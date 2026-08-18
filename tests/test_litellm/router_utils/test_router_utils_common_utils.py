@@ -1,13 +1,21 @@
+import logging
 from typing import Dict, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
 
 from litellm import Router
+from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
+    add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    resolve_model_group_alias,
+    truncate_fallback_error_detail,
+    PROVIDER_SCOPED_CREDENTIAL_PARAMS,
+    warn_on_provider_credential_mismatch,
 )
 
 
@@ -317,7 +325,9 @@ class TestFilterWebSearchDeployments:
         deployments = [
             {"model_info": {"id": "d1"}},  # No supports_web_search - defaults to True
             {"model_info": {"id": "d2"}},  # No supports_web_search - defaults to True
-            {"model_info": {"id": "d3", "supports_web_search": False}},  # Explicit False
+            {
+                "model_info": {"id": "d3", "supports_web_search": False}
+            },  # Explicit False
         ]
         request_kwargs = {"tools": [{"type": "web_search"}]}
         result = filter_web_search_deployments(deployments, request_kwargs)
@@ -360,3 +370,389 @@ def test_invalidate_model_group_info_cache():
     # Invalidate and verify cache is cleared
     router._invalidate_model_group_info_cache()
     assert router._cached_get_model_group_info.cache_info().currsize == 0
+
+
+def test_filter_deployments_by_model_access_groups_access_group_only_key():
+    """
+    Access-group-only keys should only route to deployments in allowed groups,
+    even when multiple deployments share the same public model name.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "key-1"},
+                "model_info": {"access_groups": ["AG1"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "key-2"},
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team-2",
+        models=["AG2"],
+        team_models=["AG2"],
+    )
+
+    filtered = router._filter_deployments_by_model_access_groups(
+        model="gpt-5",
+        healthy_deployments=router._get_all_deployments(model_name="gpt-5"),
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team-2",
+                "user_api_key_auth": scoped_key,
+            }
+        },
+        request_team_id="team-2",
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0].get("model_info", {}).get("access_groups") == ["AG2"]
+
+
+class TestAddModelFileIdMappings:
+    """Test cases for add_model_file_id_mappings.
+
+    The router may pass either a list of deployment dicts (multiple matched
+    deployments) or a single deployment dict (when a specific deployment was
+    resolved, e.g. because the requested model matched a `model_info.id`).
+    Both shapes must produce a `{model_id: file_id}` mapping by extracting
+    `model_info.id` from each deployment.
+    """
+
+    @staticmethod
+    def _make_response(file_id: str):
+        response = Mock()
+        response.id = file_id
+        return response
+
+    def test_should_map_each_deployment_id_when_given_list(self):
+        deployments = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "deployment-1"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "deployment-2"},
+            },
+        ]
+        responses = [self._make_response("file-1"), self._make_response("file-2")]
+
+        result = add_model_file_id_mappings(deployments, responses)
+
+        assert result == {"deployment-1": "file-1", "deployment-2": "file-2"}
+
+    def test_should_extract_model_info_id_when_given_single_deployment_dict(self):
+        """Regression test: when `_common_checks_available_deployment` resolves
+        a specific deployment (returned as a dict, not a list), the function
+        must still extract `model_info.id` rather than iterate over the
+        deployment's own keys (`model_name`, `litellm_params`, `model_info`).
+        """
+        deployment = {
+            "model_name": "gpt-4",
+            "litellm_params": {"model": "gpt-4", "api_key": "sk-test"},
+            "model_info": {"id": "deployment-1", "mode": "chat"},
+        }
+        responses = [self._make_response("file-1")]
+
+        result = add_model_file_id_mappings(deployment, responses)
+
+        assert result == {"deployment-1": "file-1"}
+        assert all(isinstance(v, str) for v in result.values())
+
+    def test_should_handle_batch_model_when_id_matches_model_name(self):
+        """Regression test for the batch-model case: when `model_info.id` is
+        intentionally set equal to `model_name`, the router resolves a single
+        deployment via `has_model_id` and returns it as a dict. The mapping
+        must contain only `{id: file_id}` with string values so the resulting
+        `LiteLLM_ManagedFileTable` Pydantic validation passes.
+        """
+        deployment = {
+            "model_name": "openai/openai/gpt-5.5-batch",
+            "litellm_params": {
+                "model": "openai/gpt-5.5",
+                "api_key": "sk-test",
+                "tpm": 40000000,
+                "rpm": 15000,
+            },
+            "model_info": {
+                "id": "openai/openai/gpt-5.5-batch",
+                "mode": "batch",
+                "base_model": "gpt-5.5",
+                "access_groups": ["default-models"],
+            },
+        }
+        responses = [self._make_response("file-batch-1")]
+
+        result = add_model_file_id_mappings(deployment, responses)
+
+        # Bug case would have produced keys ["model_name", "litellm_params",
+        # "model_info"] with non-string values.
+        assert result == {"openai/openai/gpt-5.5-batch": "file-batch-1"}
+        assert "litellm_params" not in result
+        assert "model_info" not in result
+
+    def test_should_skip_deployment_when_model_info_id_missing(self):
+        deployments = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "deployment-2"},
+            },
+        ]
+        responses = [self._make_response("file-1"), self._make_response("file-2")]
+
+        result = add_model_file_id_mappings(deployments, responses)
+
+        assert result == {"deployment-2": "file-2"}
+
+    def test_should_return_empty_mapping_when_given_empty_list(self):
+        result = add_model_file_id_mappings([], [])
+        assert result == {}
+
+
+class TestResolveModelGroupAlias:
+    """``model_group_alias`` maps reach this helper from validated config and
+    from key/team rows, so both entry shapes must resolve and malformed entries
+    must not raise mid-request."""
+
+    @pytest.mark.parametrize(
+        "alias_map, expected",
+        [
+            ({"group-a": "group-b"}, "group-b"),
+            ({"group-a": {"model": "group-b", "hidden": True}}, "group-b"),
+            ({"group-a": {"model": "group-b"}}, "group-b"),
+            ({"other": "group-b"}, None),
+            ({}, None),
+            (None, None),
+            ("not-a-map", None),
+            ({"group-a": {"hidden": True}}, None),
+            ({"group-a": {"model": 5}}, None),
+            ({"group-a": 5}, None),
+            ({"group-a": None}, None),
+            ({"group-a": ""}, None),
+        ],
+    )
+    def test_resolves_both_entry_shapes_and_tolerates_malformed_entries(self, alias_map, expected):
+        assert resolve_model_group_alias(alias_map, "group-a") == expected
+
+    def test_router_alias_resolution_uses_the_shared_helper(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "group-b",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                }
+            ],
+            model_group_alias={"group-a": "group-b", "group-item": {"model": "group-b", "hidden": True}},
+        )
+
+        assert router._get_model_from_alias("group-a") == "group-b"
+        assert router._get_model_from_alias("group-item") == "group-b"
+        assert router._get_model_from_alias("group-b") is None
+
+
+class TestTruncateFallbackErrorDetail:
+    def test_short_detail_is_returned_unchanged(self):
+        assert truncate_fallback_error_detail("boom") == "boom"
+
+    def test_detail_at_the_limit_is_returned_unchanged(self):
+        detail = "x" * ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+        assert truncate_fallback_error_detail(detail) == detail
+
+    def test_long_detail_is_bounded_and_reports_what_was_dropped(self):
+        detail = "x" * (ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS + 500)
+
+        truncated = truncate_fallback_error_detail(detail)
+
+        assert truncated.startswith("x" * ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS)
+        assert truncated.endswith("... [truncated 500 characters]")
+        assert len(truncated) < len(detail)
+
+    def test_a_megabyte_of_detail_comes_back_small(self):
+        """The detail is what a fallback level records about the level below it, so it has
+        to stay small enough that a walk over many model groups cannot compound it into an
+        output volume that starves the process."""
+        assert len(truncate_fallback_error_detail("x" * 1_000_000)) < 3_000
+
+
+class TestWarnOnProviderCredentialMismatch:
+    """A deployment that carries one provider's credentials while resolving to
+    another is silently broken: litellm ignores the credentials and sends the
+    request to the resolved provider, which 401s. The classic shape is a bedrock
+    model group where one entry lost its route prefix, which fails only on the
+    requests the router happens to send to that entry."""
+
+    def test_warns_when_aws_params_sit_on_an_anthropic_model(self):
+        warning = warn_on_provider_credential_mismatch(
+            model_name="claude-sonnet-5",
+            litellm_params={"model": "claude-sonnet-5", "aws_region_name": "eu-central-1"},
+        )
+
+        assert warning is not None
+        assert "aws_region_name" in warning
+        assert "anthropic" in warning
+        assert "bedrock/claude-sonnet-5" in warning
+
+    def test_silent_when_the_prefix_is_present(self):
+        assert (
+            warn_on_provider_credential_mismatch(
+                model_name="claude-sonnet-5",
+                litellm_params={
+                    "model": "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "eu-central-1",
+                },
+            )
+            is None
+        )
+
+    def test_silent_when_custom_llm_provider_supplies_the_route(self):
+        """An operator may name the provider explicitly instead of prefixing the
+        model; that is consistent and must not warn."""
+        assert (
+            warn_on_provider_credential_mismatch(
+                model_name="claude-sonnet-5",
+                litellm_params={
+                    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    "custom_llm_provider": "bedrock",
+                    "aws_region_name": "eu-central-1",
+                },
+            )
+            is None
+        )
+
+    def test_silent_when_no_provider_scoped_credentials_are_set(self):
+        assert (
+            warn_on_provider_credential_mismatch(
+                model_name="gpt-5.5", litellm_params={"model": "gpt-5.5"}
+            )
+            is None
+        )
+
+    def test_vertex_params_name_vertex_not_bedrock(self):
+        """The hint must follow the params that were actually set, otherwise it
+        sends the operator to the wrong prefix."""
+        warning = warn_on_provider_credential_mismatch(
+            model_name="claude-on-vertex",
+            litellm_params={"model": "claude-sonnet-5", "vertex_project": "my-project"},
+        )
+
+        assert warning is not None
+        assert "vertex_ai/claude-sonnet-5" in warning
+        assert "bedrock" not in warning
+
+    def test_silent_for_a_model_litellm_cannot_classify(self):
+        """An unresolvable model must not warn and must not raise: this runs on
+        the router startup path, so a wrong guess would spam every boot."""
+        assert (
+            warn_on_provider_credential_mismatch(
+                model_name="mystery",
+                litellm_params={"model": "not-a-real-provider-model-xyz", "aws_region_name": "us-east-1"},
+            )
+            is None
+        )
+
+    def test_router_warns_for_a_config_shaped_model_list(self, caplog):
+        """The whole point is that this fires where operators declare models, so
+        drive Router rather than the helper."""
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "claude-sonnet-5",
+                        "litellm_params": {
+                            "model": "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                            "aws_region_name": "us-east-1",
+                        },
+                    },
+                    {
+                        "model_name": "claude-sonnet-5",
+                        "litellm_params": {
+                            "model": "claude-sonnet-5",
+                            "aws_region_name": "us-east-1",
+                        },
+                    },
+                ]
+            )
+
+        mismatch_warnings = [r for r in caplog.records if "resolves to provider" in r.getMessage()]
+        assert len(mismatch_warnings) == 1, (
+            "exactly the prefix-less deployment should warn; "
+            f"got {[r.getMessage() for r in mismatch_warnings]}"
+        )
+        assert "aws_region_name" in mismatch_warnings[0].getMessage()
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/mantle/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "sagemaker/my-endpoint",
+        ],
+    )
+    def test_silent_for_every_aws_family_route(self, model):
+        """The AWS family is wider than 'bedrock': mantle, sagemaker and the
+        sagemaker variants all read aws_* legitimately. Warning on any of them
+        would tell an operator to 'fix' a working deployment, so the provider
+        set is derived from LlmProviders rather than hand-listed."""
+        assert (
+            warn_on_provider_credential_mismatch(
+                model_name="aws-deployment",
+                litellm_params={"model": model, "aws_region_name": "us-east-1"},
+            )
+            is None
+        )
+
+    def test_every_aws_family_provider_is_covered(self):
+        """Pins the derivation itself: a newly added bedrock_*/sagemaker_* provider
+        must join the set automatically, or it starts drawing false warnings."""
+        from litellm.types.utils import LlmProviders
+
+        aws_family = {p.value for p in LlmProviders if p.value.startswith(("bedrock", "sagemaker"))}
+        assert aws_family <= PROVIDER_SCOPED_CREDENTIAL_PARAMS["aws_region_name"]
+        assert {"bedrock", "bedrock_mantle", "sagemaker", "sagemaker_chat", "sagemaker_nova"} <= aws_family
+
+    def test_silent_when_credentials_come_from_a_named_credential(self):
+        """Named credentials resolve after registration, so the params are absent
+        here. Warning on that absence would fire on every such deployment."""
+        assert (
+            warn_on_provider_credential_mismatch(
+                model_name="claude-sonnet-5",
+                litellm_params={
+                    "model": "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "litellm_credential_name": "my-aws-creds",
+                },
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize("provider", ["bedrock_mantle", "sagemaker_nova"])
+    def test_silent_for_aws_providers_named_explicitly(self, provider):
+        """The false-positive shape: an operator names a less common AWS provider
+        directly, so the model string carries no route prefix to key off. A
+        hand-listed provider set misses these and tells them to 'fix' a working
+        deployment by prefixing it with bedrock/."""
+        assert (
+            warn_on_provider_credential_mismatch(
+                model_name="aws-deployment",
+                litellm_params={
+                    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    "custom_llm_provider": provider,
+                    "aws_region_name": "us-east-1",
+                },
+            )
+            is None
+        )

@@ -30,9 +30,7 @@ class TestTransformResponseWithThinking:
                 "input": {"query": "latest news"},
             }
         ]
-        search_results = [
-            "Title: News\nURL: https://example.com\nSnippet: Latest news"
-        ]
+        search_results = ["Title: News\nURL: https://example.com\nSnippet: Latest news"]
         thinking_blocks = [
             {
                 "type": "thinking",
@@ -42,12 +40,10 @@ class TestTransformResponseWithThinking:
             {"type": "redacted_thinking", "data": "abc123"},
         ]
 
-        assistant_msg, user_msg = (
-            WebSearchTransformation._transform_response_anthropic(
-                tool_calls=tool_calls,
-                search_results=search_results,
-                thinking_blocks=thinking_blocks,
-            )
+        assistant_msg, user_msg = WebSearchTransformation._transform_response_anthropic(
+            tool_calls=tool_calls,
+            search_results=search_results,
+            thinking_blocks=thinking_blocks,
         )
 
         # Verify thinking blocks come first
@@ -73,11 +69,9 @@ class TestTransformResponseWithThinking:
         search_results = ["Search result text"]
 
         # No thinking_blocks param (default None)
-        assistant_msg, _ = (
-            WebSearchTransformation._transform_response_anthropic(
-                tool_calls=tool_calls,
-                search_results=search_results,
-            )
+        assistant_msg, _ = WebSearchTransformation._transform_response_anthropic(
+            tool_calls=tool_calls,
+            search_results=search_results,
         )
 
         content = assistant_msg["content"]
@@ -96,12 +90,10 @@ class TestTransformResponseWithThinking:
         ]
         search_results = ["Search result text"]
 
-        assistant_msg, _ = (
-            WebSearchTransformation._transform_response_anthropic(
-                tool_calls=tool_calls,
-                search_results=search_results,
-                thinking_blocks=[],
-            )
+        assistant_msg, _ = WebSearchTransformation._transform_response_anthropic(
+            tool_calls=tool_calls,
+            search_results=search_results,
+            thinking_blocks=[],
         )
 
         content = assistant_msg["content"]

@@ -1,6 +1,7 @@
 """
 Tests for Fireworks AI rerank transformation functionality.
 """
+
 import json
 from unittest.mock import MagicMock
 
@@ -185,7 +186,9 @@ class TestFireworksAIRerankTransform:
         assert len(result.results) == 2
         assert result.results[0]["index"] == 0
         assert result.results[0]["relevance_score"] == 0.95
-        assert result.results[0]["document"]["text"] == "Paris is the capital of France."
+        assert (
+            result.results[0]["document"]["text"] == "Paris is the capital of France."
+        )
         assert result.results[1]["index"] == 1
         assert result.results[1]["relevance_score"] == 0.75
         assert result.results[1]["document"]["text"] == "France is a country in Europe."
@@ -341,4 +344,3 @@ class TestFireworksAIRerankTransform:
 
         assert headers["Authorization"] == "Bearer test-api-key"
         assert headers["Content-Type"] == "application/json"
-

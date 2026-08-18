@@ -7,10 +7,12 @@ from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
+from litellm.types.guardrails import GuardrailEventHooks
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -19,7 +21,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import is_request_body_safe
+from litellm.proxy.auth.auth_utils import (
+    check_complete_credentials,
+    is_request_body_safe,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
@@ -33,7 +38,9 @@ def mock_request(monkeypatch):
     mock_request = Mock(spec=Request)
     mock_request.query_params = {}  # Set mock query_params to an empty dictionary
     mock_request.headers = {"traceparent": "test_traceparent"}
-    mock_request.state = State()  # Real State so _safe_get_request_headers caching works
+    mock_request.state = (
+        State()
+    )  # Real State so _safe_get_request_headers caching works
     monkeypatch.setattr(
         "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request", mock_request
     )
@@ -226,18 +233,10 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
             "langfuse_host": "https://us.cloud.langfuse.com",
             "langfuse_public_key": "pk-lf-9636b7a6-c066",
             "langfuse_secret_key": "sk-lf-7cc8b620",
-        },
-        {
-            "langfuse_host": "os.environ/LANGFUSE_HOST_TEMP",
-            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY_TEMP",
-            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
-        },
+        }
     ],
 )
 def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
-    os.environ["LANGFUSE_PUBLIC_KEY_TEMP"] = "pk-lf-9636b7a6-c066"
-    os.environ["LANGFUSE_SECRET_KEY_TEMP"] = "sk-lf-7cc8b620"
-    os.environ["LANGFUSE_HOST_TEMP"] = "https://us.cloud.langfuse.com"
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -306,6 +305,41 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
     for var in callbacks.callback_vars.values():
         assert "os.environ" not in var
+
+
+def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
+    monkeypatch,
+):
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY_TEMP", "server-side-secret")
+    monkeypatch.setattr(
+        litellm.utils,
+        "get_secret",
+        lambda *args, **kwargs: pytest.fail("get_secret should not be called"),
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
+                    },
+                }
+            ]
+        },
+        team_metadata={},
+    )
+
+    callbacks = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
+
+    assert callbacks is None
 
 
 @pytest.mark.parametrize(
@@ -384,9 +418,10 @@ def test_dynamic_turn_off_message_logging(callback_vars):
     )
 
     assert callbacks is not None
-    assert (
-        callbacks.callback_vars["turn_off_message_logging"]
-        == callback_vars["turn_off_message_logging"]
+    # AddTeamCallback's validator stringifies callback_var values, so compare
+    # against the str() of the input rather than the input bool directly.
+    assert callbacks.callback_vars["turn_off_message_logging"] == str(
+        callback_vars["turn_off_message_logging"]
     )
 
 
@@ -465,6 +500,30 @@ def test_is_request_body_safe_model_enabled(
     assert expect_error == error_raised
 
 
+def _assert_check_complete_credentials(api_key_value, expect_complete):
+    request_body = {"model": "gpt-3.5-turbo", "api_key": api_key_value}
+    result = check_complete_credentials(request_body=request_body)
+    assert result == expect_complete
+
+
+def test_check_complete_credentials_with_real_key():
+    _assert_check_complete_credentials(
+        api_key_value="sk-" + "x" * 8, expect_complete=True
+    )
+
+
+def test_check_complete_credentials_with_empty_string():
+    _assert_check_complete_credentials(api_key_value="", expect_complete=False)
+
+
+def test_check_complete_credentials_with_none():
+    _assert_check_complete_credentials(api_key_value=None, expect_complete=False)
+
+
+def test_check_complete_credentials_with_whitespace():
+    _assert_check_complete_credentials(api_key_value="   ", expect_complete=False)
+
+
 def test_reading_openai_org_id_from_headers():
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
@@ -527,12 +586,21 @@ def test_foward_litellm_user_info_to_backend_llm_call():
         user_api_key_dict=user_api_key_dict,
     )
 
+    # All header values must be str/bytes so httpx won't reject them when the
+    # downstream client builds the request (regression: #27458).
+    for k, v in data.items():
+        assert isinstance(v, (str, bytes)), (
+            f"header {k!r} has non-str value {v!r} ({type(v).__name__}); "
+            "httpx will raise 'Header value must be str or bytes' when the LLM "
+            "request is built."
+        )
+
     expected_data = {
         "x-litellm-user_api_key_user_id": "test_user_id",
         "x-litellm-user_api_key_org_id": "test_org_id",
         "x-litellm-user_api_key_hash": "test_api_key",
-        "x-litellm-user_api_key_spend": 0.0,
-        "x-litellm-user_api_key_auth_metadata": {},
+        "x-litellm-user_api_key_spend": "0.0",
+        "x-litellm-user_api_key_auth_metadata": "{}",
     }
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
@@ -662,12 +730,13 @@ async def test_proxy_config_update_from_db():
 
 @pytest.mark.asyncio
 async def test_prepare_key_update_data():
-    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         prepare_key_update_data,
     )
 
-    existing_key_row = MagicMock()
+    existing_key_row = MagicMock(spec=LiteLLM_VerificationToken)
+    existing_key_row.metadata = {}
     data = UpdateKeyRequest(key="test_key", models=["gpt-4"], duration="120s")
     updated_data = await prepare_key_update_data(data, existing_key_row)
     assert "expires" in updated_data
@@ -734,6 +803,7 @@ def test_get_docs_url(env_vars, expected_url):
 
     result = _get_docs_url()
     assert result == expected_url
+
 
 @pytest.mark.parametrize(
     "env_vars, expected_url",
@@ -838,7 +908,7 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     mock_request.headers = {}
     mock_request.state = State()
 
-    # Setup key with tags in metadata
+    # Setup key with tags in metadata.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
         user_id="test_user_id",
@@ -1236,10 +1306,15 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
         }
     )
 
-    LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+    callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
         team_id="test",
         proxy_config=pc,
     )
+
+    assert callback_metadata is not None
+    assert callback_metadata.callback_vars is not None
+    assert callback_metadata.callback_vars["langfuse_public_key"] == "test_public_key"
+    assert callback_metadata.callback_vars["langfuse_secret"] == "test_secret_key"
 
     config = pc.get_config_state()
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
@@ -1516,7 +1591,7 @@ class MockPrismaClientDB:
         mock_key_data,
     ):
         self.db = MockDb(mock_team_data, mock_key_data)
-    
+
     async def get_data(
         self,
         token: Optional[Union[str, list]] = None,
@@ -1534,7 +1609,7 @@ class MockPrismaClientDB:
     ):
         """Mock get_data method to return user info for admin"""
         from litellm.proxy._types import LiteLLM_UserTable
-        
+
         # Return a proper LiteLLM_UserTable object when querying by user_id
         if user_id:
             return LiteLLM_UserTable(
@@ -1659,6 +1734,35 @@ def test_get_temp_budget_increase():
     assert _get_temp_budget_increase(valid_token) == 100
 
 
+def test_get_temp_budget_increase_tz_aware_expiry():
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+
+    future_expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    valid_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": future_expiry,
+        },
+    )
+    assert _get_temp_budget_increase(valid_token) == 100
+
+    past_expiry = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    expired_token = UserAPIKeyAuth(
+        max_budget=100,
+        spend=0,
+        metadata={
+            "temp_budget_increase": 100,
+            "temp_budget_expiry": past_expiry,
+        },
+    )
+    assert _get_temp_budget_increase(expired_token) is None
+
+
 def test_update_key_budget_with_temp_budget_increase():
     from datetime import datetime, timedelta
 
@@ -1678,7 +1782,10 @@ def test_update_key_budget_with_temp_budget_increase():
             "temp_budget_expiry": expiry_in_isoformat,
         },
     )
-    assert _update_key_budget_with_temp_budget_increase(valid_token).max_budget == 200
+    result = _update_key_budget_with_temp_budget_increase(valid_token)
+    assert result.max_budget == 200
+    assert result is not valid_token
+    assert valid_token.max_budget == 100
 
 
 @pytest.mark.asyncio
@@ -2072,12 +2179,13 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     import litellm.proxy.litellm_pre_call_utils as pre_call_utils
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
-    
+
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
     class _MockRouter:
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2097,12 +2205,13 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
 def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     import litellm.proxy.litellm_pre_call_utils as pre_call_utils
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
-    
+
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
     class _MockRouter:
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2394,16 +2503,17 @@ async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
         captured_logging_obj["logging_obj"] = logging_obj
         return logging_obj, data
 
-    with patch(
-        "litellm.proxy.utils.litellm.utils.function_setup",
-        side_effect=_capture_function_setup,
-    ), patch.object(
-        Logging, "async_failure_handler", new=AsyncMock(return_value=None)
-    ), patch.object(
-        Logging, "failure_handler", return_value=None
-    ), patch(
-        "litellm.proxy.utils.threading.Thread"
-    ) as mock_thread:
+    with (
+        patch(
+            "litellm.proxy.utils.litellm.utils.function_setup",
+            side_effect=_capture_function_setup,
+        ),
+        patch.object(
+            Logging, "async_failure_handler", new=AsyncMock(return_value=None)
+        ),
+        patch.object(Logging, "failure_handler", return_value=None),
+        patch("litellm.proxy.utils.threading.Thread") as mock_thread,
+    ):
         mock_thread.return_value.start = Mock()
 
         await proxy_logging._handle_logging_proxy_only_error(
@@ -2532,6 +2642,463 @@ async def test_during_call_hook_parallel_execution_with_error():
         litellm.callbacks = original_callbacks
 
 
+class _PreCallGuardrail(CustomGuardrail):
+    """Test double for pre_call guardrails; records timing and observed payload."""
+
+    def __init__(self, name, run_in_parallel, execution_order, sleep=0.1, default_on=True):
+        super().__init__(
+            guardrail_name=name,
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=default_on,
+            run_in_parallel=run_in_parallel,
+        )
+        self.name = name
+        self.sleep = sleep
+        self.execution_order = execution_order
+        self.observed_content = None
+        self.was_called = False
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.was_called = True
+        self.observed_content = data["messages"][0]["content"]
+        self.execution_order.append(f"{self.name}_start")
+        await asyncio.sleep(self.sleep)
+        self.execution_order.append(f"{self.name}_end")
+        return None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_runs_opted_in_guardrails_in_parallel():
+    """run_in_parallel pre_call guardrails execute concurrently (all start before any ends)."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    execution_order = []
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    try:
+        litellm.callbacks = [
+            _PreCallGuardrail(f"g{i}", run_in_parallel=True, execution_order=execution_order) for i in range(3)
+        ]
+
+        result = await proxy_logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="completion",
+        )
+
+        first_end_idx = next(i for i, item in enumerate(execution_order) if "end" in item)
+        starts_before_first_end = sum(1 for item in execution_order[:first_end_idx] if "start" in item)
+        assert starts_before_first_end == 3, f"expected 3 concurrent starts, got {starts_before_first_end}"
+        assert result["model"] == "gpt-4"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_runs_default_guardrails_sequentially():
+    """Guardrails without run_in_parallel keep the sequential, one-at-a-time behavior."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    execution_order = []
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    try:
+        litellm.callbacks = [
+            _PreCallGuardrail(f"g{i}", run_in_parallel=False, execution_order=execution_order) for i in range(2)
+        ]
+
+        start = asyncio.get_event_loop().time()
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="completion",
+        )
+        elapsed = asyncio.get_event_loop().time() - start
+
+        assert execution_order == ["g0_start", "g0_end", "g1_start", "g1_end"]
+        assert elapsed >= 0.18, f"sequential run took {elapsed}s, expected >= 0.18s"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_sequential_mutations_precede_parallel_batch():
+    """Sequential (mutating) guardrails run before the parallel batch, which sees their changes."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    execution_order = []
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    class MaskingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="masker",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=False,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            data["messages"][0]["content"] = "MASKED"
+            return data
+
+    parallel_observer = _PreCallGuardrail("observer", run_in_parallel=True, execution_order=execution_order)
+
+    try:
+        litellm.callbacks = [parallel_observer, MaskingGuardrail()]
+
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "secret"}]},
+            call_type="completion",
+        )
+
+        assert parallel_observer.observed_content == "MASKED"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_parallel_guardrail_blocks_request():
+    """A raising parallel guardrail blocks the request before it reaches the LLM."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    class BlockingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="blocker",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise HTTPException(status_code=400, detail="blocked by guardrail")
+
+    try:
+        litellm.callbacks = [BlockingGuardrail()]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await proxy_logging.pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+                data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                call_type="completion",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "blocked by guardrail" in str(exc_info.value.detail)
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_parallel_guardrail_skipped_when_should_not_run():
+    """A parallel guardrail that should_run_guardrail rejects is never invoked."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    execution_order = []
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    try:
+        guardrail = _PreCallGuardrail(
+            "off_by_default", run_in_parallel=True, execution_order=execution_order, default_on=False
+        )
+        litellm.callbacks = [guardrail]
+
+        result = await proxy_logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="completion",
+        )
+
+        assert guardrail.was_called is False
+        assert result["model"] == "gpt-4"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_parallel_block_wins_over_reroute():
+    """A slower block must win over a faster reroute so crafted input cannot bypass a block."""
+    from litellm.caching.caching import DualCache
+    from litellm.exceptions import SensitiveDataRouteException
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    class FastRerouteGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="rerouter",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise SensitiveDataRouteException(route_to_model="on-prem", session_id="s1", guardrail_name="rerouter")
+
+    class SlowBlockingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="blocker",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            await asyncio.sleep(0.1)
+            raise HTTPException(status_code=400, detail="blocked by guardrail")
+
+    try:
+        litellm.callbacks = [FastRerouteGuardrail(), SlowBlockingGuardrail()]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await proxy_logging.pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+                data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                call_type="completion",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "blocked by guardrail" in str(exc_info.value.detail)
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_parallel_awaits_all_when_one_blocks():
+    """A block must not orphan sibling guardrails; every parallel guardrail runs to completion."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+    completed = []
+
+    class FastBlockingGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="fast_blocker",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise HTTPException(status_code=400, detail="blocked")
+
+    class SlowGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="slow",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            await asyncio.sleep(0.1)
+            completed.append("slow")
+            return None
+
+    try:
+        litellm.callbacks = [FastBlockingGuardrail(), SlowGuardrail()]
+
+        with pytest.raises(HTTPException):
+            await proxy_logging.pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+                data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                call_type="completion",
+            )
+
+        assert completed == ["slow"], "slow guardrail was orphaned instead of awaited to completion"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+class _PostCallGuardrail(CustomGuardrail):
+    """Test double for post_call guardrails; records timing and invocation."""
+
+    def __init__(self, name, run_in_parallel, execution_order, sleep=0.1, default_on=True):
+        super().__init__(
+            guardrail_name=name,
+            event_hook=GuardrailEventHooks.post_call,
+            default_on=default_on,
+            run_in_parallel=run_in_parallel,
+        )
+        self.name = name
+        self.sleep = sleep
+        self.execution_order = execution_order
+        self.was_called = False
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        self.was_called = True
+        self.execution_order.append(f"{self.name}_start")
+        await asyncio.sleep(self.sleep)
+        self.execution_order.append(f"{self.name}_end")
+        return None
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_runs_opted_in_guardrails_in_parallel():
+    """run_in_parallel post_call guardrails execute concurrently (all start before any ends)."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    execution_order = []
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    try:
+        litellm.callbacks = [
+            _PostCallGuardrail(f"g{i}", run_in_parallel=True, execution_order=execution_order) for i in range(3)
+        ]
+
+        await proxy_logging.post_call_success_hook(
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            response=litellm.ModelResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        )
+
+        first_end_idx = next(i for i, item in enumerate(execution_order) if "end" in item)
+        starts_before_first_end = sum(1 for item in execution_order[:first_end_idx] if "start" in item)
+        assert starts_before_first_end == 3, f"expected 3 concurrent starts, got {starts_before_first_end}"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_runs_default_guardrails_sequentially():
+    """post_call guardrails without run_in_parallel keep the sequential behavior."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    execution_order = []
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    try:
+        litellm.callbacks = [
+            _PostCallGuardrail(f"g{i}", run_in_parallel=False, execution_order=execution_order) for i in range(2)
+        ]
+
+        start = asyncio.get_event_loop().time()
+        await proxy_logging.post_call_success_hook(
+            data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+            response=litellm.ModelResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+        )
+        elapsed = asyncio.get_event_loop().time() - start
+
+        assert execution_order == ["g0_start", "g0_end", "g1_start", "g1_end"]
+        assert elapsed >= 0.18, f"sequential run took {elapsed}s, expected >= 0.18s"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_parallel_guardrail_blocks_response():
+    """A raising parallel post_call guardrail blocks the response before it reaches the client."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+
+    class BlockingPostCallGuardrail(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="post_blocker",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            raise HTTPException(status_code=400, detail="blocked response by guardrail")
+
+    try:
+        litellm.callbacks = [BlockingPostCallGuardrail()]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await proxy_logging.post_call_success_hook(
+                data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                response=litellm.ModelResponse(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "blocked response by guardrail" in str(exc_info.value.detail)
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_parallel_awaits_all_when_one_blocks():
+    """A blocking post_call guardrail must not orphan its siblings; all run to completion."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+    completed = []
+
+    class FastBlockingPostCall(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="fast_post_blocker",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            raise HTTPException(status_code=400, detail="blocked")
+
+    class SlowPostCall(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="slow_post",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+                run_in_parallel=True,
+            )
+
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            await asyncio.sleep(0.1)
+            completed.append("slow")
+            return None
+
+    try:
+        litellm.callbacks = [FastBlockingPostCall(), SlowPostCall()]
+
+        with pytest.raises(HTTPException):
+            await proxy_logging.post_call_success_hook(
+                data={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                response=litellm.ModelResponse(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
+            )
+
+        assert completed == ["slow"], "slow post_call guardrail was orphaned instead of awaited to completion"
+    finally:
+        litellm.callbacks = original_callbacks
+
+
 @pytest.mark.asyncio
 async def test_handle_logging_proxy_only_error_preserves_pass_through_call_type():
     """Ensure _handle_logging_proxy_only_error does not overwrite call_type
@@ -2647,7 +3214,9 @@ async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through()
         "model": "claude-3-5-sonnet",
     }
 
-    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock) as mock_async:
+    with patch.object(
+        logging_obj, "async_failure_handler", new_callable=AsyncMock
+    ) as mock_async:
         with patch.object(logging_obj, "failure_handler") as mock_sync:
             await proxy_logging._handle_logging_proxy_only_error(
                 request_data=request_data,

@@ -101,5 +101,87 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "aihubmix": {
+    "base_url": "https://aihubmix.com/v1",
+    "api_key_env": "AIHUBMIX_API_KEY",
+    "api_base_env": "AIHUBMIX_API_BASE"
+  },
+  "crusoe": {
+    "base_url": "https://managed-inference-api-proxy.crusoecloud.com/v1",
+    "api_key_env": "CRUSOE_API_KEY",
+    "api_base_env": "CRUSOE_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "darkbloom": {
+    "base_url": "https://api.darkbloom.dev/v1",
+    "api_key_env": "DARKBLOOM_API_KEY",
+    "api_base_env": "DARKBLOOM_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "neosantara": {
+    "base_url": "https://api.neosantara.xyz/v1",
+    "api_key_env": "NEOSANTARA_API_KEY",
+    "api_base_env": "NEOSANTARA_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
+  "tensormesh": {
+    "base_url": "https://serverless.tensormesh.ai/v1",
+    "api_key_env": "TENSORMESH_INFERENCE_API_KEY",
+    "api_base_env": "TENSORMESH_SERVERLESS_BASE_URL",
+    "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
+  "parasail": {
+    "base_url": "https://api.parasail.io/v1",
+    "api_key_env": "PARASAIL_API_KEY",
+    "api_base_env": "PARASAIL_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    "special_handling": {
+      "force_store_false": true
+    }
+  },
+  "libertai": {
+    "base_url": "https://api.libertai.io/v1",
+    "api_key_env": "LIBERTAI_API_KEY",
+    "api_base_env": "LIBERTAI_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "empiriolabs": {
+    "base_url": "https://api.empiriolabs.ai/v1",
+    "api_key_env": "EMPIRIOLABS_API_KEY",
+    "api_base_env": "EMPIRIOLABS_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
+  "meta": {
+    "base_url": "https://api.meta.ai/v1",
+    "api_key_env": "META_API_KEY",
+    "api_base_env": "META_API_BASE",
+    "base_class": "openai_gpt",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
+  "pinstripes": {
+    "base_url": "https://pinstripes.io/v1",
+    "api_key_env": "PINSTRIPES_API_KEY",
+    "api_base_env": "PINSTRIPES_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   }
 }

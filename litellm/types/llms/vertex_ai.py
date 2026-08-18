@@ -1,20 +1,34 @@
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Final, Literal
 
 from typing_extensions import (
     Required,
     TypedDict,
 )
 
+from litellm.types.llms.openai import EmbeddingInput
 
-class FunctionResponse(TypedDict):
-    name: str
-    response: Optional[dict]
+# Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
+# opt-in for combined embeddings — a provider-specific extension of the
+# OpenAI-faithful EmbeddingInput shape.
+GeminiEmbeddingInput = EmbeddingInput | list[list[str]]
 
 
-class FunctionCall(TypedDict):
-    name: str
-    args: Optional[dict]
+class FunctionResponse(TypedDict, total=False):
+    # `id` correlates this response with the originating `functionCall` part.
+    # Supported on Gemini 3+; older Gemini models reject this field.
+    id: str
+    name: Required[str]
+    response: dict | None
+    parts: list["FunctionResponsePartType"]
+
+
+class FunctionCall(TypedDict, total=False):
+    # `id` correlates the corresponding `functionResponse` on Gemini 3+.
+    # Older Gemini models omit/reject this field.
+    id: str
+    name: Required[str]
+    args: dict | None
 
 
 class FileDataType(TypedDict):
@@ -25,6 +39,11 @@ class FileDataType(TypedDict):
 class BlobType(TypedDict, total=False):
     mime_type: Required[str]
     data: Required[str]
+
+
+class FunctionResponsePartType(TypedDict, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
 
 
 class PartType(TypedDict, total=False):
@@ -38,8 +57,11 @@ class PartType(TypedDict, total=False):
     media_resolution: Literal["low", "medium", "high"]
 
 
-class HttpxFunctionCall(TypedDict):
-    name: str
+class HttpxFunctionCall(TypedDict, total=False):
+    # `id` correlates the corresponding `functionResponse` on Gemini 3+.
+    # Older Gemini models omit/reject this field.
+    id: str
+    name: Required[str]
     args: dict
 
 
@@ -67,7 +89,7 @@ class HttpxServerSideToolCall(TypedDict, total=False):
 class HttpxServerSideToolResponse(TypedDict, total=False):
     toolType: str
     id: str
-    response: Union[str, dict]
+    response: str | dict
 
 
 class HttpxPartType(TypedDict, total=False):
@@ -87,16 +109,16 @@ class HttpxPartType(TypedDict, total=False):
 
 class HttpxContentType(TypedDict, total=False):
     role: Literal["user", "model"]
-    parts: List[HttpxPartType]
+    parts: list[HttpxPartType]
 
 
 class ContentType(TypedDict, total=False):
     role: Literal["user", "model"]
-    parts: Required[List[PartType]]
+    parts: Required[list[PartType]]
 
 
 class SystemInstructions(TypedDict):
-    parts: Required[List[PartType]]
+    parts: Required[list[PartType]]
 
 
 class Schema(TypedDict, total=False):
@@ -109,10 +131,10 @@ class Schema(TypedDict, total=False):
     items: "Schema"
     minItems: str
     maxItems: str
-    enum: List[str]
-    properties: Dict[str, "Schema"]
-    propertyOrdering: List[str]
-    required: List[str]
+    enum: list[str]
+    properties: dict[str, "Schema"]
+    propertyOrdering: list[str]
+    required: list[str]
     minProperties: str
     maxProperties: str
     minimum: float
@@ -121,13 +143,13 @@ class Schema(TypedDict, total=False):
     maxLength: str
     pattern: str
     example: Any
-    anyOf: List["Schema"]
+    anyOf: list["Schema"]
 
 
 class FunctionDeclaration(TypedDict, total=False):
     name: Required[str]
     description: str
-    parameters: Union[Schema, dict]
+    parameters: Schema | dict
     response: Schema
 
 
@@ -141,7 +163,7 @@ class Retrieval(TypedDict):
 
 class FunctionCallingConfig(TypedDict, total=False):
     mode: Literal["ANY", "AUTO", "NONE"]
-    allowed_function_names: List[str]
+    allowed_function_names: list[str]
 
 
 HarmCategory = Literal[
@@ -160,9 +182,7 @@ HarmBlockThreshold = Literal[
 ]
 HarmBlockMethod = Literal["HARM_BLOCK_METHOD_UNSPECIFIED", "SEVERITY", "PROBABILITY"]
 
-HarmProbability = Literal[
-    "HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"
-]
+HarmProbability = Literal["HARM_PROBABILITY_UNSPECIFIED", "NEGLIGIBLE", "LOW", "MEDIUM", "HIGH"]
 
 HarmSeverity = Literal[
     "HARM_SEVERITY_UNSPECIFIED",
@@ -188,9 +208,7 @@ class GeminiThinkingConfig(TypedDict, total=False):
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
-GeminiImageAspectRatio = Literal[
-    "1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"
-]
+GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
 
 GeminiImageSize = Literal["1K", "2K", "4K"]
 
@@ -210,6 +228,7 @@ class VoiceConfig(TypedDict):
 
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    languageCode: str
 
 
 class GenerationConfig(TypedDict, total=False):
@@ -218,16 +237,17 @@ class GenerationConfig(TypedDict, total=False):
     top_k: float
     candidate_count: int
     max_output_tokens: int
-    stop_sequences: List[str]
+    stop_sequences: list[str]
     presence_penalty: float
     frequency_penalty: float
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
     response_json_schema: dict
+    responseFormat: dict
     seed: int
     responseLogprobs: bool
     logprobs: int
-    responseModalities: List[GeminiResponseModalities]
+    responseModalities: list[GeminiResponseModalities]
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
     mediaResolution: str
@@ -247,7 +267,7 @@ class VertexToolName(str, Enum):
 
 
 class Tools(TypedDict, total=False):
-    function_declarations: List[FunctionDeclaration]
+    function_declarations: list[FunctionDeclaration]
     googleSearch: dict
     googleSearchRetrieval: dict
     enterpriseWebSearch: dict
@@ -279,13 +299,13 @@ class UsageMetadata(TypedDict, total=False):
     candidatesTokenCount: int
     responseTokenCount: int
     cachedContentTokenCount: int
-    promptTokensDetails: List[PromptTokensDetails]
-    cacheTokensDetails: List[PromptTokensDetails]
+    toolUsePromptTokenCount: int
+    toolUsePromptTokensDetails: list[PromptTokensDetails]
+    promptTokensDetails: list[PromptTokensDetails]
+    cacheTokensDetails: list[PromptTokensDetails]
     thoughtsTokenCount: int
-    responseTokensDetails: List[PromptTokensDetails]
-    candidatesTokensDetails: List[
-        PromptTokensDetails
-    ]  # Alternative key name used in some responses
+    responseTokensDetails: list[PromptTokensDetails]
+    candidatesTokensDetails: list[PromptTokensDetails]  # Alternative key name used in some responses
 
 
 class TokenCountDetailsResponse(TypedDict):
@@ -297,14 +317,14 @@ class TokenCountDetailsResponse(TypedDict):
     """
 
     totalTokens: int
-    promptTokensDetails: List[PromptTokensDetails]
+    promptTokensDetails: list[PromptTokensDetails]
 
 
 class CachedContent(TypedDict, total=False):
     ttl: TTL
     expire_time: str
-    contents: List[ContentType]
-    tools: List[Tools]
+    contents: list[ContentType]
+    tools: list[Tools]
     createTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
     updateTime: str  # "2014-10-02T15:01:23Z" and "2014-10-02T15:01:23.045123456Z"
     usageMetadata: UsageMetadata
@@ -317,19 +337,19 @@ class CachedContent(TypedDict, total=False):
 
 
 class RequestBody(TypedDict, total=False):
-    contents: Required[List[ContentType]]
+    contents: Required[list[ContentType]]
     system_instruction: SystemInstructions
     tools: Tools
     toolConfig: ToolConfig
-    safetySettings: List[SafetSettingsConfig]
+    safetySettings: list[SafetSettingsConfig]
     generationConfig: GenerationConfig
     cachedContent: str
-    labels: Dict[str, str]
+    labels: dict[str, str]
     serviceTier: str
 
 
 class CachedContentRequestBody(TypedDict, total=False):
-    contents: Required[List[ContentType]]
+    contents: Required[list[ContentType]]
     system_instruction: SystemInstructions
     tools: Tools
     toolConfig: ToolConfig
@@ -339,7 +359,7 @@ class CachedContentRequestBody(TypedDict, total=False):
 
 
 class CachedContentListAllResponseBody(TypedDict, total=False):
-    cachedContents: List[CachedContent]
+    cachedContents: list[CachedContent]
     nextPageToken: str
 
 
@@ -367,7 +387,7 @@ class Citation(TypedDict):
 
 
 class CitationMetadata(TypedDict):
-    citations: List[Citation]
+    citations: list[Citation]
 
 
 class SearchEntryPoint(TypedDict, total=False):
@@ -376,9 +396,9 @@ class SearchEntryPoint(TypedDict, total=False):
 
 
 class GroundingMetadata(TypedDict, total=False):
-    webSearchQueries: List[str]
+    webSearchQueries: list[str]
     searchEntryPoint: SearchEntryPoint
-    groundingAttributions: List[dict]
+    groundingAttributions: list[dict]
 
 
 class LogprobsCandidate(TypedDict):
@@ -388,12 +408,12 @@ class LogprobsCandidate(TypedDict):
 
 
 class LogprobsTopCandidate(TypedDict):
-    candidates: List[LogprobsCandidate]
+    candidates: list[LogprobsCandidate]
 
 
 class LogprobsResult(TypedDict, total=False):
-    topCandidates: List[LogprobsTopCandidate]
-    chosenCandidates: List[LogprobsCandidate]
+    topCandidates: list[LogprobsTopCandidate]
+    chosenCandidates: list[LogprobsCandidate]
 
 
 class UrlMetadata(TypedDict, total=False):
@@ -402,7 +422,7 @@ class UrlMetadata(TypedDict, total=False):
 
 
 class UrlContextMetadata(TypedDict, total=False):
-    urlMetadata: List[UrlMetadata]
+    urlMetadata: list[UrlMetadata]
 
 
 class Candidates(TypedDict, total=False):
@@ -421,7 +441,7 @@ class Candidates(TypedDict, total=False):
         "MALFORMED_FUNCTION_CALL",
         "IMAGE_SAFETY",
     ]
-    safetyRatings: List[SafetyRatings]
+    safetyRatings: list[SafetyRatings]
     citationMetadata: CitationMetadata
     groundingMetadata: GroundingMetadata
     finishMessage: str
@@ -431,21 +451,21 @@ class Candidates(TypedDict, total=False):
 
 class PromptFeedback(TypedDict):
     blockReason: str
-    safetyRatings: List[SafetyRatings]
+    safetyRatings: list[SafetyRatings]
     blockReasonMessage: str
 
 
 class GenerateContentResponseBody(TypedDict, total=False):
-    candidates: List[Candidates]
+    candidates: list[Candidates]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
     responseId: str
 
 
 class FineTuneHyperparameters(TypedDict, total=False):
-    epoch_count: Optional[int]
-    learning_rate_multiplier: Optional[float]
-    adapter_size: Optional[
+    epoch_count: int | None
+    learning_rate_multiplier: float | None
+    adapter_size: (
         Literal[
             "ADAPTER_SIZE_UNSPECIFIED",
             "ADAPTER_SIZE_ONE",
@@ -453,43 +473,41 @@ class FineTuneHyperparameters(TypedDict, total=False):
             "ADAPTER_SIZE_EIGHT",
             "ADAPTER_SIZE_SIXTEEN",
         ]
-    ]
+        | None
+    )
 
 
 class FineTunesupervisedTuningSpec(TypedDict, total=False):
     training_dataset_uri: str
-    validation_dataset: Optional[str]
-    tuned_model_display_name: Optional[str]
-    hyperParameters: Optional[FineTuneHyperparameters]
+    validation_dataset: str | None
+    tuned_model_display_name: str | None
+    hyperParameters: FineTuneHyperparameters | None
 
 
 class FineTuneJobCreate(TypedDict, total=False):
     baseModel: str
     supervisedTuningSpec: FineTunesupervisedTuningSpec
-    tunedModelDisplayName: Optional[str]
+    tunedModelDisplayName: str | None
 
 
 class ResponseSupervisedTuningSpec(TypedDict, total=False):
-    trainingDatasetUri: Optional[str]
-    hyperParameters: Optional[FineTuneHyperparameters]
+    trainingDatasetUri: str | None
+    hyperParameters: FineTuneHyperparameters | None
 
 
 class ResponseTuningJob(TypedDict):
-    name: Optional[str]
-    tunedModelDisplayName: Optional[str]
-    baseModel: Optional[str]
-    supervisedTuningSpec: Optional[ResponseSupervisedTuningSpec]
-    state: Optional[
+    name: str | None
+    tunedModelDisplayName: str | None
+    baseModel: str | None
+    supervisedTuningSpec: ResponseSupervisedTuningSpec | None
+    state: (
         Literal[
-            "JOB_STATE_PENDING",
-            "JOB_STATE_RUNNING",
-            "JOB_STATE_SUCCEEDED",
-            "JOB_STATE_FAILED",
-            "JOB_STATE_CANCELLED",
+            "JOB_STATE_PENDING", "JOB_STATE_RUNNING", "JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED"
         ]
-    ]
-    createTime: Optional[str]
-    updateTime: Optional[str]
+        | None
+    )
+    createTime: str | None
+    updateTime: str | None
 
 
 class VideoSegmentConfig(TypedDict, total=False):
@@ -504,9 +522,9 @@ class InstanceVideo(TypedDict, total=False):
 
 
 class InstanceImage(TypedDict, total=False):
-    gcsUri: Optional[str]
-    bytesBase64Encoded: Optional[str]
-    mimeType: Optional[str]
+    gcsUri: str | None
+    bytesBase64Encoded: str | None
+    mimeType: str | None
 
 
 class Instance(TypedDict, total=False):
@@ -515,24 +533,25 @@ class Instance(TypedDict, total=False):
     video: InstanceVideo
 
 
-class VertexMultimodalEmbeddingRequest(TypedDict):
-    instances: List[Instance]
+class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
+    instances: Required[list[Instance]]
+    parameters: dict
 
 
 class VideoEmbedding(TypedDict):
     startOffsetSec: int
     endOffsetSec: int
-    embedding: List[float]
+    embedding: list[float]
 
 
 class MultimodalPrediction(TypedDict, total=False):
-    textEmbedding: List[float]
-    imageEmbedding: List[float]
-    videoEmbeddings: List[VideoEmbedding]
+    textEmbedding: list[float]
+    imageEmbedding: list[float]
+    videoEmbeddings: list[VideoEmbedding]
 
 
 class MultimodalPredictions(TypedDict):
-    predictions: List[MultimodalPrediction]
+    predictions: list[MultimodalPrediction]
 
 
 class VertexAICachedContentResponseObject(TypedDict):
@@ -559,7 +578,7 @@ class VertexAITextEmbeddingsRequestBody(TypedDict, total=False):
 
 
 class ContentEmbeddings(TypedDict):
-    values: List[int]
+    values: list[int]
 
 
 class VertexAITextEmbeddingsResponseObject(TypedDict):
@@ -571,11 +590,11 @@ class EmbedContentRequest(VertexAITextEmbeddingsRequestBody):
 
 
 class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
-    requests: List[EmbedContentRequest]
+    requests: list[EmbedContentRequest]
 
 
 class VertexAIBatchEmbeddingsResponseObject(TypedDict):
-    embeddings: List[ContentEmbeddings]
+    embeddings: list[ContentEmbeddings]
 
 
 class GeminiEmbedContentRequestBody(TypedDict, total=False):
@@ -593,7 +612,7 @@ class GeminiEmbedContentResponseObject(TypedDict):
 
 
 class GcsSource(TypedDict):
-    uris: List[str]
+    uris: list[str]
 
 
 class InputConfig(TypedDict):
@@ -703,7 +722,7 @@ class VertexVideoGenerationParameters(TypedDict, total=False):
 class VertexVideoGenerationRequest(TypedDict):
     """Complete request body for Vertex AI video generation"""
 
-    instances: Required[List[VertexVideoGenerationInstance]]
+    instances: Required[list[VertexVideoGenerationInstance]]
     parameters: VertexVideoGenerationParameters
 
 
@@ -720,12 +739,12 @@ class VertexVideoGenerationResponse(TypedDict, total=False):
 
     name: str
     done: bool
-    response: Dict[str, Any]
-    metadata: Dict[str, Any]
-    error: Dict[str, Any]
+    response: dict[str, Any]
+    metadata: dict[str, Any]
+    error: dict[str, Any]
 
 
-VERTEX_CREDENTIALS_TYPES = Union[str, Dict[str, str]]
+VERTEX_CREDENTIALS_TYPES = str | dict[str, str]
 
 
 class VertexPartnerProvider(str, Enum):
@@ -733,3 +752,12 @@ class VertexPartnerProvider(str, Enum):
     llama = "llama"
     ai21 = "ai21"
     claude = "claude"
+
+
+VERTEX_AI_PROVIDER_METADATA_FIELDS: Final = (
+    "vertex_ai_grounding_metadata",
+    "vertex_ai_url_context_metadata",
+    "vertex_ai_safety_ratings",
+    "vertex_ai_safety_results",
+    "vertex_ai_citation_metadata",
+)

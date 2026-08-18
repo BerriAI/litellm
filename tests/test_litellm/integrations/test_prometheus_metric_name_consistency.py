@@ -7,6 +7,7 @@ configuration works correctly.
 
 Related issue: https://github.com/BerriAI/litellm/issues/18221
 """
+
 from typing import get_args
 
 import pytest

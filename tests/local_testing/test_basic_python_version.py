@@ -49,7 +49,7 @@ def test_package_dependencies():
         import pathlib
         import litellm
         from packaging.requirements import Requirement
-        
+
         # Try to import tomllib (Python 3.11+) or tomli (older versions)
         try:
             import tomllib as tomli
@@ -92,6 +92,127 @@ def test_package_dependencies():
         )
 
 
+def test_cli_extra_is_a_thin_client_install():
+    """The `cli` extra must install a working `lite` client without dragging in the
+    proxy server runtime. It therefore has to declare the CLI's real third-party
+    deps (rich, pyyaml, requests) and must never contain a server-only dependency
+    from the `proxy` extra; a leak there silently re-bloats the laptop install.
+    """
+    import pathlib
+
+    import litellm
+    from packaging.requirements import Requirement
+
+    try:
+        import tomllib as tomli
+    except ImportError:
+        try:
+            import tomli
+        except ImportError:
+            pytest.skip("tomli/tomllib not available - skipping dependency check")
+
+    pyproject_path = pathlib.Path(litellm.__file__).parent.parent / "pyproject.toml"
+    with open(pyproject_path, "rb") as f:
+        optional_deps = tomli.load(f)["project"]["optional-dependencies"]
+
+    assert "cli" in optional_deps, "Expected a `cli` extra for the thin lite install"
+
+    cli_names = {Requirement(req).name.lower() for req in optional_deps["cli"]}
+
+    missing = {"rich", "pyyaml", "requests"} - cli_names
+    assert not missing, f"`cli` extra is missing deps the lite CLI imports: {missing}"
+
+    server_only = {
+        "fastapi",
+        "uvicorn",
+        "gunicorn",
+        "granian",
+        "starlette",
+        "boto3",
+        "polars",
+        "soundfile",
+        "mcp",
+        "cryptography",
+        "apscheduler",
+        "rq",
+        "litellm-enterprise",
+        "litellm-proxy-extras",
+    }
+    leaked = cli_names & server_only
+    assert not leaked, f"`cli` extra leaks proxy-server deps onto laptops: {leaked}"
+
+
+AIOHTTP_POOL_POISONING_RANGE = ">=3.14.0,<3.14.2"
+AIOHTTP_POOL_POISONING_RELEASES = ("3.14.0", "3.14.1")
+
+
+def _load_toml(path):
+    try:
+        import tomllib as tomli
+    except ImportError:
+        try:
+            import tomli
+        except ImportError:
+            pytest.skip("tomli/tomllib not available - skipping dependency check")
+
+    with open(path, "rb") as f:
+        return tomli.load(f)
+
+
+def _declared_aiohttp_specifier():
+    from packaging.requirements import Requirement
+
+    pyproject = _load_toml(os.path.join(PROJECT_ROOT, "pyproject.toml"))
+    for requirement in pyproject["project"]["dependencies"]:
+        parsed = Requirement(requirement)
+        if parsed.name.lower() == "aiohttp":
+            return parsed.specifier
+    pytest.fail("aiohttp is no longer a declared runtime dependency of litellm")
+
+
+def _locked_aiohttp_version():
+    lock = _load_toml(os.path.join(PROJECT_ROOT, "uv.lock"))
+    for package in lock["package"]:
+        if package["name"].lower() == "aiohttp":
+            return package["version"]
+    pytest.fail("aiohttp is missing from uv.lock")
+
+
+def test_declared_aiohttp_floor_excludes_pool_poisoning_releases():
+    """aiohttp 3.14.0/3.14.1 re-arm the sock_read timer on a keep-alive connection
+    after it is back in the idle pool, so the next request to reuse it fails
+    instantly with a bogus timeout (aio-libs/aiohttp#12953, fixed in 3.14.2).
+
+    The wheel's own metadata is what pip resolves against, so the floor declared
+    here - not just the lockfile - has to exclude that range.
+    """
+    specifier = _declared_aiohttp_specifier()
+
+    admitted = [v for v in AIOHTTP_POOL_POISONING_RELEASES if specifier.contains(v)]
+    assert not admitted, (
+        f"litellm declares aiohttp{specifier}, which still admits {admitted}. "
+        "Those releases poison pooled keep-alive connections and cause "
+        "cross-provider sub-millisecond 'Connection timed out' failures; "
+        "keep the floor at >=3.14.2."
+    )
+
+
+def test_locked_aiohttp_version_is_not_pool_poisoning():
+    """uv.lock is what the published Docker images install (uv sync --frozen), so a
+    lock that drifts back onto 3.14.0/3.14.1 ships the regression regardless of
+    what pyproject.toml declares.
+    """
+    from packaging.specifiers import SpecifierSet
+
+    locked = _locked_aiohttp_version()
+
+    assert not SpecifierSet(AIOHTTP_POOL_POISONING_RANGE).contains(locked), (
+        f"uv.lock resolves aiohttp {locked}, which is inside the pool-poisoning "
+        f"range {AIOHTTP_POOL_POISONING_RANGE} (aio-libs/aiohttp#12953). "
+        "Re-run `uv lock` against an aiohttp>=3.14.2 floor."
+    )
+
+
 import os
 import subprocess
 import time
@@ -100,18 +221,34 @@ import pytest
 import requests
 
 
-def test_litellm_proxy_server_config_no_general_settings():
-    # Sync the local litellm packages into the project environment
+def _run_proxy_server_smoke_test(extra_proxy_args=None):
+    """Sync deps, generate Prisma client, start proxy with optional extra args,
+    send a health check + chat/completions request, and tear down."""
+    if extra_proxy_args is None:
+        extra_proxy_args = []
+
     server_process = None
     try:
-        _run_uv("sync", "--frozen", "--group", "proxy-dev", "--extra", "proxy", "--extra", "extra_proxy")
-        
+        _run_uv(
+            "sync",
+            "--frozen",
+            "--group",
+            "proxy-dev",
+            "--extra",
+            "proxy",
+            "--extra",
+            "extra_proxy",
+        )
+
         # Ensure Prisma client is generated
         try:
             print(f"Running prisma generate from: {PROJECT_ROOT}")
-            
+
             result = _run_uv(
-                "run", "--no-sync", "prisma", "generate",
+                "run",
+                "--no-sync",
+                "prisma",
+                "generate",
                 capture_output=True,
                 text=True,
             )
@@ -123,7 +260,17 @@ def test_litellm_proxy_server_config_no_general_settings():
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
         server_process = subprocess.Popen(
-            ["uv", "run", "--no-sync", "python", "-m", "litellm.proxy.proxy_cli", "--config", config_fp],
+            [
+                "uv",
+                "run",
+                "--no-sync",
+                "python",
+                "-m",
+                "litellm.proxy.proxy_cli",
+                "--config",
+                config_fp,
+                *extra_proxy_args,
+            ],
             cwd=PROJECT_ROOT,
         )
 
@@ -161,3 +308,17 @@ def test_litellm_proxy_server_config_no_general_settings():
 
     # Additional assertions can be added here
     assert True
+
+
+def test_litellm_proxy_server_config_no_general_settings():
+    """Exercises the default (v1) migration resolver."""
+    _run_proxy_server_smoke_test()
+
+
+def test_litellm_proxy_server_config_no_general_settings_v2_resolver():
+    """Exercises the opt-in v2 migration resolver.
+
+    Runs in a separate CI job against a local Postgres to avoid collisions
+    with the v1 variant when they share a database.
+    """
+    _run_proxy_server_smoke_test(extra_proxy_args=["--use_v2_migration_resolver"])

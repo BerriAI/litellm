@@ -14,17 +14,24 @@ Covers:
 """
 
 import asyncio
-from typing import List
+from typing import List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ResponseInputParam,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_logging_obj(
     merged_model: str,
@@ -40,9 +47,7 @@ def _make_logging_obj(
     logging_obj.should_run_prompt_management_hooks.return_value = should_run
     prompt_return = (merged_model, merged_messages, merged_optional_params)
     logging_obj.get_chat_completion_prompt.return_value = prompt_return
-    logging_obj.async_get_chat_completion_prompt = AsyncMock(
-        return_value=prompt_return
-    )
+    logging_obj.async_get_chat_completion_prompt = AsyncMock(return_value=prompt_return)
     logging_obj.model_call_details = {}
     return logging_obj
 
@@ -72,9 +77,60 @@ def _patch_responses_dispatch():
     ]
 
 
+def _make_cache_control_case() -> tuple[
+    ResponseInputParam,
+    list[AllMessageValues],
+    dict[str, object],
+]:
+    system_message = cast(
+        AllMessageValues,
+        {"role": "system", "content": "Analyze the request"},
+    )
+    assistant_message = cast(
+        AllMessageValues,
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "The code has a bug",
+                    "annotations": [],
+                }
+            ],
+        },
+    )
+    user_message = cast(
+        AllMessageValues,
+        {"role": "user", "content": "Check for security issues"},
+    )
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [],
+        "encrypted_content": "encrypted",
+    }
+    original_input = cast(
+        ResponseInputParam,
+        [system_message, reasoning_item, assistant_message, user_message],
+    )
+    _, merged_messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="azure/gpt-5-codex",
+        messages=[system_message, assistant_message, user_message],
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+    return original_input, merged_messages, reasoning_item
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestResponsesAPIPromptManagement:
 
@@ -96,6 +152,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             litellm.responses(
                 input="Tell me about AI.",
                 model="gpt-4o",
@@ -130,6 +187,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             litellm.responses(
                 input=client_messages,  # type: ignore[arg-type]
                 model="gpt-4o",
@@ -152,6 +210,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             litellm.responses(
                 input="Hello",
                 model="gpt-4o",
@@ -182,6 +241,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3] as mock_handler:
             import litellm
+
             litellm.responses(
                 input="Hello",
                 model="gpt-4o",
@@ -207,6 +267,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3] as mock_handler:
             import litellm
+
             litellm.responses(
                 input="What is AI?",
                 model="gpt-4o",
@@ -221,7 +282,8 @@ class TestResponsesAPIPromptManagement:
 
     def test_non_message_input_items_filtered(self):
         """[F] Non-message items in ResponseInputParam (e.g. function_call_output) are
-        filtered out before being passed to the prompt hook, avoiding malformed merges."""
+        filtered out before being passed to the prompt hook, avoiding malformed merges.
+        """
         template_messages: List[AllMessageValues] = [
             {"role": "system", "content": "You are helpful."},  # type: ignore[list-item]
         ]
@@ -237,6 +299,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             litellm.responses(
                 input=mixed_input,  # type: ignore[arg-type]
                 model="gpt-4o",
@@ -249,9 +312,70 @@ class TestResponsesAPIPromptManagement:
         assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
         assert len(passed_messages) == 1
 
+    def test_cache_control_hook_preserves_reasoning_items(self):
+        original_input, merged_messages, reasoning_item = _make_cache_control_case()
+        logging_obj = _make_logging_obj(
+            merged_model="azure/gpt-5-codex",
+            merged_messages=merged_messages,
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=original_input,
+                model="azure/gpt-5-codex",
+                litellm_logging_obj=logging_obj,
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert [item.get("type") for item in sent_input] == [
+            None,
+            "reasoning",
+            "message",
+            None,
+        ]
+        assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
+        assert sent_input[1] == reasoning_item
+        assert sent_input[2]["id"] == "msg_1"
+
+    def test_all_non_message_input_items_remain_unchanged(self):
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "encrypted",
+        }
+        original_input = cast(ResponseInputParam, [reasoning_item])
+        logging_obj = _make_logging_obj(
+            merged_model="openai/gpt-4o",
+            merged_messages=[
+                cast(
+                    AllMessageValues,
+                    {"role": "system", "content": "Analyze the request"},
+                )
+            ],
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            litellm.responses(
+                input=original_input,
+                model="gpt-4o",
+                prompt_id="all-non-message",
+                litellm_logging_obj=logging_obj,
+            )
+
+        assert mock_handler.call_args.kwargs["input"] == original_input
+
     def test_model_override_re_resolves_provider(self):
         """[G] When the prompt template overrides the model to a different provider,
-        custom_llm_provider is re-resolved so downstream routing uses the correct provider."""
+        custom_llm_provider is re-resolved so downstream routing uses the correct provider.
+        """
         template_messages: List[AllMessageValues] = [
             {"role": "user", "content": "Hi"},  # type: ignore[list-item]
         ]
@@ -274,6 +398,7 @@ class TestResponsesAPIPromptManagement:
             patches[3] as mock_handler,
         ):
             import litellm
+
             litellm.responses(
                 input="Hi",
                 model="gpt-4o",
@@ -309,6 +434,7 @@ class TestAsyncResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             await litellm.aresponses(
                 input="Hi",
                 model="gpt-4o",
@@ -338,6 +464,7 @@ class TestAsyncResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3] as mock_handler:
             import litellm
+
             await litellm.aresponses(
                 input="Hello",
                 model="gpt-4o",
@@ -368,6 +495,7 @@ class TestAsyncResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             await litellm.aresponses(
                 input=mixed_input,  # type: ignore[arg-type]
                 model="gpt-4o",
@@ -381,3 +509,33 @@ class TestAsyncResponsesAPIPromptManagement:
         passed_messages = call_kwargs["messages"]
         assert all(isinstance(m, dict) and "role" in m for m in passed_messages)
         assert len(passed_messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_async_cache_control_hook_preserves_reasoning_items(self):
+        original_input, merged_messages, reasoning_item = _make_cache_control_case()
+        logging_obj = _make_logging_obj(
+            merged_model="azure/gpt-5-codex",
+            merged_messages=merged_messages,
+        )
+
+        patches = _patch_responses_dispatch()
+        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+            import litellm
+
+            await litellm.aresponses(
+                input=original_input,
+                model="azure/gpt-5-codex",
+                litellm_logging_obj=logging_obj,
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            )
+
+        sent_input = mock_handler.call_args.kwargs["input"]
+        assert [item.get("type") for item in sent_input] == [
+            None,
+            "reasoning",
+            "message",
+            None,
+        ]
+        assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
+        assert sent_input[1] == reasoning_item
+        assert sent_input[2]["id"] == "msg_1"

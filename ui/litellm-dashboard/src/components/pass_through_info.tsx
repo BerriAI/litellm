@@ -17,7 +17,7 @@ import { Button, Form, Input, Switch, InputNumber, Select } from "antd";
 import { updatePassThroughEndpoint, deletePassThroughEndpointsCall } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
 import RoutePreview from "./route_preview";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
 import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 
@@ -40,6 +40,7 @@ interface PassThroughEndpoint {
   headers: Record<string, any>;
   include_subpath?: boolean;
   cost_per_request?: number;
+  timeout?: number;
   auth?: boolean;
   methods?: string[];
   guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
@@ -52,10 +53,10 @@ const PasswordField: React.FC<{ value: Record<string, any> }> = ({ value }) => {
 
   return (
     <div className="flex items-center space-x-2">
-      <pre className="font-mono text-xs bg-gray-50 p-2 rounded max-w-md overflow-auto">
+      <pre className="font-mono text-xs bg-gray-50 p-2 rounded-sm max-w-md overflow-auto">
         {showPassword ? headerString : "••••••••"}
       </pre>
-      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded" type="button">
+      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded-sm" type="button">
         {showPassword ? <EyeOff className="w-4 h-4 text-gray-500" /> : <Eye className="w-4 h-4 text-gray-500" />}
       </button>
     </div>
@@ -71,13 +72,13 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   onEndpointUpdated,
 }) => {
   const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(initialEndpointData);
-  const [loading, setLoading] = useState(false);
+  const [loading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [authEnabled, setAuthEnabled] = useState(initialEndpointData?.auth || false);
   const [selectedMethods, setSelectedMethods] = useState<string[]>(initialEndpointData?.methods || []);
-  const [guardrails, setGuardrails] = useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>(
-    initialEndpointData?.guardrails || {}
-  );
+  const [guardrails, setGuardrails] = useState<
+    Record<string, { request_fields?: string[]; response_fields?: string[] } | null>
+  >(initialEndpointData?.guardrails || {});
   const [form] = Form.useForm();
 
   const handleEndpointUpdate = async (values: any) => {
@@ -90,7 +91,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         try {
           headers = typeof values.headers === "string" ? JSON.parse(values.headers) : values.headers;
         } catch (e) {
-          NotificationsManager.fromBackend("Invalid JSON format for headers");
+          toast.fromError("Invalid JSON format for headers");
           return;
         }
       }
@@ -101,6 +102,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         headers: headers,
         include_subpath: values.include_subpath,
         cost_per_request: values.cost_per_request,
+        timeout: values.timeout,
         auth: premiumUser ? values.auth : undefined,
         methods: selectedMethods && selectedMethods.length > 0 ? selectedMethods : undefined,
         guardrails: guardrails && Object.keys(guardrails).length > 0 ? guardrails : undefined,
@@ -120,7 +122,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       }
     } catch (error) {
       console.error("Error updating endpoint:", error);
-      NotificationsManager.fromBackend("Failed to update pass through endpoint");
+      toast.fromError("Failed to update pass through endpoint");
     }
   };
 
@@ -129,14 +131,14 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       if (!accessToken || !endpointData?.id) return;
 
       await deletePassThroughEndpointsCall(accessToken, endpointData.id);
-      NotificationsManager.success("Pass through endpoint deleted successfully");
+      toast.success("Pass through endpoint deleted successfully");
       onClose();
       if (onEndpointUpdated) {
         onEndpointUpdated();
       }
     } catch (error) {
       console.error("Error deleting endpoint:", error);
-      NotificationsManager.fromBackend("Failed to delete pass through endpoint");
+      toast.fromError("Failed to delete pass through endpoint");
     }
   };
 
@@ -252,13 +254,11 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                 </div>
                 <div className="mt-4 space-y-2">
                   {Object.entries(endpointData.guardrails).map(([name, settings]) => (
-                    <div key={name} className="p-3 bg-gray-50 rounded">
+                    <div key={name} className="p-3 bg-gray-50 rounded-sm">
                       <div className="font-medium text-sm">{name}</div>
                       {settings && (settings.request_fields || settings.response_fields) && (
                         <div className="mt-2 text-xs text-gray-600 space-y-1">
-                          {settings.request_fields && (
-                            <div>Request fields: {settings.request_fields.join(", ")}</div>
-                          )}
+                          {settings.request_fields && <div>Request fields: {settings.request_fields.join(", ")}</div>}
                           {settings.response_fields && (
                             <div>Response fields: {settings.response_fields.join(", ")}</div>
                           )}
@@ -299,6 +299,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       headers: endpointData.headers ? JSON.stringify(endpointData.headers, null, 2) : "",
                       include_subpath: endpointData.include_subpath || false,
                       cost_per_request: endpointData.cost_per_request,
+                      timeout: endpointData.timeout,
                       auth: endpointData.auth || false,
                       methods: endpointData.methods || [],
                     }}
@@ -319,12 +320,12 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Form.Item 
+                    <Form.Item
                       label="HTTP Methods (Optional)"
                       name="methods"
                       extra={
-                        selectedMethods.length === 0 
-                          ? "All HTTP methods supported (default)" 
+                        selectedMethods.length === 0
+                          ? "All HTTP methods supported (default)"
                           : `Only ${selectedMethods.join(", ")} requests will be routed to this endpoint`
                       }
                     >
@@ -350,6 +351,14 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
 
                     <Form.Item label="Cost per Request" name="cost_per_request">
                       <InputNumber min={0} step={0.01} precision={2} placeholder="0.00" addonBefore="$" />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Request Timeout (seconds)"
+                      name="timeout"
+                      extra="Max time to wait for upstream response. Leave empty to use the global pass_through_request_timeout (default 600s)."
+                    >
+                      <InputNumber min={1} step={1} precision={0} placeholder="600" style={{ width: "100%" }} />
                     </Form.Item>
 
                     <PassThroughSecuritySection
@@ -396,11 +405,15 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                         <div>${endpointData.cost_per_request}</div>
                       </div>
                     )}
+                    {endpointData.timeout !== undefined && endpointData.timeout !== null && (
+                      <div>
+                        <Text className="font-medium">Request Timeout</Text>
+                        <div>{endpointData.timeout}s</div>
+                      </div>
+                    )}
                     <div>
                       <Text className="font-medium">Authentication Required</Text>
-                      <Badge color={endpointData.auth ? "green" : "gray"}>
-                        {endpointData.auth ? "Yes" : "No"}
-                      </Badge>
+                      <Badge color={endpointData.auth ? "green" : "gray"}>{endpointData.auth ? "Yes" : "No"}</Badge>
                     </div>
                     <div>
                       <Text className="font-medium">Headers</Text>

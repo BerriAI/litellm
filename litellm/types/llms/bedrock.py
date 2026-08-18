@@ -1,7 +1,8 @@
 import json
-from typing import Any, Dict, List, Literal, Optional, Union
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Final, Literal
 
-from typing_extensions import TYPE_CHECKING, Required, TypedDict, override
+from typing_extensions import Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -17,47 +18,58 @@ class SystemContentBlock(TypedDict, total=False):
 
 
 class SourceBlock(TypedDict):
-    bytes: Optional[str]  # base 64 encoded string
+    bytes: str | None  # base 64 encoded string
 
 
 BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
 
 
 class ImageBlock(TypedDict):
-    format: Union[BedrockImageTypes, str]
+    format: BedrockImageTypes | str
     source: SourceBlock
 
 
-BedrockVideoTypes = Literal[
-    "mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"
-]
+BedrockVideoTypes = Literal["mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"]
 
 
 class VideoBlock(TypedDict):
-    format: Union[BedrockVideoTypes, str]
+    format: BedrockVideoTypes | str
     source: SourceBlock
 
 
-BedrockDocumentTypes = Literal[
-    "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
-]
+BedrockDocumentTypes = Literal["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
 
 
 class DocumentBlock(TypedDict):
-    format: Union[BedrockDocumentTypes, str]
+    format: BedrockDocumentTypes | str
     source: SourceBlock
     name: str
+
+
+class SearchResultBlock(TypedDict, total=False):
+    """
+    Search result block used in Bedrock toolResult content.
+
+    Reference:
+    https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_SearchResultBlock.html
+    """
+
+    source: str
+    title: str
+    content: list[dict]
+    citations: dict
 
 
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    searchResult: SearchResultBlock
     json: dict
     text: str
 
 
 class ToolResultBlock(TypedDict, total=False):
-    content: Required[List[ToolResultContentBlock]]
+    content: Required[list[ToolResultContentBlock]]
     toolUseId: Required[str]
     status: Literal["success", "error"]
 
@@ -106,24 +118,41 @@ class CitationWebLocationBlock(TypedDict, total=False):
     domain: str
 
 
+class CitationSearchResultLocationBlock(TypedDict, total=False):
+    """
+    Character span of a Nova grounding citation within the cited content,
+    plus the index of the search result it refers to.
+    """
+
+    start: int
+    end: int
+    searchResultIndex: int
+
+
 class CitationLocationBlock(TypedDict, total=False):
     """
-    Location block containing the web location for a citation.
+    Location block describing where a citation points to.
     """
 
     web: CitationWebLocationBlock
+    searchResultLocation: CitationSearchResultLocationBlock
 
 
 class CitationReferenceBlock(TypedDict, total=False):
     """
-    Citation reference block containing a single citation with its location.
-
-    Each citation contains:
-    - location.web.url: The URL of the source
-    - location.web.domain: The domain of the source
+    Citation reference block containing a single citation with its location,
+    source URL and title.
     """
 
     location: CitationLocationBlock
+    source: str
+    title: str
+
+
+class CitationGeneratedContentBlock(TypedDict, total=False):
+    """A piece of generated text associated with a citationsContent block."""
+
+    text: str
 
 
 class CitationsContentBlock(TypedDict, total=False):
@@ -131,28 +160,34 @@ class CitationsContentBlock(TypedDict, total=False):
     Citations content block returned by Nova grounding (web search) tool.
 
     When Nova grounding is enabled via systemTool, the model may return
-    citationsContent blocks containing web search citation references.
+    citationsContent blocks containing the grounded text and its citation
+    references.
 
     Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
 
     Example response structure:
         {
             "citationsContent": {
+                "content": [{"text": "The grounded answer text ..."}],
                 "citations": [
                     {
                         "location": {
-                            "web": {
-                                "url": "https://example.com/article",
-                                "domain": "example.com"
+                            "searchResultLocation": {
+                                "start": 0,
+                                "end": 42,
+                                "searchResultIndex": 0
                             }
-                        }
+                        },
+                        "source": "https://example.com/article",
+                        "title": "Example Article"
                     }
                 ]
             }
         }
     """
 
-    citations: List[CitationReferenceBlock]
+    content: list[CitationGeneratedContentBlock]
+    citations: list[CitationReferenceBlock]
 
 
 class ContentBlock(TypedDict, total=False):
@@ -169,7 +204,7 @@ class ContentBlock(TypedDict, total=False):
 
 
 class MessageBlock(TypedDict):
-    content: List[ContentBlock]
+    content: list[ContentBlock]
     role: Literal["user", "assistant"]
 
 
@@ -178,7 +213,7 @@ class ConverseMetricsBlock(TypedDict):
 
 
 class ConverseResponseOutputBlock(TypedDict):
-    message: Optional[MessageBlock]
+    message: MessageBlock | None
 
 
 class ConverseTokenUsageBlock(TypedDict):
@@ -199,9 +234,7 @@ class ConverseResponseBlock(TypedDict, total=False):
     additionalModelResponseFields: dict
     metrics: ConverseMetricsBlock
     output: Required[ConverseResponseOutputBlock]
-    stopReason: Required[
-        str
-    ]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
+    stopReason: Required[str]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
     usage: Required[ConverseTokenUsageBlock]
     serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
 
@@ -209,17 +242,19 @@ class ConverseResponseBlock(TypedDict, total=False):
 class ToolJsonSchemaBlock(TypedDict, total=False):
     type: Literal["object"]
     properties: dict
-    required: List[str]
+    required: list[str]
+    additionalProperties: bool
 
 
 class ToolInputSchemaBlock(TypedDict):
-    json: Optional[ToolJsonSchemaBlock]
+    json: ToolJsonSchemaBlock | None
 
 
 class ToolSpecBlock(TypedDict, total=False):
     inputSchema: Required[ToolInputSchemaBlock]
     name: Required[str]
     description: str
+    strict: bool
 
 
 class SystemToolBlock(TypedDict, total=False):
@@ -238,9 +273,39 @@ class SystemToolBlock(TypedDict, total=False):
 
 
 class ToolBlock(TypedDict, total=False):
-    toolSpec: Optional[ToolSpecBlock]
-    systemTool: Optional[SystemToolBlock]
-    cachePoint: Optional[CachePointBlock]
+    toolSpec: ToolSpecBlock | None
+    systemTool: SystemToolBlock | None
+    cachePoint: CachePointBlock | None
+
+
+class BedrockToolSpec(dict):
+    def __init__(
+        self,
+        *,
+        name: str,
+        description: str,
+        parameters: dict,
+        strict: bool | None,
+        supports_strict_tools: bool,
+    ) -> None:
+        json_schema: Final[ToolJsonSchemaBlock] = {
+            "type": parameters["type"],
+            "properties": parameters.get("properties", {}),
+            "required": parameters.get("required", []),
+        }
+        additional_properties: Final = parameters.get("additionalProperties")
+        if supports_strict_tools and additional_properties is not None:
+            json_schema["additionalProperties"] = additional_properties
+
+        tool_spec: Final[ToolSpecBlock] = {
+            "inputSchema": {"json": json_schema},
+            "name": name,
+            "description": description,
+        }
+        if supports_strict_tools and strict:
+            tool_spec["strict"] = strict
+
+        super().__init__(toolSpec=tool_spec)
 
 
 class SpecificToolChoiceBlock(TypedDict):
@@ -254,19 +319,19 @@ class ToolChoiceValuesBlock(TypedDict, total=False):
 
 
 class ToolConfigBlock(TypedDict, total=False):
-    tools: Required[List[ToolBlock]]
-    toolChoice: Union[str, ToolChoiceValuesBlock]
+    tools: Required[list[ToolBlock]]
+    toolChoice: str | ToolChoiceValuesBlock
 
 
 class GuardrailConfigBlock(TypedDict, total=False):
     guardrailIdentifier: str
     guardrailVersion: str
-    trace: Literal["enabled", "disabled"]
+    trace: Literal["enabled", "disabled", "enabled_full"]
 
 
 class InferenceConfig(TypedDict, total=False):
     maxTokens: int
-    stopSequences: List[str]
+    stopSequences: list[str]
     temperature: float
     topP: float
     topK: int
@@ -282,7 +347,7 @@ class ToolUseBlockStartEvent(TypedDict):
 
 
 class ContentBlockStartEvent(TypedDict, total=False):
-    toolUse: Optional[ToolUseBlockStartEvent]
+    toolUse: ToolUseBlockStartEvent | None
     reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
@@ -329,23 +394,21 @@ class OutputConfigBlock(TypedDict, total=False):
     textFormat: OutputFormat
 
 
-class CommonRequestObject(
-    TypedDict, total=False
-):  # common request object across sync + async flows
+class CommonRequestObject(TypedDict, total=False):  # common request object across sync + async flows
     additionalModelRequestFields: dict
-    additionalModelResponseFieldPaths: List[str]
+    additionalModelResponseFieldPaths: list[str]
     inferenceConfig: InferenceConfig
-    system: List[SystemContentBlock]
+    system: list[SystemContentBlock]
     toolConfig: ToolConfigBlock
-    guardrailConfig: Optional[GuardrailConfigBlock]
-    performanceConfig: Optional[PerformanceConfigBlock]
-    serviceTier: Optional[ServiceTierBlock]
-    requestMetadata: Optional[Dict[str, str]]
-    outputConfig: Optional[OutputConfigBlock]
+    guardrailConfig: GuardrailConfigBlock | None
+    performanceConfig: PerformanceConfigBlock | None
+    serviceTier: ServiceTierBlock | None
+    requestMetadata: dict[str, str] | None
+    outputConfig: OutputConfigBlock | None
 
 
 class RequestObject(CommonRequestObject, total=False):
-    messages: Required[List[MessageBlock]]
+    messages: Required[list[MessageBlock]]
 
 
 class BedrockInvokeNovaRequest(TypedDict, total=False):
@@ -353,19 +416,19 @@ class BedrockInvokeNovaRequest(TypedDict, total=False):
     Request object for sending `nova` requests to `/bedrock/invoke/`
     """
 
-    messages: List[MessageBlock]
+    messages: list[MessageBlock]
     inferenceConfig: InferenceConfig
-    system: List[SystemContentBlock]
+    system: list[SystemContentBlock]
     toolConfig: ToolConfigBlock
-    guardrailConfig: Optional[GuardrailConfigBlock]
+    guardrailConfig: GuardrailConfigBlock | None
 
 
 class GenericStreamingChunk(TypedDict):
     text: Required[str]
-    tool_use: Optional[ChatCompletionToolCallChunk]
+    tool_use: ChatCompletionToolCallChunk | None
     is_finished: Required[bool]
     finish_reason: Required[str]
-    usage: Optional[ConverseTokenUsageBlock]
+    usage: ConverseTokenUsageBlock | None
     index: int
 
 
@@ -378,10 +441,10 @@ class ServerSentEvent:
     def __init__(
         self,
         *,
-        event: Optional[str] = None,
-        data: Optional[str] = None,
-        id: Optional[str] = None,
-        retry: Optional[int] = None,
+        event: str | None = None,
+        data: str | None = None,
+        id: str | None = None,
+        retry: int | None = None,
     ) -> None:
         if data is None:
             data = ""
@@ -392,15 +455,15 @@ class ServerSentEvent:
         self._retry = retry
 
     @property
-    def event(self) -> Optional[str]:
+    def event(self) -> str | None:
         return self._event
 
     @property
-    def id(self) -> Optional[str]:
+    def id(self) -> str | None:
         return self._id
 
     @property
-    def retry(self) -> Optional[int]:
+    def retry(self) -> int | None:
         return self._retry
 
     @property
@@ -415,14 +478,12 @@ class ServerSentEvent:
         return f"ServerSentEvent(event={self.event}, data={self.data}, id={self.id}, retry={self.retry})"
 
 
-COHERE_EMBEDDING_INPUT_TYPES = Literal[
-    "search_document", "search_query", "classification", "clustering", "image"
-]
+COHERE_EMBEDDING_INPUT_TYPES = Literal["search_document", "search_query", "classification", "clustering", "image"]
 
 
 class CohereEmbeddingRequest(TypedDict, total=False):
-    texts: List[str]
-    images: List[str]
+    texts: list[str]
+    images: list[str]
     input_type: Required[COHERE_EMBEDDING_INPUT_TYPES]
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
@@ -434,26 +495,26 @@ class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
 
 
 class CohereEmbeddingResponse(TypedDict):
-    embeddings: List[List[float]]
+    embeddings: list[list[float]]
     id: str
     response_type: Literal["embedding_floats"]
-    texts: List[str]
+    texts: list[str]
 
 
 class AmazonTitanV2EmbeddingRequest(TypedDict, total=False):
     inputText: Required[str]
     dimensions: int
     normalize: bool
-    embeddingTypes: List[Literal["float", "binary"]]
+    embeddingTypes: list[Literal["float", "binary"]]
 
 
 class AmazonTitanV2EmbeddingsByType(TypedDict, total=False):
-    binary: List[int]  # Array of integers for binary format
-    float: List[float]  # Array of floats for float format
+    binary: list[int]  # Array of integers for binary format
+    float: list[float]  # Array of floats for float format
 
 
 class AmazonTitanV2EmbeddingResponse(TypedDict, total=False):
-    embedding: List[float]  # Legacy field - array of floats (backward compatibility)
+    embedding: list[float]  # Legacy field - array of floats (backward compatibility)
     embeddingsByType: AmazonTitanV2EmbeddingsByType  # New format per AWS schema
     inputTextTokenCount: Required[int]  # Always present in AWS response
 
@@ -463,7 +524,7 @@ class AmazonTitanG1EmbeddingRequest(TypedDict):
 
 
 class AmazonTitanG1EmbeddingResponse(TypedDict):
-    embedding: List[float]
+    embedding: list[float]
     inputTextTokenCount: int
 
 
@@ -478,7 +539,7 @@ class AmazonTitanMultimodalEmbeddingRequest(TypedDict, total=False):
 
 
 class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
-    embedding: List[float]
+    embedding: list[float]
     inputTextTokenCount: int
     message: str  # Specifies any errors that occur during generation.
 
@@ -507,11 +568,11 @@ class TwelveLabsMarengoEmbeddingRequest(TypedDict, total=False):
     lengthSec: float
     useFixedLengthSec: float
     minClipSec: int
-    embeddingOption: List[TWELVELABS_EMBEDDING_OPTIONS]
+    embeddingOption: list[TWELVELABS_EMBEDDING_OPTIONS]
 
 
 class TwelveLabsMarengoEmbeddingResponse(TypedDict):
-    embedding: List[float]
+    embedding: list[float]
     embeddingOption: TWELVELABS_EMBEDDING_OPTIONS
     startSec: float
     endSec: float
@@ -537,10 +598,10 @@ class TwelveLabsAsyncInvokeStatusResponse(TypedDict):
     status: str  # "InProgress" | "Completed" | "Failed"
     submitTime: str
     lastModifiedTime: str
-    endTime: Optional[str]
+    endTime: str | None
     outputDataConfig: TwelveLabsOutputDataConfig
-    clientRequestToken: Optional[str]
-    failureMessage: Optional[str]
+    clientRequestToken: str | None
+    failureMessage: str | None
 
 
 # Amazon Nova Multimodal Embeddings types
@@ -564,9 +625,7 @@ NOVA_DETAIL_LEVELS = Literal["STANDARD_IMAGE", "DOCUMENT_IMAGE"]
 
 NOVA_EMBEDDING_MODES = Literal["AUDIO_VIDEO_COMBINED", "AUDIO_VIDEO_SEPARATE"]
 
-NOVA_EMBEDDING_TYPES = Literal[
-    "TEXT", "IMAGE", "VIDEO", "AUDIO", "AUDIO_VIDEO_COMBINED"
-]
+NOVA_EMBEDDING_TYPES = Literal["TEXT", "IMAGE", "VIDEO", "AUDIO", "AUDIO_VIDEO_COMBINED"]
 
 
 class NovaSourceS3Location(TypedDict):
@@ -648,12 +707,12 @@ class NovaEmbeddingRequest(TypedDict, total=False):
 
 class NovaEmbeddingItem(TypedDict, total=False):
     embeddingType: NOVA_EMBEDDING_TYPES
-    embedding: Required[List[float]]
+    embedding: Required[list[float]]
     truncatedCharLength: int  # Only for text
 
 
 class NovaEmbeddingResponse(TypedDict):
-    embeddings: List[NovaEmbeddingItem]
+    embeddings: list[NovaEmbeddingItem]
 
 
 class NovaS3OutputDataConfig(TypedDict):
@@ -670,11 +729,9 @@ class NovaAsyncInvokeRequest(TypedDict):
     outputDataConfig: NovaOutputDataConfig
 
 
-AmazonEmbeddingRequest = Union[
-    AmazonTitanMultimodalEmbeddingRequest,
-    AmazonTitanV2EmbeddingRequest,
-    AmazonTitanG1EmbeddingRequest,
-]
+AmazonEmbeddingRequest = (
+    AmazonTitanMultimodalEmbeddingRequest | AmazonTitanV2EmbeddingRequest | AmazonTitanG1EmbeddingRequest
+)
 
 
 class AmazonStability3TextToImageRequest(TypedDict, total=False):
@@ -685,9 +742,7 @@ class AmazonStability3TextToImageRequest(TypedDict, total=False):
     """
 
     prompt: str
-    aspect_ratio: Literal[
-        "16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"
-    ]
+    aspect_ratio: Literal["16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"]
     mode: Literal["image-to-image", "text-to-image"]
     output_format: Literal["JPEG", "PNG"]
     seed: int
@@ -701,9 +756,9 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-diffusion-3-text-image.html
     """
 
-    images: List[str]
-    seeds: List[str]
-    finish_reasons: List[str]
+    images: list[str]
+    seeds: list[str]
+    finish_reasons: list[str]
 
 
 class AmazonTitanTextToImageParams(TypedDict, total=False):
@@ -719,8 +774,6 @@ class AmazonNovaCanvasRequestBase(TypedDict, total=False):
     """
     Base class for Amazon Nova Canvas API requests
     """
-
-    pass
 
 
 class AmazonNovaCanvasImageGenerationConfig(TypedDict, total=False):
@@ -750,9 +803,7 @@ class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
     conditionImage: str
 
 
-class AmazonNovaCanvasTextToImageRequest(
-    AmazonNovaCanvasRequestBase, TypedDict, total=False
-):
+class AmazonNovaCanvasTextToImageRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Text to Image API
 
@@ -769,15 +820,13 @@ class AmazonNovaCanvasColorGuidedGenerationParams(TypedDict, total=False):
     Params for Amazon Nova Canvas Color Guided Generation API
     """
 
-    colors: List[str]
+    colors: list[str]
     referenceImage: str
     text: str
     negativeText: str
 
 
-class AmazonNovaCanvasColorGuidedRequest(
-    AmazonNovaCanvasRequestBase, TypedDict, total=False
-):
+class AmazonNovaCanvasColorGuidedRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Color Guided Generation API
 
@@ -796,7 +845,7 @@ class AmazonNovaCanvasTextToImageResponse(TypedDict, total=False):
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
     """
 
-    images: List[str]
+    images: list[str]
 
 
 class AmazonNovaCanvasInpaintingParams(TypedDict, total=False):
@@ -810,9 +859,7 @@ class AmazonNovaCanvasInpaintingParams(TypedDict, total=False):
     negativeText: str
 
 
-class AmazonNovaCanvasInpaintingRequest(
-    AmazonNovaCanvasRequestBase, TypedDict, total=False
-):
+class AmazonNovaCanvasInpaintingRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
     """
     Request for Amazon Nova Canvas Inpainting API
 
@@ -895,15 +942,15 @@ class BedrockRerankRequest(TypedDict):
     Request for Bedrock Rerank API
     """
 
-    queries: List[BedrockRerankQuery]
+    queries: list[BedrockRerankQuery]
     rerankingConfiguration: BedrockRerankConfiguration
-    sources: List[BedrockRerankSource]
+    sources: list[BedrockRerankSource]
 
 
 class AmazonDeepSeekR1StreamingResponse(TypedDict):
     generation: str
     generation_token_count: int
-    stop_reason: Optional[str]
+    stop_reason: str | None
     prompt_token_count: int
 
 
@@ -926,13 +973,18 @@ class BedrockS3OutputDataConfig(TypedDict, total=False):
     """S3 output data configuration for Bedrock batch jobs."""
 
     s3Uri: str
-    s3EncryptionKeyId: Optional[str]
+    s3EncryptionKeyId: str | None
 
 
 class BedrockOutputDataConfig(TypedDict):
     """Output data configuration for Bedrock batch jobs."""
 
     s3OutputDataConfig: BedrockS3OutputDataConfig
+
+
+class BedrockTag(TypedDict):
+    key: str
+    value: str
 
 
 class BedrockCreateBatchRequest(TypedDict, total=False):
@@ -947,14 +999,12 @@ class BedrockCreateBatchRequest(TypedDict, total=False):
     modelId: str
     inputDataConfig: BedrockInputDataConfig
     outputDataConfig: BedrockOutputDataConfig
-    timeoutDurationInHours: Optional[int]
-    clientRequestToken: Optional[str]
-    tags: Optional[List[dict]]
+    timeoutDurationInHours: int | None
+    clientRequestToken: str | None
+    tags: list[BedrockTag] | None
 
 
-BedrockBatchJobStatus = Literal[
-    "Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"
-]
+BedrockBatchJobStatus = Literal["Submitted", "InProgress", "Completed", "Failed", "Stopping", "Stopped"]
 
 
 class BedrockCreateBatchResponse(TypedDict):
@@ -981,17 +1031,83 @@ class BedrockGetBatchResponse(TypedDict, total=False):
     modelId: str
     roleArn: str
     status: BedrockBatchJobStatus
-    message: Optional[str]
-    submitTime: Optional[str]
-    lastModifiedTime: Optional[str]
-    endTime: Optional[str]
+    message: str | None
+    submitTime: str | None
+    lastModifiedTime: str | None
+    endTime: str | None
     inputDataConfig: BedrockInputDataConfig
     outputDataConfig: BedrockOutputDataConfig
-    timeoutDurationInHours: Optional[int]
-    clientRequestToken: Optional[str]
+    timeoutDurationInHours: int | None
+    clientRequestToken: str | None
 
 
 class BedrockToolBlock(TypedDict, total=False):
-    toolSpec: Optional[ToolSpecBlock]
-    systemTool: Optional[SystemToolBlock]  # For Nova grounding
-    cachePoint: Optional[CachePointBlock]
+    toolSpec: ToolSpecBlock | None
+    systemTool: SystemToolBlock | None  # For Nova grounding
+    cachePoint: CachePointBlock | None
+
+
+class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
+    """
+    Top-level request body accepted by AWS Bedrock `InvokeModel` /
+    `InvokeModelWithResponseStream` when calling an Anthropic Claude model with
+    the Messages API format. The LiteLLM /v1/messages → Bedrock Invoke
+    transformation filters outgoing requests to the keys of this TypedDict; any
+    other field (Anthropic-only extension, internal metadata, future addition)
+    is dropped before signing so Bedrock doesn't 400 with
+    "Extra inputs are not permitted".
+
+    Reference:
+        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
+        https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
+
+    Editing this type is the single source of truth — the runtime allowlist in
+    `AmazonAnthropicClaudeMessagesConfig.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS`
+    is derived from `__annotations__`, and a test asserts the resolved set
+    exactly, so any edit forces a conscious review.
+
+    Value types are intentionally loose (`list`, `dict`) — this type exists to
+    pin the allowed field names, not to validate nested structure.
+    """
+
+    # Required by Bedrock
+    anthropic_version: str
+    max_tokens: int
+    messages: list
+
+    # Documented optional fields
+    anthropic_beta: list[str]
+    system: object  # str or list[TextBlock]
+    stop_sequences: list[str]
+    temperature: float
+    top_p: float
+    top_k: int
+    tools: list
+    tool_choice: dict
+
+    # `thinking` is required for Opus 4.5 / Sonnet 4 extended thinking,
+    # `metadata` is part of the common Anthropic Messages API shape.
+    thinking: dict
+    metadata: dict
+    output_config: dict
+
+    # `context_management` is allowed for Bedrock InvokeModel only when it
+    # carries `compact_20260112` edits paired with the `compact-2026-01-12`
+    # anthropic-beta header. The Invoke transformation filters edits to the
+    # supported subset and strips the field entirely when nothing remains, so
+    # other edit types (e.g. `clear_thinking_20251015`) never reach Bedrock.
+    context_management: dict
+
+
+class BedrockBatchRecordKind(Enum):
+    """
+    Which OpenAI endpoint shape a line of a Bedrock managed-batch JSONL file
+    carries. Bedrock batch `modelInput` is always the model's InvokeModel /
+    Converse body, so every non-embedding shape is normalized to Chat
+    Completions before being handed to the per-provider transformation.
+    """
+
+    CHAT = "chat"
+    TEXT_COMPLETION = "text_completion"
+    RESPONSES = "responses"
+    EMBEDDING = "embedding"

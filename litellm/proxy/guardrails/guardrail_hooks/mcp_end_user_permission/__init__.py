@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,12 +14,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     # Default to always-on. Only disable if the user explicitly sets default_on: false.
     # We check the raw guardrail dict because LitellmParams normalizes None → False,
     # making it impossible to distinguish "not set" from "explicitly false" via litellm_params.
-    _raw_default_on = (
-        cast(Dict[str, Any], guardrail).get("litellm_params", {}).get("default_on")
-    )
-    _default_on = False if _raw_default_on is False else True
+    _raw_default_on: Final = cast(dict[str, Any], guardrail).get("litellm_params", {}).get("default_on")
+    _default_on: Final = False if _raw_default_on is False else True
 
-    _callback = MCPEndUserPermissionGuardrail(
+    _callback: Final = MCPEndUserPermissionGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=_default_on,
@@ -28,10 +26,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.MCP_END_USER_PERMISSION.value: initialize_guardrail,
 }
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.MCP_END_USER_PERMISSION.value: MCPEndUserPermissionGuardrail,
 }

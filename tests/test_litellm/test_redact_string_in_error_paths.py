@@ -5,8 +5,10 @@ Covers actual execution of redaction in:
 - WebSocket close reasons in realtime handlers (openai, azure, bedrock)
 - Gemini RAG ingestion x-goog-api-key header usage
 - Traceback redaction pattern used in proxy streaming
+- Router fallback-failure traceback redaction
 """
 
+import logging
 import os
 import sys
 import traceback
@@ -55,7 +57,11 @@ class TestOpenAIRealtimeRedaction:
     def _make_patches(self, handler):
         """Shared patches for OpenAI realtime handler tests."""
         return (
-            patch.object(handler, "_construct_url", return_value="wss://api.openai.com/v1/realtime?model=gpt-4"),
+            patch.object(
+                handler,
+                "_construct_url",
+                return_value="wss://api.openai.com/v1/realtime?model=gpt-4",
+            ),
             patch.object(handler, "_get_ssl_config", return_value=None),
             patch.object(handler, "_get_additional_headers", return_value={}),
         )
@@ -93,7 +99,9 @@ class TestOpenAIRealtimeRedaction:
         from litellm.llms.openai.realtime.handler import OpenAIRealtime
 
         handler = OpenAIRealtime()
-        secret_error = RuntimeError("Connection failed for api_key=sk-1234567890abcdefghij")
+        secret_error = RuntimeError(
+            "Connection failed for api_key=sk-1234567890abcdefghij"
+        )
 
         kwargs = self._call_kwargs()
         mock_ws = kwargs["websocket"]
@@ -120,8 +128,14 @@ class TestAzureRealtimeRedaction:
         exc = websockets.exceptions.InvalidStatusCode(403, None)
         exc.status_code = 403
 
-        with patch.object(handler, "_construct_url", return_value="wss://test.openai.azure.com/openai/realtime"), \
-             patch("websockets.connect", side_effect=exc):
+        with (
+            patch.object(
+                handler,
+                "_construct_url",
+                return_value="wss://test.openai.azure.com/openai/realtime",
+            ),
+            patch("websockets.connect", side_effect=exc),
+        ):
             await handler.async_realtime(
                 model="gpt-4",
                 websocket=mock_ws,
@@ -139,7 +153,9 @@ class TestBedrockRealtimeRedaction:
     """Test that _redact_string produces safe close reasons for Bedrock-style errors."""
 
     def test_internal_error_message_redacted(self):
-        secret_error = RuntimeError("Failed with aws_secret_access_key=AKIAIOSFODNN7EXAMPLE123456")
+        secret_error = RuntimeError(
+            "Failed with aws_secret_access_key=AKIAIOSFODNN7EXAMPLE123456"
+        )
         reason = _redact_string(f"Internal error: {str(secret_error)}")
         assert "AKIAIOSFODNN7EXAMPLE123456" not in reason
 
@@ -153,7 +169,9 @@ class TestLLMHTTPHandlerRealtimeRedaction:
 
     def test_internal_server_error_pattern(self):
         error_msg = "Connection failed for api_key=sk-secret-key-12345678"
-        assert "sk-secret-key-12345678" not in _redact_string(f"Internal server error: {error_msg}")
+        assert "sk-secret-key-12345678" not in _redact_string(
+            f"Internal server error: {error_msg}"
+        )
 
 
 class TestProxyStreamingDataGeneratorRedaction:
@@ -172,6 +190,79 @@ class TestProxyStreamingDataGeneratorRedaction:
         assert "sk-1234567890abcdefghij" not in redacted_tb
         assert "Traceback" in redacted_tb
         assert "RuntimeError" in redacted_tb
+
+
+class TestRouterFallbackFailureTracebackRedaction:
+    """Test the fallback-failure logs in router.py's
+    async_function_with_fallbacks_common_utils. Both call sites must redact the
+    traceback at the call site with redact_string() rather than hand a live
+    exception to exc_info=True. SecretRedactionFilter rewrites record.exc_text,
+    but record.exc_info stays an exception object no filter can rewrite, so any
+    handler that renders exc_info itself (Datadog and OTel log bridges do) would
+    receive the unredacted secret."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_failure_does_not_leak_secret_via_exc_info(self, caplog):
+        """The helper is driven from inside an `except` block because that is the only
+        way production reaches it, and the entry-point debug log takes its traceback
+        from the active exception. With no exception in flight sys.exc_info() is empty,
+        so an exc_info=True regression there would degrade to (None, None, None) and
+        this test would pass against it.
+        """
+        import litellm
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+                },
+                {
+                    "model_name": "claude-3-haiku",
+                    "litellm_params": {"model": "anthropic/claude-3-haiku-20240307", "api_key": "fake-key"},
+                },
+            ],
+        )
+
+        secret = "sk-testsecretvalue1234567890abcdef"
+
+        with patch(
+            "litellm.router.run_async_fallback",
+            new=AsyncMock(side_effect=RuntimeError(f"boom api_key={secret}")),
+        ):
+            try:
+                raise ValueError(f"primary deployment failed api_key={secret}")
+            except ValueError as original_exception:
+                with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+                    with pytest.raises(Exception):
+                        await router.async_function_with_fallbacks_common_utils(
+                            e=original_exception,
+                            disable_fallbacks=False,
+                            fallbacks=[{"gpt-3.5-turbo": ["claude-3-haiku"]}],
+                            context_window_fallbacks=None,
+                            content_policy_fallbacks=None,
+                            model_group="gpt-3.5-turbo",
+                            args=(),
+                            kwargs={"model": "gpt-3.5-turbo"},
+                        )
+
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert debug_records, "expected the entry-point debug log, which carries the active traceback"
+
+        error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert error_records, "expected an error log for the fallback failure"
+        assert any(
+            "Cooldown Deployments" in r.getMessage() for r in error_records
+        ), "expected the fallback-failure log, not an unrelated error"
+
+        for record in caplog.records:
+            assert secret not in record.getMessage()
+            assert secret not in (record.exc_text or "")
+            rendered_exc_info = "".join(traceback.format_exception(*record.exc_info)) if record.exc_info else ""
+            assert secret not in rendered_exc_info, (
+                f"{record.levelname} record passed a live exception to exc_info; "
+                "no logging filter can redact record.exc_info"
+            )
 
 
 def _make_mock_ingest_options():
@@ -223,7 +314,9 @@ class TestGeminiIngestionHeaders:
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.headers = {"x-goog-upload-url": "https://upload.example.com/upload123"}
+        mock_response.headers = {
+            "x-goog-upload-url": "https://upload.example.com/upload123"
+        }
         mock_client.post.return_value = mock_response
 
         with patch(

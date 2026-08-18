@@ -1,10 +1,13 @@
+import base64
+import json
 import logging
 import os
+import time
 from unittest.mock import Mock, patch
 
 import pytest
 
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, normalize_nonempty_secret_str
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -95,6 +98,100 @@ def test_oidc_google_cached():
     mock_get_http_handler.assert_not_called()
 
 
+def _jwt_with_exp(exp: int) -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256"}).encode()).rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).rstrip(b"=").decode()
+    return f"{header}.{payload}.signature"
+
+
+def test_oidc_google_cache_ttl_capped_by_token_exp():
+    """A token the metadata server returns near its expiry must not be cached past
+    its exp claim; the cached-entry TTL is exp - now - 60s, not the 59m default."""
+    secret_name = "oidc/google/https://example.com/api"
+    mock_handler = MockHTTPHandler(timeout=600.0)
+    mock_handler.text = _jwt_with_exp(int(time.time()) + 300)
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
+    mock_oidc_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            result = get_secret(secret_name)
+
+    assert result == mock_handler.text
+    mock_oidc_cache.set_cache.assert_called_once()
+    ttl = mock_oidc_cache.set_cache.call_args.kwargs["ttl"]
+    assert 0 < ttl <= 240
+
+
+def test_oidc_google_expired_token_not_cached():
+    """An already-expired token is returned (STS gives the authoritative error) but
+    never cached, so the next call fetches a fresh token instead of replaying it."""
+    secret_name = "oidc/google/https://example.com/api"
+    mock_handler = MockHTTPHandler(timeout=600.0)
+    mock_handler.text = _jwt_with_exp(int(time.time()) - 10)
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
+    mock_oidc_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            result = get_secret(secret_name)
+
+    assert result == mock_handler.text
+    mock_oidc_cache.set_cache.assert_not_called()
+
+
+def test_oidc_google_long_lived_token_still_capped_at_default_ttl():
+    """A token expiring far in the future must not extend the cache past the
+    59m policy ceiling; exp only ever shortens the TTL."""
+    secret_name = "oidc/google/https://example.com/api"
+    mock_handler = MockHTTPHandler(timeout=600.0)
+    mock_handler.text = _jwt_with_exp(int(time.time()) + 7200)
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
+    mock_oidc_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            result = get_secret(secret_name)
+
+    assert result == mock_handler.text
+    mock_oidc_cache.set_cache.assert_called_once_with(
+        key=secret_name, value=mock_handler.text, ttl=3540
+    )
+
+
+def test_oidc_google_non_jwt_token_keeps_default_ttl():
+    """A token without a readable exp claim falls back to the 59m default TTL."""
+    secret_name = "oidc/google/https://example.com/api"
+    mock_handler = MockHTTPHandler(timeout=600.0)
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
+    mock_oidc_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            result = get_secret(secret_name)
+
+    assert result == "mocked_token"
+    mock_oidc_cache.set_cache.assert_called_once_with(
+        key=secret_name, value="mocked_token", ttl=3540
+    )
+
+
 def test_oidc_google_failure():
     """Test Google OIDC raises when provider returns error (no real network calls)."""
     secret_name = "oidc/google/https://example.com/api"
@@ -171,7 +268,7 @@ def test_oidc_azure_file_success(mock_env, tmp_path):
     mock_env["AZURE_FEDERATED_TOKEN_FILE"] = str(token_file)
 
     secret_name = "oidc/azure/azure-audience"
-    result = get_secret(secret_name)    
+    result = get_secret(secret_name)
 
     assert result == "azure_token"
 
@@ -253,3 +350,17 @@ def test_unsupported_oidc_provider():
 
     with pytest.raises(ValueError, match="Unsupported OIDC provider"):
         get_secret(secret_name)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("   \t\n", None),
+        ("abc", "abc"),
+        ("  xyz  ", "xyz"),
+    ],
+)
+def test_normalize_nonempty_secret_str(raw, expected):
+    assert normalize_nonempty_secret_str(raw) == expected

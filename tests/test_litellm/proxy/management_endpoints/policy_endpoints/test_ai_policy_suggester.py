@@ -145,7 +145,9 @@ class TestAiPolicySuggester:
             )
 
         assert len(result["selected_templates"]) == 1
-        assert result["selected_templates"][0]["template_id"] == "baseline-pii-protection"
+        assert (
+            result["selected_templates"][0]["template_id"] == "baseline-pii-protection"
+        )
         assert result["explanation"] == "Your examples contain PII data."
 
     @pytest.mark.asyncio
@@ -183,7 +185,9 @@ class TestAiPolicySuggester:
             )
 
         assert len(result["selected_templates"]) == 1
-        assert result["selected_templates"][0]["template_id"] == "baseline-pii-protection"
+        assert (
+            result["selected_templates"][0]["template_id"] == "baseline-pii-protection"
+        )
 
     @pytest.mark.asyncio
     async def test_suggest_handles_no_tool_calls(self):
@@ -232,7 +236,9 @@ class TestAiPolicySuggester:
         assert call_kwargs["temperature"] == 0.2
         assert len(call_kwargs["tools"]) == 1
         assert call_kwargs["tools"][0]["function"]["name"] == "select_policy_templates"
-        assert call_kwargs["tool_choice"]["function"]["name"] == "select_policy_templates"
+        assert (
+            call_kwargs["tool_choice"]["function"]["name"] == "select_policy_templates"
+        )
         assert len(call_kwargs["messages"]) == 2
         assert call_kwargs["messages"][0]["role"] == "system"
         assert call_kwargs["messages"][1]["role"] == "user"

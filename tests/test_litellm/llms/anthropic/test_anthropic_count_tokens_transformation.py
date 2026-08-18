@@ -47,7 +47,10 @@ def test_transform_includes_tools():
         {
             "name": "read_file",
             "description": "Read a file",
-            "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "input_schema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+            },
         }
     ]
 

@@ -7,39 +7,49 @@ This module has no dependencies on proxy code and can be safely imported at the 
 
 import json
 import os
+import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Optional
+from typing import Final
 
 
 def get_cli_token_file_path() -> str:
     """Get the path to the CLI token file"""
-    home_dir = Path.home()
-    config_dir = home_dir / ".litellm"
+    home_dir: Final = Path.home()
+    config_dir: Final = home_dir / ".litellm"
     return str(config_dir / "token.json")
 
 
-def load_cli_token() -> Optional[dict]:
+def load_cli_token() -> dict | None:
     """Load CLI token data from file"""
-    token_file = get_cli_token_file_path()
+    token_file: Final = get_cli_token_file_path()
     if not os.path.exists(token_file):
         return None
 
     try:
         with open(token_file, "r") as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return None
 
 
-def get_litellm_gateway_api_key() -> Optional[str]:
+def get_litellm_gateway_api_key(
+    expected_base_url: str | None = None,
+) -> str | None:
     """
     Get the stored CLI API key for use with LiteLLM SDK.
 
-    This function reads the token file created by `litellm-proxy login`
+    This function reads the token file created by `lite login`
     and returns the API key for use in Python scripts.
 
+    Args:
+        expected_base_url: When provided, the key is only returned if it was
+            originally issued for this URL. Pass the target server URL to
+            prevent credential leakage when the client is pointed at a
+            different (possibly malicious) server.
+
     Returns:
-        str: The API key if found, None otherwise
+        str: The API key if found (and origin matches), None otherwise
 
     Example:
         >>> import litellm
@@ -52,7 +62,25 @@ def get_litellm_gateway_api_key() -> Optional[str]:
         >>>         base_url="https://your-proxy.com/v1"
         >>>     )
     """
-    token_data = load_cli_token()
-    if token_data and "key" in token_data:
-        return token_data["key"]
-    return None
+    token_data: Final = load_cli_token()
+    if not token_data or "key" not in token_data:
+        return None
+    if expected_base_url is not None:
+        stored_url: Final = token_data.get("base_url")
+        if stored_url != expected_base_url.rstrip("/"):
+            return None
+    return token_data["key"]
+
+
+def is_cli_token_fresh(token_data: Mapping[str, object], buffer_hours: float = 0.1) -> bool:
+    """Check whether a cached CLI token (as stored in token.json) is still
+    within its expiration window. Used by `lite auth print-token` to fail
+    fast, without a network round trip, once the cached token is past
+    `LITELLM_CLI_JWT_EXPIRATION_HOURS`."""
+    from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+
+    timestamp: Final = token_data.get("timestamp")
+    if not isinstance(timestamp, (int, float)):
+        return False
+    age_hours: Final = (time.time() - timestamp) / 3600
+    return age_hours < (CLI_JWT_EXPIRATION_HOURS - buffer_hours)

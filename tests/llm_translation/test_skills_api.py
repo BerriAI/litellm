@@ -144,6 +144,7 @@ class BaseSkillsAPITest(ABC):
         Test listing skills.
         """
         import os
+
         custom_llm_provider = self.get_custom_llm_provider()
         api_key = self.get_api_key()
         api_base = self.get_api_base()
@@ -158,7 +159,7 @@ class BaseSkillsAPITest(ABC):
         print(f"\n=== Testing list_skills ===")
         print("API Key: [REDACTED]")
         print(f"API Base: {api_base}")
-        
+
         response = litellm.list_skills(
             limit=10,
             custom_llm_provider=custom_llm_provider,
@@ -191,17 +192,16 @@ class BaseSkillsAPITest(ABC):
             api_key=api_key,
             api_base=api_base,
         )
-        
+
         # Type assertion for linter
         assert isinstance(list_response, ListSkillsResponse)
         print(f"List response: {list_response}")
-        
+
         # If there are existing skills, use the first one
         if list_response.data and len(list_response.data) > 0:
             skill_id = list_response.data[0].id
             should_cleanup = False
             print(f"Using existing skill: {skill_id}")
-        
 
             # Now get the skill
             response = litellm.get_skill(
@@ -216,17 +216,15 @@ class BaseSkillsAPITest(ABC):
             assert response.id == skill_id
             print(f"GET - Retrieved skill: {response}")
 
-
-
     def test_delete_skill(self):
         """
         Test deleting a skill.
-        
+
         Note: Anthropic requires deleting all skill versions before deleting the skill itself.
         This test is currently skipped as it would require additional API calls to delete versions.
         """
         import time
-        
+
         custom_llm_provider = self.get_custom_llm_provider()
         api_key = self.get_api_key()
         api_base = self.get_api_base()
@@ -234,7 +232,9 @@ class BaseSkillsAPITest(ABC):
         if not api_key:
             pytest.skip(f"No API key provided for {custom_llm_provider}")
 
-        pytest.skip("Anthropic requires deleting all skill versions first - skipping for now")
+        pytest.skip(
+            "Anthropic requires deleting all skill versions first - skipping for now"
+        )
 
         litellm.set_verbose = True
 
@@ -254,7 +254,7 @@ class BaseSkillsAPITest(ABC):
                 api_key=api_key,
                 api_base=api_base,
             )
-        
+
         # Type assertion for linter
         assert isinstance(created_skill, Skill)
         skill_id = created_skill.id
@@ -281,4 +281,3 @@ class BaseSkillsAPITest(ABC):
 # Transformation logic (URL construction, headers, request/response parsing) is
 # covered by unit tests in:
 #   tests/test_litellm/test_anthropic_skills_transformation.py
-

@@ -1,9 +1,10 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable, Optional, Union
+from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
 from litellm import LlmProviders
@@ -20,13 +21,9 @@ class VertexAIError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url=" https://cloud.google.com/vertex-ai/"
-        )
+        self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 class PartnerModelPrefixes(str, Enum):
@@ -41,11 +38,12 @@ class PartnerModelPrefixes(str, Enum):
     MINIMAX_PREFIX = "minimaxai/"
     MOONSHOT_PREFIX = "moonshotai/"
     ZAI_PREFIX = "zai-org/"
+    GEMMA_MAAS_PREFIX = "google/gemma-"
 
 
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
-        pass
+        super().__init__()
 
     @staticmethod
     def is_vertex_partner_model(model: str):
@@ -68,13 +66,14 @@ class VertexAIPartnerModels(VertexBase):
             or model.startswith(PartnerModelPrefixes.MINIMAX_PREFIX)
             or model.startswith(PartnerModelPrefixes.MOONSHOT_PREFIX)
             or model.startswith(PartnerModelPrefixes.ZAI_PREFIX)
+            or model.startswith(PartnerModelPrefixes.GEMMA_MAAS_PREFIX)
         ):
             return True
         return False
 
     @staticmethod
     def should_use_openai_handler(model: str):
-        OPENAI_LIKE_VERTEX_PROVIDERS = [
+        OPENAI_LIKE_VERTEX_PROVIDERS: Final = [
             "llama",
             PartnerModelPrefixes.DEEPSEEK_PREFIX,
             PartnerModelPrefixes.QWEN_PREFIX,
@@ -82,6 +81,7 @@ class VertexAIPartnerModels(VertexBase):
             PartnerModelPrefixes.MINIMAX_PREFIX,
             PartnerModelPrefixes.MOONSHOT_PREFIX,
             PartnerModelPrefixes.ZAI_PREFIX,
+            PartnerModelPrefixes.GEMMA_MAAS_PREFIX,
         ]
         if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
             return True
@@ -95,11 +95,11 @@ class VertexAIPartnerModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: Optional[dict],
-        timeout: Union[float, httpx.Timeout],
+        headers: dict | None,
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,
@@ -116,37 +116,30 @@ class VertexAIPartnerModels(VertexBase):
                 CodestralTextCompletion,
             )
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
-            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                VertexLLM,
-            )
         except Exception as e:
             raise VertexAIError(
                 status_code=400,
                 message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
-        if not (
-            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-        ):
+        if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
             raise VertexAIError(
                 status_code=400,
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
-            vertex_httpx_logic = VertexLLM()
-
-            access_token, project_id = vertex_httpx_logic._ensure_access_token(
+            access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
                 project_id=vertex_project,
                 custom_llm_provider="vertex_ai",
             )
 
-            openai_like_chat_completions = OpenAILikeChatHandler()
-            codestral_fim_completions = CodestralTextCompletion()
-            anthropic_chat_completions = AnthropicChatCompletion()
+            openai_like_chat_completions: Final = OpenAILikeChatHandler()
+            codestral_fim_completions: Final = CodestralTextCompletion()
+            anthropic_chat_completions: Final = AnthropicChatCompletion()
 
             ## CONSTRUCT API BASE
-            stream: bool = optional_params.get("stream", False) or False
+            stream: Final[bool] = optional_params.get("stream", False) or False
 
             optional_params["stream"] = stream
 
@@ -176,9 +169,7 @@ class VertexAIPartnerModels(VertexBase):
 
             if "codestral" in model and litellm_params.get("text_completion") is True:
                 optional_params["model"] = model
-                text_completion_model_response = litellm.TextCompletionResponse(
-                    stream=stream
-                )
+                text_completion_model_response: Final = litellm.TextCompletionResponse(stream=stream)
                 return codestral_fim_completions.completion(
                     model=model,
                     messages=messages,
@@ -196,9 +187,11 @@ class VertexAIPartnerModels(VertexBase):
                     encoding=encoding,
                 )
             elif "claude" in model:
-                if headers is None:
-                    headers = {}
-                headers.update({"Authorization": "Bearer {}".format(access_token)})
+                # Build a new dict so we never mutate the shared deployment extra_headers object.
+                headers = {
+                    **(headers or {}),
+                    "Authorization": f"Bearer {access_token}",
+                }
 
                 optional_params.update(
                     {
@@ -292,35 +285,28 @@ class VertexAIPartnerModels(VertexBase):
         Returns:
             Dict containing token count information
         """
-        try:
-            import vertexai
-        except Exception as e:
-            raise VertexAIError(
-                status_code=400,
-                message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
-            )
-
-        if not (
-            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-        ):
-            raise VertexAIError(
-                status_code=400,
-                message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
-            )
-
+        # Note: we intentionally do not import `vertexai` (the Gemini SDK shipped
+        # by `google-cloud-aiplatform`) on this path. Partner models such as
+        # Claude on Vertex use the Anthropic Messages API protocol directly via
+        # `:rawPredict`, and `VertexAIPartnerModelsTokenCounter` reaches that
+        # endpoint with an authenticated httpx client — it never touches the
+        # Gemini SDK. Requiring `google-cloud-aiplatform>=1.38` here turned a
+        # SDK-free Anthropic-protocol call into a hard dependency on the Gemini
+        # SDK (see #28084), breaking `/v1/messages/count_tokens` for Claude-on-
+        # Vertex on any LiteLLM install without that extra. Stay SDK-free.
         try:
             from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
                 VertexAIPartnerModelsTokenCounter,
             )
 
             # Prepare request data in Anthropic Messages API format
-            request_data = {
+            request_data: Final = {
                 "model": model,
                 "messages": messages,
             }
 
             # Prepare litellm_params with credentials
-            _litellm_params = litellm_params.copy()
+            _litellm_params: Final = litellm_params.copy()
             if vertex_project:
                 _litellm_params["vertex_project"] = vertex_project
             if vertex_location:
@@ -329,8 +315,8 @@ class VertexAIPartnerModels(VertexBase):
                 _litellm_params["vertex_credentials"] = vertex_credentials
 
             # Call the token counter
-            token_counter = VertexAIPartnerModelsTokenCounter()
-            result = await token_counter.handle_count_tokens_request(
+            token_counter: Final = VertexAIPartnerModelsTokenCounter()
+            result: Final = await token_counter.handle_count_tokens_request(
                 model=model,
                 request_data=request_data,
                 litellm_params=_litellm_params,

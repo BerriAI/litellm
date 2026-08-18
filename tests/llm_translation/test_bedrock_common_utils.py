@@ -21,13 +21,20 @@ class TestStripBedrockRoutingPrefix:
     """Tests for strip_bedrock_routing_prefix function."""
 
     def test_strips_bedrock_prefix(self):
-        assert strip_bedrock_routing_prefix("bedrock/claude-3-sonnet") == "claude-3-sonnet"
+        assert (
+            strip_bedrock_routing_prefix("bedrock/claude-3-sonnet") == "claude-3-sonnet"
+        )
 
     def test_strips_converse_prefix(self):
-        assert strip_bedrock_routing_prefix("converse/claude-3-sonnet") == "claude-3-sonnet"
+        assert (
+            strip_bedrock_routing_prefix("converse/claude-3-sonnet")
+            == "claude-3-sonnet"
+        )
 
     def test_strips_invoke_prefix(self):
-        assert strip_bedrock_routing_prefix("invoke/claude-3-sonnet") == "claude-3-sonnet"
+        assert (
+            strip_bedrock_routing_prefix("invoke/claude-3-sonnet") == "claude-3-sonnet"
+        )
 
     def test_strips_openai_prefix(self):
         assert strip_bedrock_routing_prefix("openai/gpt-4") == "gpt-4"
@@ -50,14 +57,26 @@ class TestStripBedrockRoutingPrefix:
 class TestStripBedrockThroughputSuffix:
     """Tests for strip_bedrock_throughput_suffix function."""
 
-    @pytest.mark.parametrize("input_model,expected", [
-        ("anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
-        ("anthropic.claude-haiku-4-5-20251001-v1:0:18k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
-        ("model:1:51k", "model:1"),
-        ("model:123:18k", "model:123"),
-        ("anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic.claude-haiku-4-5-20251001-v1:0"),
-        ("anthropic.claude-3-sonnet", "anthropic.claude-3-sonnet"),
-    ])
+    @pytest.mark.parametrize(
+        "input_model,expected",
+        [
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0:51k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0:18k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            ("model:1:51k", "model:1"),
+            ("model:123:18k", "model:123"),
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            ("anthropic.claude-3-sonnet", "anthropic.claude-3-sonnet"),
+        ],
+    )
     def test_strip_throughput_suffix(self, input_model, expected):
         assert strip_bedrock_throughput_suffix(input_model) == expected
 
@@ -104,7 +123,10 @@ class TestGetBedrockBaseModel:
         assert get_bedrock_base_model("bedrock/claude-3-sonnet") == "claude-3-sonnet"
 
     def test_strips_converse_prefix(self):
-        assert get_bedrock_base_model("bedrock/converse/claude-3-sonnet") == "claude-3-sonnet"
+        assert (
+            get_bedrock_base_model("bedrock/converse/claude-3-sonnet")
+            == "claude-3-sonnet"
+        )
 
     def test_strips_us_region_prefix(self):
         # us.anthropic.model -> anthropic.model
@@ -134,12 +156,27 @@ class TestGetBedrockBaseModel:
             == "anthropic.claude-3-sonnet-20240229-v1:0"
         )
 
-    @pytest.mark.parametrize("input_model,expected", [
-        ("anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
-        ("anthropic.claude-haiku-4-5-20251001-v1:0:18k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
-        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
-        ("us.anthropic.claude-haiku-4-5-20251001-v1:0:51k", "anthropic.claude-haiku-4-5-20251001-v1:0"),
-    ])
+    @pytest.mark.parametrize(
+        "input_model,expected",
+        [
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0:51k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0:18k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            (
+                "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0:51k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            (
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0:51k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+        ],
+    )
     def test_strips_throughput_suffix(self, input_model, expected):
         """Test that throughput tier suffixes like :51k are stripped. Issue #19113."""
         assert get_bedrock_base_model(input_model) == expected
@@ -155,21 +192,21 @@ class TestBedrockModelInfoWrappers:
             "arn:aws:bedrock:us-east-1:123:model/my-model",
         ]
         for model in test_cases:
-            assert BedrockModelInfo.get_base_model(model) == get_bedrock_base_model(model)
+            assert BedrockModelInfo.get_base_model(model) == get_bedrock_base_model(
+                model
+            )
 
     def test_extract_model_name_from_arn_matches_standalone(self):
         arn = "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/my-model"
-        assert (
-            BedrockModelInfo.extract_model_name_from_arn(arn)
-            == extract_model_name_from_bedrock_arn(arn)
-        )
+        assert BedrockModelInfo.extract_model_name_from_arn(
+            arn
+        ) == extract_model_name_from_bedrock_arn(arn)
 
     def test_get_non_litellm_routing_model_name_matches_standalone(self):
         model = "bedrock/converse/claude-3"
-        assert (
-            BedrockModelInfo.get_non_litellm_routing_model_name(model)
-            == strip_bedrock_routing_prefix(model)
-        )
+        assert BedrockModelInfo.get_non_litellm_routing_model_name(
+            model
+        ) == strip_bedrock_routing_prefix(model)
 
 
 class TestBedrockTokenCounter:

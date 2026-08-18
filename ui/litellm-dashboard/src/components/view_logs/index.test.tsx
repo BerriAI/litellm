@@ -1,231 +1,197 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import SpendLogsTable, { RequestViewer } from "./index";
-import type { LogEntry } from "./columns";
-import type { Row } from "@tanstack/react-table";
+import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
 
-const mockHandleFilterResetFromHook = vi.fn();
-vi.mock("./log_filter_logic", () => ({
-  useLogFilterLogic: vi.fn(() => ({
-    filters: {},
-    filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
-    allTeams: [],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: mockHandleFilterResetFromHook,
-  })),
+const { useAuthorizedMock, useOrganizationsMock } = vi.hoisted(() => ({
+  useAuthorizedMock: vi.fn(),
+  useOrganizationsMock: vi.fn(),
 }));
 
-vi.mock("../networking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../networking")>();
-  return {
-    ...actual,
-    uiSpendLogsCall: vi.fn().mockResolvedValue({
-      data: [],
-      total: 0,
-      page: 1,
-      page_size: 50,
-      total_pages: 0,
-    }),
-    keyListCall: vi.fn().mockResolvedValue({ keys: [] }),
-    keyInfoV1Call: vi.fn().mockResolvedValue({ info: {} }),
-    allEndUsersCall: vi.fn().mockResolvedValue([]),
-  };
-});
-
-vi.mock("../key_team_helpers/filter_helpers", () => ({
-  fetchAllTeams: vi.fn().mockResolvedValue([]),
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: useAuthorizedMock,
 }));
 
-const baseLogEntry: LogEntry = {
-  request_id: "chatcmpl-test-id",
-  api_key: "api-key",
-  team_id: "team-id",
-  model: "gpt-4",
-  model_id: "gpt-4",
-  call_type: "chat",
-  spend: 0,
-  total_tokens: 0,
-  prompt_tokens: 0,
-  completion_tokens: 0,
-  startTime: "2025-11-14T00:00:00Z",
-  endTime: "2025-11-14T00:00:00Z",
-  cache_hit: "miss",
-  request_duration_ms: 1000,
-  messages: [{ role: "user", content: "hello" }],
-  response: { status: "ok" },
-  metadata: {
-    status: "success",
-    additional_usage_values: {
-      cache_read_input_tokens: 0,
-      cache_creation_input_tokens: 0,
-    },
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: useOrganizationsMock,
+}));
+
+vi.mock("./RequestLogsPanel", () => ({
+  default: function RequestLogsPanelMock({ isActive }: { isActive: boolean }) {
+    return <div data-testid="request-logs-panel">{isActive ? "active" : "inactive"}</div>;
   },
-  request_tags: {},
-  custom_llm_provider: "openai",
-  api_base: "https://api.example.com",
+}));
+
+vi.mock("./AuditLogsPanel", () => ({
+  default: function AuditLogsPanelMock({ isActive }: { isActive: boolean }) {
+    return <div data-testid="audit-logs-panel">{isActive ? "active" : "inactive"}</div>;
+  },
+}));
+
+vi.mock("../DeletedKeysPage/DeletedKeysPage", () => ({
+  default: function DeletedKeysPageMock() {
+    return <div data-testid="deleted-keys-page" />;
+  },
+}));
+
+vi.mock("../DeletedTeamsPage/DeletedTeamsPage", () => ({
+  default: function DeletedTeamsPageMock() {
+    return <div data-testid="deleted-teams-page" />;
+  },
+}));
+
+const defaultProps = {
+  accessToken: "test-token",
+  token: "test-token",
+  userRole: "Admin",
+  userID: "user-1",
+  premiumUser: false,
 };
 
-const createRow = (overrides: Partial<LogEntry> = {}): Row<LogEntry> =>
-  ({
-    original: {
-      ...baseLogEntry,
-      ...overrides,
-    },
-  }) as unknown as Row<LogEntry>;
+const ORG_ADMIN_MEMBERSHIPS = [{ organization_id: "org-1", members: [{ user_id: "user-1", user_role: "org_admin" }] }];
 
-describe("Request Viewer", () => {
-  it("renders the request details heading", () => {
-    render(<RequestViewer row={createRow()} />);
-    expect(screen.getByText("Request Details")).toBeInTheDocument();
-  });
+const renderAs = (sessionRole: string, organizations: unknown[] = []) => {
+  useAuthorizedMock.mockReturnValue({ userId: "user-1", userRole: sessionRole });
+  useOrganizationsMock.mockReturnValue({ data: organizations });
+  return renderWithProviders(<SpendLogsTable {...defaultProps} userRole={sessionRole} />);
+};
 
-  it("should truncate the request id if it is longer than 64 characters", () => {
-    const LONG_REQUEST_ID = "a".repeat(128);
-    const TRUNCATED_REQUEST_ID = `${"a".repeat(64)}...`;
-    render(
-      <RequestViewer
-        row={createRow({
-          request_id: LONG_REQUEST_ID,
-        })}
-      />,
-    );
-
-    expect(screen.getByText(TRUNCATED_REQUEST_ID)).toBeInTheDocument();
-  });
-
-  it("should display LiteLLM Overhead when litellm_overhead_time_ms is present in metadata", () => {
-    render(
-      <RequestViewer
-        row={createRow({
-          metadata: {
-            status: "success",
-            litellm_overhead_time_ms: 150,
-            additional_usage_values: {
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-          },
-        })}
-      />,
-    );
-
-    expect(screen.getByText("LiteLLM Overhead:")).toBeInTheDocument();
-    expect(screen.getByText("150 ms")).toBeInTheDocument();
-  });
-
-  it("should not display LiteLLM Overhead when litellm_overhead_time_ms is not present in metadata", () => {
-    render(<RequestViewer row={createRow()} />);
-
-    expect(screen.queryByText("LiteLLM Overhead:")).not.toBeInTheDocument();
-  });
-
-  it("should display retry count when attempted_retries > 0 in metadata", () => {
-    render(
-      <RequestViewer
-        row={createRow({
-          metadata: {
-            status: "success",
-            attempted_retries: 2,
-            max_retries: 3,
-            additional_usage_values: {
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-          },
-        })}
-      />,
-    );
-
-    expect(screen.getByText("Retries:")).toBeInTheDocument();
-    expect(screen.getByText("2 / 3")).toBeInTheDocument();
-  });
-
-  it("should display green 'None' tag when attempted_retries is 0", () => {
-    render(
-      <RequestViewer
-        row={createRow({
-          metadata: {
-            status: "success",
-            attempted_retries: 0,
-            max_retries: 3,
-            additional_usage_values: {
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-          },
-        })}
-      />,
-    );
-
-    expect(screen.getByText("Retries:")).toBeInTheDocument();
-    expect(screen.getByText("None")).toBeInTheDocument();
-  });
-
-  it("should display '-' for Retries when attempted_retries is not present in metadata", () => {
-    render(<RequestViewer row={createRow()} />);
-
-    expect(screen.getByText("Retries:")).toBeInTheDocument();
-    expect(screen.getByText("-")).toBeInTheDocument();
-  });
-});
+const tabNames = () => screen.getAllByRole("tab").map((tab) => tab.textContent);
 
 describe("SpendLogsTable", () => {
-  const defaultProps = {
-    accessToken: "test-token",
-    token: "test-token",
-    userRole: "Admin",
-    userID: "user-1",
-    premiumUser: false,
-  };
-
   beforeEach(() => {
-    vi.clearAllMocks();
-    // Clear sessionStorage to avoid isLiveTail state from previous tests
-    sessionStorage.clear();
+    useAuthorizedMock.mockReturnValue({ userId: "user-1", userRole: "Admin" });
+    useOrganizationsMock.mockReturnValue({ data: [] });
   });
 
-  it("should call handleFilterResetFromHook when Reset Filters is clicked", async () => {
+  it("renders the four log tabs", () => {
+    renderAs("Admin");
+
+    for (const label of ["Request Logs", "Audit Logs", "Deleted Keys", "Deleted Teams"]) {
+      expect(screen.getByRole("tab", { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it("marks only the visible tab's panel active so background tabs do not query", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<SpendLogsTable {...defaultProps} />);
+    renderAs("Admin");
 
-    const resetButton = screen.getByRole("button", { name: "Reset Filters" });
-    await user.click(resetButton);
+    expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("active");
 
-    await waitFor(() => {
-      expect(mockHandleFilterResetFromHook).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("tab", { name: "Audit Logs" }));
+
+    expect(await screen.findByTestId("audit-logs-panel")).toHaveTextContent("active");
+    expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("inactive");
+  });
+
+  describe("admin-only tabs", () => {
+    it.each(["Internal User", "Internal Viewer"])("hides Audit Logs and Deleted Teams from %s", (role) => {
+      renderAs(role);
+
+      expect(screen.getByRole("tab", { name: "Request Logs" })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Deleted Keys" })).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Audit Logs" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Deleted Teams" })).not.toBeInTheDocument();
+    });
+
+    it("never mounts the panels that call the admin-only endpoints for an internal user", () => {
+      renderAs("Internal User");
+
+      expect(screen.queryByTestId("audit-logs-panel")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("deleted-teams-page")).not.toBeInTheDocument();
+      expect(screen.getByTestId("deleted-keys-page")).toBeInTheDocument();
     });
   });
 
-  it("should reset custom date range to default when Reset Filters is clicked", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<SpendLogsTable {...defaultProps} />);
+  describe("organization admins", () => {
+    it("shows Deleted Teams to an org admin, whose session role reads as a plain internal user", () => {
+      renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS);
 
-    // Open the time range quick select dropdown (button shows current range like "Last 24 Hours")
-    const quickSelectButton = screen.getByRole("button", { name: /Last 24 Hours|Last 15 Minutes|Last Hour|Last 4 Hours|Last 7 Days/i });
-    await user.click(quickSelectButton);
-
-    // Click "Custom Range" to enable custom date selection
-    const customRangeButton = await screen.findByRole("button", { name: "Custom Range" });
-    await user.click(customRangeButton);
-
-    // Custom date inputs should now be visible (start and end datetime-local inputs)
-    const datetimeInputs = document.querySelectorAll('input[type="datetime-local"]');
-    expect(datetimeInputs.length).toBeGreaterThanOrEqual(2);
-
-    // Click Reset Filters - this should reset the custom date range and hide custom inputs
-    const resetButton = screen.getByRole("button", { name: "Reset Filters" });
-    await user.click(resetButton);
-
-    await waitFor(() => {
-      expect(mockHandleFilterResetFromHook).toHaveBeenCalled();
+      expect(screen.getByRole("tab", { name: "Deleted Teams" })).toBeInTheDocument();
+      expect(screen.getByTestId("deleted-teams-page")).toBeInTheDocument();
     });
 
-    // After reset, custom date inputs should be hidden (isCustomDate reset to false)
-    await waitFor(() => {
-      const inputsAfterReset = document.querySelectorAll('input[type="datetime-local"]');
-      expect(inputsAfterReset.length).toBe(0);
+    it("does not hand an org admin the Audit Logs tab, which the backend still refuses them", () => {
+      renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS);
+
+      expect(tabNames()).toEqual(["Request Logs", "Deleted Keys", "Deleted Teams"]);
+      expect(screen.queryByTestId("audit-logs-panel")).not.toBeInTheDocument();
+    });
+
+    it("keeps an internal user in the same org without an org_admin membership at two tabs", () => {
+      renderAs("Internal User", [
+        { organization_id: "org-1", members: [{ user_id: "user-1", user_role: "internal_user" }] },
+      ]);
+
+      expect(tabNames()).toEqual(["Request Logs", "Deleted Keys"]);
+    });
+
+    it("activates the org admin's selected tab rather than the one at the four-tab index", async () => {
+      const user = userEvent.setup();
+      renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS);
+
+      await user.click(screen.getByRole("tab", { name: "Deleted Teams" }));
+
+      expect(screen.getByRole("tab", { name: "Deleted Teams" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("inactive");
+
+      await user.click(screen.getByRole("tab", { name: "Request Logs" }));
+
+      expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("active");
+    });
+  });
+
+  describe("tab index mapping", () => {
+    it("activates the panel the admin selected, not the one at the old hardcoded index", async () => {
+      const user = userEvent.setup();
+      renderAs("Admin");
+
+      await user.click(screen.getByRole("tab", { name: "Deleted Keys" }));
+
+      expect(screen.getByTestId("audit-logs-panel")).toHaveTextContent("inactive");
+      expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("inactive");
+    });
+
+    it("keeps the audit panel inert when an admin selects the last tab", async () => {
+      const user = userEvent.setup();
+      renderAs("Admin");
+
+      await user.click(screen.getByRole("tab", { name: "Deleted Teams" }));
+
+      expect(screen.getByTestId("audit-logs-panel")).toHaveTextContent("inactive");
+      expect(screen.getByTestId("deleted-teams-page")).toBeInTheDocument();
+    });
+
+    it("selects the last visible tab for an internal user and returns to Request Logs", async () => {
+      const user = userEvent.setup();
+      renderAs("Internal User");
+
+      await user.click(screen.getByRole("tab", { name: "Deleted Keys" }));
+
+      expect(screen.getByTestId("deleted-keys-page")).toBeInTheDocument();
+      expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("inactive");
+
+      await user.click(screen.getByRole("tab", { name: "Request Logs" }));
+
+      expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("active");
+    });
+  });
+
+  describe("auth-not-ready guard", () => {
+    it("shows a loading spinner when credentials are not yet resolved", () => {
+      useAuthorizedMock.mockReturnValue({ userRole: "Admin" });
+      renderWithProviders(<SpendLogsTable {...defaultProps} accessToken={null} />);
+
+      expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Request Logs" })).not.toBeInTheDocument();
+    });
+
+    it("renders the tabs (no spinner) once all credentials are present", () => {
+      renderAs("Admin");
+
+      expect(document.querySelector('[aria-busy="true"]')).not.toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Request Logs" })).toBeInTheDocument();
     });
   });
 });

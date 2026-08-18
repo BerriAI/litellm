@@ -6,7 +6,6 @@ import traceback
 import json
 
 
-
 from typing import List, Dict, Any
 
 sys.path.insert(
@@ -115,8 +114,6 @@ def test_get_model_info_ollama_chat():
         assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-
-
 def test_get_model_info_bedrock_region():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -156,7 +153,6 @@ def test_get_model_info_ft_model_with_provider_prefix():
     info = litellm.get_model_info(**args)
     print("info", info)
     assert info["key"] == "ft:gpt-3.5-turbo"
-
 
 
 def _enforce_bedrock_converse_models(
@@ -281,7 +277,7 @@ def test_get_model_info_custom_model_router():
                 },
                 "model_info": {
                     "id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
-                }
+                },
             }
         ]
     )
@@ -330,6 +326,38 @@ def test_get_model_info_bedrock_models():
                     assert (
                         v[base_model_key] == base_model_value
                     ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
+
+
+def test_get_model_info_bedrock_cross_region_capability_parity():
+    """
+    Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
+    regional drift check above (which filters on "bedrock") never reaches them.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prefixes = ("us.", "eu.", "apac.", "us-gov.")
+    checked = 0
+
+    for k, v in litellm.model_cost.items():
+        if not str(v.get("litellm_provider", "")).startswith("bedrock"):
+            continue
+        base_model_key = next(
+            (k[len(p) :] for p in prefixes if k.startswith(p)),
+            None,
+        )
+        if base_model_key is None or base_model_key not in litellm.model_cost:
+            continue
+        checked += 1
+        for cap, base_value in litellm.model_cost[base_model_key].items():
+            if not cap.startswith("supports_"):
+                continue
+            assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
+            assert (
+                v[cap] == base_value
+            ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
+
+    assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
 
 def test_get_model_info_huggingface_models(monkeypatch):

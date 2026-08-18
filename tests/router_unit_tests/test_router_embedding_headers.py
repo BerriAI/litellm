@@ -8,6 +8,7 @@ The fix ensures that router.embedding() calls _update_kwargs_before_fallbacks()
 just like router.completion() does, which properly sets up metadata and allows
 default_litellm_params (including headers) to be propagated.
 """
+
 import os
 import sys
 from unittest.mock import MagicMock, patch, AsyncMock
@@ -31,9 +32,9 @@ class TestRouterEmbeddingHeaders:
         """
         model_list = [
             {
-                "model_name": "text-embedding-ada-002",
+                "model_name": "text-embedding-3-small",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "fake-key",
                 },
             }
@@ -52,12 +53,12 @@ class TestRouterEmbeddingHeaders:
                     data=[{"embedding": [0.1, 0.2, 0.3]}]
                 )
 
-                router.embedding(model="text-embedding-ada-002", input=["test input"])
+                router.embedding(model="text-embedding-3-small", input=["test input"])
 
                 # Verify _update_kwargs_before_fallbacks was called
                 mock_update.assert_called_once()
                 call_kwargs = mock_update.call_args[1]
-                assert call_kwargs["model"] == "text-embedding-ada-002"
+                assert call_kwargs["model"] == "text-embedding-3-small"
                 assert "kwargs" in call_kwargs
 
     @pytest.mark.asyncio
@@ -69,9 +70,9 @@ class TestRouterEmbeddingHeaders:
         """
         model_list = [
             {
-                "model_name": "text-embedding-ada-002",
+                "model_name": "text-embedding-3-small",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "fake-key",
                 },
             }
@@ -93,13 +94,13 @@ class TestRouterEmbeddingHeaders:
                 )
 
                 await router.aembedding(
-                    model="text-embedding-ada-002", input=["test input"]
+                    model="text-embedding-3-small", input=["test input"]
                 )
 
                 # Verify _update_kwargs_before_fallbacks was called
                 mock_update.assert_called_once()
                 call_kwargs = mock_update.call_args[1]
-                assert call_kwargs["model"] == "text-embedding-ada-002"
+                assert call_kwargs["model"] == "text-embedding-3-small"
                 assert "kwargs" in call_kwargs
 
     def test_embedding_propagates_default_litellm_params(self):
@@ -113,9 +114,9 @@ class TestRouterEmbeddingHeaders:
 
         model_list = [
             {
-                "model_name": "text-embedding-ada-002",
+                "model_name": "text-embedding-3-small",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "fake-key",
                 },
             }
@@ -135,7 +136,7 @@ class TestRouterEmbeddingHeaders:
                 data=[{"embedding": [0.1, 0.2, 0.3]}]
             )
 
-            router.embedding(model="text-embedding-ada-002", input=["test input"])
+            router.embedding(model="text-embedding-3-small", input=["test input"])
 
             # Verify that litellm.embedding was called with the headers
             mock_litellm_embedding.assert_called_once()
@@ -148,7 +149,7 @@ class TestRouterEmbeddingHeaders:
             # Check that metadata was properly set up
             assert "metadata" in call_kwargs
             assert "model_group" in call_kwargs["metadata"]
-            assert call_kwargs["metadata"]["model_group"] == "text-embedding-ada-002"
+            assert call_kwargs["metadata"]["model_group"] == "text-embedding-3-small"
 
     @pytest.mark.asyncio
     async def test_aembedding_propagates_default_litellm_params(self):
@@ -159,9 +160,9 @@ class TestRouterEmbeddingHeaders:
 
         model_list = [
             {
-                "model_name": "text-embedding-ada-002",
+                "model_name": "text-embedding-3-small",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "fake-key",
                 },
             }
@@ -184,7 +185,7 @@ class TestRouterEmbeddingHeaders:
             )
 
             await router.aembedding(
-                model="text-embedding-ada-002", input=["test input"]
+                model="text-embedding-3-small", input=["test input"]
             )
 
             # Verify that litellm.aembedding was called with the headers
@@ -198,7 +199,7 @@ class TestRouterEmbeddingHeaders:
             # Check that metadata was properly set up
             assert "metadata" in call_kwargs
             assert "model_group" in call_kwargs["metadata"]
-            assert call_kwargs["metadata"]["model_group"] == "text-embedding-ada-002"
+            assert call_kwargs["metadata"]["model_group"] == "text-embedding-3-small"
 
     def test_embedding_metadata_includes_model_group(self):
         """
@@ -210,7 +211,7 @@ class TestRouterEmbeddingHeaders:
             {
                 "model_name": "test-embedding-model",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "fake-key",
                 },
             }
@@ -240,9 +241,9 @@ class TestRouterEmbeddingHeaders:
         """
         model_list = [
             {
-                "model_name": "text-embedding-ada-002",
+                "model_name": "text-embedding-3-small",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "fake-key",
                 },
             }
@@ -256,7 +257,7 @@ class TestRouterEmbeddingHeaders:
                 data=[{"embedding": [0.1, 0.2, 0.3]}]
             )
 
-            router.embedding(model="text-embedding-ada-002", input=["test input"])
+            router.embedding(model="text-embedding-3-small", input=["test input"])
 
             # Verify num_retries was not set in the call (it's handled by function_with_fallbacks)
             # The important thing is that it was set in kwargs before being passed to function_with_fallbacks
@@ -271,9 +272,9 @@ class TestRouterEmbeddingHeaders:
         """
         model_list = [
             {
-                "model_name": "text-embedding-ada-002",
+                "model_name": "text-embedding-3-small",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "fake-key",
                 },
             }
@@ -286,7 +287,7 @@ class TestRouterEmbeddingHeaders:
                 data=[{"embedding": [0.1, 0.2, 0.3]}]
             )
 
-            router.embedding(model="text-embedding-ada-002", input=["test input"])
+            router.embedding(model="text-embedding-3-small", input=["test input"])
 
             call_kwargs = mock_litellm_embedding.call_args[1]
 
@@ -305,16 +306,16 @@ class TestRouterEmbeddingHeaders:
 
         model_list = [
             {
-                "model_name": "gpt-3.5-turbo",
+                "model_name": "gpt-5-mini",
                 "litellm_params": {
-                    "model": "gpt-3.5-turbo",
+                    "model": "gpt-5-mini",
                     "api_key": "fake-key",
                 },
             },
             {
-                "model_name": "text-embedding-ada-002",
+                "model_name": "text-embedding-3-small",
                 "litellm_params": {
-                    "model": "text-embedding-ada-002",
+                    "model": "text-embedding-3-small",
                     "api_key": "fake-key",
                 },
             },
@@ -329,7 +330,7 @@ class TestRouterEmbeddingHeaders:
             mock_completion.return_value = MagicMock()
 
             router.completion(
-                model="gpt-3.5-turbo", messages=[{"role": "user", "content": "test"}]
+                model="gpt-5-mini", messages=[{"role": "user", "content": "test"}]
             )
 
             completion_kwargs = mock_completion.call_args[1]
@@ -340,7 +341,7 @@ class TestRouterEmbeddingHeaders:
                 data=[{"embedding": [0.1, 0.2, 0.3]}]
             )
 
-            router.embedding(model="text-embedding-ada-002", input=["test input"])
+            router.embedding(model="text-embedding-3-small", input=["test input"])
 
             embedding_kwargs = mock_embedding.call_args[1]
 

@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -11,8 +11,8 @@ sys.path.insert(0, os.path.abspath("../../../"))
 import litellm
 from litellm.llms.azure.containers.transformation import AzureContainerConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import (
-    ContainerFileListResponse,
     ContainerListResponse,
     ContainerObject,
     DeleteContainerResult,
@@ -108,6 +108,31 @@ class TestAzureContainerConfig:
         )
 
         assert "/openai/v1/containers" in url
+
+    def test_get_complete_url_strips_responses_path_and_preserves_api_version(self):
+        """When api_base is the responses endpoint URL, get_complete_url must:
+        - strip /openai/responses (no double-path)
+        - use the api-version from api_base query string, NOT the deployment's
+          older api_version (e.g. 2024-08-01-preview → containers need 2025-04-01-preview)
+        """
+        api_base = "https://my-resource.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview"
+
+        url = self.config.get_complete_url(
+            api_base=api_base,
+            litellm_params={"api_version": "2024-08-01-preview"},
+        )
+
+        assert (
+            "/openai/responses/openai/containers" not in url
+        ), "path must not double /openai/responses"
+        assert "my-resource.cognitiveservices.azure.com" in url
+        assert "/openai/containers" in url or "/openai/v1/containers" in url
+        assert (
+            "2025-04-01-preview" in url
+        ), "must use version from api_base, not litellm_params"
+        assert (
+            "2024-08-01-preview" not in url
+        ), "must not fall back to older chat api_version"
 
     def test_get_complete_url_raises_without_api_base(self, monkeypatch):
         monkeypatch.delenv("AZURE_API_BASE", raising=False)
@@ -323,6 +348,29 @@ class TestAzureContainerConfig:
         assert url_fc == expected_fc
         assert url_fc.index("/content") < url_fc.index("?")
 
+    def test_transform_requests_encode_path_ids_before_query_string(self):
+        from litellm.types.router import GenericLiteLLMParams
+
+        api_base = (
+            "https://my-resource.openai.azure.com/openai/v1/containers"
+            "?api-version=v1"
+        )
+
+        url, _ = self.config.transform_container_file_content_request(
+            container_id="../../other",
+            file_id="file?download=1#frag",
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        expected_url = (
+            "https://my-resource.openai.azure.com/openai/v1/containers/"
+            "..%2F..%2Fother/files/file%3Fdownload%3D1%23frag/content"
+            "?api-version=v1"
+        )
+        assert url == expected_url
+
     def test_provider_config_manager_returns_azure_config(self):
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
@@ -398,9 +446,7 @@ class TestAzureContainerKnownFailureRegressions:
         assert "containers?api-version=v1/cntr_" not in url_fc
 
         parsed = urlparse(url_fc)
-        assert parsed.path == (
-            f"/openai/v1/containers/{cid}/files/{fid}/content"
-        )
+        assert parsed.path == (f"/openai/v1/containers/{cid}/files/{fid}/content")
         assert parse_qs(parsed.query).get("api-version") == ["v1"]
         assert url_fc.index("/content") < url_fc.index("?")
 
@@ -414,7 +460,10 @@ class TestAzureContainerKnownFailureRegressions:
             litellm_params={},
         )
         assert "openai.azure.com" in container_base
-        assert "openai/v1/containers" in container_base or "/openai/containers" in container_base
+        assert (
+            "openai/v1/containers" in container_base
+            or "/openai/containers" in container_base
+        )
 
         cid = "cntr_livepath123"
         fid = "cfile_live456"
@@ -507,6 +556,92 @@ class TestAzureContainerKnownFailureRegressions:
         assert qs.get("api-version") == ["v1"]
         assert qs.get("foo") == ["bar"]
 
+    @pytest.mark.asyncio
+    async def test_regression_no_container_id_does_not_use_user_supplied_model_id(
+        self, monkeypatch
+    ):
+        """Operations without container_id (create, list) must NOT route via
+        _ageneric_api_call_with_fallbacks using a caller-supplied model_id.
+
+        Security boundary: only the path that holds a validated container_id
+        is trusted to fall back to the forwarded model_id.  A caller setting
+        model_id without container_id on POST /v1/containers must not gain
+        access to an arbitrary deployment UUID.
+        """
+        from litellm.router import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "azure-model",
+                    "litellm_params": {
+                        "model": "azure/gpt-4",
+                        "api_base": "https://my-resource.cognitiveservices.azure.com",
+                        "api_key": "test-key",
+                        "api_version": "2025-04-01-preview",
+                    },
+                    "model_info": {"id": "deployment-uuid-123"},
+                }
+            ]
+        )
+
+        fallback_called = {"called": False}
+
+        async def _mock_fallback(original_function, **kwargs):
+            fallback_called["called"] = True
+            return {}
+
+        monkeypatch.setattr(router, "_ageneric_api_call_with_fallbacks", _mock_fallback)
+
+        original_called = {"called": False}
+
+        async def _noop(**kwargs):
+            original_called["called"] = True
+            return {}
+
+        # No container_id — simulates create/list; caller injects a model_id
+        await router._init_containers_api_endpoints(
+            original_function=_noop,
+            model_id="deployment-uuid-123",
+            custom_llm_provider="azure",
+        )
+
+        assert not fallback_called["called"], (
+            "_ageneric_api_call_with_fallbacks must NOT be called when "
+            "container_id is absent, even if model_id is supplied"
+        )
+        assert original_called["called"], "original_function must be called directly"
+
+    def test_regression_httpx_empty_params_strips_query_string(self):
+        """httpx erases the URL query-string when params={} (empty dict) is passed.
+
+        Root cause of the Azure container 404s on POST/DELETE:
+          _build_query_params returns {} when the endpoint has no extra params;
+          passing that {} as params= to httpx wiped ?api-version=2025-04-01-preview.
+
+        Fix: every container httpx call now uses `params or None` so an empty
+        dict falls back to None, which tells httpx to leave the URL untouched.
+        """
+        url = (
+            "https://resource.cognitiveservices.azure.com"
+            "/openai/containers/cntr_123?api-version=2025-04-01-preview"
+        )
+        client = httpx.AsyncClient()
+
+        req_none = client.build_request("DELETE", url, params=None)
+        assert "api-version=2025-04-01-preview" in str(req_none.url)
+
+        req_empty = client.build_request("DELETE", url, params={})
+        assert "api-version" not in str(
+            req_empty.url
+        ), "Documents root cause: params={} strips the query string"
+
+        effective: dict = {}
+        req_guarded = client.build_request("DELETE", url, params=effective or None)
+        assert "api-version=2025-04-01-preview" in str(
+            req_guarded.url
+        ), "`params or None` must preserve ?api-version"
+
     def test_regression_proxy_resolves_azure_text_same_as_azure(self):
         """Router/proxy treat azure_text like azure for container config."""
         from litellm.proxy.container_endpoints.handler_factory import (
@@ -517,3 +652,372 @@ class TestAzureContainerKnownFailureRegressions:
         c2 = _get_container_provider_config("azure_text")
         assert type(c1) is type(c2)
         assert isinstance(c1, AzureContainerConfig)
+
+    @pytest.mark.asyncio
+    async def test_proxy_process_request_forwards_decoded_container_id(
+        self, monkeypatch
+    ):
+        from starlette.requests import Request
+
+        from litellm.proxy.container_endpoints import handler_factory
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="model_abc123",
+            container_id="cntr_123",
+        )
+        captured = {}
+
+        async def _mock_base_process_llm_request(
+            self,
+            request,
+            fastapi_response,
+            user_api_key_dict,
+            route_type,
+            **kwargs,
+        ):
+            captured["data"] = self.data
+            captured["route_type"] = route_type
+            return {"id": "cfile_abc"}
+
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        monkeypatch.setattr(
+            ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            _mock_base_process_llm_request,
+        )
+        access_check = AsyncMock(return_value=("cntr_123", "azure"))
+        monkeypatch.setattr(
+            handler_factory,
+            "assert_user_can_access_container",
+            access_check,
+        )
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/v1/containers/id/files/id/content",
+                "headers": [],
+                "query_string": b"",
+            }
+        )
+        fastapi_response = MagicMock()
+
+        await handler_factory._process_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=MagicMock(),
+            route_type="alist_container_files",
+            path_params={"container_id": encoded_id},
+        )
+
+        access_check.assert_awaited_once()
+        assert access_check.await_args.kwargs["container_id"] == encoded_id
+        assert captured["route_type"] == "alist_container_files"
+        assert captured["data"]["container_id"] == "cntr_123"
+        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["model_id"] == "model_abc123"
+        assert "api_base" not in captured["data"]
+
+    @pytest.mark.asyncio
+    async def test_regression_binary_file_request_routes_through_proxy_processor(
+        self, monkeypatch
+    ):
+        from fastapi import Response
+        from starlette.requests import Request
+
+        from litellm.proxy.container_endpoints import handler_factory
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="model_abc123",
+            container_id="cntr_123",
+        )
+        captured = {}
+
+        async def _mock_base_process_llm_request(
+            self,
+            request,
+            fastapi_response,
+            user_api_key_dict,
+            route_type,
+            **kwargs,
+        ):
+            captured["data"] = self.data
+            captured["route_type"] = route_type
+            fastapi_response.headers["x-litellm-call-id"] = "call-123"
+            return b"csv-bytes"
+
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        monkeypatch.setattr(
+            ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            _mock_base_process_llm_request,
+        )
+        access_check = AsyncMock(return_value=("cntr_123", "azure"))
+        monkeypatch.setattr(
+            handler_factory,
+            "assert_user_can_access_container",
+            access_check,
+        )
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/v1/containers/id/files/id/content",
+                "headers": [],
+                "query_string": b"",
+            }
+        )
+        fastapi_response = Response()
+
+        response = await handler_factory._process_binary_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            container_id=encoded_id,
+            file_id="cfile_abc",
+            user_api_key_dict=MagicMock(),
+        )
+
+        access_check.assert_awaited_once()
+        assert access_check.await_args.kwargs["container_id"] == encoded_id
+        assert captured["route_type"] == "aretrieve_container_file_content"
+        assert captured["data"]["container_id"] == "cntr_123"
+        assert captured["data"]["file_id"] == "cfile_abc"
+        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["model_id"] == "model_abc123"
+        assert response.status_code == 200
+        assert response.body == b"csv-bytes"
+        assert response.headers["x-litellm-call-id"] == "call-123"
+
+    @pytest.mark.asyncio
+    async def test_regression_multipart_upload_request_uses_provider_from_managed_id(
+        self, monkeypatch
+    ):
+        from starlette.requests import Request
+
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.common_utils import http_parsing_utils
+        from litellm.proxy.container_endpoints import handler_factory
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="model_abc123",
+            container_id="cntr_123",
+        )
+        captured = {}
+
+        async def _mock_get_form_data(request):
+            return {"file": "ignored"}
+
+        async def _mock_convert_upload_files_to_file_data(form_data):
+            return {"file": [("data.csv", b"csv-bytes", "text/csv")]}
+
+        async def _mock_base_process_llm_request(
+            self,
+            request,
+            fastapi_response,
+            user_api_key_dict,
+            route_type,
+            **kwargs,
+        ):
+            captured["data"] = self.data
+            captured["route_type"] = route_type
+            return {"id": "cfile_abc"}
+
+        monkeypatch.setattr(
+            http_parsing_utils,
+            "get_form_data",
+            _mock_get_form_data,
+        )
+        monkeypatch.setattr(
+            http_parsing_utils,
+            "convert_upload_files_to_file_data",
+            _mock_convert_upload_files_to_file_data,
+        )
+        monkeypatch.setattr(
+            ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            _mock_base_process_llm_request,
+        )
+        access_check = AsyncMock(return_value=("cntr_123", "azure"))
+        monkeypatch.setattr(
+            handler_factory,
+            "assert_user_can_access_container",
+            access_check,
+        )
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/containers/id/files",
+                "headers": [],
+                "query_string": b"",
+            }
+        )
+
+        await handler_factory._process_multipart_upload_request(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+            route_type="aupload_container_file",
+            container_id=encoded_id,
+        )
+
+        access_check.assert_awaited_once()
+        assert access_check.await_args.kwargs["container_id"] == encoded_id
+        assert captured["route_type"] == "aupload_container_file"
+        assert captured["data"]["container_id"] == "cntr_123"
+        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["model_id"] == "model_abc123"
+
+    @pytest.mark.asyncio
+    async def test_regression_get_container_forwarding_params_sets_model_id_for_managed_id(
+        self,
+    ):
+        """get_container_forwarding_params must extract model_id from a
+        LiteLLM-managed encoded container ID and include it in the forwarding
+        dict.  This is the proxy-side half of the native-Azure-ID routing fix:
+        the router's _init_containers_api_endpoints reads kwargs["model_id"]
+        which is set here.
+        """
+        from litellm.proxy.container_endpoints.ownership import (
+            get_container_forwarding_params,
+        )
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="deployment-uuid-123",
+            container_id="cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df",
+        )
+
+        params = await get_container_forwarding_params(
+            container_id=encoded_id,
+            original_container_id="cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df",
+            custom_llm_provider="azure",
+        )
+
+        assert (
+            params.get("model_id") == "deployment-uuid-123"
+        ), "model_id must be forwarded to the router for managed container IDs"
+        assert params.get("container_id") == (
+            "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+        )
+        assert params.get("custom_llm_provider") == "azure"
+
+    @pytest.mark.asyncio
+    async def test_regression_get_container_forwarding_params_recovers_model_id_for_native_id(
+        self, monkeypatch
+    ):
+        """Native Azure IDs (``cntr_<hex>``) cannot be decoded, so model_id
+        must be recovered from the ownership row's ``unified_object_id`` —
+        the encoded form captured at create time when the router selected a
+        specific deployment. Without this, the router-side fallback for
+        native IDs in ``_init_containers_api_endpoints`` is dead code.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from litellm.proxy.container_endpoints import ownership
+        from litellm.proxy.container_endpoints.ownership import (
+            get_container_forwarding_params,
+        )
+
+        native_id = "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+        encoded_stored_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="deployment-uuid-123",
+            container_id=native_id,
+        )
+
+        ownership._CONTAINER_STORED_ID_CACHE.flush_cache()
+        ownership._CONTAINER_OWNER_CACHE.flush_cache()
+
+        table = AsyncMock()
+        table.find_first.return_value = SimpleNamespace(
+            created_by="user-1",
+            file_purpose=ownership.CONTAINER_OBJECT_PURPOSE,
+            unified_object_id=encoded_stored_id,
+        )
+        prisma_client = SimpleNamespace(
+            db=SimpleNamespace(litellm_managedobjecttable=table)
+        )
+        monkeypatch.setattr(
+            ownership,
+            "_get_prisma_client",
+            AsyncMock(return_value=prisma_client),
+        )
+
+        params = await get_container_forwarding_params(
+            container_id=native_id,
+            original_container_id=native_id,
+            custom_llm_provider="azure",
+        )
+
+        assert params.get("model_id") == "deployment-uuid-123", (
+            "model_id must be recovered from the stored unified_object_id "
+            "for native upstream container IDs"
+        )
+        assert params.get("container_id") == native_id
+        assert params.get("custom_llm_provider") == "azure"
+
+    @pytest.mark.asyncio
+    async def test_regression_native_azure_container_id_uses_forwarded_model_id(
+        self, monkeypatch
+    ):
+        """Native Azure container IDs (cntr_ + hex, no LiteLLM payload) must
+        still route through _ageneric_api_call_with_fallbacks using the
+        model_id forwarded from the proxy ownership check so that deployment
+        credentials (api_base) are applied."""
+        from litellm.router import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "azure-model",
+                    "litellm_params": {
+                        "model": "azure/gpt-4",
+                        "api_base": "https://my-resource.cognitiveservices.azure.com",
+                        "api_key": "test-key",
+                        "api_version": "2025-04-01-preview",
+                    },
+                    "model_info": {"id": "deployment-uuid-123"},
+                }
+            ]
+        )
+
+        called_with: dict = {}
+
+        async def _mock_fallback(original_function, **kwargs):
+            called_with.update(kwargs)
+            return {}
+
+        monkeypatch.setattr(router, "_ageneric_api_call_with_fallbacks", _mock_fallback)
+
+        native_azure_id = "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+
+        async def _noop(**kwargs):
+            return {}
+
+        await router._init_containers_api_endpoints(
+            original_function=_noop,
+            container_id=native_azure_id,
+            model_id="deployment-uuid-123",
+            custom_llm_provider="azure",
+        )
+
+        assert called_with.get("model") == "deployment-uuid-123", (
+            "_ageneric_api_call_with_fallbacks must be called with the forwarded "
+            "model_id when the container_id carries no LiteLLM routing payload"
+        )

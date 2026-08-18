@@ -18,10 +18,12 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
 sys.path.insert(0, os.path.abspath("../../.."))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import pytest
 import litellm
 
+from tests._live_test_helpers import _skip_live_prompt_caching_test
 
 # Large document for caching tests (needs 1024+ tokens for Claude models)
 LARGE_DOCUMENT_FOR_CACHING = """
@@ -82,7 +84,7 @@ IN WITNESS WHEREOF, the parties have executed this Agreement.
 class BaseAnthropicMessagesPromptCachingTest(ABC):
     """
     Base test class for prompt caching E2E tests across different providers.
-    
+
     Subclasses must implement:
     - get_model(): Returns the model string to use for tests
     """
@@ -91,10 +93,10 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
     def get_model(self) -> str:
         """
         Returns the model string to use for tests.
-        
+
         Examples:
-        - "bedrock/converse/anthropic.claude-3-7-sonnet-20250219-v1:0"
-        - "bedrock/invoke/anthropic.claude-3-7-sonnet-20250219-v1:0"
+        - "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0"
+        - "bedrock/invoke/anthropic.claude-sonnet-4-5-20250929-v1:0"
         """
         pass
 
@@ -123,33 +125,34 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
     async def test_prompt_caching_returns_cache_creation_tokens(self):
         """
         E2E test: First call should return cache_creation_input_tokens > 0.
-        
+
         This validates that the cache_control field is being passed through
         correctly and the provider is creating a cache.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
-        
+
         messages = self.get_messages_with_cache_control()
-        
+
         response = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
             messages=messages,
             max_tokens=100,
         )
-        
+
         print(f"Response: {json.dumps(response, indent=2, default=str)}")
-        
+
         # Validate response structure
         assert "usage" in response, "Response should contain usage"
         usage = response["usage"]
-        
+
         # Check for cache tokens in usage
         cache_creation = usage.get("cache_creation_input_tokens", 0)
         cache_read = usage.get("cache_read_input_tokens", 0)
-        
+
         print(f"cache_creation_input_tokens: {cache_creation}")
         print(f"cache_read_input_tokens: {cache_read}")
-        
+
         # First call should create cache (cache_creation > 0) OR read from existing cache
         assert cache_creation > 0 or cache_read > 0, (
             f"Expected cache_creation_input_tokens > 0 or cache_read_input_tokens > 0, "
@@ -161,34 +164,39 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
     async def test_prompt_caching_returns_cache_read_tokens_on_second_call(self):
         """
         E2E test: Second call with same content should return cache_read_input_tokens > 0.
-        
+
         This validates that caching is working end-to-end.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
-        
+
         messages = self.get_messages_with_cache_control()
-        
+
         # First call - creates cache
         response1 = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
             messages=messages,
             max_tokens=100,
         )
-        
-        print(f"First response usage: {json.dumps(response1.get('usage', {}), indent=2)}")
-        
+
+        print(
+            f"First response usage: {json.dumps(response1.get('usage', {}), indent=2)}"
+        )
+
         # Second call - should read from cache
         response2 = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
             messages=messages,
             max_tokens=100,
         )
-        
-        print(f"Second response usage: {json.dumps(response2.get('usage', {}), indent=2)}")
-        
+
+        print(
+            f"Second response usage: {json.dumps(response2.get('usage', {}), indent=2)}"
+        )
+
         usage = response2.get("usage", {})
         cache_read = usage.get("cache_read_input_tokens", 0)
-        
+
         # Second call should read from cache
         assert cache_read > 0, (
             f"Expected cache_read_input_tokens > 0 on second call, "
@@ -200,15 +208,16 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         """
         E2E test: Prompt caching with system message should work.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
-        
+
         messages = [
             {
                 "role": "user",
                 "content": "What are the key terms?",
             },
         ]
-        
+
         system = [
             {
                 "type": "text",
@@ -216,23 +225,23 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                 "cache_control": {"type": "ephemeral"},
             },
         ]
-        
+
         response = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
             messages=messages,
             system=system,
             max_tokens=100,
         )
-        
+
         print(f"Response: {json.dumps(response, indent=2, default=str)}")
-        
+
         usage = response.get("usage", {})
         cache_creation = usage.get("cache_creation_input_tokens", 0)
         cache_read = usage.get("cache_read_input_tokens", 0)
-        
+
         print(f"cache_creation_input_tokens: {cache_creation}")
         print(f"cache_read_input_tokens: {cache_read}")
-        
+
         assert cache_creation > 0 or cache_read > 0, (
             f"Expected cache tokens > 0 for system message caching, "
             f"but got cache_creation={cache_creation}, cache_read={cache_read}"
@@ -257,51 +266,68 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
     async def test_prompt_caching_streaming_returns_cache_tokens(self):
         """
         E2E test: Streaming response should include cache tokens in usage.
-        
+
         This validates that cache_creation_input_tokens and cache_read_input_tokens
         are correctly returned in the streaming response's message_delta event.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
-        
+
         messages = self.get_messages_with_cache_control()
-        
+
         response = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
             messages=messages,
             max_tokens=100,
             stream=True,
         )
-        
+
         # Collect all chunks and find the message_delta with usage
         cache_creation = 0
         cache_read = 0
         found_usage = False
-        
+
         async for chunk in response:
             # Handle SSE format chunks (bytes)
             if isinstance(chunk, bytes):
                 json_chunks = self._parse_sse_chunks(chunk)
                 for json_data in json_chunks:
-                    print(f"Parsed chunk: {json.dumps(json_data, indent=2, default=str)}")
-                    
+                    print(
+                        f"Parsed chunk: {json.dumps(json_data, indent=2, default=str)}"
+                    )
+
                     # Look for message_delta with usage (final chunk)
                     if json_data.get("type") == "message_delta":
                         usage = json_data.get("usage", {})
                         if usage:
                             found_usage = True
-                            cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
-                            cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
-                            print(f"Found usage in message_delta: cache_creation={cache_creation}, cache_read={cache_read}")
-                    
+                            cache_creation = max(
+                                cache_creation,
+                                usage.get("cache_creation_input_tokens", 0),
+                            )
+                            cache_read = max(
+                                cache_read, usage.get("cache_read_input_tokens", 0)
+                            )
+                            print(
+                                f"Found usage in message_delta: cache_creation={cache_creation}, cache_read={cache_read}"
+                            )
+
                     # Also check message_start for usage (Anthropic includes it there too)
                     if json_data.get("type") == "message_start":
                         message = json_data.get("message", {})
                         usage = message.get("usage", {})
                         if usage:
                             found_usage = True
-                            cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
-                            cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
-                            print(f"Found usage in message_start: cache_creation={cache_creation}, cache_read={cache_read}")
+                            cache_creation = max(
+                                cache_creation,
+                                usage.get("cache_creation_input_tokens", 0),
+                            )
+                            cache_read = max(
+                                cache_read, usage.get("cache_read_input_tokens", 0)
+                            )
+                            print(
+                                f"Found usage in message_start: cache_creation={cache_creation}, cache_read={cache_read}"
+                            )
             elif isinstance(chunk, dict):
                 print(f"Dict chunk: {json.dumps(chunk, indent=2, default=str)}")
                 # Handle dict chunks directly
@@ -309,19 +335,27 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                     usage = chunk.get("usage", {})
                     if usage:
                         found_usage = True
-                        cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
-                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
-                
+                        cache_creation = max(
+                            cache_creation, usage.get("cache_creation_input_tokens", 0)
+                        )
+                        cache_read = max(
+                            cache_read, usage.get("cache_read_input_tokens", 0)
+                        )
+
                 if chunk.get("type") == "message_start":
                     message = chunk.get("message", {})
                     usage = message.get("usage", {})
                     if usage:
                         found_usage = True
-                        cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
-                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
-        
+                        cache_creation = max(
+                            cache_creation, usage.get("cache_creation_input_tokens", 0)
+                        )
+                        cache_read = max(
+                            cache_read, usage.get("cache_read_input_tokens", 0)
+                        )
+
         assert found_usage, "Expected to find usage in streaming response"
-        
+
         # Should have cache tokens (either creation or read)
         assert cache_creation > 0 or cache_read > 0, (
             f"Expected cache_creation_input_tokens > 0 or cache_read_input_tokens > 0 in streaming response, "
@@ -334,10 +368,11 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         """
         E2E test: Second streaming call should return cache_read_input_tokens > 0.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
-        
+
         messages = self.get_messages_with_cache_control()
-        
+
         # First call - creates cache
         response1 = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
@@ -345,11 +380,11 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
             max_tokens=100,
             stream=True,
         )
-        
+
         # Consume the first stream
         async for chunk in response1:
             pass
-        
+
         # Second call - should read from cache
         response2 = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
@@ -357,33 +392,43 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
             max_tokens=100,
             stream=True,
         )
-        
+
         cache_read = 0
         async for chunk in response2:
             # Handle SSE format chunks (bytes)
             if isinstance(chunk, bytes):
                 json_chunks = self._parse_sse_chunks(chunk)
                 for json_data in json_chunks:
-                    print(f"Second call parsed chunk: {json.dumps(json_data, indent=2, default=str)}")
-                    
+                    print(
+                        f"Second call parsed chunk: {json.dumps(json_data, indent=2, default=str)}"
+                    )
+
                     if json_data.get("type") == "message_delta":
                         usage = json_data.get("usage", {})
-                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
-                    
+                        cache_read = max(
+                            cache_read, usage.get("cache_read_input_tokens", 0)
+                        )
+
                     if json_data.get("type") == "message_start":
                         message = json_data.get("message", {})
                         usage = message.get("usage", {})
-                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
+                        cache_read = max(
+                            cache_read, usage.get("cache_read_input_tokens", 0)
+                        )
             elif isinstance(chunk, dict):
                 if chunk.get("type") == "message_delta":
                     usage = chunk.get("usage", {})
-                    cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
-                
+                    cache_read = max(
+                        cache_read, usage.get("cache_read_input_tokens", 0)
+                    )
+
                 if chunk.get("type") == "message_start":
                     message = chunk.get("message", {})
                     usage = message.get("usage", {})
-                    cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
-        
+                    cache_read = max(
+                        cache_read, usage.get("cache_read_input_tokens", 0)
+                    )
+
         assert cache_read > 0, (
             f"Expected cache_read_input_tokens > 0 on second streaming call, "
             f"but got {cache_read}"
@@ -402,6 +447,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         didn't include cache fields in message_start, causing clients to think caching
         wasn't supported.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
@@ -428,7 +474,9 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                         message = json_data.get("message", {})
                         usage = message.get("usage", {})
 
-                        print(f"message_start usage: {json.dumps(usage, indent=2, default=str)}")
+                        print(
+                            f"message_start usage: {json.dumps(usage, indent=2, default=str)}"
+                        )
 
                         # Check that cache fields are present (even if 0)
                         if "cache_creation_input_tokens" in usage:
@@ -444,7 +492,9 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                     message = chunk.get("message", {})
                     usage = message.get("usage", {})
 
-                    print(f"message_start usage: {json.dumps(usage, indent=2, default=str)}")
+                    print(
+                        f"message_start usage: {json.dumps(usage, indent=2, default=str)}"
+                    )
 
                     # Check that cache fields are present (even if 0)
                     if "cache_creation_input_tokens" in usage:
@@ -460,7 +510,9 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
                 break
 
         # Validate that message_start was found
-        assert message_start_found, "Expected to find message_start event in streaming response"
+        assert (
+            message_start_found
+        ), "Expected to find message_start event in streaming response"
 
         # Validate that cache fields are present in message_start
         assert message_start_has_cache_creation_field, (

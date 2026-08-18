@@ -49,7 +49,8 @@ class TestS3VectorsVectorStoreConfig:
         mock_logging_obj.model_call_details = {}
 
         with pytest.raises(
-            ValueError, match="vector_store_id must be in format 'bucket_name:index_name'"
+            ValueError,
+            match="vector_store_id must be in format 'bucket_name:index_name'",
         ):
             config.transform_search_vector_store_request(
                 vector_store_id="invalid-format",
@@ -58,6 +59,7 @@ class TestS3VectorsVectorStoreConfig:
                 api_base="https://s3vectors.us-west-2.api.aws",
                 litellm_logging_obj=mock_logging_obj,
                 litellm_params={},
+                extra_body=None,
             )
 
     def test_transform_search_response(self):

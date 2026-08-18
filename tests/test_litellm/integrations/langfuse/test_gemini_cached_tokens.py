@@ -2,6 +2,7 @@
 Test for Langfuse integration with Gemini cached_tokens bug
 https://github.com/BerriAI/litellm/issues/18520
 """
+
 import pytest
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
@@ -27,16 +28,17 @@ def test_cached_tokens_extraction():
     # Check prompt_tokens_details.cached_tokens (the fix)
     if hasattr(usage, "prompt_tokens_details"):
         prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
-        if (
-            prompt_tokens_details is not None
-            and hasattr(prompt_tokens_details, "cached_tokens")
+        if prompt_tokens_details is not None and hasattr(
+            prompt_tokens_details, "cached_tokens"
         ):
             cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
             if cached_tokens is not None and cached_tokens > 0:
                 cache_read_input_tokens = cached_tokens
 
     # Verify the fix works
-    assert cache_read_input_tokens == 20203, f"Expected 20203, got {cache_read_input_tokens}"
+    assert (
+        cache_read_input_tokens == 20203
+    ), f"Expected 20203, got {cache_read_input_tokens}"
 
 
 def test_cached_tokens_not_present():
@@ -51,9 +53,8 @@ def test_cached_tokens_not_present():
 
     if hasattr(usage, "prompt_tokens_details"):
         prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
-        if (
-            prompt_tokens_details is not None
-            and hasattr(prompt_tokens_details, "cached_tokens")
+        if prompt_tokens_details is not None and hasattr(
+            prompt_tokens_details, "cached_tokens"
         ):
             cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
             if cached_tokens is not None and cached_tokens > 0:
@@ -78,9 +79,8 @@ def test_cached_tokens_is_zero():
 
     if hasattr(usage, "prompt_tokens_details"):
         prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
-        if (
-            prompt_tokens_details is not None
-            and hasattr(prompt_tokens_details, "cached_tokens")
+        if prompt_tokens_details is not None and hasattr(
+            prompt_tokens_details, "cached_tokens"
         ):
             cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
             if cached_tokens is not None and cached_tokens > 0:

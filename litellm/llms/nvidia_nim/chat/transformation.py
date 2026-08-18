@@ -1,12 +1,15 @@
 """
-Nvidia NIM endpoint: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer 
+Nvidia NIM endpoint: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
-This is OpenAI compatible 
+This is OpenAI compatible
 
 This file only contains param mapping logic
 
 API calling is done using the OpenAI SDK with an api_base
 """
+
+from typing import Final
+
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
@@ -101,7 +104,7 @@ class NvidiaNimConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
+        supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value

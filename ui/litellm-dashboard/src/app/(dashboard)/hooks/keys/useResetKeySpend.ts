@@ -1,10 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { keyKeys } from "./useKeys";
 
@@ -20,10 +15,7 @@ export interface ResetKeySpendResponse {
 
 // ── Fetch function ────────────────────────────────────────────────────────────
 
-export const resetKeySpend = async (
-  accessToken: string,
-  keyToken: string,
-): Promise<ResetKeySpendResponse> => {
+export const resetKeySpend = async (accessToken: string, keyToken: string): Promise<ResetKeySpendResponse> => {
   const baseUrl = getProxyBaseUrl();
   const url = `${baseUrl ? `${baseUrl}/key/${keyToken}/reset_spend` : `/key/${keyToken}/reset_spend`}`;
 

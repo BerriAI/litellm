@@ -1,9 +1,9 @@
-from typing import Dict, Optional
+from typing import Final
 
 import litellm
 
 
-def _ensure_extra_body_is_safe(extra_body: Optional[Dict]) -> Optional[Dict]:
+def _ensure_extra_body_is_safe(extra_body: dict | None) -> dict | None:
     """
     Ensure that the extra_body sent in the request is safe,  otherwise users will see this error
 
@@ -20,7 +20,7 @@ def _ensure_extra_body_is_safe(extra_body: Optional[Dict]) -> Optional[Dict]:
 
     if "metadata" in extra_body and isinstance(extra_body["metadata"], dict):
         if "prompt" in extra_body["metadata"]:
-            _prompt = extra_body["metadata"].get("prompt")
+            _prompt: Final = extra_body["metadata"].get("prompt")
 
             # users can send Langfuse TextPromptClient objects, so we need to convert them to dicts
             # Langfuse TextPromptClients have .__dict__ attribute
@@ -44,20 +44,17 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     if custom_llm_provider not in litellm.models_by_provider:
         return []
 
-    known_models = litellm.models_by_provider.get(custom_llm_provider, [])
-    model_costs = []
+    known_models: Final = litellm.models_by_provider.get(custom_llm_provider, [])
+    model_costs: Final = []
 
     for model in known_models:
         try:
-            model_info = litellm.get_model_info(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
+            model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
         if model_info.get("mode") != "chat":
             continue
-        _cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get(
-            "output_cost_per_token") or 0.0)
+        _cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
         model_costs.append((model, _cost))
 
     # Sort by cost (ascending)
@@ -67,7 +64,7 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     return [model for model, _ in model_costs[:n]]
 
 
-def get_proxy_server_request_headers(litellm_params: Optional[dict]) -> dict:
+def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:
     """
     Get the `proxy_server_request` headers from the litellm_params.\
 
@@ -76,8 +73,6 @@ def get_proxy_server_request_headers(litellm_params: Optional[dict]) -> dict:
     if litellm_params is None:
         return {}
 
-    proxy_request_headers = (
-        litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
-    )
+    proxy_request_headers: Final = (litellm_params.get("proxy_server_request") or {}).get("headers") or {}
 
     return proxy_request_headers

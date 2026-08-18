@@ -22,6 +22,8 @@ from litellm.router_utils.fallback_event_handlers import (
     log_failure_fallback_event,
 )
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 
 # Helper function to create a Router instance
 def create_test_router():
@@ -68,7 +70,7 @@ def create_test_router_2():
                 "litellm_params": {
                     "model": "openai/fake-openai-endpoint-2",
                     "api_key": "working-key-since-this-is-fake-endpoint",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
         ],
@@ -117,7 +119,7 @@ async def test_run_async_fallback(function_name):
         original_exception=original_exception,
         max_fallbacks=5,
         fallback_depth=0,
-        **request_kwargs
+        **request_kwargs,
     )
 
     assert result is not None
@@ -219,9 +221,7 @@ async def test_log_failure_fallback_event():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "function_name", ["_acompletion", "_atext_completion"]
-)
+@pytest.mark.parametrize("function_name", ["_acompletion", "_atext_completion"])
 async def test_failed_fallbacks_raise_most_recent_exception(function_name):
     """
     Tests that if all fallbacks fail, the most recent occuring exception is raised
@@ -261,14 +261,12 @@ async def test_failed_fallbacks_raise_most_recent_exception(function_name):
             mock_response="litellm.RateLimitError",
             max_fallbacks=5,
             fallback_depth=0,
-            **request_kwargs
+            **request_kwargs,
         )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "function_name", ["_acompletion", "_atext_completion"]
-)
+@pytest.mark.parametrize("function_name", ["_acompletion", "_atext_completion"])
 async def test_multiple_fallbacks(function_name):
     """
     Tests that if multiple fallbacks passed:
@@ -305,14 +303,11 @@ async def test_multiple_fallbacks(function_name):
         original_exception=original_exception,
         max_fallbacks=5,
         fallback_depth=0,
-        **request_kwargs
+        **request_kwargs,
     )
 
     print(result)
 
     print(result._hidden_params)
 
-    assert (
-        result._hidden_params["api_base"]
-        == "https://exampleopenaiendpoint-production.up.railway.app/"
-    )
+    assert result._hidden_params["api_base"] == FAKE_OPENAI_API_BASE

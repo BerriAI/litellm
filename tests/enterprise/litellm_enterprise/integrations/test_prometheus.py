@@ -110,9 +110,9 @@ def test_end_user_not_tracked_for_all_prometheus_metrics():
             team="test_team",
             team_alias="test_team_alias",
             user="test_user",
-            requested_model="gpt-4",
-            model="gpt-4",
-            litellm_model_name="gpt-4",
+            requested_model="gpt-5.5",
+            model="gpt-5.5",
+            litellm_model_name="gpt-5.5",
         )
 
         # Get all defined Prometheus metrics that include end_user in their labels
@@ -199,7 +199,7 @@ def test_future_metrics_with_end_user_are_filtered():
             hashed_api_key="test_key",
             api_key_alias="test_alias",
             team="test_team",
-            model="gpt-4",
+            model="gpt-5.5",
         )
 
         # Test the filtering
@@ -478,6 +478,244 @@ def test_valid_configuration_passes_validation():
 
 
 # ==============================================================================
+# GLOBAL EXCLUDE TESTS - exclude_metrics / exclude_labels
+# ==============================================================================
+
+
+@pytest.fixture
+def reset_prometheus_exclude_settings():
+    """Restore the global exclude settings after each test so they don't leak."""
+    prev_metrics = litellm.prometheus_exclude_metrics
+    prev_labels = litellm.prometheus_exclude_labels
+    prev_config = litellm.prometheus_metrics_config
+    try:
+        yield
+    finally:
+        litellm.prometheus_exclude_metrics = prev_metrics
+        litellm.prometheus_exclude_labels = prev_labels
+        litellm.prometheus_metrics_config = prev_config
+
+
+def test_exclude_metrics_disables_only_listed_metrics(reset_prometheus_exclude_settings):
+    """A metric named in exclude_metrics becomes a NoOpMetric; others stay real."""
+    from litellm.types.integrations.prometheus import NoOpMetric
+
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_labels = None
+    litellm.prometheus_exclude_metrics = [
+        "litellm_spend_metric",
+        "litellm_input_tokens_metric",
+    ]
+
+    logger = PrometheusLogger()
+
+    assert isinstance(logger.litellm_spend_metric, NoOpMetric)
+    assert isinstance(logger.litellm_input_tokens_metric, NoOpMetric)
+    # A metric not in the exclude list is still a real prometheus metric
+    assert not isinstance(logger.litellm_output_tokens_metric, NoOpMetric)
+
+
+def test_exclude_metrics_wins_over_include_config(reset_prometheus_exclude_settings):
+    """exclude_metrics removes a metric even if an include-based group enabled it."""
+    from litellm.types.integrations.prometheus import NoOpMetric
+
+    clear_prometheus_registry()
+    litellm.prometheus_exclude_labels = None
+    litellm.prometheus_metrics_config = [
+        {
+            "group": "tokens",
+            "metrics": ["litellm_input_tokens_metric", "litellm_output_tokens_metric"],
+        }
+    ]
+    litellm.prometheus_exclude_metrics = ["litellm_input_tokens_metric"]
+
+    logger = PrometheusLogger()
+
+    assert isinstance(logger.litellm_input_tokens_metric, NoOpMetric)
+    assert not isinstance(logger.litellm_output_tokens_metric, NoOpMetric)
+
+
+def test_exclude_labels_dropped_globally(reset_prometheus_exclude_settings):
+    """exclude_labels removes the label from every metric that would emit it."""
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["hashed_api_key", "api_key_alias"]
+
+    logger = PrometheusLogger()
+
+    for metric_name in ("litellm_spend_metric", "litellm_input_tokens_metric"):
+        labels = logger.get_labels_for_metric(metric_name)
+        assert "hashed_api_key" not in labels
+        assert "api_key_alias" not in labels
+        # Other default labels remain
+        assert "team" in labels
+
+
+def test_exclude_labels_intersect_with_include_labels(reset_prometheus_exclude_settings):
+    """exclude_labels is applied on top of an include-based label filter."""
+    clear_prometheus_registry()
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_metrics_config = [
+        {
+            "group": "spend",
+            "metrics": ["litellm_spend_metric"],
+            "include_labels": ["hashed_api_key", "team", "api_provider"],
+        }
+    ]
+    litellm.prometheus_exclude_labels = ["hashed_api_key"]
+
+    logger = PrometheusLogger()
+
+    labels = logger.get_labels_for_metric("litellm_spend_metric")
+    assert "hashed_api_key" not in labels
+    assert set(labels) == {"team", "api_provider"}
+
+
+def test_no_exclude_settings_is_backward_compatible(reset_prometheus_exclude_settings):
+    """With no exclude settings, all metrics and default labels are preserved."""
+    from litellm.types.integrations.prometheus import NoOpMetric
+
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = None
+
+    logger = PrometheusLogger()
+
+    assert logger.exclude_metrics == frozenset()
+    assert logger.exclude_labels == frozenset()
+    assert not isinstance(logger.litellm_spend_metric, NoOpMetric)
+    default_labels = PrometheusMetricLabels.get_labels("litellm_spend_metric")
+    assert logger.get_labels_for_metric("litellm_spend_metric") == default_labels
+
+
+def test_invalid_exclude_metric_name_raises(reset_prometheus_exclude_settings):
+    """An unknown metric name in exclude_metrics fails fast at logger init."""
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_labels = None
+    litellm.prometheus_exclude_metrics = ["not_a_real_metric"]
+
+    with pytest.raises(ValueError) as exc_info:
+        PrometheusLogger()
+
+    assert "not_a_real_metric" in str(exc_info.value)
+    assert "prometheus_exclude_metrics" in str(exc_info.value)
+
+
+def test_invalid_exclude_label_name_raises(reset_prometheus_exclude_settings):
+    """An unknown label name in exclude_labels fails fast at logger init."""
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["not_a_real_label"]
+
+    with pytest.raises(ValueError) as exc_info:
+        PrometheusLogger()
+
+    assert "not_a_real_label" in str(exc_info.value)
+    assert "prometheus_exclude_labels" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "hardcoded_label",
+    ["guardrail_name", "status", "error_type", "hook_type", "purpose", "file_type", "result"],
+)
+def test_exclude_hardcoded_label_name_is_accepted(reset_prometheus_exclude_settings, hardcoded_label):
+    """Labels that only appear in hard-coded metric definitions (not UserAPIKeyLabelNames)
+    are valid exclude targets and must not fail validation at logger init."""
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = [hardcoded_label]
+
+    logger = PrometheusLogger()
+
+    assert hardcoded_label in logger.exclude_labels
+
+
+def test_exclude_labels_dropped_from_hardcoded_metric(reset_prometheus_exclude_settings):
+    """A metric built with a hard-coded labelnames list drops excluded labels from its
+    declared label set instead of silently retaining them."""
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["guardrail_name"]
+
+    logger = PrometheusLogger()
+
+    labelnames = logger.litellm_guardrail_latency_metric._metric._labelnames
+    assert "guardrail_name" not in labelnames
+    assert set(labelnames) == {"status", "error_type", "hook_type"}
+
+
+def test_hardcoded_metric_emission_omits_excluded_label(reset_prometheus_exclude_settings):
+    """Emitting a hard-coded metric with the excluded label still passed keeps the emission
+    working and the excluded label never reaches the scrape output."""
+    from prometheus_client import generate_latest
+
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["guardrail_name"]
+
+    logger = PrometheusLogger()
+    logger.litellm_guardrail_latency_metric.labels(
+        guardrail_name="my_guardrail",
+        status="success",
+        error_type="",
+        hook_type="pre_call",
+    ).observe(0.25)
+
+    scrape = generate_latest(REGISTRY).decode()
+    assert "litellm_guardrail_latency_seconds_bucket" in scrape
+    assert "my_guardrail" not in scrape
+    assert 'guardrail_name="' not in scrape
+    assert 'status="success"' in scrape
+
+
+def test_exclude_only_hardcoded_label_drops_all_labels(reset_prometheus_exclude_settings):
+    """Excluding the sole label of a hard-coded metric leaves it label-less and still emittable
+    via both keyword and positional labels() calls."""
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["result", "api_provider"]
+
+    logger = PrometheusLogger()
+
+    assert logger.litellm_managed_file_deleted_total._metric._labelnames == ()
+    assert logger.litellm_provider_remaining_budget_metric._metric._labelnames == ()
+
+    logger.litellm_managed_file_deleted_total.labels(result="blocked").inc()
+    logger.litellm_provider_remaining_budget_metric.labels("anthropic").set(5.0)
+
+
+def test_exclude_labels_does_not_touch_unrelated_metrics(reset_prometheus_exclude_settings):
+    """A metric that never declares the excluded label is left as a plain prometheus metric,
+    not wrapped, so no behavior changes for it."""
+    from litellm.integrations.prometheus import _ExcludedLabelMetric
+
+    clear_prometheus_registry()
+    litellm.prometheus_metrics_config = None
+    litellm.prometheus_exclude_metrics = None
+    litellm.prometheus_exclude_labels = ["guardrail_name"]
+
+    logger = PrometheusLogger()
+
+    assert not isinstance(logger.litellm_spend_metric, _ExcludedLabelMetric)
+    assert not isinstance(logger.litellm_provider_remaining_budget_metric, _ExcludedLabelMetric)
+    assert isinstance(logger.litellm_guardrail_latency_metric, _ExcludedLabelMetric)
+
+
+# ==============================================================================
+# END GLOBAL EXCLUDE TESTS
+# ==============================================================================
+
+
+# ==============================================================================
 # SEMANTIC VALIDATION TESTS - Detect logical errors in metric increments
 # ==============================================================================
 
@@ -556,7 +794,7 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
 
     # Test data with large token count that should NOT affect request counter
     kwargs = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "litellm_params": {"metadata": {}},
         "start_time": datetime.now() - timedelta(seconds=1),
         "end_time": datetime.now(),
@@ -566,7 +804,7 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
             "prompt_tokens": 600,
             "completion_tokens": 399,
             "response_cost": 0.005,
-            "model_group": "gpt-3.5-turbo",
+            "model_group": "gpt-5-mini",
             "model_id": "test-model-id",
             "api_base": "https://api.openai.com/v1",
             "custom_llm_provider": "openai",
@@ -605,7 +843,7 @@ async def test_request_counter_semantic_validation(mock_prometheus_logger):
             hashed_api_key="test-hash",
             api_key_alias="test-alias",
             team="test-team",
-            model="gpt-4",
+            model="gpt-5.5",
         ),
         response=MagicMock(),
     )
@@ -643,7 +881,7 @@ async def test_multiple_requests_counter_semantics(mock_prometheus_logger):
 
     for i in range(num_requests):
         kwargs = {
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-5-mini",
             "litellm_params": {"metadata": {}},
             "start_time": datetime.now() - timedelta(seconds=1),
             "end_time": datetime.now(),
@@ -653,7 +891,7 @@ async def test_multiple_requests_counter_semantics(mock_prometheus_logger):
                 "prompt_tokens": tokens_per_request // 2,
                 "completion_tokens": tokens_per_request // 2,
                 "response_cost": 0.001,
-                "model_group": "gpt-3.5-turbo",
+                "model_group": "gpt-5-mini",
                 "model_id": "test-model-id",
                 "api_base": "https://api.openai.com/v1",
                 "custom_llm_provider": "openai",
@@ -707,7 +945,7 @@ async def test_streaming_request_counter_semantics(mock_prometheus_logger):
     from datetime import datetime, timedelta
 
     kwargs = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "litellm_params": {"metadata": {}},
         "start_time": datetime.now() - timedelta(seconds=1),
         "end_time": datetime.now(),
@@ -717,7 +955,7 @@ async def test_streaming_request_counter_semantics(mock_prometheus_logger):
             "prompt_tokens": 300,
             "completion_tokens": 450,
             "response_cost": 0.003,
-            "model_group": "gpt-3.5-turbo",
+            "model_group": "gpt-5-mini",
             "model_id": "test-model-id",
             "api_base": "https://api.openai.com/v1",
             "custom_llm_provider": "openai",
@@ -801,7 +1039,7 @@ async def test_spend_counter_semantics(mock_prometheus_logger):
     from datetime import datetime, timedelta
 
     kwargs = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "litellm_params": {"metadata": {}},
         "start_time": datetime.now() - timedelta(seconds=1),
         "end_time": datetime.now(),
@@ -811,7 +1049,7 @@ async def test_spend_counter_semantics(mock_prometheus_logger):
             "prompt_tokens": 60,
             "completion_tokens": 40,
             "response_cost": 0.0015,  # This should be used for spend metrics
-            "model_group": "gpt-3.5-turbo",
+            "model_group": "gpt-5-mini",
             "model_id": "test-model-id",
             "api_base": "https://api.openai.com/v1",
             "custom_llm_provider": "openai",

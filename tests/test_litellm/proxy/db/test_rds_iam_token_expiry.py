@@ -26,25 +26,13 @@ class TestPrismaWrapperTokenRefresh:
     """Tests for the PrismaWrapper RDS IAM token refresh implementation."""
 
     @pytest.fixture
-    def setup_env(self):
+    def setup_env(self, monkeypatch, unset_database_url):
         """Setup environment variables for testing."""
-        os.environ["DATABASE_HOST"] = "test-host.rds.amazonaws.com"
-        os.environ["DATABASE_PORT"] = "5432"
-        os.environ["DATABASE_USER"] = "test_user"
-        os.environ["DATABASE_NAME"] = "test_db"
-        os.environ["IAM_TOKEN_DB_AUTH"] = "True"
-        yield
-        # Cleanup
-        for key in [
-            "DATABASE_HOST",
-            "DATABASE_PORT",
-            "DATABASE_USER",
-            "DATABASE_NAME",
-            "DATABASE_URL",
-            "IAM_TOKEN_DB_AUTH",
-            "DATABASE_SCHEMA",
-        ]:
-            os.environ.pop(key, None)
+        monkeypatch.setenv("DATABASE_HOST", "test-host.rds.amazonaws.com")
+        monkeypatch.setenv("DATABASE_PORT", "5432")
+        monkeypatch.setenv("DATABASE_USER", "test_user")
+        monkeypatch.setenv("DATABASE_NAME", "test_db")
+        monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "True")
 
     def _generate_mock_token(self, expires_in_seconds: int = 900) -> str:
         """Generate a mock IAM token with expiration info."""
@@ -57,9 +45,9 @@ class TestPrismaWrapperTokenRefresh:
     def _set_database_url_with_token(self, expires_in_seconds: int = 900):
         """Set DATABASE_URL with a mock token."""
         token = self._generate_mock_token(expires_in_seconds)
-        os.environ[
-            "DATABASE_URL"
-        ] = f"postgresql://test_user:{token}@test-host:5432/test_db"
+        os.environ["DATABASE_URL"] = (
+            f"postgresql://test_user:{token}@test-host:5432/test_db"
+        )
 
     @pytest.mark.asyncio
     async def test_is_token_expired_fresh(self, setup_env):
@@ -172,22 +160,12 @@ class TestBackgroundRefreshLoop:
     """Tests for the background refresh loop timing."""
 
     @pytest.fixture
-    def setup_env(self):
+    def setup_env(self, monkeypatch, unset_database_url):
         """Setup environment variables for testing."""
-        os.environ["DATABASE_HOST"] = "test-host.rds.amazonaws.com"
-        os.environ["DATABASE_PORT"] = "5432"
-        os.environ["DATABASE_USER"] = "test_user"
-        os.environ["DATABASE_NAME"] = "test_db"
-        yield
-        # Cleanup
-        for key in [
-            "DATABASE_HOST",
-            "DATABASE_PORT",
-            "DATABASE_USER",
-            "DATABASE_NAME",
-            "DATABASE_URL",
-        ]:
-            os.environ.pop(key, None)
+        monkeypatch.setenv("DATABASE_HOST", "test-host.rds.amazonaws.com")
+        monkeypatch.setenv("DATABASE_PORT", "5432")
+        monkeypatch.setenv("DATABASE_USER", "test_user")
+        monkeypatch.setenv("DATABASE_NAME", "test_db")
 
     @pytest.mark.asyncio
     async def test_calculate_seconds_fallback_when_no_url(self, setup_env):
@@ -232,9 +210,9 @@ async def demonstrate_fix():
     date_str = now.strftime("%Y%m%dT%H%M%SZ")
     token = f"mock-token?X-Amz-Date={date_str}&X-Amz-Expires=10&X-Amz-Signature=abc123"
     encoded_token = urllib.parse.quote(token, safe="")
-    os.environ[
-        "DATABASE_URL"
-    ] = f"postgresql://iam_user:{encoded_token}@mock-rds:5432/litellm"
+    os.environ["DATABASE_URL"] = (
+        f"postgresql://iam_user:{encoded_token}@mock-rds:5432/litellm"
+    )
 
     # Create mock prisma client
     mock_prisma = MagicMock()

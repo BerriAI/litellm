@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Adaptive Router — Chat</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #131a26;
+      --panel-2: #1b2433;
+      --fg: #e7ecf3;
+      --muted: #8a95a8;
+      --accent: #5dd6a4;
+      --accent-2: #6fb6ff;
+      --warn: #f6b94d;
+      --bad: #ff6b6b;
+      --bar-bg: #233047;
+      --border: #25324a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                   "Segoe UI", Roboto, Inter, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      font-size: 14px;
+      line-height: 1.45;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: var(--panel);
+      flex-shrink: 0;
+    }
+    header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); display: inline-block; margin-right: 6px; }
+    .dot.ok { background: var(--accent); }
+    .status { color: var(--muted); font-size: 12px; }
+    .header-link { margin-left: auto; color: var(--accent-2); font-size: 12px; text-decoration: none; }
+    .header-link:hover { text-decoration: underline; }
+
+    .connect {
+      padding: 12px 24px;
+      display: flex; gap: 10px; align-items: center;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .connect label { color: var(--muted); font-size: 12px; }
+    .connect input, .connect select {
+      background: #0e1422;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .connect input[type=text] { width: 210px; }
+    .connect input[type=password] { width: 180px; }
+    .connect button.btn-connect {
+      background: var(--accent-2);
+      color: #0b0f17;
+      border: none;
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    /* scenario strip */
+    .scenarios {
+      padding: 10px 24px;
+      display: flex; gap: 8px; flex-wrap: wrap;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .scenarios .sc-btn {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      padding: 7px 14px;
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .scenarios .sc-btn:hover { border-color: var(--accent-2); background: #1e2d42; }
+    .scenarios .sc-btn.active { border-color: var(--accent-2); background: #1a2d45; color: var(--accent-2); }
+    .scenarios .sc-btn.new { border-color: var(--border); color: var(--muted); }
+    .scenarios .sc-btn.new:hover { border-color: var(--warn); color: var(--warn); background: #1f1a10; }
+
+    /* main layout */
+    .workspace {
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      flex: 1;
+      min-height: 0;
+    }
+    @media (max-width: 900px) {
+      .workspace { grid-template-columns: 1fr; }
+      .info-panel { display: none; }
+    }
+
+    /* chat panel */
+    .chat-panel {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      border-right: 1px solid var(--border);
+    }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .messages .empty-state {
+      margin: auto;
+      text-align: center;
+      color: var(--muted);
+    }
+    .messages .empty-state h2 {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--fg);
+      margin: 0 0 8px;
+    }
+    .messages .empty-state p {
+      font-size: 13px;
+      margin: 0;
+      max-width: 360px;
+    }
+
+    .msg {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .msg.assistant { flex-direction: row; }
+    .msg.user { flex-direction: row-reverse; }
+
+    .avatar {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .msg.user .avatar { background: var(--accent-2); color: #0b0f17; font-weight: 700; }
+    .msg.assistant .avatar { background: var(--accent); color: #0b0f17; }
+
+    .bubble {
+      max-width: 75%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user .bubble {
+      background: #1a2d45;
+      border: 1px solid var(--border);
+      border-top-right-radius: 4px;
+    }
+    .msg.assistant .bubble {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-top-left-radius: 4px;
+    }
+    .bubble code {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      background: rgba(255,255,255,0.06);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 12px;
+    }
+    .bubble pre {
+      background: #0e1422;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      overflow-x: auto;
+      margin: 8px 0 0;
+    }
+    .bubble pre code {
+      background: none;
+      padding: 0;
+      font-size: 12px;
+    }
+
+    .msg-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+      padding: 0 2px;
+    }
+    .msg.user .msg-meta { text-align: right; }
+    .msg-model { color: var(--accent); font-weight: 600; }
+    .msg-type  { color: var(--accent-2); }
+
+    .thinking {
+      display: flex; gap: 4px; align-items: center;
+      padding: 8px 0;
+    }
+    .thinking span {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--muted);
+      animation: blink 1.2s infinite;
+    }
+    .thinking span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink {
+      0%, 80%, 100% { opacity: 0.2; }
+      40% { opacity: 1; }
+    }
+
+    /* input area */
+    .input-area {
+      padding: 14px 24px;
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .input-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+    textarea {
+      flex: 1;
+      background: #0e1422;
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+      min-height: 44px;
+      max-height: 160px;
+      line-height: 1.45;
+    }
+    textarea:focus { border-color: var(--accent-2); }
+    textarea:disabled { opacity: 0.5; }
+    .btn-send {
+      background: var(--accent);
+      color: #0b0f17;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+      flex-shrink: 0;
+      align-self: flex-end;
+    }
+    .btn-send:disabled { opacity: 0.5; cursor: default; }
+
+    .input-hint {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* info panel */
+    .info-panel {
+      background: var(--panel);
+      padding: 18px 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .info-block h3 {
+      margin: 0 0 10px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .info-row .label { color: var(--muted); }
+    .info-row .val { font-family: ui-monospace, monospace; color: var(--fg); font-weight: 600; }
+    .info-row .val.accent { color: var(--accent); }
+    .info-row .val.accent-2 { color: var(--accent-2); }
+    .info-row .val.warn { color: var(--warn); }
+
+    .signal-gate {
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .signal-gate.waiting {
+      background: rgba(246, 185, 77, 0.08);
+      border: 1px solid rgba(246, 185, 77, 0.3);
+      color: var(--warn);
+    }
+    .signal-gate.learning {
+      background: rgba(93, 214, 164, 0.08);
+      border: 1px solid rgba(93, 214, 164, 0.3);
+      color: var(--accent);
+    }
+
+    .scenario-desc {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 0;
+    }
+
+    .link-dash {
+      display: block;
+      text-align: center;
+      color: var(--accent-2);
+      font-size: 12px;
+      text-decoration: none;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-top: auto;
+    }
+    .link-dash:hover { border-color: var(--accent-2); background: #1a2d45; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ Adaptive Router — Chat</h1>
+  <span class="status"><span id="conn-dot" class="dot"></span><span id="conn-label">Disconnected</span></span>
+  <a class="header-link" href="dashboard.html">→ Open live dashboard</a>
+</header>
+
+<div class="connect">
+  <label>Proxy URL <input id="proxy-url" type="text" value="http://localhost:4000" /></label>
+  <label>API Key <input id="api-key" type="password" placeholder="sk-1234" /></label>
+  <label>Router
+    <input id="router" type="text" value="smart-cheap-router" style="width:160px" />
+  </label>
+  <button class="btn-connect" id="connect-btn">Connect</button>
+</div>
+
+<div class="scenarios" id="scenario-bar">
+  <button class="sc-btn" data-id="debug_code">🐛 Debug my code</button>
+  <button class="sc-btn" data-id="brainstorm_feature">💡 Brainstorm a feature</button>
+  <button class="sc-btn" data-id="explain_concept">📚 Explain a concept</button>
+  <button class="sc-btn" data-id="write_something">✍️ Write something</button>
+  <button class="sc-btn new" id="new-chat-btn">＋ New chat</button>
+</div>
+
+<div class="workspace">
+  <div class="chat-panel">
+    <div class="messages" id="messages">
+      <div class="empty-state">
+        <h2>Pick a scenario to start</h2>
+        <p>Choose one of the presets above or connect to the proxy and type your own message. The adaptive router will pick the best model for each turn.</p>
+      </div>
+    </div>
+    <div class="input-area">
+      <div class="input-row">
+        <textarea id="input" rows="1" placeholder="Send a message… (Shift+Enter for new line)" disabled></textarea>
+        <button class="btn-send" id="send-btn" disabled>Send</button>
+      </div>
+      <div class="input-hint" id="input-hint">Connect first to start chatting.</div>
+    </div>
+  </div>
+
+  <aside class="info-panel">
+    <div class="info-block">
+      <h3>Session</h3>
+      <div class="info-row"><span class="label">ID</span><span class="val" id="info-session-id">—</span></div>
+      <div class="info-row"><span class="label">Messages</span><span class="val" id="info-msg-count">0</span></div>
+      <div class="info-row"><span class="label">Scenario</span><span class="val accent-2" id="info-scenario">none</span></div>
+    </div>
+
+    <div id="gate-status" class="signal-gate waiting" style="display:none">
+      ⏳ <b>Learning starts at 4 messages.</b> Keep chatting — the router will start updating its bandit after your next reply.
+    </div>
+
+    <hr class="divider" />
+
+    <div class="info-block">
+      <h3>Last response</h3>
+      <div class="info-row"><span class="label">Model picked</span><span class="val accent" id="info-model">—</span></div>
+      <div class="info-row"><span class="label">Request type</span><span class="val accent-2" id="info-req-type">—</span></div>
+      <div class="info-row"><span class="label">Latency</span><span class="val" id="info-latency">—</span></div>
+    </div>
+
+    <hr class="divider" />
+
+    <div class="info-block">
+      <h3>How it works</h3>
+      <p class="scenario-desc">
+        Each message goes through the <b>adaptive router</b> which classifies your request type (code, writing, factual…) and uses a Thompson-sampling bandit to pick the model with the best quality for that category.<br><br>
+        After 4+ messages, positive feedback signals (✓ in the activity log) update the bandit. Watch the bars move in the <a href="dashboard.html" style="color:var(--accent-2)">live dashboard</a>.
+      </p>
+    </div>
+
+    <a class="link-dash" href="dashboard.html">📊 Live bandit dashboard →</a>
+  </aside>
+</div>
+
+<script>
+// ---- scenarios -------------------------------------------------------
+const SCENARIOS = {
+  debug_code: {
+    label: "Debug my code",
+    system: "You are an expert debugging assistant. Be concise. Identify the bug, explain why it's wrong, and provide the corrected code.",
+    starter: "I have a Python function that should return the sum of a list, but it always returns 0:\n\n```python\ndef sum_list(items):\n    total = 0\n    for item in items:\n        total + item\n    return total\n\nprint(sum_list([1, 2, 3]))  # prints 0, expected 6\n```\n\nWhat's wrong with it?",
+  },
+  brainstorm_feature: {
+    label: "Brainstorm a feature",
+    system: "You are a product thinking partner. Help explore feature ideas with concrete examples, trade-offs, and implementation considerations. Be specific and opinionated.",
+    starter: "I'm building a note-taking app for developers. What are 5 differentiated features that would make it stand out from Notion or Obsidian? Focus on things that would genuinely solve developer pain points.",
+  },
+  explain_concept: {
+    label: "Explain a concept",
+    system: "You are a clear, concise technical educator. Explain concepts with simple language, good analogies, and concrete examples. Avoid unnecessary jargon.",
+    starter: "Can you explain how the Thompson Sampling algorithm works and why it's better than epsilon-greedy for multi-armed bandit problems? Use a concrete example if it helps.",
+  },
+  write_something: {
+    label: "Write something",
+    system: "You are a skilled writer. Produce clear, professional text tailored to the requested format and tone. Match the voice the user asks for.",
+    starter: "Write a short Slack message to my team letting them know our weekly standup is moving from 9am to 10am starting next Monday. Keep it brief, friendly, and include a clear ask for them to update their calendars.",
+  },
+};
+
+// ---- state -----------------------------------------------------------
+const STATE = {
+  connected: false,
+  proxyUrl: "",
+  apiKey: "",
+  router: "",
+  sessionId: "",
+  messages: [],         // [{role, content}] — sent to the API
+  scenario: null,
+  sending: false,
+  msgCount: 0,          // turns in current session
+  lastModel: null,
+  lastReqType: null,
+};
+
+// ---- session ---------------------------------------------------------
+function newSession() {
+  STATE.sessionId = "chat-" + Math.random().toString(36).slice(2, 10);
+  STATE.messages = [];
+  STATE.msgCount = 0;
+  STATE.lastModel = null;
+  STATE.lastReqType = null;
+  renderInfo();
+  renderGateStatus();
+}
+
+// ---- persistence -----------------------------------------------------
+function ssGet(k) { try { return sessionStorage.getItem(k) || ""; } catch { return ""; } }
+function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch {} }
+
+// ---- rendering -------------------------------------------------------
+function setConn(ok, label) {
+  document.getElementById("conn-dot").className = "dot" + (ok ? " ok" : "");
+  document.getElementById("conn-label").textContent = ok ? "Connected" : label || "Disconnected";
+}
+
+function renderInfo() {
+  const shortId = STATE.sessionId ? STATE.sessionId.slice(-8) : "—";
+  document.getElementById("info-session-id").textContent = shortId;
+  document.getElementById("info-msg-count").textContent = STATE.msgCount;
+  document.getElementById("info-scenario").textContent = STATE.scenario ? SCENARIOS[STATE.scenario].label : "none";
+  document.getElementById("info-model").textContent = STATE.lastModel || "—";
+  document.getElementById("info-req-type").textContent = STATE.lastReqType || "—";
+}
+
+function renderGateStatus() {
+  const el = document.getElementById("gate-status");
+  if (STATE.msgCount === 0) { el.style.display = "none"; return; }
+  el.style.display = "";
+  if (STATE.msgCount < 4) {
+    el.className = "signal-gate waiting";
+    el.innerHTML = `⏳ <b>${4 - STATE.msgCount} more message${4 - STATE.msgCount > 1 ? "s" : ""} until learning kicks in.</b> The bandit updates after 4+ turns.`;
+  } else {
+    el.className = "signal-gate learning";
+    el.innerHTML = `✅ <b>Bandit is learning!</b> Each reply is now updating the router's model quality estimates.`;
+  }
+}
+
+function appendEmptyState() {
+  const msgs = document.getElementById("messages");
+  msgs.innerHTML = `<div class="empty-state">
+    <h2>Pick a scenario to start</h2>
+    <p>Choose one of the presets above or type your own message. The adaptive router picks the best model for each turn.</p>
+  </div>`;
+}
+
+function clearMessages() {
+  document.getElementById("messages").innerHTML = "";
+}
+
+function appendMessage(role, content, meta) {
+  const msgs = document.getElementById("messages");
+  const div = document.createElement("div");
+  div.className = `msg ${role}`;
+  div.dataset.role = role;
+
+  const avatar = document.createElement("div");
+  avatar.className = "avatar";
+  avatar.textContent = role === "user" ? "U" : "AI";
+
+  const wrap = document.createElement("div");
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = content;  // plain text; code blocks show as preformatted
+  renderBubble(bubble, content);
+
+  wrap.appendChild(bubble);
+
+  if (meta) {
+    const metaEl = document.createElement("div");
+    metaEl.className = "msg-meta";
+    metaEl.innerHTML = meta;
+    wrap.appendChild(metaEl);
+  }
+
+  div.appendChild(avatar);
+  div.appendChild(wrap);
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return bubble;
+}
+
+function renderBubble(el, text) {
+  // Minimal markdown: fenced code blocks and inline code.
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  const withBlocks = escaped.replace(
+    /```(\w*)\n?([\s\S]*?)```/g,
+    (_, lang, code) => `<pre><code>${code.trimEnd()}</code></pre>`
+  );
+  const withInline = withBlocks.replace(/`([^`]+)`/g, "<code>$1</code>");
+  el.innerHTML = withInline;
+}
+
+function appendThinking() {
+  const msgs = document.getElementById("messages");
+  const div = document.createElement("div");
+  div.className = "msg assistant";
+  div.id = "thinking-bubble";
+
+  const avatar = document.createElement("div");
+  avatar.className = "avatar";
+  avatar.textContent = "AI";
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.innerHTML = `<div class="thinking"><span></span><span></span><span></span></div>`;
+
+  div.appendChild(avatar);
+  div.appendChild(bubble);
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return bubble;
+}
+
+function removeThinking() {
+  const el = document.getElementById("thinking-bubble");
+  if (el) el.remove();
+}
+
+// ---- chat send -------------------------------------------------------
+async function sendMessage(text) {
+  if (STATE.sending || !text.trim()) return;
+  STATE.sending = true;
+  setSendEnabled(false);
+
+  // Add user message to history and UI
+  STATE.messages.push({ role: "user", content: text });
+  STATE.msgCount++;
+  appendMessage("user", text);
+  renderInfo();
+  renderGateStatus();
+
+  const thinkingBubble = appendThinking();
+  const t0 = Date.now();
+
+  try {
+    const body = {
+      model: STATE.router,
+      messages: STATE.messages,
+      stream: true,
+      metadata: { litellm_session_id: STATE.sessionId },
+    };
+
+    const resp = await fetch(`${STATE.proxyUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${STATE.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => `HTTP ${resp.status}`);
+      removeThinking();
+      appendMessage("assistant", `Error ${resp.status}: ${err}`);
+      STATE.sending = false;
+      setSendEnabled(true);
+      return;
+    }
+
+    // Read model from response header (requires proxy to expose via CORS).
+    const chosenModel = resp.headers.get("x-litellm-adaptive-router-model");
+    const reqType     = resp.headers.get("x-litellm-request-type");
+    STATE.lastModel   = chosenModel || "check dashboard";
+    STATE.lastReqType = reqType     || "—";
+
+    // Stream the response.
+    removeThinking();
+    const assistantBubble = appendMessage("assistant", "");
+    let fullContent = "";
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Process complete SSE lines.
+      const lines = buffer.split("\n");
+      buffer = lines.pop(); // last fragment may be incomplete
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (raw === "[DONE]") break;
+        try {
+          const chunk = JSON.parse(raw);
+          const delta = chunk.choices?.[0]?.delta?.content || "";
+          fullContent += delta;
+          renderBubble(assistantBubble, fullContent);
+          assistantBubble.closest(".messages")
+            ? (assistantBubble.closest(".messages").scrollTop = assistantBubble.closest(".messages").scrollHeight)
+            : null;
+          document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
+        } catch { /* incomplete JSON chunk, fine */ }
+      }
+    }
+
+    const latency = ((Date.now() - t0) / 1000).toFixed(2) + "s";
+    document.getElementById("info-latency").textContent = latency;
+
+    // Add assistant turn meta
+    const metaParts = [];
+    if (chosenModel) metaParts.push(`<span class="msg-model">${chosenModel}</span>`);
+    if (reqType)     metaParts.push(`<span class="msg-type">${reqType}</span>`);
+    metaParts.push(latency);
+    if (metaParts.length) {
+      const metaEl = document.createElement("div");
+      metaEl.className = "msg-meta";
+      metaEl.innerHTML = metaParts.join(" · ");
+      assistantBubble.parentNode.appendChild(metaEl);
+    }
+
+    STATE.messages.push({ role: "assistant", content: fullContent });
+    STATE.msgCount++;
+    renderInfo();
+    renderGateStatus();
+  } catch (e) {
+    removeThinking();
+    appendMessage("assistant", `Request failed: ${e.message}`);
+  }
+
+  STATE.sending = false;
+  setSendEnabled(true);
+}
+
+// ---- input controls --------------------------------------------------
+function setSendEnabled(enabled) {
+  const ta   = document.getElementById("input");
+  const btn  = document.getElementById("send-btn");
+  ta.disabled  = !enabled || !STATE.connected;
+  btn.disabled = !enabled || !STATE.connected;
+}
+
+function setHint(text) {
+  document.getElementById("input-hint").textContent = text;
+}
+
+// ---- scenario selection ----------------------------------------------
+function activateScenario(id) {
+  STATE.scenario = id;
+  document.querySelectorAll(".sc-btn[data-id]").forEach(b => {
+    b.classList.toggle("active", b.dataset.id === id);
+  });
+
+  newSession();
+  clearMessages();
+
+  const s = SCENARIOS[id];
+  if (s.system) STATE.messages.push({ role: "system", content: s.system });
+
+  const ta = document.getElementById("input");
+  ta.value = s.starter;
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+  ta.focus();
+
+  renderInfo();
+  setHint(`Scenario: "${s.label}". Edit the starter if you like, then hit Send.`);
+}
+
+// ---- connect ---------------------------------------------------------
+function connect() {
+  const url    = document.getElementById("proxy-url").value.trim().replace(/\/$/, "");
+  const key    = document.getElementById("api-key").value.trim();
+  const router = document.getElementById("router").value.trim();
+
+  if (!url || !key || !router) {
+    alert("Please fill in Proxy URL, API Key, and Router name.");
+    return;
+  }
+
+  STATE.proxyUrl   = url;
+  STATE.apiKey     = key;
+  STATE.router     = router;
+  STATE.connected  = true;
+
+  ssSet("ar_proxy_url", url);
+  ssSet("ar_api_key",   key);
+  ssSet("ar_router",    router);
+
+  setConn(true);
+  setSendEnabled(true);
+  setHint("Pick a scenario above or type your own message.");
+  newSession();
+  appendEmptyState();
+  renderInfo();
+}
+
+// ---- textarea auto-resize & keyboard submit --------------------------
+document.getElementById("input").addEventListener("input", function () {
+  this.style.height = "auto";
+  this.style.height = Math.min(this.scrollHeight, 160) + "px";
+});
+
+document.getElementById("input").addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    doSend();
+  }
+});
+
+function doSend() {
+  const ta = document.getElementById("input");
+  const text = ta.value.trim();
+  if (!text) return;
+  ta.value = "";
+  ta.style.height = "auto";
+  sendMessage(text);
+}
+
+// ---- wiring ----------------------------------------------------------
+document.getElementById("connect-btn").addEventListener("click", connect);
+document.getElementById("send-btn").addEventListener("click", doSend);
+document.getElementById("new-chat-btn").addEventListener("click", () => {
+  STATE.scenario = null;
+  document.querySelectorAll(".sc-btn[data-id]").forEach(b => b.classList.remove("active"));
+  newSession();
+  clearMessages();
+  appendEmptyState();
+  const ta = document.getElementById("input");
+  ta.value = "";
+  ta.style.height = "auto";
+  setHint("Type anything — the router will classify it and pick the best model.");
+  renderInfo();
+});
+
+document.querySelectorAll(".sc-btn[data-id]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (!STATE.connected) {
+      alert("Connect to the proxy first (fill in the form above and click Connect).");
+      return;
+    }
+    activateScenario(btn.dataset.id);
+  });
+});
+
+// ---- restore session storage -----------------------------------------
+window.addEventListener("DOMContentLoaded", () => {
+  const u = ssGet("ar_proxy_url"); if (u) document.getElementById("proxy-url").value = u;
+  const k = ssGet("ar_api_key");   if (k) document.getElementById("api-key").value   = k;
+  const r = ssGet("ar_router");    if (r) document.getElementById("router").value     = r;
+  newSession();
+  renderInfo();
+});
+</script>
+
+</body>
+</html>

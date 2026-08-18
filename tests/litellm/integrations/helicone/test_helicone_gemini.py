@@ -15,7 +15,9 @@ def test_helicone_gemini_model_in_list():
     logger = HeliconeLogger()
 
     # Test that "gemini" is in the model list
-    assert "gemini" in logger.helicone_model_list, "gemini should be in helicone_model_list"
+    assert (
+        "gemini" in logger.helicone_model_list
+    ), "gemini should be in helicone_model_list"
 
 
 def test_helicone_gemini_models_recognized():
@@ -29,8 +31,7 @@ def test_helicone_gemini_models_recognized():
     test_models = ["gemini-1.5-pro", "gemini-2.0-flash", "vertex_ai/gemini-1.5-flash"]
     for model in test_models:
         is_recognized = any(
-            accepted_model in model
-            for accepted_model in logger.helicone_model_list
+            accepted_model in model for accepted_model in logger.helicone_model_list
         )
         assert is_recognized, f"{model} should be recognized by helicone_model_list"
 
@@ -60,8 +61,12 @@ def test_helicone_vertex_ai_via_custom_llm_provider():
         ("deepseek-ai/deepseek-v3", "vertex_ai"),
     ]
     for model, custom_llm_provider in test_cases:
-        is_vertex_ai = custom_llm_provider == "vertex_ai" or model.startswith("vertex_ai/")
-        assert is_vertex_ai, f"{model} with custom_llm_provider={custom_llm_provider} should be recognized as vertex_ai"
+        is_vertex_ai = custom_llm_provider == "vertex_ai" or model.startswith(
+            "vertex_ai/"
+        )
+        assert (
+            is_vertex_ai
+        ), f"{model} with custom_llm_provider={custom_llm_provider} should be recognized as vertex_ai"
 
 
 def test_helicone_vertex_gemini_gets_vertex_provider_url():

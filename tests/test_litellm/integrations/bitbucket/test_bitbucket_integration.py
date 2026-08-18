@@ -11,6 +11,7 @@ sys.path.insert(
 
 import litellm
 from litellm.integrations.bitbucket import BitBucketPromptManager
+from litellm.integrations.bitbucket.bitbucket_client import _sanitize_file_path
 
 
 @patch("litellm.integrations.bitbucket.bitbucket_prompt_manager.BitBucketClient")
@@ -87,7 +88,9 @@ def test_bitbucket_prompt_manager_error_handling(mock_client_class):
         "access_token": "test-token",
     }
 
-    with pytest.raises(Exception, match="Failed to load prompt 'test_prompt' from BitBucket"):
+    with pytest.raises(
+        Exception, match="Failed to load prompt 'test_prompt' from BitBucket"
+    ):
         manager = BitBucketPromptManager(config, prompt_id="test_prompt")
         _ = manager.prompt_manager  # This triggers the error
 
@@ -95,19 +98,27 @@ def test_bitbucket_prompt_manager_error_handling(mock_client_class):
 def test_bitbucket_prompt_manager_config_validation():
     """Test BitBucketPromptManager configuration validation."""
     # Test missing required fields - validation happens when prompt_manager is accessed
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         manager = BitBucketPromptManager({})
         _ = manager.prompt_manager  # This triggers validation
 
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         manager = BitBucketPromptManager({"workspace": "test"})
         _ = manager.prompt_manager  # This triggers validation
 
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         manager = BitBucketPromptManager({"repository": "test"})
         _ = manager.prompt_manager  # This triggers validation
 
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         manager = BitBucketPromptManager({"access_token": "test"})
         _ = manager.prompt_manager  # This triggers validation
 
@@ -153,7 +164,7 @@ Please provide a detailed response in {{language}}."""
     assert template.input_schema == {
         "user_question": "string",
         "context?": "string",
-        "language": "string"
+        "language": "string",
     }
 
     # Test rendering with all variables
@@ -162,8 +173,8 @@ Please provide a detailed response in {{language}}."""
         {
             "user_question": "How do I create a class?",
             "context": "Python programming",
-            "language": "Python"
-        }
+            "language": "Python",
+        },
     )
 
     assert "You are a helpful Python programming assistant." in rendered
@@ -173,11 +184,7 @@ Please provide a detailed response in {{language}}."""
 
     # Test rendering without optional context
     rendered_no_context = manager.prompt_manager.render_template(
-        "complex_prompt",
-        {
-            "user_question": "What is inheritance?",
-            "language": "Java"
-        }
+        "complex_prompt", {"user_question": "What is inheritance?", "language": "Java"}
     )
 
     assert "You are a helpful Java programming assistant." in rendered_no_context
@@ -254,7 +261,7 @@ User: {{user_message}}"""
         messages=original_messages,
         litellm_params=litellm_params,
         prompt_id="test_prompt",
-        prompt_variables={"user_message": "What is AI?"}
+        prompt_variables={"user_message": "What is AI?"},
     )
 
     # Should have parsed the prompt into messages
@@ -299,7 +306,7 @@ def test_bitbucket_prompt_manager_post_call_hook(mock_client_class):
         response=mock_response,
         input_messages=[{"role": "user", "content": "test"}],
         litellm_params={},
-        prompt_id="test_prompt"
+        prompt_id="test_prompt",
     )
 
     # Should return the response unchanged
@@ -364,3 +371,45 @@ def test_bitbucket_prompt_manager_list_templates(mock_client_class):
     templates = manager.prompt_manager.list_templates()
     assert isinstance(templates, list)
     assert "test_prompt" in templates
+
+
+# --- Security: path traversal / SSRF ---
+
+
+def test_sanitize_file_path_rejects_traversal():
+    with pytest.raises(ValueError, match="path traversal"):
+        _sanitize_file_path("../../etc/passwd")
+
+
+def test_sanitize_file_path_rejects_fragment():
+    with pytest.raises(ValueError, match="URL special characters"):
+        _sanitize_file_path("secret#.prompt")
+
+
+def test_sanitize_file_path_rejects_query():
+    with pytest.raises(ValueError, match="URL special characters"):
+        _sanitize_file_path("secret?.prompt")
+
+
+def test_sanitize_file_path_encodes_special_chars():
+    result = _sanitize_file_path("prompts/my prompt.prompt")
+    assert result == "prompts/my%20prompt.prompt"
+
+
+def test_sanitize_file_path_allows_normal_paths():
+    assert _sanitize_file_path("prompts/my-prompt") == "prompts/my-prompt"
+    assert _sanitize_file_path("simple") == "simple"
+
+
+def test_bitbucket_client_rejects_traversal_in_get_file_content():
+    from litellm.integrations.bitbucket.bitbucket_client import BitBucketClient
+
+    client = BitBucketClient(
+        {
+            "workspace": "ws",
+            "repository": "repo",
+            "access_token": "tok",
+        }
+    )
+    with pytest.raises(ValueError, match="path traversal"):
+        client.get_file_content("../../admin/credentials")

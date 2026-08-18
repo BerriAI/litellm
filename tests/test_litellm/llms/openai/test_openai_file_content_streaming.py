@@ -34,13 +34,13 @@ async def test_afile_content_with_stream_routes_to_openai_streaming_handler(
     stream_result = cast(
         FileContentStreamingResult,
         await files_main.afile_content(
-        file_id="file-abc123",
-        custom_llm_provider="openai",
-        api_key="sk-test",
-        api_base="https://api.openai.com/v1",
-        organization="org-123",
-        chunk_size=8,
-        stream=True,
+            file_id="file-abc123",
+            custom_llm_provider="openai",
+            api_key="sk-test",
+            api_base="https://api.openai.com/v1",
+            organization="org-123",
+            chunk_size=8,
+            stream=True,
         ),
     )
 
@@ -78,7 +78,9 @@ async def test_afile_content_streaming_builds_standard_logging_object_on_complet
     ):
         nonlocal captured_standard_logging_object
         captured_standard_logging_object = kwargs.get("standard_logging_object")
-        self.model_call_details["standard_logging_object"] = captured_standard_logging_object
+        self.model_call_details["standard_logging_object"] = (
+            captured_standard_logging_object
+        )
 
     monkeypatch.setattr(
         files_main.openai_files_instance,
@@ -99,11 +101,11 @@ async def test_afile_content_streaming_builds_standard_logging_object_on_complet
     stream_result = cast(
         FileContentStreamingResult,
         await files_main.afile_content(
-        file_id="file-abc123",
-        custom_llm_provider="openai",
-        api_key="sk-test",
-        api_base="https://api.openai.com/v1",
-        stream=True,
+            file_id="file-abc123",
+            custom_llm_provider="openai",
+            api_key="sk-test",
+            api_base="https://api.openai.com/v1",
+            stream=True,
         ),
     )
 
@@ -200,11 +202,11 @@ async def test_afile_content_streaming_populates_hidden_params_before_iteration(
     stream_result = cast(
         FileContentStreamingResult,
         await files_main.afile_content(
-        file_id="file-abc123",
-        custom_llm_provider="openai",
-        api_key="sk-test",
-        api_base="https://api.openai.com/v1",
-        stream=True,
+            file_id="file-abc123",
+            custom_llm_provider="openai",
+            api_key="sk-test",
+            api_base="https://api.openai.com/v1",
+            stream=True,
         ),
     )
 

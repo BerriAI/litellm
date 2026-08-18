@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from httpx._types import RequestFiles
@@ -58,7 +58,7 @@ class BaseImageEditConfig(ABC):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         pass
 
     @abstractmethod
@@ -66,7 +66,9 @@ class BaseImageEditConfig(ABC):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return {}
 
@@ -74,7 +76,7 @@ class BaseImageEditConfig(ABC):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -92,13 +94,23 @@ class BaseImageEditConfig(ABC):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> tuple[dict, RequestFiles]:
         pass
+
+    def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:
+        """
+        Last pass on the request dict after ``transform_image_edit_request``, using the
+        exact URL string used for the HTTP POST (same as ``get_complete_url`` output).
+
+        The handler sends this dict as ``data=`` for multipart providers or ``json=``
+        for JSON-only providers; default implementation returns ``data`` unchanged.
+        """
+        return data
 
     @abstractmethod
     def transform_image_edit_response(

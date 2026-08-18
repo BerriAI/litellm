@@ -11,24 +11,15 @@
 import asyncio
 import json
 import threading
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
 
 import aiohttp
+from typing_extensions import NotRequired, ReadOnly
 
-import litellm  # noqa: E401
+import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -63,39 +54,56 @@ from litellm.utils import (
 )
 
 
+class _PresidioAnonymizeItem(TypedDict, total=False):
+    entity_type: ReadOnly[str | None]
+
+
+class _PresidioAnonymizeResponse(TypedDict):
+    text: ReadOnly[str]
+    items: ReadOnly[NotRequired[list[_PresidioAnonymizeItem]]]
+
+
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
-    ad_hoc_recognizers = None
+    ad_hoc_recognizers: list[str] | None = None
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.logging_only,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
+        ]
 
     # Class variables or attributes
     def __init__(
         self,
         mock_testing: bool = False,
-        mock_redacted_text: Optional[dict] = None,
-        presidio_analyzer_api_base: Optional[str] = None,
-        presidio_anonymizer_api_base: Optional[str] = None,
-        output_parse_pii: Optional[bool] = False,
+        mock_redacted_text: _PresidioAnonymizeResponse | None = None,
+        presidio_analyzer_api_base: str | None = None,
+        presidio_anonymizer_api_base: str | None = None,
+        output_parse_pii: bool | None = False,
         apply_to_output: bool = False,
-        presidio_ad_hoc_recognizers: Optional[str] = None,
-        logging_only: Optional[bool] = None,
-        pii_entities_config: Optional[
-            Dict[Union[PiiEntityType, str], PiiAction]
-        ] = None,
-        presidio_language: Optional[str] = None,
-        presidio_score_thresholds: Optional[
-            Dict[Union[PiiEntityType, str], float]
-        ] = None,
-        presidio_entities_deny_list: Optional[List[Union[PiiEntityType, str]]] = None,
+        presidio_ad_hoc_recognizers: str | None = None,
+        logging_only: bool | None = None,
+        pii_entities_config: dict[PiiEntityType | str, PiiAction] | None = None,
+        presidio_language: str | None = None,
+        presidio_score_thresholds: dict[PiiEntityType | str, float] | None = None,
+        presidio_entities_deny_list: list[PiiEntityType | str] | None = None,
         **kwargs,
     ):
         if logging_only is True:
             self.logging_only = True
             kwargs["event_hook"] = GuardrailEventHooks.logging_only
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
         self.guardrail_provider = "presidio"
-        self.pii_tokens: dict = (
-            {}
-        )  # mapping of PII token to original text - only used with Presidio `replace` operation
+        self.pii_tokens: dict[
+            str, str
+        ] = {}  # mapping of PII token to original text - only used with Presidio `replace` operation
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
         self.apply_to_output = apply_to_output
@@ -104,27 +112,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # also run on post_call to unmask/mask the response.  Expand the event_hook
         # so should_run_guardrail returns True for both pre_call and post_call.
         if (self.output_parse_pii or self.apply_to_output) and not logging_only:
-            current_hook = self.event_hook
+            current_hook: Final = self.event_hook
             if isinstance(current_hook, str) and current_hook != "post_call":
-                self.event_hook = cast(
-                    List[GuardrailEventHooks], [current_hook, "post_call"]
-                )
+                self.event_hook = cast(list[GuardrailEventHooks], [current_hook, "post_call"])
             elif isinstance(current_hook, list) and "post_call" not in current_hook:
-                self.event_hook = cast(
-                    List[GuardrailEventHooks], current_hook + ["post_call"]
-                )
-        self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
-            pii_entities_config or {}
-        )
-        self.presidio_score_thresholds: Dict[Union[PiiEntityType, str], float] = (
-            presidio_score_thresholds or {}
-        )
-        self.presidio_entities_deny_list: List[Union[PiiEntityType, str]] = (
-            presidio_entities_deny_list or []
-        )
+                self.event_hook = cast(list[GuardrailEventHooks], current_hook + ["post_call"])
+        self.pii_entities_config: dict[PiiEntityType | str, PiiAction] = pii_entities_config or {}
+        self.presidio_score_thresholds: dict[PiiEntityType | str, float] = presidio_score_thresholds or {}
+        self.presidio_entities_deny_list: list[PiiEntityType | str] = presidio_entities_deny_list or []
         self.presidio_language = presidio_language or "en"
         # Shared HTTP session to prevent memory leaks (issue #14540)
-        self._http_session: Optional[aiohttp.ClientSession] = None
+        self._http_session: aiohttp.ClientSession | None = None
         # Lock to prevent race conditions when creating session under concurrent load
         # Note: asyncio.Lock() can be created without an event loop; it only needs one when awaited
         self._session_lock: asyncio.Lock = asyncio.Lock()
@@ -134,12 +132,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self._main_thread_id = threading.get_ident()
 
         # Loop-bound session cache for background threads
-        self._loop_sessions: Dict[asyncio.AbstractEventLoop, aiohttp.ClientSession] = {}
+        self._loop_sessions: dict[asyncio.AbstractEventLoop, aiohttp.ClientSession] = {}
 
         if mock_testing is True:  # for testing purposes only
             return
 
-        ad_hoc_recognizers = presidio_ad_hoc_recognizers
+        ad_hoc_recognizers: Final = presidio_ad_hoc_recognizers
         if ad_hoc_recognizers is not None:
             try:
                 with open(ad_hoc_recognizers, "r") as file:
@@ -147,13 +145,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             except FileNotFoundError:
                 raise Exception(f"File not found. file_path={ad_hoc_recognizers}")
             except json.JSONDecodeError as e:
-                raise Exception(
-                    f"Error decoding JSON file: {str(e)}, file_path={ad_hoc_recognizers}"
-                )
+                raise Exception(f"Error decoding JSON file: {e}, file_path={ad_hoc_recognizers}")
             except Exception as e:
-                raise Exception(
-                    f"An error occurred: {str(e)}, file_path={ad_hoc_recognizers}"
-                )
+                raise Exception(f"An error occurred: {e}, file_path={ad_hoc_recognizers}")
         self.validate_environment(
             presidio_analyzer_api_base=presidio_analyzer_api_base,
             presidio_anonymizer_api_base=presidio_anonymizer_api_base,
@@ -161,19 +155,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     def validate_environment(
         self,
-        presidio_analyzer_api_base: Optional[str] = None,
-        presidio_anonymizer_api_base: Optional[str] = None,
+        presidio_analyzer_api_base: str | None = None,
+        presidio_anonymizer_api_base: str | None = None,
     ):
-        self.presidio_analyzer_api_base: Optional[
-            str
-        ] = presidio_analyzer_api_base or get_secret(
+        self.presidio_analyzer_api_base: str | None = presidio_analyzer_api_base or get_secret(
             "PRESIDIO_ANALYZER_API_BASE", None
-        )  # type: ignore
-        self.presidio_anonymizer_api_base: Optional[
-            str
-        ] = presidio_anonymizer_api_base or litellm.get_secret(
+        )
+        self.presidio_anonymizer_api_base: str | None = presidio_anonymizer_api_base or litellm.get_secret(
             "PRESIDIO_ANONYMIZER_API_BASE", None
-        )  # type: ignore
+        )
 
         if self.presidio_analyzer_api_base is None:
             raise Exception("Missing `PRESIDIO_ANALYZER_API_BASE` from environment")
@@ -184,9 +174,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             or self.presidio_analyzer_api_base.startswith("https://")
         ):
             # add http:// if unset, assume communicating over private network - e.g. render
-            self.presidio_analyzer_api_base = (
-                "http://" + self.presidio_analyzer_api_base
-            )
+            self.presidio_analyzer_api_base = "http://" + self.presidio_analyzer_api_base
 
         if self.presidio_anonymizer_api_base is None:
             raise Exception("Missing `PRESIDIO_ANONYMIZER_API_BASE` from environment")
@@ -197,9 +185,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             or self.presidio_anonymizer_api_base.startswith("https://")
         ):
             # add http:// if unset, assume communicating over private network - e.g. render
-            self.presidio_anonymizer_api_base = (
-                "http://" + self.presidio_anonymizer_api_base
-            )
+            self.presidio_anonymizer_api_base = "http://" + self.presidio_anonymizer_api_base
 
     @asynccontextmanager
     async def _get_session_iterator(
@@ -213,7 +199,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
            use the shared `self._http_session` (protected by a lock).
         2. If running in a background thread (e.g. logging hook), use a cached session for that loop.
         """
-        current_loop = asyncio.get_running_loop()
+        current_loop: Final = asyncio.get_running_loop()
 
         # Check if we are in the stored main thread
         if threading.get_ident() == self._main_thread_id:
@@ -226,10 +212,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Background thread/loop -> use loop-bound session cache
             # This avoids "attached to a different loop" or "no running event loop" errors
             # when accessing the shared session created in the main loop
-            if (
-                current_loop not in self._loop_sessions
-                or self._loop_sessions[current_loop].closed
-            ):
+            if current_loop not in self._loop_sessions or self._loop_sessions[current_loop].closed:
                 self._loop_sessions[current_loop] = aiohttp.ClientSession()
             yield self._loop_sessions[current_loop]
 
@@ -246,20 +229,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     def __del__(self):
         """Cleanup: we try to close, but doing async cleanup in __del__ is risky."""
-        pass
 
     def _has_block_action(self) -> bool:
         """Return True if pii_entities_config has any BLOCK action (fail-closed on analyzer errors)."""
         if not self.pii_entities_config:
             return False
-        return any(
-            action == PiiAction.BLOCK for action in self.pii_entities_config.values()
-        )
+        return any(action == PiiAction.BLOCK for action in self.pii_entities_config.values())
 
     def _get_presidio_analyze_request_payload(
         self,
         text: str,
-        presidio_config: Optional[PresidioPerRequestConfig],
+        presidio_config: PresidioPerRequestConfig | None,
         request_data: dict,
     ) -> PresidioAnalyzeRequest:
         """
@@ -267,7 +247,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         API Ref: https://microsoft.github.io/presidio/api-docs/api-docs.html#tag/Analyzer/paths/~1analyze/post
         """
-        analyze_payload: PresidioAnalyzeRequest = PresidioAnalyzeRequest(
+        analyze_payload: Final[PresidioAnalyzeRequest] = PresidioAnalyzeRequest(
             text=text,
             language=self.presidio_language,
         )
@@ -288,18 +268,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if presidio_config and presidio_config.language:
             analyze_payload["language"] = presidio_config.language
 
-        casted_analyze_payload: dict = cast(dict, analyze_payload)
-        casted_analyze_payload.update(
-            self.get_guardrail_dynamic_request_body_params(request_data=request_data)
-        )
+        casted_analyze_payload: Final[dict] = cast(dict, analyze_payload)
+        casted_analyze_payload.update(self.get_guardrail_dynamic_request_body_params(request_data=request_data))
         return cast(PresidioAnalyzeRequest, casted_analyze_payload)
 
     async def analyze_text(
         self,
         text: str,
-        presidio_config: Optional[PresidioPerRequestConfig],
+        presidio_config: PresidioPerRequestConfig | None,
         request_data: dict,
-    ) -> Union[List[PresidioAnalyzeResponseItem], Dict]:
+    ) -> list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse:
         """
         Send text to the Presidio analyzer endpoint and get analysis results
         """
@@ -307,9 +285,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Skip empty or whitespace-only text to avoid Presidio errors
             # Common in tool/function calling where assistant content is empty
             if not text or len(text.strip()) == 0:
-                verbose_proxy_logger.debug(
-                    "Skipping Presidio analysis for empty/whitespace-only text"
-                )
+                verbose_proxy_logger.debug("Skipping Presidio analysis for empty/whitespace-only text")
                 return []
 
             if self.mock_redacted_text is not None:
@@ -318,14 +294,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Use shared session to prevent memory leak (issue #14540)
             async with self._get_session_iterator() as session:
                 # Make the request to /analyze
-                analyze_url = f"{self.presidio_analyzer_api_base}analyze"
+                analyze_url: Final = f"{self.presidio_analyzer_api_base}analyze"
 
-                analyze_payload: PresidioAnalyzeRequest = (
-                    self._get_presidio_analyze_request_payload(
-                        text=text,
-                        presidio_config=presidio_config,
-                        request_data=request_data,
-                    )
+                analyze_payload: Final[PresidioAnalyzeRequest] = self._get_presidio_analyze_request_payload(
+                    text=text,
+                    presidio_config=presidio_config,
+                    request_data=request_data,
                 )
 
                 verbose_proxy_logger.debug(
@@ -336,21 +310,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
                 def _fail_on_invalid_response(
                     reason: str,
-                ) -> List[PresidioAnalyzeResponseItem]:
-                    should_fail_closed = (
-                        bool(self.pii_entities_config)
-                        or self.output_parse_pii
-                        or self.apply_to_output
-                    )
+                ) -> list[PresidioAnalyzeResponseItem]:
+                    should_fail_closed = bool(self.pii_entities_config) or self.output_parse_pii or self.apply_to_output
                     if should_fail_closed:
                         raise GuardrailRaisedException(
                             guardrail_name=self.guardrail_name,
                             message=f"Presidio analyzer returned invalid response; cannot verify PII when PII protection is configured: {reason}",
                             should_wrap_with_default_message=False,
                         )
-                    verbose_proxy_logger.warning(
-                        "Presidio analyzer %s, returning empty list", reason
-                    )
+                    verbose_proxy_logger.warning("Presidio analyzer %s, returning empty list", reason)
                     return []
 
                 async with session.post(
@@ -366,7 +334,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
 
                     # Validate Content-Type is JSON
-                    content_type = getattr(
+                    content_type: Final = getattr(
                         response,
                         "content_type",
                         response.headers.get("Content-Type", ""),
@@ -377,7 +345,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             f"expected application/json Content-Type but received '{content_type}'; body: '{error_body[:200]}'"
                         )
 
-                    analyze_results = await response.json()
+                    analyze_results: Final = await response.json()
                     verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
                 # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
@@ -385,9 +353,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
                 if isinstance(analyze_results, dict):
                     if "error" in analyze_results:
-                        return _fail_on_invalid_response(
-                            f"error: {analyze_results.get('error')}"
-                        )
+                        return _fail_on_invalid_response(f"error: {analyze_results.get('error')}")
                     # If it's a dict but not an error, try to process it as a single item
                     verbose_proxy_logger.debug(
                         "Presidio returned dict (not list), attempting to process as single item"
@@ -395,9 +361,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     try:
                         return [PresidioAnalyzeResponseItem(**analyze_results)]
                     except Exception as e:
-                        return _fail_on_invalid_response(
-                            f"failed to parse dict response: {e}"
-                        )
+                        return _fail_on_invalid_response(f"failed to parse dict response: {e}")
 
                 # Handle unexpected types (str, None, etc.) - e.g. from malformed/error
                 if not isinstance(analyze_results, list):
@@ -406,7 +370,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     )
 
                 # Normal case: list of results
-                final_results = []
+                final_results: Final = []
                 for item in analyze_results:
                     if not isinstance(item, dict):
                         verbose_proxy_logger.warning(
@@ -434,14 +398,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             raise Exception(f"Presidio PII analysis failed: {type(e).__name__}") from e
 
     async def _post_presidio_anonymize(
-        self, text: str, analyze_results: Any
-    ) -> Any:
+        self,
+        text: str,
+        analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
+    ) -> _PresidioAnonymizeResponse | None:
         """POST to Presidio anonymize; returns parsed JSON body."""
         # Use shared session to prevent memory leak (issue #14540)
         async with self._get_session_iterator() as session:
-            anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
+            anonymize_url: Final = f"{self.presidio_anonymizer_api_base}anonymize"
             verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
-            anonymize_payload = {
+            anonymize_payload: Final = {
                 "text": text,
                 "analyzer_results": analyze_results,
             }
@@ -452,10 +418,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             ) as response:
                 if response.status >= 400:
                     error_body = await response.text()
-                    raise Exception(
-                        f"Presidio anonymizer returned HTTP {response.status}: {error_body[:200]}"
-                    )
-                content_type = getattr(
+                    raise Exception(f"Presidio anonymizer returned HTTP {response.status}: {error_body[:200]}")
+                content_type: Final = getattr(
                     response,
                     "content_type",
                     response.headers.get("Content-Type", ""),
@@ -469,8 +433,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     def _finalize_presidio_anonymize_simple(
         self,
-        redacted_text: Dict[str, Any],
-        masked_entity_count: Dict[str, int],
+        redacted_text: _PresidioAnonymizeResponse,
+        masked_entity_count: dict[str, int],
     ) -> str:
         # No need to build numbered tokens — just use Presidio's
         # already-anonymized text directly.  The old code incorrectly
@@ -479,17 +443,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         for item in redacted_text.get("items", []):
             entity_type = item.get("entity_type", None)
             if entity_type is not None:
-                masked_entity_count[entity_type] = (
-                    masked_entity_count.get(entity_type, 0) + 1
-                )
+                masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return redacted_text["text"]
 
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
         analyze_results: Any,
-        request_data: Optional[Dict],
-        masked_entity_count: Dict[str, int],
+        request_data: dict | None,
+        masked_entity_count: dict[str, int],
     ) -> str:
         # output_parse_pii is True — we need sequentially numbered
         # tokens and a pii_tokens mapping for later unmasking.
@@ -507,12 +469,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"] = {}
         if "pii_tokens" not in request_data["metadata"]:
             request_data["metadata"]["pii_tokens"] = {}
-        pii_tokens = request_data["metadata"]["pii_tokens"]
+        pii_tokens: Final = request_data["metadata"]["pii_tokens"]
 
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
-        sorted_forward = sorted(analyze_results, key=lambda x: x["start"])
-        seq_map = {}
+        sorted_forward: Final = sorted(analyze_results, key=lambda x: x["start"])
+        seq_map: Final = {}
         for idx, ar in enumerate(sorted_forward, start=1):
             seq_map[(ar["start"], ar["end"])] = idx
 
@@ -531,18 +493,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 replacement = f"{replacement}_{seq}"
             pii_tokens[replacement] = text[start:end]
             new_text = new_text[:start] + replacement + new_text[end:]
-            masked_entity_count[entity_type] = (
-                masked_entity_count.get(entity_type, 0) + 1
-            )
+            masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return new_text
 
     async def anonymize_text(
         self,
         text: str,
-        analyze_results: Any,
+        analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
         output_parse_pii: bool,
-        masked_entity_count: Dict[str, int],
-        request_data: Optional[Dict] = None,
+        masked_entity_count: dict[str, int],
+        request_data: dict | None = None,
     ) -> str:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
@@ -552,16 +512,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if isinstance(analyze_results, list) and len(analyze_results) == 0:
                 return text
 
-            redacted_text = await self._post_presidio_anonymize(text, analyze_results)
+            redacted_text: Final = await self._post_presidio_anonymize(text, analyze_results)
             if redacted_text is None:
                 raise Exception("Invalid anonymizer response: received None")
 
             verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
 
             if not output_parse_pii:
-                return self._finalize_presidio_anonymize_simple(
-                    redacted_text, masked_entity_count
-                )
+                return self._finalize_presidio_anonymize_simple(redacted_text, masked_entity_count)
 
             return self._finalize_presidio_anonymize_numbered_tokens(
                 text, analyze_results, request_data, masked_entity_count
@@ -569,19 +527,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             # Sanitize exception to avoid leaking the original text (which may
             # contain API keys or other secrets) in error responses.
-            error_str = str(e)
-            if (
-                "Invalid anonymizer response" in error_str
-                or "Presidio anonymizer returned" in error_str
-            ):
+            error_str: Final = str(e)
+            if "Invalid anonymizer response" in error_str or "Presidio anonymizer returned" in error_str:
                 raise
-            raise Exception(
-                f"Presidio PII anonymization failed: {type(e).__name__}"
-            ) from e
+            raise Exception(f"Presidio PII anonymization failed: {type(e).__name__}") from e
 
     def filter_analyze_results_by_score(
-        self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
-    ) -> Union[List[PresidioAnalyzeResponseItem], Dict]:
+        self, analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse
+    ) -> list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse:
         """
         Drop detections that fall below configured per-entity score thresholds
         or match an entity type in the deny list.
@@ -592,17 +545,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if not isinstance(analyze_results, list):
             return analyze_results
 
-        filtered_results: List[PresidioAnalyzeResponseItem] = []
-        deny_list_strings = [
-            getattr(x, "value", str(x)) for x in self.presidio_entities_deny_list
-        ]
+        filtered_results: Final[list[PresidioAnalyzeResponseItem]] = []
+        deny_list_strings: Final = [getattr(x, "value", str(x)) for x in self.presidio_entities_deny_list]
         for item in analyze_results:
             entity_type = item.get("entity_type")
 
             str_entity_type = str(
-                getattr(entity_type, "value", entity_type)
-                if entity_type is not None
-                else entity_type
+                getattr(entity_type, "value", entity_type) if entity_type is not None else entity_type
             )
             if entity_type and str_entity_type in deny_list_strings:
                 continue
@@ -624,7 +573,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return filtered_results
 
     def raise_exception_if_blocked_entities_detected(
-        self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
+        self, analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse
     ):
         """
         Raise an exception if blocked entities are detected
@@ -632,7 +581,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if self.pii_entities_config is None:
             return
 
-        if isinstance(analyze_results, Dict):
+        if isinstance(analyze_results, dict):
             # if mock testing is enabled, analyze_results is a dict
             # we don't need to raise an exception in this case
             return
@@ -642,10 +591,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             if entity_type:
                 # Check if entity_type is in config (supports both enum and string)
-                if (
-                    entity_type in self.pii_entities_config
-                    and self.pii_entities_config[entity_type] == PiiAction.BLOCK
-                ):
+                if entity_type in self.pii_entities_config and self.pii_entities_config[entity_type] == PiiAction.BLOCK:
                     raise BlockedPiiEntityError(
                         entity_type=entity_type,
                         guardrail_name=self.guardrail_name,
@@ -655,20 +601,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         text: str,
         output_parse_pii: bool,
-        presidio_config: Optional[PresidioPerRequestConfig],
+        presidio_config: PresidioPerRequestConfig | None,
         request_data: dict,
     ) -> str:
         """
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
         """
-        start_time = datetime.now()
-        analyze_results: Optional[Union[List[PresidioAnalyzeResponseItem], Dict]] = None
+        start_time: Final = datetime.now()
+        analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse | None = None
         status: GuardrailStatus = "success"
-        masked_entity_count: Dict[str, int] = {}
+        masked_entity_count: Final[dict[str, int]] = {}
         exception_str: str = ""
         try:
             if self.mock_redacted_text is not None:
-                redacted_text = self.mock_redacted_text
+                redacted_text: Final = self.mock_redacted_text
             else:
                 # First get analysis results
                 analyze_results = await self.analyze_text(
@@ -680,19 +626,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
                 # Apply score threshold filtering if configured
-                analyze_results = self.filter_analyze_results_by_score(
-                    analyze_results=analyze_results
-                )
+                analyze_results = self.filter_analyze_results_by_score(analyze_results=analyze_results)
 
                 ####################################################
                 # Blocked Entities check
                 ####################################################
-                self.raise_exception_if_blocked_entities_detected(
-                    analyze_results=analyze_results
-                )
+                self.raise_exception_if_blocked_entities_detected(analyze_results=analyze_results)
 
                 # Then anonymize the text using the analysis results
-                anonymized_text = await self.anonymize_text(
+                anonymized_text: Final = await self.anonymize_text(
                     text=text,
                     analyze_results=analyze_results,
                     output_parse_pii=output_parse_pii,
@@ -709,9 +651,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             ####################################################
             # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
             ####################################################
-            guardrail_json_response: Union[Exception, str, dict, List[dict]] = {}
+            guardrail_json_response: Exception | str | dict | list[dict] = {}
             if status == "success":
-                if isinstance(analyze_results, List):
+                if isinstance(analyze_results, list):
                     guardrail_json_response = [dict(item) for item in analyze_results]
             else:
                 guardrail_json_response = exception_str
@@ -743,18 +685,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         For multiple messages in /chat/completions, we'll need to call them in parallel.
         """
+        # Respect the configured event hook. In `logging_only` mode (and any config that
+        # excludes pre_call) the live request must not be masked - masking is applied to a
+        # copy at logging time via `async_logging_hook`. Without this gate the request sent
+        # to the model would carry anonymization tokens and the response would echo them.
+        if (
+            self.should_run_guardrail(
+                data=data,
+                event_type=GuardrailEventHooks.pre_call,
+            )
+            is not True
+        ):
+            return data
 
         try:
-            content_safety = data.get("content_safety", None)
+            content_safety: Final = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
-            presidio_config = self.get_presidio_settings_from_request_data(data)
-            messages = data.get("messages", None)
+            presidio_config: Final = self.get_presidio_settings_from_request_data(data)
+            messages: Final = data.get("messages", None)
             if messages is None:
                 return data
-            tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            tasks: Final = []
+            task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -769,9 +721,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             request_data=data,
                         )
                     )
-                    task_mappings.append(
-                        (msg_idx, None)
-                    )  # None indicates string content
+                    task_mappings.append((msg_idx, None))  # None indicates string content
                 elif isinstance(content, list):
                     for content_idx, c in enumerate(content):
                         text_str = c.get("text", None)
@@ -787,45 +737,37 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                         task_mappings.append((msg_idx, int(content_idx)))
 
-            responses = await asyncio.gather(*tasks)
+            responses: Final = await asyncio.gather(*tasks)
 
             # Map responses back to the correct message and content item
             for task_idx, r in enumerate(responses):
                 mapping = task_mappings[task_idx]
                 msg_idx = cast(int, mapping[0])
-                content_idx_optional = cast(Optional[int], mapping[1])
+                content_idx_optional = cast(int | None, mapping[1])
                 content = messages[msg_idx].get("content", None)
                 if content is None:
                     continue
                 if isinstance(content, str) and content_idx_optional is None:
-                    messages[msg_idx][
-                        "content"
-                    ] = r  # replace content with redacted string
+                    messages[msg_idx]["content"] = r  # replace content with redacted string
                 elif isinstance(content, list) and content_idx_optional is not None:
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
-            verbose_proxy_logger.debug(
-                f"Presidio PII Masking: Redacted pii message: {data['messages']}"
-            )
+            verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", data["messages"])
             data["messages"] = messages
             return data
         except Exception as e:
             raise e
 
-    def logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
         from concurrent.futures import ThreadPoolExecutor
 
         def run_in_new_loop():
             """Run the coroutine in a new event loop within this thread."""
-            new_loop = asyncio.new_event_loop()
+            new_loop: Final = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(new_loop)
                 return new_loop.run_until_complete(
-                    self.async_logging_hook(
-                        kwargs=kwargs, result=result, call_type=call_type
-                    )
+                    self.async_logging_hook(kwargs=kwargs, result=result, call_type=call_type)
                 )
             finally:
                 new_loop.close()
@@ -837,32 +779,26 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # If we're already in an event loop, run in a separate thread
             # to avoid nested event loop issues
             with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(run_in_new_loop)
+                future: Final = executor.submit(run_in_new_loop)
                 return future.result()
 
         except RuntimeError:
             # No running event loop, we can safely run in this thread
             return run_in_new_loop()
 
-    async def async_logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
         """
         Masks the input before logging to langfuse, datadog, etc.
         """
-        if (
-            call_type == "completion" or call_type == "acompletion"
-        ):  # /chat/completions requests
-            messages: Optional[List] = kwargs.get("messages", None)
-            tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+        if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
+            messages: Final[list | None] = kwargs.get("messages", None)
+            tasks: Final = []
+            task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
 
-            presidio_config = self.get_presidio_settings_from_request_data(kwargs)
+            presidio_config: Final = self.get_presidio_settings_from_request_data(kwargs)
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -877,9 +813,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             request_data=kwargs,
                         )
                     )  # need to pass separately b/c presidio has context window limits
-                    task_mappings.append(
-                        (msg_idx, None)
-                    )  # None indicates string content
+                    task_mappings.append((msg_idx, None))  # None indicates string content
                 elif isinstance(content, list):
                     for content_idx, c in enumerate(content):
                         text_str = c.get("text", None)
@@ -895,41 +829,37 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                         task_mappings.append((msg_idx, int(content_idx)))
 
-            responses = await asyncio.gather(*tasks)
+            responses: Final = await asyncio.gather(*tasks)
 
             # Map responses back to the correct message and content item
             for task_idx, r in enumerate(responses):
                 mapping = task_mappings[task_idx]
                 msg_idx = cast(int, mapping[0])
-                content_idx_optional = cast(Optional[int], mapping[1])
+                content_idx_optional = cast(int | None, mapping[1])
                 content = messages[msg_idx].get("content", None)
                 if content is None:
                     continue
                 if isinstance(content, str) and content_idx_optional is None:
-                    messages[msg_idx][
-                        "content"
-                    ] = r  # replace content with redacted string
+                    messages[msg_idx]["content"] = r  # replace content with redacted string
                 elif isinstance(content, list) and content_idx_optional is not None:
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
-            verbose_proxy_logger.debug(
-                f"Presidio PII Masking: Redacted pii message: {messages}"
-            )
+            verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
 
         return kwargs, result
 
-    async def async_post_call_success_hook(  # type: ignore
+    async def async_post_call_success_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
+        response: ModelResponse | EmbeddingResponse | ImageResponse,
     ):
         """
         Output parse the response object to replace the masked tokens with user sent values
         """
         verbose_proxy_logger.debug(
-            f"PII Masking Args: self.output_parse_pii={self.output_parse_pii}; type of response={type(response)}"
+            "PII Masking Args: self.output_parse_pii=%s; type of response=%s", self.output_parse_pii, type(response)
         )
 
         if self.apply_to_output is True:
@@ -937,9 +867,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return await self._process_anthropic_response_for_pii(
                     response=cast(dict, response), request_data=data, mode="mask"
                 )
-            return await self._mask_output_response(
-                response=response, request_data=data
-            )
+            return await self._mask_output_response(response=response, request_data=data)
 
         if self.output_parse_pii is False and litellm.output_parse_pii is False:
             return response
@@ -959,7 +887,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return response
 
     @staticmethod
-    def _unmask_pii_text(text: str, pii_tokens: Dict[str, str]) -> str:
+    def _unmask_pii_text(text: str, pii_tokens: dict[str, str]) -> str:
         """
         Replace PII tokens in *text* with their original values.
 
@@ -985,7 +913,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return text
 
     @staticmethod
-    def _is_anthropic_message_response(response: Any) -> bool:
+    def _is_anthropic_message_response(
+        response: ModelResponse | EmbeddingResponse | ImageResponse | dict[str, object],
+    ) -> bool:
         """Check if the response is an Anthropic native message dict."""
         return (
             isinstance(response, dict)
@@ -1003,17 +933,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Process an Anthropic native message dict for PII masking/unmasking.
         Handles content blocks with type == "text".
         """
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
+        pii_tokens: Final = metadata.get("pii_tokens", {})
         if not pii_tokens and mode == "unmask":
-            verbose_proxy_logger.debug(
-                "No pii_tokens in metadata for Anthropic response unmask"
-            )
-        presidio_config = self.get_presidio_settings_from_request_data(
-            request_data or {}
-        )
+            verbose_proxy_logger.debug("No pii_tokens in metadata for Anthropic response unmask")
+        presidio_config: Final = self.get_presidio_settings_from_request_data(request_data or {})
 
-        content = response.get("content")
+        content: Final = response.get("content")
         if not isinstance(content, list):
             return response
 
@@ -1045,15 +971,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Helper to recursively process a ModelResponse for PII.
         Handles all choices and tool calls.
         """
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
+        pii_tokens: Final = metadata.get("pii_tokens", {})
         if not pii_tokens and mode == "unmask":
-            verbose_proxy_logger.debug(
-                "No pii_tokens found in request_data['metadata'] — nothing to unmask"
-            )
-        presidio_config = self.get_presidio_settings_from_request_data(
-            request_data or {}
-        )
+            verbose_proxy_logger.debug("No pii_tokens found in request_data['metadata'] — nothing to unmask")
+        presidio_config: Final = self.get_presidio_settings_from_request_data(request_data or {})
 
         for choice in response.choices:
             message = getattr(choice, "message", None)
@@ -1098,9 +1020,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         args = function.arguments
                         if isinstance(args, str):
                             if mode == "unmask":
-                                function.arguments = self._unmask_pii_text(
-                                    args, pii_tokens
-                                )
+                                function.arguments = self._unmask_pii_text(args, pii_tokens)
                             elif mode == "mask":
                                 function.arguments = await self.check_pii(
                                     text=args,
@@ -1115,9 +1035,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 args = function_call.arguments
                 if isinstance(args, str):
                     if mode == "unmask":
-                        function_call.arguments = self._unmask_pii_text(
-                            args, pii_tokens
-                        )
+                        function_call.arguments = self._unmask_pii_text(args, pii_tokens)
                     elif mode == "mask":
                         function_call.arguments = await self.check_pii(
                             text=args,
@@ -1129,7 +1047,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def _mask_output_response(
         self,
-        response: Union[ModelResponse, EmbeddingResponse, ImageResponse],
+        response: ModelResponse | EmbeddingResponse | ImageResponse,
         request_data: dict,
     ):
         """
@@ -1153,7 +1071,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
+    ) -> AsyncGenerator[ModelResponseStream | bytes, None]:
         """Apply Presidio masking to streaming output (apply_to_output=True path)."""
         from litellm.llms.base_llm.base_model_iterator import (
             convert_model_response_to_streaming,
@@ -1161,26 +1079,49 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponse
 
-        all_chunks: List[ModelResponseStream] = []
+        all_chunks: list[ModelResponseStream] = []
+        passthrough_due_to_unknown_stream_shape = False
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
-                    all_chunks.append(chunk)
+                    if passthrough_due_to_unknown_stream_shape:
+                        yield chunk
+                    else:
+                        all_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    yield chunk  # type: ignore[misc]
+                    yield chunk
                     continue
-
+                else:
+                    if all_chunks:
+                        # Flush buffered chunks and switch to transparent passthrough for this stream shape.
+                        # NOTE: these buffered chunks are emitted unmasked because this
+                        # stream mixed chunk types and cannot be safely reconstructed.
+                        verbose_proxy_logger.warning(
+                            "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
+                            "Flushing %d buffered chunks without PII masking and switching to transparent passthrough.",
+                            len(all_chunks),
+                        )
+                        for buffered_chunk in all_chunks:
+                            yield buffered_chunk
+                        all_chunks = []
+                    passthrough_due_to_unknown_stream_shape = True
+                    yield chunk
+            if passthrough_due_to_unknown_stream_shape:
+                verbose_proxy_logger.warning(
+                    "Presidio apply_to_output: streaming response contained unknown event objects "
+                    "(e.g. /v1/responses events). Output PII masking was skipped for this response."
+                )
+                return
             if not all_chunks:
                 verbose_proxy_logger.warning(
-                    "Presidio apply_to_output: streaming response contained only "
-                    "bytes chunks (Anthropic native SSE). Output PII masking was "
-                    "skipped for this response."
+                    "Presidio apply_to_output: streaming response contained no "
+                    "ModelResponseStream chunks (e.g. raw SSE bytes or an empty "
+                    "upstream stream). Output PII masking was skipped for this "
+                    "response."
                 )
                 return
 
-            assembled_model_response = stream_chunk_builder(
-                chunks=all_chunks, messages=request_data.get("messages")
-            )
+            assembled_model_response = stream_chunk_builder(chunks=all_chunks, messages=request_data.get("messages"))
 
             if not isinstance(assembled_model_response, ModelResponse):
                 for chunk in all_chunks:
@@ -1193,21 +1134,73 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 mode="mask",
             )
 
-            mock_response_stream = convert_model_response_to_streaming(
-                assembled_model_response
-            )
+            mock_response_stream: Final = convert_model_response_to_streaming(assembled_model_response)
             yield mock_response_stream
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error masking streaming PII output: {str(e)}")
+            verbose_proxy_logger.error("Error masking streaming PII output: %s", e)
             for chunk in all_chunks:
                 yield chunk
+
+    @staticmethod
+    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:
+        try:
+            text: Final = chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            return chunk
+
+        result_lines: Final[list[str]] = []
+        for line in text.split("\n"):
+            line = line.rstrip("\r")
+            if line.startswith("data: ") and line != "data: [DONE]":
+                raw_json = line[6:]
+                try:
+                    event = json.loads(raw_json)
+                    delta = event.get("delta") if isinstance(event, dict) else None
+                    if (
+                        isinstance(delta, dict)
+                        and event.get("type") == "content_block_delta"
+                        and delta.get("type") == "text_delta"
+                        and isinstance(delta.get("text"), str)
+                    ):
+                        unmasked = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(delta["text"], pii_tokens)
+                        if unmasked != delta["text"]:
+                            event["delta"]["text"] = unmasked
+                            line = "data: " + json.dumps(event, ensure_ascii=False)
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+            result_lines.append(line)
+
+        return "\n".join(result_lines).encode("utf-8")
+
+    def _unmask_responses_api_completed_chunk(self, chunk: Any, pii_tokens: dict[str, str]) -> None:
+        """
+        Unmask PII tokens in-place for a ``response.completed`` Responses API event.
+
+        The chunk carries a ``response`` attribute (ResponsesAPIResponse) whose
+        ``output`` list holds message items.  Each item has a ``content`` list of
+        blocks; text blocks expose a ``.text`` string attribute.  We walk the tree
+        and replace every PII token with its original value.
+        """
+        response_obj: Final = getattr(chunk, "response", None)
+        if response_obj is None:
+            return
+
+        output: Final = getattr(response_obj, "output", None) or []
+        for output_item in output:
+            content = getattr(output_item, "content", None) or []
+            for content_block in content:
+                if isinstance(content_block, dict):
+                    if isinstance(content_block.get("text"), str):
+                        content_block["text"] = self._unmask_pii_text(content_block["text"], pii_tokens)
+                elif hasattr(content_block, "text") and isinstance(content_block.text, str):
+                    content_block.text = self._unmask_pii_text(content_block.text, pii_tokens)
 
     async def _stream_pii_unmasking(
         self,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
+    ) -> AsyncGenerator[ModelResponseStream | bytes, None]:
         """Apply PII unmasking to streaming output (output_parse_pii=True path)."""
         from litellm.llms.base_llm.base_model_iterator import (
             convert_model_response_to_streaming,
@@ -1215,19 +1208,45 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponse
 
-        remaining_chunks: List[ModelResponseStream] = []
+        metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
+        pii_tokens: Final[dict[str, str]] = metadata.get("pii_tokens", {})
+
+        remaining_chunks: list[ModelResponseStream] = []
+        saw_non_chat_chunk = False
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
-                    remaining_chunks.append(chunk)
+                    if saw_non_chat_chunk:
+                        yield chunk
+                    else:
+                        remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    yield chunk  # type: ignore[misc]
+                    if pii_tokens:
+                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)
+                    else:
+                        yield chunk
                     continue
+                else:
+                    # /v1/responses events: unmask response.completed text in-place.
+                    # A mixed stream can't be reassembled, so flush buffered chat
+                    # chunks in order before passthrough instead of dropping them.
+                    if remaining_chunks and not saw_non_chat_chunk:
+                        for buffered_chunk in remaining_chunks:
+                            yield buffered_chunk
+                        remaining_chunks = []
+                    chunk_type = getattr(chunk, "type", None)
+                    if chunk_type == "response.completed" and pii_tokens:
+                        self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
+                    saw_non_chat_chunk = True
+                    yield chunk
+
+            if saw_non_chat_chunk:
+                return
 
             if not remaining_chunks:
                 return
 
-            assembled_model_response = stream_chunk_builder(
+            assembled_model_response: Final = stream_chunk_builder(
                 chunks=remaining_chunks, messages=request_data.get("messages")
             )
 
@@ -1236,9 +1255,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     yield chunk
                 return
 
-            self._preserve_usage_from_last_chunk(
-                assembled_model_response, remaining_chunks
-            )
+            self._preserve_usage_from_last_chunk(assembled_model_response, remaining_chunks)
 
             await self._process_response_for_pii(
                 response=assembled_model_response,
@@ -1246,22 +1263,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 mode="unmask",
             )
 
-            mock_response_stream = convert_model_response_to_streaming(
-                assembled_model_response
-            )
+            mock_response_stream: Final = convert_model_response_to_streaming(assembled_model_response)
             yield mock_response_stream
 
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
+            verbose_proxy_logger.error("Error in PII streaming processing: %s", e)
             for chunk in remaining_chunks:
                 yield chunk
 
-    async def async_post_call_streaming_iterator_hook(  # type: ignore[override]
+    async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[Union[ModelResponseStream, bytes], None]:
+    ) -> AsyncGenerator[ModelResponseStream | bytes, None]:
         """
         Process streaming response chunks to unmask PII tokens when needed.
 
@@ -1270,18 +1285,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         The base class declares ModelResponseStream only.
         """
         if self.apply_to_output:
-            async for chunk in self._stream_apply_output_masking(
-                response, request_data
-            ):
+            async for chunk in self._stream_apply_output_masking(response, request_data):
                 yield chunk
             return
 
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
+        pii_tokens: Final = metadata.get("pii_tokens", {})
         if not pii_tokens and request_data:
-            verbose_proxy_logger.debug(
-                "No pii_tokens in request_data['metadata'] for streaming unmask path"
-            )
+            verbose_proxy_logger.debug("No pii_tokens in request_data['metadata'] for streaming unmask path")
         if not (self.output_parse_pii and pii_tokens):
             async for chunk in response:
                 yield chunk
@@ -1292,25 +1303,23 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     @staticmethod
     def _preserve_usage_from_last_chunk(
-        assembled_model_response: Any,
-        chunks: List[Any],
+        assembled_model_response: ModelResponse,
+        chunks: list[ModelResponseStream],
     ) -> None:
         """Copy usage metadata from the last chunk when stream_chunk_builder misses it."""
         if not getattr(assembled_model_response, "usage", None) and chunks:
-            last_chunk_usage = getattr(chunks[-1], "usage", None)
+            last_chunk_usage: Final = getattr(chunks[-1], "usage", None)
             if last_chunk_usage:
                 setattr(assembled_model_response, "usage", last_chunk_usage)
 
-    def get_presidio_settings_from_request_data(
-        self, data: dict
-    ) -> Optional[PresidioPerRequestConfig]:
+    def get_presidio_settings_from_request_data(self, data: dict) -> PresidioPerRequestConfig | None:
         if "metadata" in data:
-            _metadata = data.get("metadata", None)
+            _metadata: Final = data.get("metadata", None)
             if _metadata is None:
                 return None
-            _guardrail_config = _metadata.get("guardrail_config")
+            _guardrail_config: Final = _metadata.get("guardrail_config")
             if _guardrail_config:
-                _presidio_config = PresidioPerRequestConfig(**_guardrail_config)
+                _presidio_config: Final = PresidioPerRequestConfig(**_guardrail_config)
                 return _presidio_config
 
         return None
@@ -1319,7 +1328,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
-                print(print_statement)  # noqa
+                print(print_statement)  # noqa: T201
         except Exception:
             pass
 
@@ -1336,14 +1345,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             1. If the connection to the guardrail is working
             2. When Testing the guardrail with some text, this function will be called with the input text and returns a text after applying the guardrail
         """
-        texts = inputs.get("texts", [])
+        texts: Final = inputs.get("texts", [])
 
         # When input_type is "response" and pii_tokens are available,
         # unmask the text instead of masking it.
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
+        pii_tokens: Final = metadata.get("pii_tokens", {})
 
-        new_texts = []
+        new_texts: Final = []
         if input_type == "response" and pii_tokens:
             for text in texts:
                 new_texts.append(self._unmask_pii_text(text, pii_tokens))
@@ -1369,6 +1378,4 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if litellm_params.presidio_score_thresholds:
             self.presidio_score_thresholds = litellm_params.presidio_score_thresholds
         if litellm_params.presidio_entities_deny_list:
-            self.presidio_entities_deny_list = (
-                litellm_params.presidio_entities_deny_list
-            )
+            self.presidio_entities_deny_list = litellm_params.presidio_entities_deny_list

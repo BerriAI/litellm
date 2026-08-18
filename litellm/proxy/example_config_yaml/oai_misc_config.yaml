@@ -1,7 +1,7 @@
 model_list:
-  - model_name: gpt-3.5-turbo-end-user-test
+  - model_name: gpt-5-mini-end-user-test
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-5-mini
       region_name: "eu"
     model_info:
       id: "1"
@@ -18,9 +18,9 @@ model_list:
     litellm_params:
       model: "groq/*"
       api_key: os.environ/GROQ_API_KEY
-  - model_name: bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0
+  - model_name: bedrock/batch-us.anthropic.claude-haiku-4-5-20251001-v1:0
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       #########################################################
       ########## batch specific params ########################
       s3_bucket_name: litellm-proxy
@@ -39,7 +39,7 @@ litellm_settings:
   num_retries: 5
   request_timeout: 600
   telemetry: False
-  context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
+  context_window_fallbacks: [{"gpt-5-mini": ["gpt-5.5"]}]
   default_team_settings: 
     - team_id: team-1
       success_callback: ["langfuse"]

@@ -1,20 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
+import { migratedHref } from "@/utils/migratedPages";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
   getCookie: vi.fn(),
   storeLoginToken: vi.fn(),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    info: vi.fn(),
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 describe("networking - expired session handling", () => {
@@ -30,10 +22,10 @@ describe("networking - expired session handling", () => {
 
   it("should call clearTokenCookies on expired session", async () => {
     const errorData = "Authentication Error - Expired Key";
-    const { default: NotificationsManager } = await import("./molecules/notifications_manager");
+    const { toast } = await import("@/lib/toast");
 
     if (errorData.includes("Authentication Error - Expired Key")) {
-      NotificationsManager.info("UI Session Expired. Logging out.");
+      toast.info("UI Session Expired. Logging out.");
       clearTokenCookies();
     }
 
@@ -349,6 +341,20 @@ describe("UI config and public endpoints", () => {
     );
     expect(configCall).toBeDefined();
   });
+
+  it("updates serverRootPath so path-based nav links carry the root path", async () => {
+    const uiConfig = {
+      server_root_path: "/litellm",
+      proxy_base_url: "https://example.com",
+    };
+
+    setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+
+    await Networking.getUiConfig();
+
+    expect(Networking.serverRootPath).toBe("/litellm");
+    expect(migratedHref("api-reference")).toBe("/litellm/ui/api-reference");
+  });
 });
 
 describe("individualModelHealthCheckCall", () => {
@@ -402,5 +408,222 @@ describe("individualModelHealthCheckCall", () => {
     const [url] = mockFetch.mock.calls[0];
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
     expect(parsed.searchParams.get("model_id")).toBe("id/with/slashes");
+  });
+});
+
+describe("teamInfoCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should URL-encode team_id query param to handle special characters safely", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify({ team_id: "team with spaces & special?chars" })),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    const teamID = "team with spaces & special?chars";
+    await Networking.teamInfoCall("token", teamID);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+
+    expect(urlStr).toContain("/team/info");
+    // Special characters are encoded (not present raw) and round-trip back to the original
+    expect(urlStr).not.toContain("team with spaces");
+    expect(parsed.searchParams.get("team_id")).toBe(teamID);
+  });
+
+  it("should not append team_id when teamID is null", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue("{}"),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.teamInfoCall("token", null);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.has("team_id")).toBe(false);
+  });
+});
+
+describe("sessionSpendLogsCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should request the first page with defaults so the caller can page through the session", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, page_size: 100, total_pages: 1 }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.sessionSpendLogsCall("token", "session-123");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+
+    expect(urlStr).toContain("/spend/logs/session/ui");
+    expect(parsed.searchParams.get("session_id")).toBe("session-123");
+    expect(parsed.searchParams.get("page")).toBe("1");
+    expect(parsed.searchParams.get("page_size")).toBe("100");
+  });
+
+  it("should pass explicit page and page_size query params for later pages", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [], total: 250, page: 3, page_size: 100, total_pages: 3 }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.sessionSpendLogsCall("token", "session-123", 3, 100);
+
+    const [url] = mockFetch.mock.calls[0];
+    const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
+    expect(parsed.searchParams.get("page")).toBe("3");
+    expect(parsed.searchParams.get("page_size")).toBe("100");
+  });
+});
+
+describe("buildModelGroupTestRequest", () => {
+  it("builds a chat completion request with NO max_tokens (reasoning models 400 on a tiny cap)", () => {
+    const { path, body } = Networking.buildModelGroupTestRequest("o3", "chat");
+    expect(path).toBe("/v1/chat/completions");
+    expect(body).toEqual({ model: "o3", messages: [{ role: "user", content: "test from litellm" }] });
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("builds an embeddings request for embedding mode", () => {
+    const { path, body } = Networking.buildModelGroupTestRequest("text-embedding-3-small", "embedding");
+    expect(path).toBe("/v1/embeddings");
+    expect(body).toEqual({ model: "text-embedding-3-small", input: "test from litellm" });
+  });
+});
+
+describe("testMCPToolsListRequest auth headers", () => {
+  const originalFetch = global.fetch;
+
+  const captureFetch = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: vi.fn().mockResolvedValue({ tools: [] }),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const sentHeaders = (mockFetch: ReturnType<typeof vi.fn>): Record<string, string> =>
+    (mockFetch.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+
+  afterEach(() => {
+    Networking.setGlobalLitellmHeaderName("Authorization");
+    global.fetch = originalFetch;
+  });
+
+  it("sends the litellm key under a custom litellm_key_header_name even when an upstream OAuth token uses Authorization", async () => {
+    Networking.setGlobalLitellmHeaderName("x-litellm-key");
+    const mockFetch = captureFetch();
+
+    await Networking.testMCPToolsListRequest("sk-key", {}, "upstream-oauth-token");
+
+    const headers = sentHeaders(mockFetch);
+    expect(headers["x-litellm-key"]).toBe("Bearer sk-key");
+    expect(headers["Authorization"]).toBe("Bearer upstream-oauth-token");
+  });
+
+  it("Bearer-prefixes x-litellm-api-key when it is the configured key header (raw values fail _get_bearer_token)", async () => {
+    Networking.setGlobalLitellmHeaderName("x-litellm-api-key");
+    const mockFetch = captureFetch();
+
+    await Networking.testMCPToolsListRequest("sk-key", {}, "upstream-oauth-token");
+
+    const headers = sentHeaders(mockFetch);
+    expect(headers["x-litellm-api-key"]).toBe("Bearer sk-key");
+    expect(headers["Authorization"]).toBe("Bearer upstream-oauth-token");
+  });
+
+  it("never clobbers the upstream OAuth token on default deployments", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.testMCPToolsListRequest("sk-key", {}, "upstream-oauth-token");
+
+    const headers = sentHeaders(mockFetch);
+    expect(headers["Authorization"]).toBe("Bearer upstream-oauth-token");
+    expect(headers["x-litellm-api-key"]).toBe("sk-key");
+  });
+
+  it("sends the litellm key as the bearer on default deployments without an OAuth token", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.testMCPToolsListRequest("sk-key", {});
+
+    const headers = sentHeaders(mockFetch);
+    expect(headers["Authorization"]).toBe("Bearer sk-key");
+  });
+});
+
+describe("getAutoRouterClassifierDefaultPromptCall", () => {
+  const originalFetch = global.fetch;
+
+  const captureFetch = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: vi.fn().mockResolvedValue({ system_prompt: "rubric" }),
+      text: vi.fn().mockResolvedValue(JSON.stringify({ system_prompt: "rubric" })),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const requestedUrl = (mockFetch: ReturnType<typeof vi.fn>): string => String(mockFetch.mock.calls[0][0]);
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("sends renamed tiers as a JSON object so the rubric names them", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.getAutoRouterClassifierDefaultPromptCall("sk-key", 5, { SIMPLE: "Cheap" });
+
+    const url = requestedUrl(mockFetch);
+    expect(url).toContain("context_window_size=5");
+    expect(decodeURIComponent(url)).toContain('tier_labels={"SIMPLE":"Cheap"}');
+  });
+
+  it("omits tier_labels entirely when nothing was renamed", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.getAutoRouterClassifierDefaultPromptCall("sk-key", 5);
+    await Networking.getAutoRouterClassifierDefaultPromptCall("sk-key", 5, {});
+
+    expect(requestedUrl(mockFetch)).not.toContain("tier_labels");
+    expect(String(mockFetch.mock.calls[1][0])).not.toContain("tier_labels");
   });
 });

@@ -4,8 +4,6 @@ A2A Provider Config Manager.
 Manages provider-specific configurations for A2A protocol.
 """
 
-from typing import Optional
-
 from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
 
 
@@ -18,9 +16,9 @@ class A2AProviderConfigManager:
 
     @staticmethod
     def get_provider_config(
-        custom_llm_provider: Optional[str],
-        model: Optional[str] = None,
-    ) -> Optional[BaseA2AProviderConfig]:
+        custom_llm_provider: str | None,
+        model: str | None = None,
+    ) -> BaseA2AProviderConfig | None:
         """
         Get the provider configuration for a given custom_llm_provider.
 
@@ -47,5 +45,17 @@ class A2AProviderConfigManager:
             )
 
             return BedrockAgentCoreA2AConfig()
+
+        if custom_llm_provider == "langflow":
+            from litellm.a2a_protocol.providers.langflow.config import LangFlowA2AConfig
+
+            return LangFlowA2AConfig()
+
+        if custom_llm_provider == "watsonx_orchestrate":
+            from litellm.a2a_protocol.providers.watsonx_orchestrate.config import (
+                WatsonxOrchestrateA2AConfig,
+            )
+
+            return WatsonxOrchestrateA2AConfig()
 
         return None

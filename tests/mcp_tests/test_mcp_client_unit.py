@@ -1,6 +1,7 @@
 """
 Unit tests for the MCPClient class - critical functionality only.
 """
+
 import base64
 import os
 import sys
@@ -18,9 +19,7 @@ from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult
 
 def test_mcp_client_uses_configurable_default_timeout():
     """MCPClient should use MCP_CLIENT_TIMEOUT constant when no timeout is passed."""
-    with patch(
-        "litellm.experimental_mcp_client.client.MCP_CLIENT_TIMEOUT", 120.0
-    ):
+    with patch("litellm.experimental_mcp_client.client.MCP_CLIENT_TIMEOUT", 120.0):
         # Client reads constant at runtime when timeout is None
         client = MCPClient(
             server_url="http://example.com",
@@ -217,9 +216,8 @@ class TestMCPClientUnitTests:
         assert result == mock_result
         mock_session_instance.initialize.assert_called_once()
         mock_session_instance.call_tool.assert_called_once_with(
-            name="test_tool", arguments={"arg1": "value1"},progress_callback=ANY
+            name="test_tool", arguments={"arg1": "value1"}, progress_callback=ANY
         )
-
 
 
 if __name__ == "__main__":

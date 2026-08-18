@@ -23,7 +23,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passth
 @pytest.fixture
 def mock_response():
     return {
-        "model": "claude-3-opus-20240229",
+        "model": "claude-opus-4-7",
         "content": [{"text": "Hello, world!", "type": "text"}],
         "role": "assistant",
     }
@@ -50,7 +50,7 @@ def mock_httpx_response():
 @pytest.fixture
 def mock_logging_obj():
     logging_obj = LiteLLMLoggingObj(
-        model="claude-3-opus-20240229",
+        model="claude-opus-4-7",
         messages=[],
         stream=False,
         call_type="completion",
@@ -101,7 +101,7 @@ def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_pa
 
     result = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
         litellm_model_response=model_response,
-        model="claude-3-opus-20240229",
+        model="claude-opus-4-7",
         kwargs={
             "litellm_params": {
                 "metadata": {
@@ -249,7 +249,7 @@ def test_get_user_from_metadata(end_user_id):
 def all_chunks():
     return [
         "event: message_start",
-        'data: {"type":"message_start","message":{"id":"msg_01G7T4YSBzHjmgTyizv1UfkB","type":"message","role":"assistant","model":"claude-3-5-sonnet-20240620","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":17,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}',
+        'data: {"type":"message_start","message":{"id":"msg_01G7T4YSBzHjmgTyizv1UfkB","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":17,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}',
         "event: content_block_start",
         'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
         "event: ping",
@@ -318,6 +318,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
     from litellm.types.utils import ModelResponse
 
     litellm_logging_obj = Mock()
+    litellm_logging_obj.model_call_details = {}
     pass_through_logging_obj = Mock()
 
     sent_args = {
@@ -325,7 +326,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
         "passthrough_success_handler_obj": pass_through_logging_obj,
         "url_route": "https://api.anthropic.com/v1/messages",
         "request_body": {
-            "model": "claude-3-5-sonnet-20240620",
+            "model": "claude-sonnet-4-5-20250929",
             "messages": [
                 {
                     "role": "user",
@@ -366,7 +367,7 @@ def test_build_complete_streaming_response(all_chunks):
 
     result = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
         all_chunks=all_chunks,
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         litellm_logging_obj=litellm_logging_obj,
     )
 

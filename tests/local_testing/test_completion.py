@@ -24,6 +24,8 @@ from litellm import RateLimitError, Timeout, completion, completion_cost, embedd
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 # litellm.num_retries=3
 
 litellm.cache = None
@@ -211,36 +213,6 @@ def test_completion_empower():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_github_api():
-    litellm.set_verbose = True
-    messages = [
-        {
-            "role": "user",
-            "content": "\nWhat is the query for `console.log` => `console.error`\n",
-        },
-        {
-            "role": "assistant",
-            "content": "\nThis is the GritQL query for the given before/after examples:\n<gritql>\n`console.log` => `console.error`\n</gritql>\n",
-        },
-        {
-            "role": "user",
-            "content": "\nWhat is the query for `console.info` => `consdole.heaven`\n",
-        },
-    ]
-    try:
-        # test without max tokens
-        response = completion(
-            model="github/gpt-4o",
-            messages=messages,
-        )
-        # Add any assertions, here to check response args
-        print(response)
-    except litellm.AuthenticationError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_completion_claude_3_empty_response():
     litellm.set_verbose = True
 
@@ -299,7 +271,7 @@ def test_completion_claude_3():
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic/claude-sonnet-4-5-20250929", "anthropic.claude-3-sonnet-20240229-v1:0"],
+    ["anthropic/claude-sonnet-4-5-20250929", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"],
 )
 def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
@@ -385,7 +357,7 @@ def test_completion_claude_3_function_call(model):
     [
         ("gpt-3.5-turbo", None, None),
         ("claude-sonnet-4-5-20250929", None, None),
-        ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", None, None),
         # (
         #     "azure_ai/command-r-plus",
         #     os.getenv("AZURE_COHERE_API_KEY"),
@@ -1047,22 +1019,50 @@ def test_completion_openai_params(model):
 
 
 def test_completion_fireworks_ai():
-    try:
-        litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
+    """
+    Mocked so it does not depend on Fireworks' rotating serverless catalog
+    (no externally-verifiable model list exists). Asserts the request is
+    built correctly and the OpenAI-compatible response is parsed back.
+    """
+    litellm.set_verbose = True
+    messages = [
+        {"role": "system", "content": "You're a good bot"},
+        {"role": "user", "content": "Hey"},
+    ]
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "accounts/fireworks/models/deepseek-v3p1",
+        "choices": [
             {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello there!"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+    }
+    mock_response.text = json.dumps(mock_response.json.return_value)
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
         response = completion(
-            model="fireworks_ai/llama-v3p3-70b-instruct",
+            model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
             messages=messages,
+            client=client,
         )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+
+    mock_post.assert_called_once()
+    request_body = json.loads(mock_post.call_args.kwargs["data"])
+    assert "deepseek-v3p1" in request_body["model"]
+    assert request_body["messages"] == messages
+    assert response.choices[0].message.content == "Hello there!"
+    assert response.usage.total_tokens == 12
 
 
 @pytest.mark.parametrize(
@@ -1315,7 +1315,7 @@ def test_lm_studio_completion(monkeypatch):
             messages=[
                 {"role": "user", "content": "What's the weather like in San Francisco?"}
             ],
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/",
+            api_base=FAKE_OPENAI_API_BASE,
         )
     except litellm.AuthenticationError as e:
         pytest.fail(f"Error occurred: {e}")
@@ -1550,7 +1550,7 @@ def test_completion_openai():
     [
         # ("gpt-4o-2024-08-06", None),
         # ("azure/gpt-4.1-mini", None),
-        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
+        ("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", None),
         # ("azure/gpt-4o-new-test", "2024-08-01-preview"),
     ],
 )
@@ -1759,8 +1759,14 @@ def test_completion_logprobs_stream():
         for chunk in response:
             # check if atleast one chunk has log probs
             print(chunk)
+            if len(chunk.choices) == 0:
+                continue
             print(f"chunk.choices[0]: {chunk.choices[0]}")
-            if "logprobs" in chunk.choices[0]:
+            if (
+                "logprobs" in chunk.choices[0]
+                and chunk.choices[0].logprobs is not None
+                and len(chunk.choices[0].logprobs.content) > 0
+            ):
                 # assert we got a valid logprob in the choices
                 assert len(chunk.choices[0].logprobs.content[0].top_logprobs) == 3
                 found_logprob = True
@@ -2366,7 +2372,6 @@ def test_azure_openai_ad_token():
 # test_azure_openai_ad_token()
 
 
-
 def test_completion_azure2():
     # test if we can pass api_base, api_version and api_key in compleition()
     try:
@@ -2486,8 +2491,6 @@ def test_completion_azure_with_litellm_key():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
 
 
 import asyncio
@@ -2884,7 +2887,7 @@ def response_format_tests(response: litellm.ModelResponse):
     [
         "bedrock/mistral.mistral-large-2407-v1:0",
         "bedrock/cohere.command-r-plus-v1:0",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mistral-7b-instruct-v0:2",
         "meta.llama3-8b-instruct-v1:0",
     ],
@@ -3102,29 +3105,6 @@ def test_completion_anyscale_api():
 
 
 @pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_completion_anyscale_2():
-    try:
-        # litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="anyscale/meta-llama/Llama-2-7b-chat-hf", messages=messages
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
 def test_mistral_anyscale_stream():
     litellm.set_verbose = False
     response = completion(
@@ -3261,9 +3241,7 @@ def test_completion_deep_infra(drop_params):
             Choice(
                 finish_reason="stop",
                 index=0,
-                message=ChatCompletionMessage(
-                    content="It's sunny.", role="assistant"
-                ),
+                message=ChatCompletionMessage(content="It's sunny.", role="assistant"),
             )
         ],
         created=1234567890,
@@ -3345,9 +3323,7 @@ def test_completion_deep_infra_mistral():
             Choice(
                 finish_reason="stop",
                 index=0,
-                message=ChatCompletionMessage(
-                    content="Hello!", role="assistant"
-                ),
+                message=ChatCompletionMessage(content="Hello!", role="assistant"),
             )
         ],
         created=1234567890,

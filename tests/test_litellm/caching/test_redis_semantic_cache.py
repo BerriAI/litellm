@@ -72,24 +72,314 @@ def test_redis_semantic_cache_get_cache(monkeypatch):
                 "prompt": "What is the capital of France?",
                 "response": '{"content": "Paris is the capital of France."}',
                 "vector_distance": 0.1,  # Distance of 0.1 means similarity of 0.9
+                RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key",
             }
         ]
         redis_semantic_cache.llmcache.check = MagicMock(return_value=mock_result)
 
         # Mock the embedding function
-        with patch(
-            "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+        with (
+            patch(
+                "litellm.embedding",
+                return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]},
+            ),
+            patch.object(
+                redis_semantic_cache,
+                "_get_cache_key_filter_expression",
+                return_value="cache-key-filter",
+            ),
         ):
             # Test get_cache with a message
+            metadata = {}
             result = redis_semantic_cache.get_cache(
-                key="test_key", messages=[{"content": "What is the capital of France?"}]
+                key="test_key",
+                messages=[{"content": "What is the capital of France?"}],
+                metadata=metadata,
             )
 
             # Verify result is properly parsed
             assert result == {"content": "Paris is the capital of France."}
+            assert metadata["semantic-similarity"] == pytest.approx(0.9)
 
             # Verify llmcache.check was called
-            redis_semantic_cache.llmcache.check.assert_called_once()
+            redis_semantic_cache.llmcache.check.assert_called_once_with(
+                prompt="What is the capital of France?",
+                vector=[0.1, 0.2, 0.3],
+                filter_expression="cache-key-filter",
+            )
+
+
+def test_redis_semantic_cache_rejects_unscoped_cache_hit(monkeypatch):
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(similarity_threshold=0.8)
+        redis_semantic_cache.llmcache.check = MagicMock(
+            return_value=[
+                {
+                    "prompt": "What is the capital of France?",
+                    "response": '{"content": "Paris"}',
+                    "vector_distance": 0.1,
+                }
+            ]
+        )
+
+        with (
+            patch(
+                "litellm.embedding",
+                return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]},
+            ),
+            patch.object(
+                redis_semantic_cache,
+                "_get_cache_key_filter_expression",
+                return_value="cache-key-filter",
+            ),
+        ):
+            metadata = {}
+            result = redis_semantic_cache.get_cache(
+                key="test_key",
+                messages=[{"content": "What is the capital of France?"}],
+                metadata=metadata,
+            )
+
+        assert result is None
+        assert metadata["semantic-similarity"] == 0.0
+
+
+def test_redis_semantic_cache_set_cache_stores_cache_key_filter(monkeypatch):
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(similarity_threshold=0.8)
+        redis_semantic_cache.llmcache.store = MagicMock()
+
+        with patch(
+            "litellm.embedding",
+            return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]},
+        ):
+            redis_semantic_cache.set_cache(
+                key="test_key",
+                value={"content": "Paris"},
+                messages=[{"content": "What is the capital of France?"}],
+                ttl=60,
+            )
+
+        redis_semantic_cache.llmcache.store.assert_called_once_with(
+            "What is the capital of France?",
+            "{'content': 'Paris'}",
+            vector=[0.1, 0.2, 0.3],
+            filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
+            ttl=60,
+        )
+
+
+def test_redis_semantic_cache_uses_isolated_index_for_old_schema(monkeypatch):
+    fallback_cache_mock = MagicMock()
+    semantic_cache_mock = MagicMock(
+        side_effect=[
+            ValueError("stored index schema differs from requested fields"),
+            fallback_cache_mock,
+        ]
+    )
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(
+            similarity_threshold=0.8,
+            index_name="existing_index",
+        )
+
+        assert redis_semantic_cache.llmcache is fallback_cache_mock
+        assert semantic_cache_mock.call_args_list[0].kwargs["name"] == "existing_index"
+        assert (
+            semantic_cache_mock.call_args_list[1].kwargs["name"]
+            == "existing_index_isolated"
+        )
+        assert semantic_cache_mock.call_args_list[1].kwargs["filterable_fields"] == [
+            RedisSemanticCache._cache_key_filterable_field()
+        ]
+
+
+def test_redis_semantic_cache_overwrites_stale_isolated_index(monkeypatch):
+    fallback_cache_mock = MagicMock()
+    semantic_cache_mock = MagicMock(
+        side_effect=[
+            ValueError("Existing index schema does not match"),
+            ValueError("Existing index schema does not match"),
+            fallback_cache_mock,
+        ]
+    )
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(
+            similarity_threshold=0.8,
+            index_name="existing_index",
+        )
+
+        assert redis_semantic_cache.llmcache is fallback_cache_mock
+        assert (
+            semantic_cache_mock.call_args_list[2].kwargs["name"]
+            == "existing_index_isolated"
+        )
+        assert semantic_cache_mock.call_args_list[2].kwargs["overwrite"] is True
+        assert semantic_cache_mock.call_args_list[2].kwargs["filterable_fields"] == [
+            RedisSemanticCache._cache_key_filterable_field()
+        ]
+
+
+def test_redis_semantic_cache_reraises_unexpected_isolated_index_error(monkeypatch):
+    semantic_cache_mock = MagicMock(
+        side_effect=[
+            ValueError("Existing index schema does not match"),
+            ValueError("connection failed"),
+        ]
+    )
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        with pytest.raises(ValueError, match="connection failed"):
+            cache = RedisSemanticCache(
+                similarity_threshold=0.8,
+                index_name="existing_index",
+            )
+            _ = cache.llmcache
+
+
+def test_redis_semantic_cache_reraises_unexpected_index_error():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache.distance_threshold = 0.2
+    semantic_cache_mock = MagicMock(side_effect=ValueError("connection failed"))
+
+    with pytest.raises(ValueError, match="connection failed"):
+        redis_semantic_cache._init_semantic_cache(
+            semantic_cache_cls=semantic_cache_mock,
+            index_name="existing_index",
+            redis_url="redis://localhost:6379",
+            cache_vectorizer=MagicMock(),
+        )
+
+
+def test_redis_semantic_cache_matches_bytes_cache_key():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+
+    assert redis_semantic_cache._cache_hit_matches_key(
+        cache_hit={RedisSemanticCache.CACHE_KEY_FIELD_NAME: b"test_key"},
+        key="test_key",
+    )
+
+
+def test_redis_semantic_cache_rejects_pre_isolation_unscoped_hit():
+    """Pre-isolation entries with no cache-key field cannot be safely
+    reassigned to a caller's scope and are treated as misses."""
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+
+    cache_hit = {
+        "prompt": "What is the capital of France?",
+        "response": '{"content": "Paris"}',
+        "vector_distance": 0.1,
+    }
+    assert not redis_semantic_cache._cache_hit_matches_key(
+        cache_hit=cache_hit,
+        key="test_key",
+    )
+
+
+def test_redis_semantic_cache_builds_filter_expression(monkeypatch):
+    class FakeTag:
+        def __init__(self, field_name):
+            self.field_name = field_name
+
+        def __eq__(self, value):
+            return (self.field_name, value)
+
+    with patch.dict("sys.modules", {"redisvl.query.filter": MagicMock(Tag=FakeTag)}):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+
+        assert redis_semantic_cache._get_cache_key_filter_expression("test_key") == (
+            RedisSemanticCache.CACHE_KEY_FIELD_NAME,
+            "test_key",
+        )
 
 
 @pytest.mark.asyncio
@@ -123,6 +413,7 @@ async def test_redis_semantic_cache_async_get_cache(monkeypatch):
                 "prompt": "What is the capital of France?",
                 "response": '{"content": "Paris is the capital of France."}',
                 "vector_distance": 0.1,  # Distance of 0.1 means similarity of 0.9
+                RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key",
             }
         ]
 
@@ -131,16 +422,814 @@ async def test_redis_semantic_cache_async_get_cache(monkeypatch):
             return_value=[0.1, 0.2, 0.3]
         )
 
-        # Test async_get_cache with a message
-        result = await redis_semantic_cache.async_get_cache(
-            key="test_key",
-            messages=[{"content": "What is the capital of France?"}],
-            metadata={},
-        )
+        with patch.object(
+            redis_semantic_cache,
+            "_get_cache_key_filter_expression",
+            return_value="cache-key-filter",
+        ):
+            # Test async_get_cache with a message
+            result = await redis_semantic_cache.async_get_cache(
+                key="test_key",
+                messages=[{"content": "What is the capital of France?"}],
+                metadata={},
+            )
 
         # Verify result is properly parsed
         assert result == {"content": "Paris is the capital of France."}
 
         # Verify methods were called
         redis_semantic_cache._get_async_embedding.assert_called_once()
-        redis_semantic_cache.llmcache.acheck.assert_called_once()
+        redis_semantic_cache.llmcache.acheck.assert_called_once_with(
+            prompt="What is the capital of France?",
+            vector=[0.1, 0.2, 0.3],
+            filter_expression="cache-key-filter",
+        )
+
+
+@pytest.mark.asyncio
+async def test_redis_semantic_cache_async_get_cache_rejects_unscoped_hit(monkeypatch):
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(similarity_threshold=0.8)
+        redis_semantic_cache.llmcache.acheck = AsyncMock(
+            return_value=[
+                {
+                    "prompt": "What is the capital of France?",
+                    "response": '{"content": "Paris"}',
+                    "vector_distance": 0.1,
+                }
+            ]
+        )
+        redis_semantic_cache._get_async_embedding = AsyncMock(
+            return_value=[0.1, 0.2, 0.3]
+        )
+
+        with patch.object(
+            redis_semantic_cache,
+            "_get_cache_key_filter_expression",
+            return_value="cache-key-filter",
+        ):
+            result = await redis_semantic_cache.async_get_cache(
+                key="test_key",
+                messages=[{"content": "What is the capital of France?"}],
+                metadata={},
+            )
+
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_redis_semantic_cache_async_set_cache_stores_cache_key_filter(
+    monkeypatch,
+):
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(similarity_threshold=0.8)
+        redis_semantic_cache.llmcache.astore = AsyncMock()
+        redis_semantic_cache._get_async_embedding = AsyncMock(
+            return_value=[0.1, 0.2, 0.3]
+        )
+
+        await redis_semantic_cache.async_set_cache(
+            key="test_key",
+            value={"content": "Paris"},
+            messages=[{"content": "What is the capital of France?"}],
+            ttl=60,
+        )
+
+        redis_semantic_cache.llmcache.astore.assert_called_once_with(
+            "What is the capital of France?",
+            "{'content': 'Paris'}",
+            vector=[0.1, 0.2, 0.3],
+            filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
+            ttl=60,
+        )
+
+
+def test_redis_semantic_cache_set_cache_uses_responses_string_input():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache.llmcache = MagicMock()
+    redis_semantic_cache._get_cache_filters = MagicMock(
+        return_value={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"}
+    )
+    redis_semantic_cache._get_ttl = MagicMock(return_value=None)
+    redis_semantic_cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
+
+    redis_semantic_cache.set_cache(
+        key="test_key",
+        value={"content": "Paris"},
+        input="What is the capital of France?",
+    )
+
+    redis_semantic_cache.llmcache.store.assert_called_once_with(
+        "What is the capital of France?",
+        "{'content': 'Paris'}",
+        vector=[0.1, 0.2, 0.3],
+        filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
+    )
+
+
+def test_redis_semantic_cache_get_cache_uses_responses_string_input():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache.similarity_threshold = 0.8
+    redis_semantic_cache.llmcache = MagicMock()
+    redis_semantic_cache.llmcache.check = MagicMock(
+        return_value=[
+            {
+                "prompt": "What is the capital of France?",
+                "response": '{"content": "Paris"}',
+                "vector_distance": 0.1,
+                RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key",
+            }
+        ]
+    )
+    redis_semantic_cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
+
+    with patch.object(
+        redis_semantic_cache,
+        "_get_cache_key_filter_expression",
+        return_value="cache-key-filter",
+    ):
+        metadata = {}
+        result = redis_semantic_cache.get_cache(
+            key="test_key",
+            input="What is the capital of France?",
+            metadata=metadata,
+        )
+
+    assert result == {"content": "Paris"}
+    assert metadata["semantic-similarity"] == pytest.approx(0.9)
+    redis_semantic_cache.llmcache.check.assert_called_once_with(
+        prompt="What is the capital of France?",
+        vector=[0.1, 0.2, 0.3],
+        filter_expression="cache-key-filter",
+    )
+
+
+def test_redis_semantic_cache_set_cache_flattens_structured_responses_input():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache.llmcache = MagicMock()
+    redis_semantic_cache._get_cache_filters = MagicMock(
+        return_value={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"}
+    )
+    redis_semantic_cache._get_ttl = MagicMock(return_value=None)
+    redis_semantic_cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
+
+    redis_semantic_cache.set_cache(
+        key="test_key",
+        value={"content": "Paris"},
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "What is the capital of France?"},
+                    {"type": "input_text", "text": "Answer briefly."},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/paris.png",
+                    },
+                ],
+            }
+        ],
+    )
+
+    redis_semantic_cache.llmcache.store.assert_called_once_with(
+        "What is the capital of France?\nAnswer briefly.",
+        "{'content': 'Paris'}",
+        vector=[0.1, 0.2, 0.3],
+        filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
+    )
+
+
+def test_redis_semantic_cache_prompt_extraction_prefers_messages():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        messages=[{"content": "message prompt"}],
+        input="responses prompt",
+    )
+
+    assert prompt == "message prompt"
+
+
+def test_redis_semantic_cache_prompt_extraction_handles_model_objects():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    class ModelDumpInput:
+        def model_dump(self):
+            return {"content": [{"text": "model dump prompt"}]}
+
+    class DictInput:
+        def dict(self):
+            return {"content": [{"output_text": "dict prompt"}]}
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        input=[
+            ModelDumpInput(),
+            DictInput(),
+            {"content": [{"input_text": "inline prompt"}]},
+            {"content": [{"type": "input_image", "image_url": "https://example.com"}]},
+        ]
+    )
+
+    assert prompt == "model dump prompt\ndict prompt\ninline prompt"
+
+
+def test_redis_semantic_cache_prompt_extraction_returns_none_without_text():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    assert RedisSemanticCache._get_prompt_from_kwargs() is None
+    assert RedisSemanticCache._get_prompt_from_kwargs(input=None) is None
+    assert RedisSemanticCache._get_prompt_from_kwargs(input="   ") is None
+    assert (
+        RedisSemanticCache._get_prompt_from_kwargs(
+            input=[{"type": "input_image", "image_url": "https://example.com"}]
+        )
+        is None
+    )
+
+
+def test_redis_semantic_cache_prompt_extraction_skips_blank_dict_text_keys():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        input={"text": "   ", "input_text": "fallback prompt"}
+    )
+
+    assert prompt == "fallback prompt"
+
+
+def test_redis_semantic_cache_prompt_extraction_skips_blank_object_text_keys():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    class ResponseInput:
+        text = "   "
+        input_text = "fallback prompt"
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(input=ResponseInput())
+
+    assert prompt == "fallback prompt"
+
+
+def test_redis_semantic_cache_prompt_extraction_handles_object_content():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    class ResponseInput:
+        content = [{"text": "object content prompt"}]
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(input=ResponseInput())
+
+    assert prompt == "object content prompt"
+
+
+def test_redis_semantic_cache_set_cache_skips_blank_responses_input():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache.llmcache = MagicMock()
+
+    redis_semantic_cache.set_cache(
+        key="test_key",
+        value={"content": "Paris"},
+        input="   ",
+    )
+
+    redis_semantic_cache.llmcache.store.assert_not_called()
+
+
+def test_redis_semantic_cache_get_cache_sets_similarity_on_blank_responses_input():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache.llmcache = MagicMock()
+    metadata = {}
+
+    result = redis_semantic_cache.get_cache(
+        key="test_key",
+        input="   ",
+        metadata=metadata,
+    )
+
+    assert result is None
+    assert metadata["semantic-similarity"] == 0.0
+    redis_semantic_cache.llmcache.check.assert_not_called()
+
+
+def test_redis_semantic_cache_get_cache_sets_similarity_when_no_results():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache.llmcache = MagicMock()
+    redis_semantic_cache.llmcache.check = MagicMock(return_value=[])
+    redis_semantic_cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
+
+    with patch.object(
+        redis_semantic_cache,
+        "_get_cache_key_filter_expression",
+        return_value="cache-key-filter",
+    ):
+        metadata = {}
+        result = redis_semantic_cache.get_cache(
+            key="test_key",
+            input="What is the capital of France?",
+            metadata=metadata,
+        )
+
+    assert result is None
+    assert metadata["semantic-similarity"] == 0.0
+    redis_semantic_cache.llmcache.check.assert_called_once_with(
+        prompt="What is the capital of France?",
+        vector=[0.1, 0.2, 0.3],
+        filter_expression="cache-key-filter",
+    )
+
+
+@pytest.mark.asyncio
+async def test_redis_semantic_cache_async_paths_use_responses_string_input():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache.similarity_threshold = 0.8
+    redis_semantic_cache.llmcache = MagicMock()
+    redis_semantic_cache.llmcache.astore = AsyncMock()
+    redis_semantic_cache.llmcache.acheck = AsyncMock(
+        return_value=[
+            {
+                "prompt": "What is the capital of France?",
+                "response": '{"content": "Paris"}',
+                "vector_distance": 0.1,
+                RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key",
+            }
+        ]
+    )
+    redis_semantic_cache._get_cache_filters = MagicMock(
+        return_value={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"}
+    )
+    redis_semantic_cache._get_ttl = MagicMock(return_value=None)
+    redis_semantic_cache._get_async_embedding = AsyncMock(return_value=[0.1, 0.2, 0.3])
+
+    await redis_semantic_cache.async_set_cache(
+        key="test_key",
+        value={"content": "Paris"},
+        input="What is the capital of France?",
+    )
+
+    with patch.object(
+        redis_semantic_cache,
+        "_get_cache_key_filter_expression",
+        return_value="cache-key-filter",
+    ):
+        metadata = {}
+        result = await redis_semantic_cache.async_get_cache(
+            key="test_key",
+            input="What is the capital of France?",
+            metadata=metadata,
+        )
+
+    redis_semantic_cache.llmcache.astore.assert_called_once_with(
+        "What is the capital of France?",
+        "{'content': 'Paris'}",
+        vector=[0.1, 0.2, 0.3],
+        filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
+    )
+    assert result == {"content": "Paris"}
+    assert metadata["semantic-similarity"] == pytest.approx(0.9)
+    redis_semantic_cache.llmcache.acheck.assert_called_once_with(
+        prompt="What is the capital of France?",
+        vector=[0.1, 0.2, 0.3],
+        filter_expression="cache-key-filter",
+    )
+
+
+@pytest.mark.asyncio
+async def test_redis_semantic_cache_async_paths_set_similarity_on_misses():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    redis_semantic_cache.llmcache = MagicMock()
+    redis_semantic_cache.llmcache.astore = AsyncMock()
+    redis_semantic_cache.llmcache.acheck = AsyncMock(return_value=[])
+    redis_semantic_cache._get_async_embedding = AsyncMock(return_value=[0.1, 0.2, 0.3])
+
+    await redis_semantic_cache.async_set_cache(
+        key="test_key",
+        value={"content": "Paris"},
+        input="   ",
+    )
+
+    redis_semantic_cache.llmcache.astore.assert_not_called()
+    redis_semantic_cache._get_async_embedding.assert_not_called()
+
+    blank_metadata = {}
+    blank_result = await redis_semantic_cache.async_get_cache(
+        key="test_key",
+        input="   ",
+        metadata=blank_metadata,
+    )
+
+    assert blank_result is None
+    assert blank_metadata["semantic-similarity"] == 0.0
+    redis_semantic_cache.llmcache.acheck.assert_not_called()
+    redis_semantic_cache._get_async_embedding.assert_not_called()
+
+    with patch.object(
+        redis_semantic_cache,
+        "_get_cache_key_filter_expression",
+        return_value="cache-key-filter",
+    ):
+        miss_metadata = {}
+        miss_result = await redis_semantic_cache.async_get_cache(
+            key="test_key",
+            input="What is the capital of France?",
+            metadata=miss_metadata,
+        )
+
+    assert miss_result is None
+    assert miss_metadata["semantic-similarity"] == 0.0
+    redis_semantic_cache.llmcache.acheck.assert_called_once_with(
+        prompt="What is the capital of France?",
+        vector=[0.1, 0.2, 0.3],
+        filter_expression="cache-key-filter",
+    )
+
+
+def test_redis_get_embedding_routes_through_router(monkeypatch):
+    import sys
+    import types
+
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    cache.embedding_model = "sem-embed"
+
+    router = MagicMock()
+    router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
+    fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
+    fake_proxy.llm_router = router
+    fake_proxy.llm_model_list = [{"model_name": "sem-embed"}]
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
+
+    with patch("litellm.embedding") as direct_embed:
+        vec = cache._get_embedding("hello", metadata={"user_api_key": "sk-x"})
+
+    assert vec == [0.5, 0.6]
+    router.embedding.assert_called_once()
+    assert router.embedding.call_args.kwargs["model"] == "sem-embed"
+    assert router.embedding.call_args.kwargs["input"] == "hello"
+    assert router.embedding.call_args.kwargs["cache"] == {
+        "no-store": True,
+        "no-cache": True,
+    }
+    assert router.embedding.call_args.kwargs["metadata"] == {
+        "user_api_key": "sk-x",
+        "semantic-cache-embedding": True,
+    }
+    direct_embed.assert_not_called()
+
+
+def test_redis_get_embedding_falls_back_to_direct(monkeypatch):
+    import sys
+    import types
+
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    cache.embedding_model = "text-embedding-ada-002"
+
+    fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
+    fake_proxy.llm_router = None
+    fake_proxy.llm_model_list = None
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
+
+    with patch(
+        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2]}]}
+    ) as direct_embed:
+        vec = cache._get_embedding("hello")
+
+    assert vec == [0.1, 0.2]
+    direct_embed.assert_called_once()
+
+
+def test_cache_get_cache_passes_responses_input_to_backend_cache():
+    from litellm.caching.caching import Cache
+
+    cache = Cache.__new__(Cache)
+    cache.cache = MagicMock()
+    cache.cache.get_cache = MagicMock(return_value=None)
+    cache.should_use_cache = MagicMock(return_value=True)
+    cache.get_cache_key = MagicMock(return_value="test_key")
+
+    metadata = {}
+    cache.get_cache(
+        input="What is the capital of France?",
+        metadata=metadata,
+        cache={},
+    )
+
+    cache.cache.get_cache.assert_called_once_with(
+        "test_key",
+        input="What is the capital of France?",
+        metadata=metadata,
+    )
+
+
+def test_cache_get_cache_filters_non_lookup_kwargs_from_backend_cache():
+    from litellm.caching.caching import Cache
+
+    cache = Cache.__new__(Cache)
+    cache.cache = MagicMock()
+    cache.should_use_cache = MagicMock(return_value=True)
+    cache.get_cache_key = MagicMock(return_value="test_key")
+    cache._get_cache_logic = MagicMock(return_value={"content": "Paris"})
+
+    def _cache_hit(_cache_key, **cache_kwargs):
+        cache_kwargs["metadata"]["semantic-similarity"] = 0.7
+        return {"content": "Paris"}
+
+    cache.cache.get_cache = MagicMock(side_effect=_cache_hit)
+
+    metadata = {"user_api_key": "sk-secret", "trace_id": "trace-id"}
+    result = cache.get_cache(
+        input="What is the capital of France?",
+        metadata=metadata,
+        cache={"s-maxage": 10},
+        api_key="sk-secret",
+        headers={"authorization": "Bearer sk-secret"},
+    )
+
+    assert result == {"content": "Paris"}
+    assert metadata == {
+        "user_api_key": "sk-secret",
+        "trace_id": "trace-id",
+        "semantic-similarity": 0.7,
+    }
+
+    forwarded_kwargs = cache.cache.get_cache.call_args.kwargs
+    assert forwarded_kwargs == {
+        "input": "What is the capital of France?",
+        "metadata": {
+            "user_api_key": "sk-secret",
+            "trace_id": "trace-id",
+            "semantic-similarity": 0.7,
+        },
+    }
+    assert forwarded_kwargs["metadata"] is not metadata
+    cache._get_cache_logic.assert_called_once_with(
+        cached_result={"content": "Paris"},
+        max_age=10,
+    )
+
+
+def test_cache_get_cache_filters_sensitive_kwargs_without_metadata():
+    from litellm.caching.caching import Cache
+
+    cache = Cache.__new__(Cache)
+    cache.cache = MagicMock()
+    cache.cache.get_cache = MagicMock(return_value={"content": "Paris"})
+    cache.should_use_cache = MagicMock(return_value=True)
+    cache.get_cache_key = MagicMock(return_value="test_key")
+    cache._get_cache_logic = MagicMock(return_value={"content": "Paris"})
+
+    result = cache.get_cache(
+        input="What is the capital of France?",
+        cache={"s-maxage": 10},
+        api_key="sk-secret",
+        headers={"authorization": "Bearer sk-secret"},
+    )
+
+    assert result == {"content": "Paris"}
+    cache.cache.get_cache.assert_called_once_with(
+        "test_key",
+        input="What is the capital of France?",
+    )
+
+
+def test_cache_get_cache_passes_responses_input_to_dynamic_cache():
+    from litellm.caching.caching import Cache
+
+    cache = Cache.__new__(Cache)
+    cache.should_use_cache = MagicMock(return_value=True)
+    cache.get_cache_key = MagicMock(return_value="test_key")
+    cache._get_cache_logic = MagicMock(return_value={"content": "Paris"})
+    dynamic_cache_object = MagicMock()
+    dynamic_cache_object.get_cache = MagicMock(return_value={"content": "Paris"})
+
+    metadata = {}
+    result = cache.get_cache(
+        dynamic_cache_object=dynamic_cache_object,
+        input="What is the capital of France?",
+        metadata=metadata,
+        cache={},
+    )
+
+    assert result == {"content": "Paris"}
+    dynamic_cache_object.get_cache.assert_called_once_with(
+        "test_key",
+        input="What is the capital of France?",
+        metadata=metadata,
+    )
+    cache._get_cache_logic.assert_called_once_with(
+        cached_result={"content": "Paris"},
+        max_age=float("inf"),
+    )
+
+
+def test_redis_sync_set_cache_passes_precomputed_vector():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    cache.llmcache = MagicMock()
+    cache._get_cache_filters = MagicMock(
+        return_value={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"}
+    )
+    cache._get_ttl = MagicMock(return_value=None)
+    cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
+
+    cache.set_cache(
+        key="test_key",
+        value={"content": "Paris"},
+        messages=[{"content": "What is the capital of France?"}],
+    )
+
+    cache._get_embedding.assert_called_once()
+    cache.llmcache.store.assert_called_once_with(
+        "What is the capital of France?",
+        "{'content': 'Paris'}",
+        vector=[0.1, 0.2, 0.3],
+        filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
+    )
+
+
+def test_redis_sync_get_cache_passes_precomputed_vector():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    cache.similarity_threshold = 0.8
+    cache.llmcache = MagicMock()
+    cache.llmcache.check = MagicMock(
+        return_value=[
+            {
+                "prompt": "What is the capital of France?",
+                "response": '{"content": "Paris"}',
+                "vector_distance": 0.1,
+                RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key",
+            }
+        ]
+    )
+    cache._get_embedding = MagicMock(return_value=[0.1, 0.2, 0.3])
+
+    with patch.object(
+        cache, "_get_cache_key_filter_expression", return_value="cache-key-filter"
+    ):
+        result = cache.get_cache(
+            key="test_key",
+            messages=[{"content": "What is the capital of France?"}],
+            metadata={},
+        )
+
+    assert result == {"content": "Paris"}
+    cache._get_embedding.assert_called_once()
+    cache.llmcache.check.assert_called_once_with(
+        prompt="What is the capital of France?",
+        vector=[0.1, 0.2, 0.3],
+        filter_expression="cache-key-filter",
+    )
+
+
+@pytest.mark.asyncio
+async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
+    import sys
+    import types
+
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    cache.embedding_model = "sem-embed"
+
+    router = MagicMock()
+    router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
+    fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
+    fake_proxy.llm_router = router
+    fake_proxy.llm_model_list = [{"model_name": "sem-embed"}]
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
+
+    await cache._get_async_embedding(
+        "hello",
+        metadata={"user_api_key": "sk-x", "user_api_key_team_id": "team-1"},
+    )
+
+    md = router.aembedding.call_args.kwargs["metadata"]
+    assert md["user_api_key"] == "sk-x"
+    assert md["user_api_key_team_id"] == "team-1"  # FAILS today: team_id is dropped
+    assert md["semantic-cache-embedding"] is True
+
+
+def test_redis_init_defers_redisvl_construction(monkeypatch):
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        cache = RedisSemanticCache(similarity_threshold=0.8)
+
+        semantic_cache_mock.assert_not_called()
+        custom_vectorizer_mock.assert_not_called()
+
+        first = cache.llmcache
+        semantic_cache_mock.assert_called_once()
+        custom_vectorizer_mock.assert_called_once()
+
+        second = cache.llmcache
+        assert first is second
+        semantic_cache_mock.assert_called_once()
+
+
+def test_redis_failed_llmcache_build_is_not_memoized(monkeypatch):
+    built_cache = MagicMock()
+    semantic_cache_mock = MagicMock(
+        side_effect=[ConnectionError("redis down"), built_cache]
+    )
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        cache = RedisSemanticCache(similarity_threshold=0.8)
+
+        with pytest.raises(ConnectionError, match="redis down"):
+            _ = cache.llmcache
+
+        assert cache.llmcache is built_cache
+        assert semantic_cache_mock.call_count == 2
+
+
+def test_redis_llmcache_setter_supported():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    sentinel = MagicMock()
+    cache.llmcache = sentinel
+    assert cache.llmcache is sentinel

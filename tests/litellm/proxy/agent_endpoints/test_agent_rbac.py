@@ -11,6 +11,10 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    RestrictedAgentAccess,
+    UnrestrictedAgentAccess,
+)
 
 
 def _make_internal_user(user_id: str = "user-1") -> UserAPIKeyAuth:
@@ -31,13 +35,17 @@ def _make_admin_user(user_id: str = "admin-1") -> UserAPIKeyAuth:
 # get_agents
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_agents_blocked_for_internal_user_when_disabled():
     """get_agents should raise 403 when agents are disabled for internal users."""
     from litellm.proxy.agent_endpoints.endpoints import get_agents
 
     user = _make_internal_user()
-    gs = {"disable_agents_for_internal_users": True, "allow_agents_for_team_admins": False}
+    gs = {
+        "disable_agents_for_internal_users": True,
+        "allow_agents_for_team_admins": False,
+    }
 
     request_mock = MagicMock()
     with patch.dict("litellm.proxy.proxy_server.general_settings", gs, clear=True):
@@ -60,8 +68,8 @@ async def test_get_agents_allowed_when_not_disabled():
             MagicMock(get_agent_list=MagicMock(return_value=[])),
         ):
             with patch(
-                "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
-                new=AsyncMock(return_value=[]),
+                "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
+                new=AsyncMock(return_value=UnrestrictedAgentAccess()),
             ):
                 result = await get_agents(request=request_mock, user_api_key_dict=user)
     assert result == []
@@ -71,12 +79,16 @@ async def test_get_agents_allowed_when_not_disabled():
 # get_agent_daily_activity
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_agent_daily_activity_blocked_when_disabled():
     from litellm.proxy.agent_endpoints.endpoints import get_agent_daily_activity
 
     user = _make_internal_user()
-    gs = {"disable_agents_for_internal_users": True, "allow_agents_for_team_admins": False}
+    gs = {
+        "disable_agents_for_internal_users": True,
+        "allow_agents_for_team_admins": False,
+    }
 
     with patch.dict("litellm.proxy.proxy_server.general_settings", gs, clear=True):
         with pytest.raises(HTTPException) as exc_info:

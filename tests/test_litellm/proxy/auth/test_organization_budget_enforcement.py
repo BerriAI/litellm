@@ -58,7 +58,7 @@ async def test_organization_budget_exceeded_blocks_request():
         team_id="test-team-1",
         organization_id=org_id,
         max_budget=50.0,  # Team budget is 50
-        spend=10.0,       # Team spend is only 10 - under budget
+        spend=10.0,  # Team spend is only 10 - under budget
         models=["gpt-4"],
     )
 
@@ -78,7 +78,9 @@ async def test_organization_budget_exceeded_blocks_request():
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
         with patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache:
-            with patch("litellm.proxy.auth.auth_checks.get_org_object", new_callable=AsyncMock) as mock_get_org:
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_org_object", new_callable=AsyncMock
+            ) as mock_get_org:
                 mock_get_org.return_value = org_object
 
                 # BUG: This should raise BudgetExceededError but currently passes
@@ -153,7 +155,9 @@ async def test_multiple_teams_exceed_organization_budget():
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
         with patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache:
-            with patch("litellm.proxy.auth.auth_checks.get_org_object", new_callable=AsyncMock) as mock_get_org:
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_org_object", new_callable=AsyncMock
+            ) as mock_get_org:
                 mock_get_org.return_value = org_object
 
                 # Org is at budget limit, should raise BudgetExceededError
@@ -223,7 +227,9 @@ async def test_organization_budget_fields_are_checked():
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
         with patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache:
-            with patch("litellm.proxy.auth.auth_checks.get_org_object", new_callable=AsyncMock) as mock_get_org:
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_org_object", new_callable=AsyncMock
+            ) as mock_get_org:
                 mock_get_org.return_value = org_over_budget
 
                 # Organization is over budget, should raise BudgetExceededError
@@ -320,7 +326,9 @@ async def test_both_team_and_org_budget_enforced():
 
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
         with patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache:
-            with patch("litellm.proxy.auth.auth_checks.get_org_object", new_callable=AsyncMock) as mock_get_org:
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_org_object", new_callable=AsyncMock
+            ) as mock_get_org:
                 mock_get_org.return_value = org_over_budget
 
                 # Organization is over budget, should raise BudgetExceededError

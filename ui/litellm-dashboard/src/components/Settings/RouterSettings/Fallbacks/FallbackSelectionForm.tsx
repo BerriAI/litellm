@@ -8,7 +8,7 @@ import { Button } from "@tremor/react";
 import { Tabs } from "antd";
 import { Plus } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
 
 interface FallbackSelectionFormProps {
@@ -61,7 +61,7 @@ export function FallbackSelectionForm({
 
   const handleRemoveGroup = (targetId: string) => {
     if (groups.length === 1) {
-      MessageManager.warning("At least one group is required");
+      toast.warning("At least one group is required");
       return;
     }
     const newGroups = groups.filter((g) => g.id !== targetId);
@@ -78,9 +78,7 @@ export function FallbackSelectionForm({
 
   // Generate tab items
   const items = groups.map((group, index) => {
-    const label = group.primaryModel
-      ? group.primaryModel
-      : `Group ${index + 1}`;
+    const label = group.primaryModel ? group.primaryModel : `Group ${index + 1}`;
     return {
       key: group.id,
       label: label,
@@ -100,11 +98,7 @@ export function FallbackSelectionForm({
     return (
       <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300">
         <p className="text-gray-500 mb-4">No fallback groups configured</p>
-        <Button
-          variant="primary"
-          onClick={handleAddGroup}
-          icon={() => <Plus className="w-4 h-4" />}
-        >
+        <Button variant="primary" onClick={handleAddGroup} icon={() => <Plus className="w-4 h-4" />}>
           Create First Group
         </Button>
       </div>

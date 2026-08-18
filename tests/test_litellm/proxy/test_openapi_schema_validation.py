@@ -22,9 +22,9 @@ class TestSpendCalculateOpenAPISchema:
             if hasattr(route, "path") and route.path == "/spend/calculate":
                 responses = route.responses or {}
                 response_200 = responses.get(200, {})
-                assert "description" in response_200, (
-                    "/spend/calculate 200 response must have a 'description' field"
-                )
+                assert (
+                    "description" in response_200
+                ), "/spend/calculate 200 response must have a 'description' field"
                 break
         else:
             pytest.fail("/spend/calculate route not found in router")
@@ -43,9 +43,9 @@ class TestSpendCalculateOpenAPISchema:
                     "top-level property - use 'content' wrapper instead"
                 )
                 # Must have 'content' wrapper
-                assert "content" in response_200, (
-                    "/spend/calculate 200 response must have a 'content' field"
-                )
+                assert (
+                    "content" in response_200
+                ), "/spend/calculate 200 response must have a 'content' field"
                 content = response_200["content"]
                 assert "application/json" in content
                 assert "schema" in content["application/json"]
@@ -97,9 +97,9 @@ class TestCredentialEndpointsOpenAPISchema:
 
         sig = inspect.signature(get_credential_by_model)
         param_names = list(sig.parameters.keys())
-        assert "credential_name" not in param_names, (
-            "get_credential_by_model must not have a credential_name parameter"
-        )
+        assert (
+            "credential_name" not in param_names
+        ), "get_credential_by_model must not have a credential_name parameter"
 
     def test_by_name_route_does_not_require_model_id(self):
         """
@@ -113,9 +113,9 @@ class TestCredentialEndpointsOpenAPISchema:
 
         sig = inspect.signature(get_credential_by_name)
         param_names = list(sig.parameters.keys())
-        assert "model_id" not in param_names, (
-            "get_credential_by_name must not have a model_id parameter"
-        )
+        assert (
+            "model_id" not in param_names
+        ), "get_credential_by_name must not have a model_id parameter"
 
     def test_by_model_has_model_id_path_param(self):
         """The by_model handler must accept model_id as a path parameter."""
@@ -125,9 +125,9 @@ class TestCredentialEndpointsOpenAPISchema:
         )
 
         sig = inspect.signature(get_credential_by_model)
-        assert "model_id" in sig.parameters, (
-            "get_credential_by_model must have a model_id parameter"
-        )
+        assert (
+            "model_id" in sig.parameters
+        ), "get_credential_by_model must have a model_id parameter"
 
     def test_by_name_has_credential_name_path_param(self):
         """The by_name handler must accept credential_name as a path parameter."""
@@ -137,6 +137,113 @@ class TestCredentialEndpointsOpenAPISchema:
         )
 
         sig = inspect.signature(get_credential_by_name)
-        assert "credential_name" in sig.parameters, (
-            "get_credential_by_name must have a credential_name parameter"
+        assert (
+            "credential_name" in sig.parameters
+        ), "get_credential_by_name must have a credential_name parameter"
+
+
+class TestWebSocketStubInjection:
+    """
+    Regression test for the v1.82.3 bug where adding a WebSocket route on a path
+    that already had an HTTP route silently dropped the HTTP operation from the
+    OpenAPI schema.
+
+    Related case: 2026-05-05-madhu-swagger-responses-missing
+    """
+
+    def _make_fake_ws_route(self, path: str, name: str = "fake_ws"):
+        """Minimal stand-in for fastapi.routing.APIWebSocketRoute for the helper's purposes."""
+        from types import SimpleNamespace
+
+        return SimpleNamespace(path=path, name=name, dependant=None)
+
+    def test_websocket_stub_does_not_clobber_existing_post(self):
+        """
+        When a WebSocket route shares its path with an existing POST operation,
+        the POST must survive — the WebSocket stub is added alongside, not on top.
+        """
+        from litellm.proxy.proxy_server import (
+            _inject_websocket_stubs_into_openapi_schema,
         )
+
+        schema = {
+            "paths": {
+                "/v1/responses": {
+                    "post": {"summary": "responses_api", "operationId": "responses_api"}
+                }
+            }
+        }
+        ws_routes = [self._make_fake_ws_route("/v1/responses", name="responses_ws")]
+
+        result = _inject_websocket_stubs_into_openapi_schema(schema, ws_routes)
+
+        assert (
+            "post" in result["paths"]["/v1/responses"]
+        ), "POST operation must be preserved when a WebSocket route shares the path"
+        assert (
+            result["paths"]["/v1/responses"]["post"]["operationId"] == "responses_api"
+        )
+        assert (
+            "get" in result["paths"]["/v1/responses"]
+        ), "WebSocket stub should also be added under 'get'"
+        assert result["paths"]["/v1/responses"]["get"]["tags"] == ["WebSocket"]
+
+    def test_websocket_stub_added_when_path_is_new(self):
+        """
+        When a WebSocket route's path is not already in the schema, the stub
+        creates a fresh entry — preserving the original behavior for WebSocket-only
+        paths.
+        """
+        from litellm.proxy.proxy_server import (
+            _inject_websocket_stubs_into_openapi_schema,
+        )
+
+        schema = {"paths": {}}
+        ws_routes = [self._make_fake_ws_route("/ws_only", name="ws_only")]
+
+        result = _inject_websocket_stubs_into_openapi_schema(schema, ws_routes)
+
+        assert "/ws_only" in result["paths"]
+        assert "get" in result["paths"]["/ws_only"]
+        assert result["paths"]["/ws_only"]["get"]["tags"] == ["WebSocket"]
+
+    def test_websocket_stub_skipped_when_existing_get(self):
+        """
+        If a real GET is already documented on the path, the WebSocket stub is
+        skipped — a real operation always wins over the synthetic stub. This
+        closes the same trap for future GET-vs-WebSocket collisions.
+        """
+        from litellm.proxy.proxy_server import (
+            _inject_websocket_stubs_into_openapi_schema,
+        )
+
+        schema = {
+            "paths": {
+                "/health": {
+                    "get": {"summary": "health_check", "operationId": "real_get"}
+                }
+            }
+        }
+        ws_routes = [self._make_fake_ws_route("/health", name="health_ws")]
+
+        result = _inject_websocket_stubs_into_openapi_schema(schema, ws_routes)
+
+        assert (
+            result["paths"]["/health"]["get"]["operationId"] == "real_get"
+        ), "Real GET must take precedence over WebSocket stub"
+
+    def test_responses_post_routes_registered_on_router(self):
+        """
+        Sanity check: the three POST routes for the responses API are still wired
+        on the responses router. Guards against accidental removal at the source.
+        """
+        from litellm.proxy.response_api_endpoints.endpoints import router
+
+        post_paths = {
+            route.path
+            for route in router.routes
+            if hasattr(route, "methods")
+            and "POST" in (route.methods or set())
+            and route.path in {"/v1/responses", "/responses", "/openai/v1/responses"}
+        }
+        assert post_paths == {"/v1/responses", "/responses", "/openai/v1/responses"}

@@ -45,7 +45,9 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Hello there!", "annotations": []}],
+                "content": [
+                    {"type": "output_text", "text": "Hello there!", "annotations": []}
+                ],
             }
         ],
         "parallel_tool_calls": True,
@@ -111,12 +113,15 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post, patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=deterministic_choice,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=deterministic_choice,
+        ),
     ):
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
@@ -206,12 +211,15 @@ async def test_async_user_key_affinity_routes_with_model_group_alias():
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post, patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=deterministic_choice,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=deterministic_choice,
+        ),
     ):
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
@@ -314,12 +322,15 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
     model_group = "azure-computer-use-preview"
     user_api_key_hash = "test-user-key-1"
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post, patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=lambda seq: seq[0],
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=lambda seq: seq[0],
+        ),
     ):
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
@@ -340,7 +351,9 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
             model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await router.cache.async_set_cache(affinity_cache_key, {"model_id": other_model_id}, ttl=3600)
+        await router.cache.async_set_cache(
+            affinity_cache_key, {"model_id": other_model_id}, ttl=3600
+        )
 
         # Even though user-key affinity points elsewhere, previous_response_id should pin
         # to the deployment that created the original response.
@@ -417,12 +430,15 @@ async def test_async_user_parameter_does_not_trigger_deployment_affinity():
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post, patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=deterministic_choice,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=deterministic_choice,
+        ),
     ):
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
@@ -449,8 +465,7 @@ async def test_async_pre_call_hook_uses_model_map_key_scope():
     Deployment affinity caching uses (user_api_key_hash, model_map_key) -> model_id.
     """
 
-    cache = AsyncMock()
-    cache.async_set_cache = AsyncMock()
+    cache = DualCache()
 
     callback = DeploymentAffinityCheck(
         cache=cache,
@@ -473,11 +488,7 @@ async def test_async_pre_call_hook_uses_model_map_key_scope():
         model_group="claude-sonnet-4-5@20250929",
         user_key="user-key-abc",
     )
-    cache.async_set_cache.assert_called_once_with(
-        expected_cache_key,
-        {"model_id": "model-id-123"},
-        ttl=123,
-    )
+    assert await cache.async_get_cache(key=expected_cache_key) == {"model_id": "model-id-123"}
 
 
 @pytest.mark.asyncio
@@ -511,7 +522,9 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
         },
         {
             "model_name": stable_model_map_key,
-            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
+            "litellm_params": {
+                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
+            },
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -532,7 +545,9 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
         model="some-router-model-group",
         healthy_deployments=healthy_deployments,
         messages=None,
-        request_kwargs={"metadata": {"user_api_key_hash": user_key, "model_group": "alias-group"}},
+        request_kwargs={
+            "metadata": {"user_api_key_hash": user_key, "model_group": "alias-group"}
+        },
         parent_otel_span=None,
     )
 
@@ -568,7 +583,9 @@ async def test_async_filter_deployments_falls_back_when_cached_deployment_is_unh
         },
         {
             "model_name": stable_model_map_key,
-            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
+            "litellm_params": {
+                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
+            },
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -607,7 +624,9 @@ async def test_async_user_key_affinity_ttl_expiry_allows_reroute():
         },
         {
             "model_name": stable_model_map_key,
-            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
+            "litellm_params": {
+                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
+            },
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -651,7 +670,9 @@ def test_cache_key_does_not_double_hash_user_api_key_hash():
     The affinity cache key should not hash it again.
     """
 
-    user_api_key_hash = "b95b015b66dd02a1c14e1e0a8729211f8ee53ec962658764f4cf58546c2c68e1"
+    user_api_key_hash = (
+        "b95b015b66dd02a1c14e1e0a8729211f8ee53ec962658764f4cf58546c2c68e1"
+    )
     key = DeploymentAffinityCheck.get_affinity_cache_key(
         model_group="any-model-group",
         user_key=user_api_key_hash,
@@ -783,12 +804,15 @@ async def test_model_group_affinity_config_only_applies_to_configured_group():
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post, patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=deterministic_choice,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=deterministic_choice,
+        ),
     ):
         mock_post.return_value = MockResponse(mock_response_data, 200)
 

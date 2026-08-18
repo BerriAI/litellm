@@ -10,6 +10,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 from litellm.constants import XAI_API_BASE
 
 from ...openai.realtime.handler import OpenAIRealtime
+from .transformation import XAIRealtimeNormalizer
 
 
 class XAIRealtime(OpenAIRealtime):
@@ -28,7 +29,16 @@ class XAIRealtime(OpenAIRealtime):
         """xAI uses a different API base URL."""
         return XAI_API_BASE
 
-    def _get_additional_headers(self, api_key: str) -> dict:
+    def _make_event_normalizer(self) -> XAIRealtimeNormalizer:
+        """Return a fresh per-session XAI normalizer instance."""
+        return XAIRealtimeNormalizer()
+
+    def _get_additional_headers(
+        self,
+        api_key: str,
+        *,
+        openai_beta_realtime: bool = False,
+    ) -> dict:
         """
         xAI does NOT require the OpenAI-Beta header.
         Only send Authorization header.

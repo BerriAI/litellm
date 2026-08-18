@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Final, Literal
 
 import httpx
 
@@ -13,8 +13,8 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.types.llms.openai import EmbeddingInput
 from litellm.types.llms.vertex_ai import (
+    GeminiEmbeddingInput,
     VertexAIBatchEmbeddingsRequestBody,
     VertexAIBatchEmbeddingsResponseObject,
 )
@@ -23,7 +23,6 @@ from litellm.types.utils import EmbeddingResponse
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
     _is_file_reference,
-    _is_multimodal_input,
     process_embed_content_response,
     process_response,
     transform_openai_input_gemini_content,
@@ -32,25 +31,37 @@ from .batch_embed_content_transformation import (
 
 
 class GoogleBatchEmbeddings(VertexLLM):
+    @staticmethod
+    def _flatten_and_detect_file_refs(
+        input: GeminiEmbeddingInput,
+    ) -> tuple[list[str], bool]:
+        """Flatten nested input lists and detect file references."""
+        input_list: Final = [input] if isinstance(input, str) else input
+        flat_elements: Final = [
+            e for item in input_list for e in (item if isinstance(item, list) else [item]) if isinstance(e, str)
+        ]
+        has_file_refs: Final = any(_is_file_reference(e) for e in flat_elements)
+        return flat_elements, has_file_refs
+
     def _resolve_file_references(
         self,
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
         api_key: str,
         sync_handler: HTTPHandler,
-    ) -> Dict[str, Dict[str, str]]:
+    ) -> dict[str, dict[str, str]]:
         """
         Resolve Gemini file references (files/...) to get mime_type and uri.
 
         Args:
-            input: EmbeddingInput that may contain file references
+            input: GeminiEmbeddingInput that may contain file references
             api_key: Gemini API key
             sync_handler: HTTP client
 
         Returns:
             Dict mapping file name to {mime_type, uri}
         """
-        input_list = [input] if isinstance(input, str) else input
-        resolved_files: Dict[str, Dict[str, str]] = {}
+        input_list: Final = [input] if isinstance(input, str) else input
+        resolved_files: Final[dict[str, dict[str, str]]] = {}
 
         for element in input_list:
             if isinstance(element, str) and _is_file_reference(element):
@@ -59,9 +70,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 response = sync_handler.get(url=url, headers=headers)
 
                 if response.status_code != 200:
-                    raise Exception(
-                        f"Error fetching file {element}: {response.status_code} {response.text}"
-                    )
+                    raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
                 file_data = response.json()
                 resolved_files[element] = {
@@ -73,23 +82,23 @@ class GoogleBatchEmbeddings(VertexLLM):
 
     async def _async_resolve_file_references(
         self,
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
         api_key: str,
         async_handler: AsyncHTTPHandler,
-    ) -> Dict[str, Dict[str, str]]:
+    ) -> dict[str, dict[str, str]]:
         """
         Async version of _resolve_file_references.
 
         Args:
-            input: EmbeddingInput that may contain file references
+            input: GeminiEmbeddingInput that may contain file references
             api_key: Gemini API key
             async_handler: Async HTTP client
 
         Returns:
             Dict mapping file name to {mime_type, uri}
         """
-        input_list = [input] if isinstance(input, str) else input
-        resolved_files: Dict[str, Dict[str, str]] = {}
+        input_list: Final = [input] if isinstance(input, str) else input
+        resolved_files: Final[dict[str, dict[str, str]]] = {}
 
         for element in input_list:
             if isinstance(element, str) and _is_file_reference(element):
@@ -98,9 +107,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 response = await async_handler.get(url=url, headers=headers)
 
                 if response.status_code != 200:
-                    raise Exception(
-                        f"Error fetching file {element}: {response.status_code} {response.text}"
-                    )
+                    raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
                 file_data = response.json()
                 resolved_files[element] = {
@@ -113,22 +120,22 @@ class GoogleBatchEmbeddings(VertexLLM):
     def batch_embeddings(
         self,
         model: str,
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
         print_verbose,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
         logging_obj: Any,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         encoding=None,
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        aembedding: Optional[bool] = False,
+        aembedding: bool | None = False,
         timeout=300,
         client=None,
-        extra_headers: Optional[dict] = None,
+        extra_headers: dict | None = None,
     ) -> EmbeddingResponse:
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -137,22 +144,21 @@ class GoogleBatchEmbeddings(VertexLLM):
         )
 
         if client is None:
-            _params = {}
+            _params: Final = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
-                    _httpx_timeout = httpx.Timeout(timeout)
+                    _httpx_timeout: Final = httpx.Timeout(timeout)
                     _params["timeout"] = _httpx_timeout
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
 
-            sync_handler: HTTPHandler = HTTPHandler(**_params)  # type: ignore
+            sync_handler: HTTPHandler = HTTPHandler(**_params)
         else:
-            sync_handler = client  # type: ignore
+            sync_handler = client
 
         optional_params = optional_params or {}
 
-        is_multimodal = _is_multimodal_input(input)
-        use_embed_content = is_multimodal or (custom_llm_provider == "vertex_ai")
+        use_embed_content: Final = custom_llm_provider == "vertex_ai"
         mode: Literal["embedding", "batch_embedding"]
         if use_embed_content:
             mode = "embedding"
@@ -173,7 +179,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             mode=mode,
         )
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json; charset=utf-8",
         }
         if auth_header is not None:
@@ -185,7 +191,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             headers.update(extra_headers)
 
         if aembedding is True:
-            return self.async_batch_embeddings(  # type: ignore
+            return self.async_batch_embeddings(
                 model=model,
                 api_base=api_base,
                 url=url,
@@ -205,9 +211,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         if use_embed_content:
             resolved_files = {}
             if api_key:
-                resolved_files = self._resolve_file_references(
-                    input=input, api_key=api_key, sync_handler=sync_handler
-                )
+                resolved_files = self._resolve_file_references(input=input, api_key=api_key, sync_handler=sync_handler)
             request_data = transform_openai_input_gemini_embed_content(
                 input=input,
                 model=model,
@@ -215,8 +219,22 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
+            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
+            if has_file_refs and not api_key:
+                raise ValueError(
+                    "An API key is required to resolve Gemini file references (files/...). "
+                    "Pass api_key= or set GEMINI_API_KEY."
+                )
+            resolved_files = {}
+            if api_key and has_file_refs:
+                resolved_files = self._resolve_file_references(
+                    input=flat_elements, api_key=api_key, sync_handler=sync_handler
+                )
             request_data = transform_openai_input_gemini_content(
-                input=input, model=model, optional_params=optional_params
+                input=input,
+                model=model,
+                optional_params=optional_params,
+                resolved_files=resolved_files,
             )
 
         ## LOGGING
@@ -230,7 +248,7 @@ class GoogleBatchEmbeddings(VertexLLM):
             },
         )
 
-        response = sync_handler.post(
+        response: Final = sync_handler.post(
             url=url,
             headers=headers,
             data=json.dumps(request_data),
@@ -239,7 +257,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        _json_response = response.json()
+        _json_response: Final = response.json()
 
         if use_embed_content:
             return process_embed_content_response(
@@ -247,9 +265,10 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 model=model,
                 response_json=_json_response,
+                resolved_files=resolved_files,
             )
         else:
-            _predictions = VertexAIBatchEmbeddingsResponseObject(**_json_response)  # type: ignore
+            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,
                 model_response=model_response,
@@ -260,24 +279,24 @@ class GoogleBatchEmbeddings(VertexLLM):
     async def async_batch_embeddings(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         url: str,
-        data: Optional[Union[VertexAIBatchEmbeddingsRequestBody, dict]],
+        data: VertexAIBatchEmbeddingsRequestBody | dict | None,
         model_response: EmbeddingResponse,
-        input: EmbeddingInput,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        input: GeminiEmbeddingInput,
+        timeout: float | httpx.Timeout | None,
         headers={},
-        client: Optional[AsyncHTTPHandler] = None,
+        client: AsyncHTTPHandler | None = None,
         use_embed_content: bool = False,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        logging_obj: Optional[Any] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
+        logging_obj: Any | None = None,
     ) -> EmbeddingResponse:
         if client is None:
-            _params = {}
+            _params: Final = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
-                    _httpx_timeout = httpx.Timeout(timeout)
+                    _httpx_timeout: Final = httpx.Timeout(timeout)
                     _params["timeout"] = _httpx_timeout
             else:
                 _params["timeout"] = httpx.Timeout(timeout=600.0, connect=5.0)
@@ -287,7 +306,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 params={"timeout": timeout},
             )
         else:
-            async_handler = client  # type: ignore
+            async_handler = client
 
         ### TRANSFORMATION (async path) ###
         if use_embed_content:
@@ -303,8 +322,22 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
+            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
+            if has_file_refs and not api_key:
+                raise ValueError(
+                    "An API key is required to resolve Gemini file references (files/...). "
+                    "Pass api_key= or set GEMINI_API_KEY."
+                )
+            resolved_files = {}
+            if api_key and has_file_refs:
+                resolved_files = await self._async_resolve_file_references(
+                    input=flat_elements, api_key=api_key, async_handler=async_handler
+                )
             data = transform_openai_input_gemini_content(
-                input=input, model=model, optional_params=optional_params or {}
+                input=input,
+                model=model,
+                optional_params=optional_params or {},
+                resolved_files=resolved_files,
             )
 
         ## LOGGING
@@ -319,7 +352,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 },
             )
 
-        response = await async_handler.post(
+        response: Final = await async_handler.post(
             url=url,
             headers=headers,
             data=json.dumps(data),
@@ -328,7 +361,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        _json_response = response.json()
+        _json_response: Final = response.json()
 
         if use_embed_content:
             return process_embed_content_response(
@@ -336,9 +369,10 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 model=model,
                 response_json=_json_response,
+                resolved_files=resolved_files,
             )
         else:
-            _predictions = VertexAIBatchEmbeddingsResponseObject(**_json_response)  # type: ignore
+            _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,
                 model_response=model_response,

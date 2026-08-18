@@ -79,13 +79,16 @@ async def test_sap_chat(
     import litellm
 
     litellm.disable_aiohttp_transport = True
-    with patch(
-        "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
-        new_callable=PropertyMock,
-        return_value=fake_deployment_url,
-    ), patch(
-        "litellm.llms.sap.chat.transformation.get_token_creator",
-        return_value=fake_token_creator,
+    with (
+        patch(
+            "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.chat.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
     ):
         model = "sap/gpt-4o"
         messages = [{"role": "user", "content": "Hello"}]
@@ -113,13 +116,16 @@ async def test_sap_streaming(
     import litellm
 
     litellm.disable_aiohttp_transport = True
-    with patch(
-        "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
-        new_callable=PropertyMock,
-        return_value=fake_deployment_url,
-    ), patch(
-        "litellm.llms.sap.chat.transformation.get_token_creator",
-        return_value=fake_token_creator,
+    with (
+        patch(
+            "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.chat.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
     ):
         model = "sap/gpt-4o"
         messages = [{"role": "user", "content": "Hello"}]
@@ -161,13 +167,16 @@ async def test_sap_chat_required_headers(
     }
 
     litellm.disable_aiohttp_transport = True
-    with patch(
-        "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
-        new_callable=PropertyMock,
-        return_value=fake_deployment_url,
-    ), patch(
-        "litellm.llms.sap.chat.transformation.get_token_creator",
-        return_value=fake_token_creator,
+    with (
+        patch(
+            "litellm.llms.sap.chat.transformation.GenAIHubOrchestrationConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.chat.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
     ):
         model = "sap/gpt-4o"
         messages = [{"role": "user", "content": "Hello"}]

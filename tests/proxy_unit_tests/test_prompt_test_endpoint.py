@@ -3,8 +3,6 @@ Test /prompts/test endpoint for testing prompts before saving
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi import HTTPException
 
 
 class TestPromptTestEndpoint:
@@ -132,3 +130,55 @@ User: Hello"""
 
         model = frontmatter.get("model")
         assert model is None
+
+    def test_ssrf_via_dotprompt_api_base_blocked(self):
+        """
+        Regression: api_base in dotprompt YAML frontmatter must be rejected.
+
+        Without the fix, optional_params (every frontmatter key not in the
+        restricted list) was merged into the LLM call data dict and bypassed
+        is_request_body_safe, allowing any bearer-key holder to redirect the
+        outbound LLM request — and the provider API key — to an
+        attacker-controlled host (SSRF / credential exfil).
+
+        The fix calls is_request_body_safe on the constructed data dict before
+        the LLM call. This test verifies:
+        1. api_base flows from YAML frontmatter into optional_params (it does).
+        2. is_request_body_safe raises ValueError when api_base is present
+           without admin opt-in (it does, from _BANNED_REQUEST_BODY_PARAMS).
+        """
+        from litellm.integrations.dotprompt.prompt_manager import (
+            PromptManager,
+            PromptTemplate,
+        )
+        from litellm.proxy.auth.auth_utils import is_request_body_safe
+
+        malicious_frontmatter = {
+            "model": "gpt-4o",
+            "api_base": "https://attacker.example.com",
+            "temperature": 0.7,
+        }
+
+        template = PromptTemplate(
+            content="User: Hello", metadata=malicious_frontmatter, template_id="test"
+        )
+
+        # api_base must flow into optional_params — that's the attack surface
+        assert "api_base" in template.optional_params
+        assert template.optional_params["api_base"] == "https://attacker.example.com"
+
+        # Simulate what test_prompt builds before calling the LLM
+        data = {
+            "model": template.model,
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+        data.update(template.optional_params)
+
+        # is_request_body_safe must reject it without admin opt-in
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body=data,
+                general_settings={},
+                llm_router=None,
+                model=data.get("model", ""),
+            )

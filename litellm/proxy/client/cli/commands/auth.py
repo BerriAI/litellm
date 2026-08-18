@@ -4,72 +4,128 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
+from urllib.parse import urlencode
 
 import click
 import requests
 from rich.console import Console
 from rich.table import Table
+from typing_extensions import NotRequired, TypedDict
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+
+from .private_json import write_private_json
+
+
+class CliTokenData(TypedDict):
+    base_url: str
+    key: str
+    user_id: str
+    user_email: str
+    user_role: str
+    auth_header_name: str
+    jwt_token: str
+    timestamp: float
+
+
+class CliTeam(TypedDict, total=False):
+    team_id: str | None
+    team_alias: str | None
+    models: list[str]
+    max_budget: float | None
+
+
+class CliContextObj(TypedDict):
+    base_url: str
+    base_url_explicit: NotRequired[bool]
+
+
+class CliPollData(TypedDict, total=False):
+    status: str
+    key: str
+    user_id: str
+    teams: list[str]
+    team_details: object
+    requires_team_selection: bool
+    team_id: str
+
+
+class CliPollRequestKwargs(TypedDict, total=False):
+    timeout: int
+    headers: dict[str, str]
+
+
+class CliSsoStartData(TypedDict):
+    login_id: str
+    poll_secret: str
+    user_code: str
+
+
+class CliAuthResult(TypedDict):
+    api_key: str
+    user_id: str | None
+    teams: list[str]
+    team_id: str | None
 
 
 # Token storage utilities
 def get_token_file_path() -> str:
     """Get the path to store the authentication token"""
-    home_dir = Path.home()
-    config_dir = home_dir / ".litellm"
+    home_dir: Final = Path.home()
+    config_dir: Final = home_dir / ".litellm"
     config_dir.mkdir(exist_ok=True)
     return str(config_dir / "token.json")
 
 
-def save_token(token_data: Dict[str, Any]) -> None:
+def save_token(token_data: CliTokenData) -> None:
     """Save token data to file"""
-    token_file = get_token_file_path()
-    with open(token_file, "w") as f:
-        json.dump(token_data, f, indent=2)
-    # Set file permissions to be readable only by owner
-    os.chmod(token_file, 0o600)
+    write_private_json(get_token_file_path(), token_data)
 
 
-def load_token() -> Optional[Dict[str, Any]]:
+def load_token() -> CliTokenData | None:
     """Load token data from file"""
-    token_file = get_token_file_path()
+    token_file: Final = get_token_file_path()
     if not os.path.exists(token_file):
         return None
 
     try:
         with open(token_file, "r") as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return None
 
 
 def clear_token() -> None:
     """Clear stored token"""
-    token_file = get_token_file_path()
+    token_file: Final = get_token_file_path()
     if os.path.exists(token_file):
         os.remove(token_file)
 
 
-def get_stored_api_key() -> Optional[str]:
-    """Get the stored API key from token file"""
-    # Use the SDK-level utility
+def get_stored_api_key(expected_base_url: str | None = None) -> str | None:
+    """Get the stored API key from token file.
+
+    If expected_base_url is provided, the key is only returned when it was
+    originally issued for that URL. This prevents credential leakage when the
+    CLI is pointed at a different (possibly malicious) server.
+    """
     from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
 
-    return get_litellm_gateway_api_key()
+    return get_litellm_gateway_api_key(expected_base_url=expected_base_url)
 
 
 # Team selection utilities
-def display_teams_table(teams: List[Dict[str, Any]]) -> None:
+def display_teams_table(teams: list[CliTeam]) -> None:
     """Display teams in a formatted table"""
-    console = Console()
+    console: Final = Console()
 
     if not teams:
-        console.print("❌ No teams found for your user.")
+        console.print("No teams found for your user.")
         return
 
-    table = Table(title="Available Teams")
+    table: Final = Table(title="Available Teams")
     table.add_column("Index", style="cyan", no_wrap=True)
     table.add_column("Team Alias", style="magenta")
     table.add_column("Team ID", style="green")
@@ -123,8 +179,8 @@ def get_key_input():
             import termios
             import tty
 
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
+            fd: Final = sys.stdin.fileno()
+            old_settings: Final = termios.tcgetattr(fd)
             try:
                 tty.setraw(sys.stdin.fileno())
                 key = sys.stdin.read(1)
@@ -149,21 +205,19 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(
-    teams: List[Dict[str, Any]], selected_index: int = 0
-) -> None:
+def display_interactive_team_selection(teams: list[dict[str, Any]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
-    console = Console()
+    console: Final = Console()
 
     # Clear the screen using Rich's method
     console.clear()
 
-    console.print("🎯 Select a Team (Use ↑↓ arrows, Enter to select, 'q' to skip):\n")
+    console.print("Select a Team (Use up/down arrows, Enter to select, 'q' to skip):\n")
 
     for i, team in enumerate(teams):
         team_alias = team.get("team_alias") or "N/A"
         team_id = team.get("team_id", "N/A")
-        models = team.get("models", [])
+        models: list[str] = team.get("models", [])
         max_budget = team.get("max_budget")
 
         # Format models list
@@ -180,7 +234,7 @@ def display_interactive_team_selection(
 
         # Highlight the selected item
         if i == selected_index:
-            console.print(f"➤ [bold cyan]{team_alias}[/bold cyan] ({team_id})")
+            console.print(f"> [bold cyan]{team_alias}[/bold cyan] ({team_id})")
             console.print(f"   Models: [yellow]{models_str}[/yellow]")
             console.print(f"   Budget: [blue]{budget_str}[/blue]\n")
         else:
@@ -189,7 +243,7 @@ def display_interactive_team_selection(
             console.print(f"   Budget: [dim]{budget_str}[/dim]\n")
 
 
-def prompt_team_selection(teams: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Interactive team selection with arrow keys"""
     if not teams:
         return None
@@ -216,15 +270,13 @@ def prompt_team_selection(teams: List[Dict[str, Any]]) -> Optional[Dict[str, Any
                 # Clear screen and show selection
                 console = Console()
                 console.clear()
-                click.echo(
-                    f"✅ Selected team: {selected_team.get('team_alias', 'N/A')} ({selected_team.get('team_id')})"
-                )
+                click.echo(f"Selected team: {selected_team.get('team_alias', 'N/A')} ({selected_team.get('team_id')})")
                 return selected_team
             elif key == "quit" or key == "escape":
                 # Clear screen
                 console = Console()
                 console.clear()
-                click.echo("ℹ️ Team selection skipped.")
+                click.echo("Team selection skipped.")
                 return None
             elif key is None:
                 # If we can't get key input, fall back to simple selection
@@ -233,7 +285,7 @@ def prompt_team_selection(teams: List[Dict[str, Any]]) -> Optional[Dict[str, Any
     except KeyboardInterrupt:
         console = Console()
         console.clear()
-        click.echo("\n❌ Team selection cancelled.")
+        click.echo("\nTeam selection cancelled.")
         return None
     except Exception:
         # If interactive mode fails, fall back to simple selection
@@ -241,18 +293,19 @@ def prompt_team_selection(teams: List[Dict[str, Any]]) -> Optional[Dict[str, Any
 
 
 def prompt_team_selection_fallback(
-    teams: List[Dict[str, Any]]
-) -> Optional[Dict[str, Any]]:
+    teams: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     """Fallback team selection for non-interactive environments"""
     if not teams:
         return None
 
     while True:
         try:
-            choice = click.prompt(
+            prompt_response: str = click.prompt(
                 "\nSelect a team by entering the index number (or 'skip' to continue without a team)",
                 type=str,
-            ).strip()
+            )
+            choice = prompt_response.strip()
 
             if choice.lower() == "skip":
                 return None
@@ -261,68 +314,87 @@ def prompt_team_selection_fallback(
             if 0 <= index < len(teams):
                 selected_team = teams[index]
                 click.echo(
-                    f"\n✅ Selected team: {selected_team.get('team_alias', 'N/A')} ({selected_team.get('team_id')})"
+                    f"\nSelected team: {selected_team.get('team_alias', 'N/A')} ({selected_team.get('team_id')})"
                 )
                 return selected_team
             else:
-                click.echo(
-                    f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}"
-                )
+                click.echo(f"Invalid selection. Please enter a number between 1 and {len(teams)}")
         except ValueError:
-            click.echo("❌ Invalid input. Please enter a number or 'skip'")
+            click.echo("Invalid input. Please enter a number or 'skip'")
         except KeyboardInterrupt:
-            click.echo("\n❌ Team selection cancelled.")
+            click.echo("\nTeam selection cancelled.")
             return None
+
+
+def _response_error_detail(response: requests.Response) -> str | None:
+    try:
+        body: Final[dict[str, object] | list[object] | str | int | float | bool | None] = response.json()
+    except ValueError:
+        return None
+    detail: Final = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, str) and detail:
+        return detail
+    return None
+
+
+def _polling_error_message(response: requests.Response) -> str:
+    detail: Final = _response_error_detail(response)
+    if detail:
+        return f"Polling error: HTTP {response.status_code}: {detail}"
+    return f"Polling error: HTTP {response.status_code}"
+
+
+def _is_permanent_polling_error(status_code: int) -> bool:
+    return 400 <= status_code < 500 and status_code != 429
 
 
 # Polling-based authentication - no local server needed
 def _poll_for_ready_data(
     url: str,
     *,
+    headers: dict[str, str] | None = None,
     total_timeout: int = 300,
     poll_interval: int = 2,
     request_timeout: int = 10,
-    pending_message: Optional[str] = None,
+    pending_message: str | None = None,
     pending_log_every: int = 10,
-    other_status_message: Optional[str] = None,
+    other_status_message: str | None = None,
     other_status_log_every: int = 10,
     http_error_log_every: int = 10,
     connection_error_log_every: int = 10,
-) -> Optional[Dict[str, Any]]:
+) -> CliPollData | None:
     for attempt in range(total_timeout // poll_interval):
         try:
-            response = requests.get(url, timeout=request_timeout)
+            request_kwargs: CliPollRequestKwargs = {"timeout": request_timeout}
+            if headers is not None:
+                request_kwargs["headers"] = headers
+            response = requests.get(url, **request_kwargs)
             if response.status_code == 200:
-                data = response.json()
+                data: CliPollData = response.json()
                 status = data.get("status")
                 if status == "ready":
                     return data
                 if status == "pending":
-                    if (
-                        pending_message
-                        and pending_log_every > 0
-                        and attempt % pending_log_every == 0
-                    ):
+                    if pending_message and pending_log_every > 0 and attempt % pending_log_every == 0:
                         click.echo(pending_message)
-                elif (
-                    other_status_message
-                    and other_status_log_every > 0
-                    and attempt % other_status_log_every == 0
-                ):
+                elif other_status_message and other_status_log_every > 0 and attempt % other_status_log_every == 0:
                     click.echo(other_status_message)
+            elif _is_permanent_polling_error(response.status_code):
+                detail = _response_error_detail(response)
+                raise ValueError(
+                    f"The proxy rejected the login session with HTTP {response.status_code}"
+                    + (f": {detail}" if detail else f" and no error detail (from {url})")
+                )
             elif http_error_log_every > 0 and attempt % http_error_log_every == 0:
-                click.echo(f"Polling error: HTTP {response.status_code}")
+                click.echo(_polling_error_message(response))
         except requests.RequestException as e:
-            if (
-                connection_error_log_every > 0
-                and attempt % connection_error_log_every == 0
-            ):
+            if connection_error_log_every > 0 and attempt % connection_error_log_every == 0:
                 click.echo(f"Connection error (will retry): {e}")
         time.sleep(poll_interval)
     return None
 
 
-def _normalize_teams(teams, team_details):
+def _normalize_teams(teams: object, team_details: object) -> list[CliTeam]:
     """If team_details are a
 
     Args:
@@ -346,33 +418,82 @@ def _normalize_teams(teams, team_details):
     return []
 
 
-def _poll_for_authentication(base_url: str, key_id: str) -> Optional[dict]:
+def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
+    start_url: Final = f"{base_url}/sso/cli/start"
+    try:
+        response: Final = requests.post(start_url, timeout=10)
+    except requests.RequestException as e:
+        raise ValueError(
+            f"Could not reach the proxy at {start_url}: {e}. "
+            "Check that the proxy is running and that --base-url points at it."
+        ) from e
+
+    if response.status_code in (404, 405):
+        raise ValueError(
+            f"POST {start_url} returned HTTP {response.status_code}. "
+            "Either --base-url is wrong, or the proxy is older than this CLI and does not support "
+            "the CLI SSO login flow; upgrade the proxy or use a CLI version that matches it."
+        )
+    if response.status_code != 200:
+        detail: Final = _response_error_detail(response)
+        raise ValueError(
+            f"Starting CLI login failed: HTTP {response.status_code} from {start_url}"
+            + (f": {detail}" if detail else "")
+        )
+
+    try:
+        data: Final[CliSsoStartData] = response.json()
+    except ValueError:
+        content_type: Final = response.headers.get("content-type", "unknown")
+        raise ValueError(
+            f"The proxy returned a non-JSON response from {start_url} (content-type: {content_type}). "
+            "A proxy, load balancer, or auth gateway in front of LiteLLM may be intercepting the request. "
+            f"Response starts with: {response.text[:200]!r}"
+        )
+
+    required_fields: Final[tuple[str, ...]] = ("login_id", "poll_secret", "user_code")
+    missing_fields: Final = tuple(field for field in required_fields if not isinstance(data.get(field), str))
+    if missing_fields:
+        raise ValueError(
+            f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
+            "The proxy version may not match this CLI; upgrade whichever is older."
+        )
+    return data
+
+
+def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
+    return {"x-litellm-cli-poll-secret": poll_secret}
+
+
+def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> CliAuthResult | None:
     """
     Poll the server for authentication completion and handle team selection.
 
     Returns:
         Dictionary with authentication data if successful, None otherwise
     """
-    poll_url = f"{base_url}/sso/cli/poll/{key_id}"
-    data = _poll_for_ready_data(
+    poll_url: Final = f"{base_url}/sso/cli/poll/{key_id}"
+    data: Final = _poll_for_ready_data(
         poll_url,
+        headers=_get_cli_sso_poll_headers(poll_secret),
         pending_message="Still waiting for authentication...",
     )
     if not data:
         return None
     if data.get("requires_team_selection"):
         teams = data.get("teams", [])
-        team_details = data.get("team_details")
+        team_details: Final = data.get("team_details")
         user_id = data.get("user_id")
-        normalized_teams: List[Dict[str, Any]] = _normalize_teams(teams, team_details)
+        normalized_teams: Final[list[CliTeam]] = _normalize_teams(teams, team_details)
         if not normalized_teams:
-            click.echo("⚠️ No teams available for selection.")
+            click.echo("Warning: No teams available for selection.")
             return None
 
         # User has multiple teams - let them select
-        jwt_with_team = _handle_team_selection_during_polling(
+        jwt_with_team: Final = _handle_team_selection_during_polling(
             base_url=base_url,
             key_id=key_id,
+            poll_secret=poll_secret,
             teams=normalized_teams,
         )
 
@@ -385,18 +506,18 @@ def _poll_for_authentication(base_url: str, key_id: str) -> Optional[dict]:
                 "team_id": None,  # Set by server in JWT
             }
 
-        click.echo("❌ Team selection cancelled or JWT generation failed.")
+        click.echo("Team selection cancelled or JWT generation failed.")
         return None
 
     # JWT is ready (single team or team already selected)
-    api_key = data.get("key")
+    api_key: Final = data.get("key")
     user_id = data.get("user_id")
     teams = data.get("teams", [])
-    team_id = data.get("team_id")
+    team_id: Final = data.get("team_id")
 
     # Show which team was assigned
     if team_id and len(teams) == 1:
-        click.echo(f"\n✅ Automatically assigned to team: {team_id}")
+        click.echo(f"\nAutomatically assigned to team: {team_id}")
 
     if api_key:
         return {
@@ -410,8 +531,8 @@ def _poll_for_authentication(base_url: str, key_id: str) -> Optional[dict]:
 
 
 def _handle_team_selection_during_polling(
-    base_url: str, key_id: str, teams: List[Dict[str, Any]]
-) -> Optional[str]:
+    base_url: str, key_id: str, poll_secret: str, teams: list[CliTeam]
+) -> str | None:
     """
     Handle team selection and re-poll with selected team_id.
 
@@ -422,40 +543,39 @@ def _handle_team_selection_during_polling(
         The JWT token with the selected team, or None if selection was skipped
     """
     if not teams:
-        click.echo(
-            "ℹ️ No teams found. You can create or join teams using the web interface."
-        )
+        click.echo("No teams found. You can create or join teams using the web interface.")
         return None
 
     click.echo("\n" + "=" * 60)
-    click.echo("📋 Select a team for your CLI session...")
+    click.echo("Select a team for your CLI session...")
 
-    team_id = _render_and_prompt_for_team_selection(teams)
+    team_id: Final = _render_and_prompt_for_team_selection(teams)
 
     if not team_id:
-        click.echo("ℹ️ No team selected.")
+        click.echo("No team selected.")
         return None
 
-    click.echo(f"\n🔄 Generating JWT for team: {team_id}")
+    click.echo(f"\nGenerating JWT for team: {team_id}")
 
-    poll_url = f"{base_url}/sso/cli/poll/{key_id}?team_id={team_id}"
-    data = _poll_for_ready_data(
+    poll_url: Final = f"{base_url}/sso/cli/poll/{key_id}?team_id={team_id}"
+    data: Final = _poll_for_ready_data(
         poll_url,
+        headers=_get_cli_sso_poll_headers(poll_secret),
         pending_message="Still waiting for team authentication...",
         other_status_message="Waiting for team authentication to complete...",
         http_error_log_every=10,
     )
     if not data:
         return None
-    jwt_token = data.get("key")
+    jwt_token: Final = data.get("key")
     if jwt_token:
-        click.echo(f"✅ Successfully generated JWT for team: {team_id}")
+        click.echo(f"Successfully generated JWT for team: {team_id}")
         return jwt_token
 
     return None
 
 
-def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Optional[str]:
+def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
     """Render teams table and prompt user for a team selection.
 
     Returns the selected team_id as a string, or None if selection was
@@ -463,8 +583,8 @@ def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Option
     """
     # Display teams as a simple list, but prefer showing aliases where
     # available while still keeping the underlying IDs intact.
-    console = Console()
-    table = Table(title="Available Teams")
+    console: Final = Console()
+    table: Final = Table(title="Available Teams")
     table.add_column("Index", style="cyan", no_wrap=True)
     table.add_column("Team Name", style="magenta")
     table.add_column("Team ID", style="green")
@@ -479,10 +599,11 @@ def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Option
     # Simple selection
     while True:
         try:
-            choice = click.prompt(
+            prompt_response: str = click.prompt(
                 "\nSelect a team by entering the index number (or 'skip' to use first team)",
                 type=str,
-            ).strip()
+            )
+            choice = prompt_response.strip()
 
             if choice.lower() == "skip":
                 # Default to the first team's ID if the user skips an
@@ -497,16 +618,14 @@ def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Option
                 selected_team = teams[index]
                 team_id = str(selected_team.get("team_id"))
                 team_alias = selected_team.get("team_alias") or team_id
-                click.echo(f"\n✅ Selected team: {team_alias} ({team_id})")
+                click.echo(f"\nSelected team: {team_alias} ({team_id})")
                 return team_id
 
-            click.echo(
-                f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}"
-            )
+            click.echo(f"Invalid selection. Please enter a number between 1 and {len(teams)}")
         except ValueError:
-            click.echo("❌ Invalid input. Please enter a number or 'skip'")
+            click.echo("Invalid input. Please enter a number or 'skip'")
         except KeyboardInterrupt:
-            click.echo("\n❌ Team selection cancelled.")
+            click.echo("\nTeam selection cancelled.")
             return None
 
 
@@ -514,29 +633,23 @@ def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Option
 @click.pass_context
 def login(ctx: click.Context):
     """Login to LiteLLM proxy using SSO authentication"""
-    from litellm._uuid import uuid
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     from litellm.proxy.client.cli.interface import show_commands
 
-    base_url = ctx.obj["base_url"]
-
-    # Check if we have an existing key to regenerate
-    existing_key = get_stored_api_key()
-
-    # Generate unique key ID for this login session
-    key_id = f"sk-{str(uuid.uuid4())}"
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"]
 
     try:
-        # Construct SSO login URL with CLI source and pre-generated key
-        sso_url = f"{base_url}/sso/key/generate?source={LITELLM_CLI_SOURCE_IDENTIFIER}&key={key_id}"
+        cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)
+        key_id: Final = cli_sso_flow["login_id"]
+        poll_secret: Final = cli_sso_flow["poll_secret"]
+        user_code: Final = cli_sso_flow["user_code"]
 
-        # If we have an existing key, include it as a parameter to the login endpoint
-        # The server will encode it in the OAuth state parameter for the SSO flow
-        if existing_key:
-            sso_url += f"&existing_key={existing_key}"
+        sso_url = f"{base_url}/sso/key/generate?" + urlencode({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id})
 
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
+        click.echo(f"Verification code: {user_code}")
         click.echo(f"Session ID: {key_id}")
 
         # Open browser
@@ -545,15 +658,17 @@ def login(ctx: click.Context):
         # Poll for authentication completion
         click.echo("Waiting for authentication...")
 
-        auth_result = _poll_for_authentication(base_url=base_url, key_id=key_id)
+        auth_result: Final = _poll_for_authentication(base_url=base_url, key_id=key_id, poll_secret=poll_secret)
 
         if auth_result:
-            api_key = auth_result["api_key"]
-            user_id = auth_result["user_id"]
+            api_key: Final = auth_result["api_key"]
+            user_id: Final = auth_result["user_id"]
 
-            # Save token data (simplified for CLI - we just need the key)
+            # Save token data. base_url is stored so we can verify origin
+            # before reusing the key on a subsequent CLI invocation.
             save_token(
                 {
+                    "base_url": base_url.rstrip("/"),
                     "key": api_key,
                     "user_id": user_id or "cli-user",
                     "user_email": "unknown",
@@ -564,7 +679,7 @@ def login(ctx: click.Context):
                 }
             )
 
-            click.echo("\n✅ Login successful!")
+            click.echo("\nLogin successful!")
             click.echo(f"JWT Token: {api_key[:20]}...")
             click.echo("You can now use the CLI without specifying --api-key")
 
@@ -573,14 +688,18 @@ def login(ctx: click.Context):
             show_commands()
             return
         else:
-            click.echo("❌ Authentication timed out. Please try again.")
+            click.echo("Authentication timed out. Please try again.")
+            click.echo(
+                "The proxy never reported the browser sign-in as finished. If you did complete it, "
+                "check the proxy logs for /sso/callback errors and confirm SSO is configured on the proxy."
+            )
             return
 
     except KeyboardInterrupt:
-        click.echo("\n❌ Authentication cancelled by user.")
+        click.echo("\nAuthentication cancelled by user.")
         return
     except Exception as e:
-        click.echo(f"❌ Authentication failed: {e}")
+        click.echo(f"Authentication failed: {e}")
         return
 
 
@@ -588,36 +707,81 @@ def login(ctx: click.Context):
 def logout():
     """Logout and clear stored authentication"""
     clear_token()
-    click.echo("✅ Logged out successfully. Authentication token cleared.")
+    click.echo("Logged out successfully. Authentication token cleared.")
+
+
+@click.command(name="print-token")
+@click.pass_context
+def print_token(ctx: click.Context):
+    """Print a valid API token for this proxy.
+
+    Designed to be used as Claude Code's `apiKeyHelper`
+    (https://docs.claude.com/en/docs/claude-code/settings): stdout must
+    contain only the token, so all diagnostics go to stderr. The token
+    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
+    expired, run `lite login` again.
+    """
+    token_data: Final = load_token()
+    if not token_data:
+        click.echo("Not authenticated. Run 'lite login'.", err=True)
+        sys.exit(1)
+
+    # apiKeyHelper is invoked bare (no --base-url), so unless the caller
+    # explicitly pointed us at a server, trust whichever one `lite login`
+    # actually issued this token for -- that's the whole point of not
+    # needing a wrapper command.
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    if ctx_obj.get("base_url_explicit"):
+        base_url: Final = ctx_obj["base_url"]
+        if token_data.get("base_url") != base_url.rstrip("/"):
+            click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+            sys.exit(1)
+
+    if not is_cli_token_fresh(token_data):
+        click.echo("Token expired. Run 'lite login' again.", err=True)
+        sys.exit(1)
+
+    api_key: Final = token_data.get("key")
+    if not api_key:
+        click.echo("No token available. Run 'lite login'.", err=True)
+        sys.exit(1)
+
+    click.echo(api_key)
 
 
 @click.command(name="whoami")
 def whoami():
     """Show current authentication status"""
-    token_data = load_token()
+    token_data: Final = load_token()
 
     if not token_data:
-        click.echo("❌ Not authenticated. Run 'litellm-proxy login' to authenticate.")
+        click.echo("Not authenticated. Run 'lite login' to authenticate.")
         return
 
-    click.echo("✅ Authenticated")
+    click.echo("Authenticated")
     click.echo(f"User Email: {token_data.get('user_email', 'Unknown')}")
     click.echo(f"User ID: {token_data.get('user_id', 'Unknown')}")
     click.echo(f"User Role: {token_data.get('user_role', 'Unknown')}")
 
     # Check if token is still valid (basic timestamp check)
-    timestamp = token_data.get("timestamp", 0)
-    age_hours = (time.time() - timestamp) / 3600
+    timestamp: Final = token_data.get("timestamp", 0)
+    age_hours: Final = (time.time() - timestamp) / 3600
     click.echo(f"Token age: {age_hours:.1f} hours")
 
     if age_hours > CLI_JWT_EXPIRATION_HOURS:
-        click.echo(
-            f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired."
-        )
+        click.echo(f"Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
+
+
+@click.group(name="auth")
+def auth_group():
+    """Manage CLI authentication (apiKeyHelper support, etc.)"""
+
+
+auth_group.add_command(print_token)
 
 
 # Export functions for use by other CLI commands
-__all__ = ["login", "logout", "whoami", "prompt_team_selection"]
+__all__ = ["auth_group", "login", "logout", "print_token", "prompt_team_selection", "whoami"]
 
 # Export individual commands instead of grouping them
 # login, logout, and whoami will be added as top-level commands

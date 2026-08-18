@@ -4,7 +4,7 @@ import base64
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -26,41 +26,41 @@ class LicenseCheck:
 
     def __init__(self) -> None:
         self.license_str = os.getenv("LITELLM_LICENSE", None)
-        verbose_proxy_logger.debug("License Str value - {}".format(self.license_str))
+        verbose_proxy_logger.debug("License Str value - %s", self.license_str)
         self.http_handler = HTTPHandler(timeout=NON_LLM_CONNECTION_TIMEOUT)
         self._premium_check_logged = False
         self.public_key = None
         self.read_public_key()
-        self.airgapped_license_data: Optional["EnterpriseLicenseData"] = None
+        self.airgapped_license_data: EnterpriseLicenseData | None = None
 
     def read_public_key(self):
         try:
             from cryptography.hazmat.primitives import serialization
 
             # current dir
-            current_dir = os.path.dirname(os.path.realpath(__file__))
+            current_dir: Final = os.path.dirname(os.path.realpath(__file__))
 
             # check if public_key.pem exists
-            _path_to_public_key = os.path.join(current_dir, "public_key.pem")
+            _path_to_public_key: Final = os.path.join(current_dir, "public_key.pem")
             if os.path.exists(_path_to_public_key):
                 with open(_path_to_public_key, "rb") as key_file:
                     self.public_key = serialization.load_pem_public_key(key_file.read())
             else:
                 self.public_key = None
         except Exception as e:
-            verbose_proxy_logger.error(f"Error reading public key: {str(e)}")
+            verbose_proxy_logger.error("Error reading public key: %s", e)
 
     def _verify(self, license_str: str) -> bool:
         verbose_proxy_logger.debug(
-            "litellm.proxy.auth.litellm_license.py::_verify - Checking license against {}/verify_license - {}".format(
-                self.base_url, license_str
-            )
+            "litellm.proxy.auth.litellm_license.py::_verify - Checking license against %s/verify_license - %s",
+            self.base_url,
+            license_str,
         )
-        url = "{}/verify_license/{}".format(self.base_url, license_str)
+        url: Final = f"{self.base_url}/verify_license/{license_str}"
 
-        response: Optional[httpx.Response] = None
+        response: httpx.Response | None = None
         try:  # don't impact user, if call fails
-            num_retries = 3
+            num_retries: Final = 3
             for i in range(num_retries):
                 try:
                     response = self.http_handler.get(url=url)
@@ -74,23 +74,21 @@ class LicenseCheck:
             if response is None:
                 raise Exception("No response from license server")
 
-            response_json = response.json()
+            response_json: Final = response.json()
 
-            premium = response_json["verify"]
+            premium: Final = response_json["verify"]
 
             assert isinstance(premium, bool)
 
             verbose_proxy_logger.debug(
-                "litellm.proxy.auth.litellm_license.py::_verify - License={} is premium={}".format(
-                    license_str, premium
-                )
+                "litellm.proxy.auth.litellm_license.py::_verify - License=%s is premium=%s", license_str, premium
             )
             return premium
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License={} via api. - {}".format(
-                    license_str, str(e)
-                )
+                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License=%s via api. - %s",
+                license_str,
+                e,
             )
             return False
 
@@ -102,9 +100,8 @@ class LicenseCheck:
         try:
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License={}".format(
-                        self.license_str
-                    )
+                    "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License=%s",
+                    self.license_str,
                 )
 
             if self.license_str is None:
@@ -112,22 +109,17 @@ class LicenseCheck:
 
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - {}".format(
-                        self.license_str
-                    )
+                    "litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - %s",
+                    self.license_str,
                 )
                 self._premium_check_logged = True
 
             if self.license_str is None:
                 return False
             elif (
-                self.verify_license_without_api_request(
-                    public_key=self.public_key, license_key=self.license_str
-                )
+                self.verify_license_without_api_request(public_key=self.public_key, license_key=self.license_str)
                 is True
-            ):
-                return True
-            elif self._verify(license_str=self.license_str) is True:
+            ) or self._verify(license_str=self.license_str) is True:
                 return True
             return False
         except Exception:
@@ -152,12 +144,8 @@ class LicenseCheck:
         if self.airgapped_license_data is None:
             return False
 
-        _max_teams_in_license: Optional[int] = self.airgapped_license_data.get(
-            "max_teams"
-        )
-        if "max_teams" not in self.airgapped_license_data or not isinstance(
-            _max_teams_in_license, int
-        ):
+        _max_teams_in_license: Final[int | None] = self.airgapped_license_data.get("max_teams")
+        if "max_teams" not in self.airgapped_license_data or not isinstance(_max_teams_in_license, int):
             return False
         return team_count > _max_teams_in_license
 
@@ -170,11 +158,11 @@ class LicenseCheck:
 
             # Decode the license key - add padding if needed for base64
             # Base64 strings need to be a multiple of 4 characters
-            padding_needed = len(license_key) % 4
+            padding_needed: Final = len(license_key) % 4
             if padding_needed:
                 license_key += "=" * (4 - padding_needed)
 
-            decoded = base64.b64decode(license_key)
+            decoded: Final = base64.b64decode(license_key)
             message, signature = decoded.split(b".", 1)
 
             # Verify the signature
@@ -189,7 +177,7 @@ class LicenseCheck:
             )
 
             # Decode and parse the data
-            license_data = json.loads(message.decode())
+            license_data: Final = json.loads(message.decode())
 
             self.airgapped_license_data = EnterpriseLicenseData(**license_data)
 
@@ -197,9 +185,7 @@ class LicenseCheck:
             verbose_proxy_logger.debug("License data: %s", license_data)
 
             # Check expiration date
-            expiration_date = datetime.strptime(
-                license_data["expiration_date"], "%Y-%m-%d"
-            )
+            expiration_date: Final = datetime.strptime(license_data["expiration_date"], "%Y-%m-%d")
             if expiration_date < datetime.now():
                 return False, "License has expired"
 
@@ -207,8 +193,7 @@ class LicenseCheck:
 
         except Exception as e:
             verbose_proxy_logger.debug(
-                "litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - {}".format(
-                    str(e)
-                )
+                "litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - %s",
+                e,
             )
             return False

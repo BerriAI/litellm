@@ -24,7 +24,9 @@ async def test_get_llm_provider_for_deployment_dict_does_not_require_litellm_par
 ):
     class RaiseOnInit:
         def __init__(self, *args, **kwargs):
-            raise AssertionError("LiteLLM_Params should not be instantiated in hot path")
+            raise AssertionError(
+                "LiteLLM_Params should not be instantiated in hot path"
+            )
 
     monkeypatch.setattr(
         "litellm.router_strategy.budget_limiter.LiteLLM_Params",
@@ -199,7 +201,9 @@ def _legacy_provider_resolution(deployment):
     Reference implementation used before hot-path optimization.
     """
     try:
-        _litellm_params = LiteLLM_Params(**deployment.get("litellm_params", {"model": ""}))
+        _litellm_params = LiteLLM_Params(
+            **deployment.get("litellm_params", {"model": ""})
+        )
         _, custom_llm_provider, _, _ = litellm.get_llm_provider(
             model=_litellm_params.model,
             litellm_params=_litellm_params,
@@ -230,3 +234,72 @@ async def test_get_llm_provider_for_deployment_matches_legacy_behavior(
     legacy_provider = _legacy_provider_resolution(deployment)
 
     assert current_provider == legacy_provider
+
+
+def test_register_deployment_budget_for_runtime_added_deployment(
+    disable_budget_sync, monkeypatch
+):
+    import asyncio
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
+    budget_limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={},
+    )
+    model_id = "dynamic-deployment-id"
+    budget_limiter.register_deployment_budget(
+        deployment={
+            "model_name": "dynamic-budget-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "max_budget": 0.000000000001,
+                "budget_duration": "1d",
+            },
+            "model_info": {"id": model_id},
+        }
+    )
+
+    config = budget_limiter._get_budget_config_for_deployment(model_id)
+    assert config is not None
+    assert config.max_budget == 0.000000000001
+    assert config.budget_duration == "1d"
+
+    budget_limiter.unregister_deployment_budget(model_id=model_id)
+    assert budget_limiter._get_budget_config_for_deployment(model_id) is None
+
+
+def test_router_add_deployment_registers_deployment_budget(
+    disable_budget_sync, monkeypatch
+):
+    import asyncio
+
+    from litellm import Router
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
+
+    router = Router(
+        model_list=[],
+        optional_pre_call_checks=[],
+    )
+
+    router.add_deployment(
+        deployment=Deployment(
+            model_name="dynamic-budget-model",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o-mini",
+                api_key="fake-key",
+                max_budget=0.000000000001,
+                budget_duration="1d",
+            ),
+            model_info=ModelInfo(id="runtime-budget-deployment"),
+        )
+    )
+
+    budget_limiter = router._get_router_deployment_budget_limiter()
+    assert budget_limiter is not None
+    config = budget_limiter._get_budget_config_for_deployment(
+        "runtime-budget-deployment"
+    )
+    assert config is not None
+    assert config.max_budget == 0.000000000001

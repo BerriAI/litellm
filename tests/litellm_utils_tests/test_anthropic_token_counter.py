@@ -26,12 +26,10 @@ class TestAnthropicTokenCounter(BaseTokenCounterTest):
         return AnthropicTokenCounter()
 
     def get_test_model(self) -> str:
-        return "claude-sonnet-4-20250514"
+        return "claude-haiku-4-5-20251001"
 
     def get_test_messages(self) -> List[Dict[str, Any]]:
-        return [
-            {"role": "user", "content": "Hello, how are you today?"}
-        ]
+        return [{"role": "user", "content": "Hello, how are you today?"}]
 
     def get_deployment_config(self) -> Dict[str, Any]:
         api_key = os.getenv("ANTHROPIC_API_KEY")

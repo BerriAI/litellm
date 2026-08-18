@@ -13,7 +13,7 @@ import json
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Final
 
 from pydantic import BaseModel
 
@@ -27,7 +27,7 @@ from litellm.types.utils import EmbeddingResponse, all_litellm_params
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache  # noqa
+from .dual_cache import DualCache  # noqa: F401
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
@@ -41,7 +41,7 @@ def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
     except Exception:
         pass
 
@@ -55,63 +55,51 @@ class CacheMode(str, Enum):
 class Cache:
     def __init__(
         self,
-        type: Optional[LiteLLMCacheType] = LiteLLMCacheType.LOCAL,
-        mode: Optional[
-            CacheMode
-        ] = CacheMode.default_on,  # when default_on cache is always on, when default_off cache is opt in
-        host: Optional[str] = None,
-        port: Optional[str] = None,
-        password: Optional[str] = None,
-        namespace: Optional[str] = None,
-        ttl: Optional[float] = None,
-        default_in_memory_ttl: Optional[float] = None,
-        default_in_redis_ttl: Optional[float] = None,
-        similarity_threshold: Optional[float] = None,
-        supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
-            "completion",
-            "acompletion",
-            "embedding",
-            "aembedding",
-            "atranscription",
-            "transcription",
-            "atext_completion",
-            "text_completion",
-            "arerank",
-            "rerank",
-            "responses",
-            "aresponses",
-        ],
+        type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
+        mode: CacheMode
+        | None = CacheMode.default_on,  # when default_on cache is always on, when default_off cache is opt in
+        host: str | None = None,
+        port: str | None = None,
+        password: str | None = None,
+        namespace: str | None = None,
+        ttl: float | None = None,
+        default_in_memory_ttl: float | None = None,
+        default_in_redis_ttl: float | None = None,
+        similarity_threshold: float | None = None,
+        supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
         # s3 Bucket, boto3 configuration
-        azure_account_url: Optional[str] = None,
-        azure_blob_container: Optional[str] = None,
-        s3_bucket_name: Optional[str] = None,
-        s3_region_name: Optional[str] = None,
-        s3_api_version: Optional[str] = None,
-        s3_use_ssl: Optional[bool] = True,
-        s3_verify: Optional[Union[bool, str]] = None,
-        s3_endpoint_url: Optional[str] = None,
-        s3_aws_access_key_id: Optional[str] = None,
-        s3_aws_secret_access_key: Optional[str] = None,
-        s3_aws_session_token: Optional[str] = None,
-        s3_config: Optional[Any] = None,
-        s3_path: Optional[str] = None,
-        gcs_bucket_name: Optional[str] = None,
-        gcs_path_service_account: Optional[str] = None,
-        gcs_path: Optional[str] = None,
+        azure_account_url: str | None = None,
+        azure_blob_container: str | None = None,
+        s3_bucket_name: str | None = None,
+        s3_region_name: str | None = None,
+        s3_api_version: str | None = None,
+        s3_use_ssl: bool | None = True,
+        s3_verify: bool | str | None = None,
+        s3_endpoint_url: str | None = None,
+        s3_aws_access_key_id: str | None = None,
+        s3_aws_secret_access_key: str | None = None,
+        s3_aws_session_token: str | None = None,
+        s3_config: Any | None = None,
+        s3_path: str | None = None,
+        gcs_bucket_name: str | None = None,
+        gcs_path_service_account: str | None = None,
+        gcs_path: str | None = None,
         redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
-        redis_semantic_cache_index_name: Optional[str] = None,
-        redis_flush_size: Optional[int] = None,
-        redis_startup_nodes: Optional[List] = None,
-        disk_cache_dir: Optional[str] = None,
-        qdrant_api_base: Optional[str] = None,
-        qdrant_api_key: Optional[str] = None,
-        qdrant_collection_name: Optional[str] = None,
-        qdrant_quantization_config: Optional[str] = None,
+        redis_semantic_cache_index_name: str | None = None,
+        valkey_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        valkey_semantic_cache_index_name: str | None = None,
+        redis_flush_size: int | None = None,
+        redis_startup_nodes: list | None = None,
+        disk_cache_dir: str | None = None,
+        qdrant_api_base: str | None = None,
+        qdrant_api_key: str | None = None,
+        qdrant_collection_name: str | None = None,
+        qdrant_quantization_config: str | None = None,
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
-        qdrant_semantic_cache_vector_size: Optional[int] = None,
+        qdrant_semantic_cache_vector_size: int | None = None,
         # GCP IAM authentication parameters
-        gcp_service_account: Optional[str] = None,
-        gcp_ssl_ca_certs: Optional[str] = None,
+        gcp_service_account: str | None = None,
+        gcp_ssl_ca_certs: str | None = None,
         **kwargs,
     ):
         """
@@ -168,15 +156,13 @@ class Cache:
         if type == LiteLLMCacheType.REDIS:
             # Check REDIS_CLUSTER_NODES env var if no explicit startup nodes
             if not redis_startup_nodes:
-                _env_cluster_nodes = litellm.get_secret("REDIS_CLUSTER_NODES")
-                if _env_cluster_nodes is not None and isinstance(
-                    _env_cluster_nodes, str
-                ):
+                _env_cluster_nodes: Final = litellm.get_secret("REDIS_CLUSTER_NODES")
+                if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
                     redis_startup_nodes = json.loads(_env_cluster_nodes)
 
             if redis_startup_nodes:
                 # Only pass GCP parameters if they are provided
-                cluster_kwargs = {
+                cluster_kwargs: Final = {
                     "host": host,
                     "port": port,
                     "password": password,
@@ -206,6 +192,21 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 embedding_model=redis_semantic_cache_embedding_model,
                 index_name=redis_semantic_cache_index_name,
+                **kwargs,
+            )
+        elif type == LiteLLMCacheType.VALKEY_SEMANTIC:
+            # Imported here, not at module top, so the optional redis dependency
+            # is only required when this backend is actually selected.
+            from .valkey_semantic_cache import ValkeySemanticCache
+
+            self.cache = ValkeySemanticCache(
+                host=host,
+                port=port,
+                password=password,
+                similarity_threshold=similarity_threshold,
+                embedding_model=valkey_semantic_cache_embedding_model,
+                index_name=valkey_semantic_cache_index_name,
+                startup_nodes=redis_startup_nodes,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
@@ -254,7 +255,9 @@ class Cache:
             litellm.logging_callback_manager.add_litellm_success_callback("cache")
         if "cache" not in litellm._async_success_callback:
             litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
-        self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
+        self.supported_call_types = (
+            supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
+        )
         self.type = type
         self.namespace = namespace
         self.redis_flush_size = redis_flush_size
@@ -267,11 +270,47 @@ class Cache:
         if (
             self.type == LiteLLMCacheType.REDIS
             or self.type == LiteLLMCacheType.REDIS_SEMANTIC
+            or self.type == LiteLLMCacheType.VALKEY_SEMANTIC
         ) and default_in_redis_ttl is not None:
             self.ttl = default_in_redis_ttl
 
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
+
+    # Params whose values carry prompt content. Excluded from semantic-cache
+    # scope keys so differently worded prompts share a bucket and match via
+    # vector similarity rather than being split into per-wording buckets.
+    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset = frozenset({"messages", "prompt", "input"})
+
+    # Server-set identity (from proxy auth) used to isolate semantic-cache
+    # buckets per tenant. Required once the prompt is out of the scope key, so a
+    # similar prompt from another key/team/org stays in a separate bucket.
+    _SEMANTIC_CACHE_TENANT_SCOPE_FIELDS: tuple[str, ...] = (
+        "user_api_key",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+    )
+
+    def _is_semantic_cache(self) -> bool:
+        return self.type in (
+            LiteLLMCacheType.REDIS_SEMANTIC,
+            LiteLLMCacheType.QDRANT_SEMANTIC,
+            LiteLLMCacheType.VALKEY_SEMANTIC,
+        )
+
+    def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
+        metadata: Final[dict] = kwargs.get("metadata") or {}
+        litellm_params: Final[dict] = kwargs.get("litellm_params") or {}
+        metadata_in_litellm_params: Final[dict] = litellm_params.get("metadata") or {}
+
+        scope = ""
+        for field in self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS:
+            value = metadata.get(field)
+            if value is None:
+                value = metadata_in_litellm_params.get(field)
+            if value is not None:
+                scope += f"{field}: {value}"
+        return scope
 
     def get_cache_key(self, **kwargs) -> str:
         """
@@ -286,45 +325,50 @@ class Cache:
         cache_key = ""
         # verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
 
-        preset_cache_key = self._get_preset_cache_key_from_kwargs(**kwargs)
+        preset_cache_key: Final = self._get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs = ModelParamHelper._get_all_llm_api_params()
-        litellm_param_kwargs = all_litellm_params
+        combined_kwargs: Final = ModelParamHelper._get_all_llm_api_params()
+        litellm_param_kwargs: Final = all_litellm_params
+        is_semantic_cache: Final = self._is_semantic_cache()
+        scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
         for param in kwargs:
+            if param in scope_excluded_params:
+                continue
             if param in combined_kwargs:
-                param_value: Optional[str] = self._get_param_value(param, kwargs)
+                param_value: str | None = self._get_param_value(param, kwargs)
                 if param_value is not None:
-                    cache_key += f"{str(param)}: {str(param_value)}"
-            elif (
-                param not in litellm_param_kwargs
-            ):  # check if user passed in optional param - e.g. top_k
-                if (
-                    litellm.enable_caching_on_provider_specific_optional_params is True
-                ):  # feature flagged for now
+                    cache_key += f"{param}: {param_value}"
+            elif param not in litellm_param_kwargs:  # check if user passed in optional param - e.g. top_k
+                if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
                     param_value = kwargs[param]
-                    cache_key += f"{str(param)}: {str(param_value)}"
+                    cache_key += f"{param}: {param_value}"
 
-        verbose_logger.debug("\nCreated cache key: %s", cache_key)
+        if is_semantic_cache:
+            cache_key += self._get_semantic_cache_tenant_scope(kwargs)
+
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
+        verbose_logger.debug(
+            "\nCreated cache key: %s (source material length: %d)",
+            hashed_cache_key,
+            len(cache_key),
+        )
         # Remove preset_cache_key from kwargs to avoid "got multiple values" TypeError
         # when kwargs already contains preset_cache_key from upstream callers
-        kwargs_for_preset = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
-        self._set_preset_cache_key_in_kwargs(
-            preset_cache_key=hashed_cache_key, **kwargs_for_preset
-        )
+        kwargs_for_preset: Final = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
+        self._set_preset_cache_key_in_kwargs(preset_cache_key=hashed_cache_key, **kwargs_for_preset)
         return hashed_cache_key
 
     def _get_param_value(
         self,
         param: str,
         kwargs: dict,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Get the value for the given param from kwargs
         """
@@ -342,19 +386,15 @@ class Cache:
         2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
         3. Else use the `model` passed in kwargs
         """
-        metadata: Dict = kwargs.get("metadata", {}) or {}
-        litellm_params: Dict = kwargs.get("litellm_params", {}) or {}
-        metadata_in_litellm_params: Dict = litellm_params.get("metadata", {}) or {}
-        model_group: Optional[str] = metadata.get(
-            "model_group"
-        ) or metadata_in_litellm_params.get("model_group")
-        caching_group = self._get_caching_group(metadata, model_group)
+        metadata: Final[dict] = kwargs.get("metadata", {}) or {}
+        litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
+        metadata_in_litellm_params: Final[dict] = litellm_params.get("metadata", {}) or {}
+        model_group: Final[str | None] = metadata.get("model_group") or metadata_in_litellm_params.get("model_group")
+        caching_group: Final = self._get_caching_group(metadata, model_group)
         return caching_group or model_group or kwargs["model"]
 
-    def _get_caching_group(
-        self, metadata: dict, model_group: Optional[str]
-    ) -> Optional[str]:
-        caching_groups: Optional[List] = metadata.get("caching_groups", [])
+    def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:
+        caching_groups: Final[list | None] = metadata.get("caching_groups", [])
         if caching_groups:
             for group in caching_groups:
                 if model_group in group:
@@ -365,9 +405,9 @@ class Cache:
         """
         Handles getting the value for the 'file' param from kwargs. Used for `transcription` requests
         """
-        file = kwargs.get("file")
-        metadata = kwargs.get("metadata", {})
-        litellm_params = kwargs.get("litellm_params", {})
+        file: Final = kwargs.get("file")
+        metadata: Final = kwargs.get("metadata", {})
+        litellm_params: Final = kwargs.get("litellm_params", {})
         return (
             metadata.get("file_checksum")
             or getattr(file, "name", None)
@@ -375,7 +415,7 @@ class Cache:
             or litellm_params.get("file_name")
         )
 
-    def _get_preset_cache_key_from_kwargs(self, **kwargs) -> Optional[str]:
+    def _get_preset_cache_key_from_kwargs(self, **kwargs) -> str | None:
         """
         Get the preset cache key from kwargs["litellm_params"]
 
@@ -414,9 +454,9 @@ class Cache:
         Returns:
             str: The hashed cache key.
         """
-        hash_object = hashlib.sha256(cache_key.encode())
+        hash_object: Final = hashlib.sha256(cache_key.encode())
         # Hexadecimal representation of the hash
-        hash_hex = hash_object.hexdigest()
+        hash_hex: Final = hash_object.hexdigest()
         verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
         return hash_hex
 
@@ -431,19 +471,16 @@ class Cache:
         Returns:
             str: The final hashed cache key with the redis namespace.
         """
-        dynamic_cache_control: DynamicCacheControl = kwargs.get("cache", {})
-        namespace = (
-            dynamic_cache_control.get("namespace")
-            or kwargs.get("metadata", {}).get("redis_namespace")
-            or self.namespace
-        )
+        dynamic_cache_control: Final[DynamicCacheControl] = kwargs.get("cache", {})
+        metadata: Final = kwargs.get("metadata") or {}
+        namespace: Final = dynamic_cache_control.get("namespace") or metadata.get("redis_namespace") or self.namespace
         if namespace:
             hash_hex = f"{namespace}:{hash_hex}"
         verbose_logger.debug("Final hashed key: %s", hash_hex)
         return hash_hex
 
     def generate_streaming_content(self, content):
-        chunk_size = 5  # Adjust the chunk size as needed
+        chunk_size: Final = 5  # Adjust the chunk size as needed
         for i in range(0, len(content), chunk_size):
             yield {
                 "choices": [
@@ -459,23 +496,19 @@ class Cache:
 
     def _get_cache_logic(
         self,
-        cached_result: Optional[Any],
-        max_age: Optional[float],
+        cached_result: Any | None,
+        max_age: float | None,
     ):
         """
         Common get cache logic across sync + async implementations
         """
         # Check if a timestamp was stored with the cached response
-        if (
-            cached_result is not None
-            and isinstance(cached_result, dict)
-            and "timestamp" in cached_result
-        ):
-            timestamp = cached_result["timestamp"]
-            current_time = time.time()
+        if cached_result is not None and isinstance(cached_result, dict) and "timestamp" in cached_result:
+            timestamp: Final = cached_result["timestamp"]
+            current_time: Final = time.time()
 
             # Calculate age of the cached response
-            response_age = current_time - timestamp
+            response_age: Final = current_time - timestamp
 
             # Check if the cached response is older than the max-age
             if max_age is not None and response_age > max_age:
@@ -488,15 +521,38 @@ class Cache:
                 if isinstance(cached_response, dict):
                     pass
                 else:
-                    cached_response = json.loads(
-                        cached_response  # type: ignore
-                    )  # Convert string to dictionary
+                    cached_response = json.loads(cached_response)  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)  # type: ignore
+                cached_response = ast.literal_eval(cached_response)
             return cached_response
         return cached_result
 
-    def get_cache(self, dynamic_cache_object: Optional[BaseCache] = None, **kwargs):
+    @staticmethod
+    def _get_safe_cache_lookup_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+        cache_lookup_kwargs: Final[dict[str, Any]] = {}
+        for prompt_kwarg in ("messages", "input"):
+            if prompt_kwarg in kwargs:
+                cache_lookup_kwargs[prompt_kwarg] = kwargs[prompt_kwarg]
+
+        metadata: Final = kwargs.get("metadata")
+        if isinstance(metadata, dict):
+            cache_lookup_kwargs["metadata"] = dict(metadata)
+
+        return cache_lookup_kwargs
+
+    @staticmethod
+    def _update_metadata_from_cache_lookup_kwargs(
+        original_kwargs: dict[str, Any], cache_lookup_kwargs: dict[str, Any]
+    ) -> None:
+        original_metadata: Final = original_kwargs.get("metadata")
+        cache_lookup_metadata: Final = cache_lookup_kwargs.get("metadata")
+        if not isinstance(original_metadata, dict) or not isinstance(cache_lookup_metadata, dict):
+            return
+
+        if "semantic-similarity" in cache_lookup_metadata:
+            original_metadata["semantic-similarity"] = cache_lookup_metadata["semantic-similarity"]
+
+    def get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
         Retrieves the cached result for the given arguments.
 
@@ -510,34 +566,28 @@ class Cache:
         try:  # never block execution
             if self.should_use_cache(**kwargs) is not True:
                 return
-            messages = kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
-                cache_control_args: DynamicCacheControl = kwargs.get("cache", {})
-                max_age = (
-                    cache_control_args.get("s-maxage")
-                    or cache_control_args.get("s-max-age")
-                    or float("inf")
-                )
+                cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
+                max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
+                cache_lookup_kwargs: Final = self._get_safe_cache_lookup_kwargs(kwargs)
                 if dynamic_cache_object is not None:
-                    cached_result = dynamic_cache_object.get_cache(
-                        cache_key, messages=messages
-                    )
+                    cached_result = dynamic_cache_object.get_cache(cache_key, **cache_lookup_kwargs)
                 else:
-                    cached_result = self.cache.get_cache(cache_key, messages=messages)
-                return self._get_cache_logic(
-                    cached_result=cached_result, max_age=max_age
+                    cached_result = self.cache.get_cache(cache_key, **cache_lookup_kwargs)
+                self._update_metadata_from_cache_lookup_kwargs(
+                    original_kwargs=kwargs,
+                    cache_lookup_kwargs=cache_lookup_kwargs,
                 )
+                return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    async def async_get_cache(
-        self, dynamic_cache_object: Optional[BaseCache] = None, **kwargs
-    ):
+    async def async_get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
         Async get cache implementation.
 
@@ -548,27 +598,18 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
 
-            kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
-                cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get(
-                    "s-max-age", cache_control_args.get("s-maxage", float("inf"))
-                )
+                cache_control_args: Final = kwargs.get("cache", {})
+                max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
                 if dynamic_cache_object is not None:
-                    cached_result = await dynamic_cache_object.async_get_cache(
-                        cache_key, **kwargs
-                    )
+                    cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
                 else:
-                    cached_result = await self.cache.async_get_cache(
-                        cache_key, **kwargs
-                    )
-                return self._get_cache_logic(
-                    cached_result=cached_result, max_age=max_age
-                )
+                    cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
+                return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -590,13 +631,13 @@ class Cache:
                 if self.ttl is not None:
                     kwargs["ttl"] = self.ttl
                 ## Get Cache-Controls ##
-                _cache_kwargs = kwargs.get("cache", None)
+                _cache_kwargs: Final = kwargs.get("cache", None)
                 if isinstance(_cache_kwargs, dict):
                     for k, v in _cache_kwargs.items():
                         if k == "ttl":
                             kwargs["ttl"] = v
 
-                cached_data = {"timestamp": time.time(), "response": result}
+                cached_data: Final = {"timestamp": time.time(), "response": result}
                 return cache_key, cached_data, kwargs
             else:
                 raise Exception("cache key is None")
@@ -617,16 +658,12 @@ class Cache:
         try:
             if self.should_use_cache(**kwargs) is not True:
                 return
-            cache_key, cached_data, kwargs = self._add_cache_logic(
-                result=result, **kwargs
-            )
+            cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
-    async def async_add_cache(
-        self, result, dynamic_cache_object: Optional[BaseCache] = None, **kwargs
-    ):
+    async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
         Async implementation of add_cache
         """
@@ -637,20 +674,20 @@ class Cache:
                 # high traffic - fill in results in memory and then flush
                 await self.batch_cache_write(result, **kwargs)
             else:
-                cache_key, cached_data, kwargs = self._add_cache_logic(
-                    result=result, **kwargs
-                )
+                cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
                 if dynamic_cache_object is not None:
-                    await dynamic_cache_object.async_set_cache(
-                        cache_key, cached_data, **kwargs
-                    )
+                    await dynamic_cache_object.async_set_cache(cache_key, cached_data, **kwargs)
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     def _convert_to_cached_embedding(
-        self, embedding_response: Any, model: Optional[str]
+        self,
+        embedding_response: Any,
+        model: str | None,
+        prompt_tokens: int | None = None,
+        prompt_tokens_details: dict | None = None,
     ) -> CachedEmbedding:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
@@ -662,6 +699,8 @@ class Cache:
                     "index": embedding_response.get("index"),
                     "object": embedding_response.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
+                    "prompt_tokens_details": prompt_tokens_details,
                 }
             elif hasattr(embedding_response, "model_dump"):
                 data = embedding_response.model_dump()
@@ -670,6 +709,8 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
+                    "prompt_tokens_details": prompt_tokens_details,
                 }
             else:
                 data = vars(embedding_response)
@@ -678,9 +719,77 @@ class Cache:
                     "index": data.get("index"),
                     "object": data.get("object"),
                     "model": model,
+                    "prompt_tokens": prompt_tokens,
+                    "prompt_tokens_details": prompt_tokens_details,
                 }
         except KeyError as e:
             raise ValueError(f"Missing expected key in embedding response: {e}")
+
+    def _get_per_item_prompt_tokens_details(
+        self,
+        result: EmbeddingResponse,
+        idx_in_result_data: int,
+    ) -> dict | None:
+        """
+        Extract per-item prompt_tokens_details from a response for caching.
+
+        For single-item responses (common for multimodal providers like Bedrock Titan,
+        Nova, Vertex AI), returns the full prompt_tokens_details.
+        For multi-item responses, distributes integer fields evenly across items
+        so that summing all per-item details reconstructs the original totals.
+        """
+        if result.usage is None or result.usage.prompt_tokens_details is None:
+            return None
+
+        details: Final = result.usage.prompt_tokens_details
+        if hasattr(details, "model_dump"):
+            details_dict = details.model_dump(exclude_none=True)
+        elif isinstance(details, dict):
+            details_dict = {k: v for k, v in details.items() if v is not None}
+        else:
+            return None
+
+        if not details_dict:
+            return None
+
+        num_items: Final = len(result.data)
+        if num_items <= 1:
+            return details_dict
+
+        # Distribute integer/float fields evenly across items
+        per_item: Final[dict] = {}
+        for key, value in details_dict.items():
+            if isinstance(value, int):
+                quotient, remainder = divmod(value, num_items)
+                per_item[key] = quotient + (1 if idx_in_result_data < remainder else 0)
+            elif isinstance(value, float):
+                per_item[key] = value / num_items
+            else:
+                per_item[key] = value
+        return per_item if per_item else None
+
+    def _get_per_item_prompt_tokens(
+        self,
+        result: EmbeddingResponse,
+        idx_in_result_data: int,
+    ) -> int | None:
+        """
+        Extract the per-item prompt_tokens from a response for caching.
+
+        Single-item responses store the full usage.prompt_tokens. Multi-item
+        responses distribute it evenly (with remainder) so that summing all
+        per-item values on retrieval reconstructs the original total.
+        """
+        if result.usage is None or result.usage.prompt_tokens is None:
+            return None
+
+        total: Final = result.usage.prompt_tokens
+        num_items: Final = len(result.data)
+        if num_items <= 1:
+            return total
+
+        quotient, remainder = divmod(total, num_items)
+        return quotient + (1 if idx_in_result_data < remainder else 0)
 
     def add_embedding_response_to_cache(
         self,
@@ -688,15 +797,28 @@ class Cache:
         input: str,
         kwargs: dict,
         idx_in_result_data: int = 0,
-    ) -> Tuple[str, dict, dict]:
-        preset_cache_key = self.get_cache_key(**{**kwargs, "input": input})
+    ) -> tuple[str, dict, dict]:
+        preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
-        embedding_response = result.data[idx_in_result_data]
+        embedding_response: Final = result.data[idx_in_result_data]
+
+        # Extract per-item prompt_tokens + details from response usage
+        prompt_tokens: Final = self._get_per_item_prompt_tokens(
+            result=result,
+            idx_in_result_data=idx_in_result_data,
+        )
+        prompt_tokens_details: Final = self._get_per_item_prompt_tokens_details(
+            result=result,
+            idx_in_result_data=idx_in_result_data,
+        )
 
         # Always convert to properly typed CachedEmbedding
-        model_name = result.model
-        embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(
-            embedding_response, model_name
+        model_name: Final = result.model
+        embedding_dict: Final[CachedEmbedding] = self._convert_to_cached_embedding(
+            embedding_response,
+            model_name,
+            prompt_tokens=prompt_tokens,
+            prompt_tokens_details=prompt_tokens_details,
         )
 
         cache_key, cached_data, kwargs = self._add_cache_logic(
@@ -705,9 +827,7 @@ class Cache:
         )
         return cache_key, cached_data, kwargs
 
-    async def async_add_cache_pipeline(
-        self, result, dynamic_cache_object: Optional[BaseCache] = None, **kwargs
-    ):
+    async def async_add_cache_pipeline(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
         Async implementation of add_cache for Embedding calls
 
@@ -721,7 +841,7 @@ class Cache:
             if self.ttl is not None:
                 kwargs["ttl"] = self.ttl
 
-            cache_list = []
+            cache_list: Final = []
             if isinstance(kwargs["input"], list):
                 for idx, i in enumerate(kwargs["input"]):
                     (
@@ -731,21 +851,15 @@ class Cache:
                     ) = self.add_embedding_response_to_cache(result, i, kwargs, idx)
                     cache_list.append((cache_key, cached_data))
             elif isinstance(kwargs["input"], str):
-                cache_key, cached_data, kwargs = self.add_embedding_response_to_cache(
-                    result, kwargs["input"], kwargs
-                )
+                cache_key, cached_data, kwargs = self.add_embedding_response_to_cache(result, kwargs["input"], kwargs)
                 cache_list.append((cache_key, cached_data))
 
             if dynamic_cache_object is not None:
-                await dynamic_cache_object.async_set_cache_pipeline(
-                    cache_list=cache_list, **kwargs
-                )
+                await dynamic_cache_object.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
             else:
-                await self.cache.async_set_cache_pipeline(
-                    cache_list=cache_list, **kwargs
-                )
+                await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
-            verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
     def should_use_cache(self, **kwargs):
         """
@@ -758,7 +872,7 @@ class Cache:
             return True
 
         # when mode == default_off -> Cache is opt in only
-        _cache = kwargs.get("cache", None)
+        _cache: Final = kwargs.get("cache", None)
         verbose_logger.debug("should_use_cache: kwargs: %s; _cache: %s", kwargs, _cache)
         if _cache and isinstance(_cache, dict):
             if _cache.get("use-cache", False) is True:
@@ -770,13 +884,13 @@ class Cache:
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 
     async def ping(self):
-        cache_ping = getattr(self.cache, "ping")
+        cache_ping: Final = getattr(self.cache, "ping")
         if cache_ping:
             return await cache_ping()
         return None
 
     async def delete_cache_keys(self, keys):
-        cache_delete_cache_keys = getattr(self.cache, "delete_cache_keys")
+        cache_delete_cache_keys: Final = getattr(self.cache, "delete_cache_keys")
         if cache_delete_cache_keys:
             return await cache_delete_cache_keys(keys)
         return None
@@ -796,24 +910,11 @@ class Cache:
 
 
 def enable_cache(
-    type: Optional[LiteLLMCacheType] = LiteLLMCacheType.LOCAL,
-    host: Optional[str] = None,
-    port: Optional[str] = None,
-    password: Optional[str] = None,
-    supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
-        "completion",
-        "acompletion",
-        "embedding",
-        "aembedding",
-        "atranscription",
-        "transcription",
-        "atext_completion",
-        "text_completion",
-        "arerank",
-        "rerank",
-        "responses",
-        "aresponses",
-    ],
+    type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
+    host: str | None = None,
+    port: str | None = None,
+    password: str | None = None,
+    supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
     **kwargs,
 ):
     """
@@ -856,24 +957,11 @@ def enable_cache(
 
 
 def update_cache(
-    type: Optional[LiteLLMCacheType] = LiteLLMCacheType.LOCAL,
-    host: Optional[str] = None,
-    port: Optional[str] = None,
-    password: Optional[str] = None,
-    supported_call_types: Optional[List[CachingSupportedCallTypes]] = [
-        "completion",
-        "acompletion",
-        "embedding",
-        "aembedding",
-        "atranscription",
-        "transcription",
-        "atext_completion",
-        "text_completion",
-        "arerank",
-        "rerank",
-        "responses",
-        "aresponses",
-    ],
+    type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
+    host: str | None = None,
+    port: str | None = None,
+    password: str | None = None,
+    supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
     **kwargs,
 ):
     """

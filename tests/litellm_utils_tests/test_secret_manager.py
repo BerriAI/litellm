@@ -19,7 +19,8 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm.llms.azure.azure import get_azure_ad_token_from_oidc
-from litellm.llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.secret_managers.main import (
     get_secret,
@@ -160,7 +161,7 @@ def test_oidc_circle_v1_with_amazon():
     aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci-v1-assume-only"
     aws_web_identity_token = "oidc/circleci/"
 
-    bllm = BedrockLLM()
+    bllm = BaseAWSLLM()
     creds = bllm.get_credentials(
         aws_region_name="ca-west-1",
         aws_web_identity_token=aws_web_identity_token,
@@ -239,12 +240,13 @@ def test_google_secret_manager():
         }
     }
 
-    with patch(
-        "litellm.proxy.proxy_server.premium_user", True
-    ), patch.object(
-        GoogleSecretManager,
-        "sync_construct_request_headers",
-        return_value={"Authorization": "Bearer mock_token"},
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            GoogleSecretManager,
+            "sync_construct_request_headers",
+            return_value={"Authorization": "Bearer mock_token"},
+        ),
     ):
         secret_manager = GoogleSecretManager()
         secret_manager.sync_httpx_client = MagicMock()
@@ -274,12 +276,13 @@ def test_google_secret_manager_read_in_memory():
 
     os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
 
-    with patch(
-        "litellm.proxy.proxy_server.premium_user", True
-    ), patch.object(
-        GoogleSecretManager,
-        "sync_construct_request_headers",
-        return_value={"Authorization": "Bearer mock_token"},
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            GoogleSecretManager,
+            "sync_construct_request_headers",
+            return_value={"Authorization": "Bearer mock_token"},
+        ),
     ):
         secret_manager = GoogleSecretManager()
         secret_manager.cache.cache_dict["UNIQUE_KEY"] = None

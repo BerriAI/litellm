@@ -15,10 +15,10 @@ class TestBedrockNovaJson(BaseLLMChatTest):
         return {
             "model": "bedrock/converse/us.amazon.nova-micro-v1:0",
         }
-    
+
     def test_json_response_nested_pydantic_obj(self):
         pass
-    
+
     def test_json_response_nested_json_schema(self):
         pass
 

@@ -547,6 +547,8 @@ async def test_router_caching_ttl():
 
     assert router.cache.redis_cache is not None
 
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
     increment_cache_kwargs = {}
     with patch.object(
         router.cache,
@@ -554,6 +556,10 @@ async def test_router_caching_ttl():
         new=AsyncMock(),
     ) as mock_client:
         await router.acompletion(model=model, messages=messages)
+
+        # Async success callbacks are dispatched to GLOBAL_LOGGING_WORKER's
+        # background queue; drain it before asserting the mock was invoked.
+        await GLOBAL_LOGGING_WORKER.flush()
 
         # mock_client.assert_called_once()
         print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
@@ -735,13 +741,16 @@ async def test_tpm_rpm_routing_model_name_checks():
     async def side_effect_pre_call_check(*args, **kwargs):
         return args[0]
 
-    with patch.object(
-        router.lowesttpm_logger_v2,
-        "async_pre_call_check",
-        side_effect=side_effect_pre_call_check,
-    ) as mock_object, patch.object(
-        router.lowesttpm_logger_v2, "async_log_success_event"
-    ) as mock_logging_event:
+    with (
+        patch.object(
+            router.lowesttpm_logger_v2,
+            "async_pre_call_check",
+            side_effect=side_effect_pre_call_check,
+        ) as mock_object,
+        patch.object(
+            router.lowesttpm_logger_v2, "async_log_success_event"
+        ) as mock_logging_event,
+    ):
         response = await router.acompletion(
             model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}]
         )

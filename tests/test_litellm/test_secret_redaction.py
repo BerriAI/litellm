@@ -1,5 +1,7 @@
 import logging
+import logging.config
 import sys
+from collections.abc import Callable
 from io import StringIO
 from unittest.mock import patch
 
@@ -9,11 +11,11 @@ from litellm._logging import (
     JsonFormatter,
     _redact_string,
     _secret_filter,
-    _setup_json_exception_handlers,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
 )
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 
@@ -57,12 +59,22 @@ def test_redact_string_catches_secret_patterns():
         SECRET,
     ]
     for secret in cases:
-        result = _redact_string("msg: " + secret)
+        result = redact_string("msg: " + secret)
         assert secret not in result, f"{secret!r} was not redacted"
         assert "REDACTED" in result
 
     normal = "Loaded model gpt-4 with 3 replicas on us-east-1"
-    assert _redact_string(normal) == normal
+    assert redact_string(normal) == normal
+
+
+def test_redact_string_catches_minimum_length_virtual_key():
+    """Regression test for LIT-4355: keys at the enforced 16-char minimum
+    (MINIMUM_CUSTOM_KEY_LENGTH) must be treated as key-shaped by the scrubber."""
+    minimum_length_key = "sk-abcdefghijklm"
+    assert len(minimum_length_key) == 16
+    result = redact_string("msg: " + minimum_length_key)
+    assert minimum_length_key not in result
+    assert "REDACTED" in result
 
 
 def test_filter_redacts_secrets_in_logger_output():
@@ -155,7 +167,7 @@ def test_x_api_key_regex_does_not_consume_json_delimiters():
     """x-api-key pattern must stop before closing quotes/braces so JSON stays valid."""
     # Simulates a JSON log line containing an x-api-key header value
     json_line = '{"headers": {"x-api-key": "secret123"}, "status": 200}'
-    result = _redact_string(json_line)
+    result = redact_string(json_line)
     # The secret value should be redacted
     assert "secret123" not in result
     assert "REDACTED" in result
@@ -215,6 +227,36 @@ def test_json_excepthook_redacts_traceback_secrets():
     assert "REDACTED" in output
 
 
+def test_xai_key_redaction_catches_proxy_log_and_config_dump():
+    """xai_key is redacted in proxy log and config dump formats."""
+    cases = [
+        ("setting litellm.xai_key=xai-test-secret-123456", "xai-test-secret-123456"),
+        ("'xai_key': 'xai-test-secret-123456'", "xai-test-secret-123456"),
+    ]
+    for secret_line, secret in cases:
+        result = redact_string(secret_line)
+        assert secret not in result
+        assert "REDACTED" in result, f"xai_key redaction missed: {secret_line!r}"
+
+
+def test_module_level_provider_key_redaction_catches_proxy_log_format():
+    """Provider module-level keys are redacted when logged by proxy startup."""
+    cases = [
+        ("setting litellm.groq_key=gsk-test-secret-123456", "gsk-test-secret-123456"),
+        (
+            "setting litellm.openai_key=openai-test-secret-123456",
+            "openai-test-secret-123456",
+        ),
+    ]
+    for secret_line, secret in cases:
+        result = redact_string(secret_line)
+        assert secret not in result
+        assert "REDACTED" in result, f"Module-level key redaction missed: {secret_line!r}"
+
+    safe = "cache_key=cache-value-123456"
+    assert redact_string(safe) == safe
+
+
 def test_key_name_redaction_catches_secrets_in_dict_repr():
     """Secrets inside dict repr strings are redacted based on key names."""
     cases = [
@@ -234,12 +276,12 @@ def test_key_name_redaction_catches_secrets_in_dict_repr():
         "'slack_webhook_url': 'https://hooks.slack.com/services/T00/B00/xxx'",
     ]
     for secret_line in cases:
-        result = _redact_string(secret_line)
+        result = redact_string(secret_line)
         assert "REDACTED" in result, f"Key-name redaction missed: {secret_line!r}"
 
     # Non-sensitive keys should NOT be redacted
     safe = "'enable_jwt_auth': True, 'store_model_in_db': True"
-    assert _redact_string(safe) == safe
+    assert redact_string(safe) == safe
 
 
 def test_key_name_redaction_in_general_settings_dict():
@@ -253,9 +295,7 @@ def test_key_name_redaction_in_general_settings_dict():
             "enable_jwt_auth": True,
             "store_model_in_db": True,
         }
-        verbose_proxy_logger.debug(
-            f"param_name=general_settings, param_value={general_settings}"
-        )
+        verbose_proxy_logger.debug(f"param_name=general_settings, param_value={general_settings}")
 
     output = _capture_logger_output(log_messages)
     assert "my-random-secret-key-1234" not in output
@@ -277,7 +317,7 @@ _SAMPLE_SA_JSON = (
 
 
 def test_pem_private_key_redacted_in_json():
-    result = _redact_string(_SAMPLE_SA_JSON)
+    result = redact_string(_SAMPLE_SA_JSON)
     assert "MIIEvQIBADA" not in result
     assert "-----BEGIN" not in result
 
@@ -286,12 +326,12 @@ def test_pem_private_key_redacted_in_dict_repr():
     import json
 
     sa = json.loads(_SAMPLE_SA_JSON)
-    result = _redact_string(str(sa))
+    result = redact_string(str(sa))
     assert "MIIEvQIBADA" not in result
 
 
 def test_service_account_blob_fully_redacted():
-    result = _redact_string(f"Got={_SAMPLE_SA_JSON}")
+    result = redact_string(f"Got={_SAMPLE_SA_JSON}")
     assert "my-proj-123" not in result
     assert "sa@my-proj.iam.gserviceaccount.com" not in result
     assert "abc123def" not in result
@@ -320,22 +360,138 @@ def test_vertex_traceback_redacts_pem():
         "Unable to load vertex credentials from environment. "
         f"Got={_SAMPLE_SA_JSON}"
     )
-    result = _redact_string(traceback_text)
+    result = redact_string(traceback_text)
     assert "MIIEvQIBADA" not in result
     assert "-----BEGIN" not in result
 
 
 def test_gcp_oauth_token_redacted():
-    result = _redact_string("access token ya29.c.c0ASRK0GZvXlongtokenhere")
+    result = redact_string("access token ya29.c.c0ASRK0GZvXlongtokenhere")
     assert "ya29." not in result
     assert "REDACTED" in result
 
 
 def test_non_pem_private_key_value_redacted():
-    result = _redact_string("'private_key': 'some-non-pem-secret-value'")
+    result = redact_string("'private_key': 'some-non-pem-secret-value'")
     assert "some-non-pem-secret" not in result
 
 
 def test_normal_vertex_log_not_redacted():
     msg = "Vertex: Loading vertex credentials, is_file_path=True, current dir /app"
-    assert _redact_string(msg) == msg
+    assert redact_string(msg) == msg
+
+
+THIRD_PARTY_LOGGERS = (
+    "apscheduler.executors.default",
+    "apscheduler.scheduler",
+    "asyncio",
+    "backoff",
+    "httpx",
+    "uvicorn.error",
+)
+
+
+def _capture_from_logger(logger_name: str, emit: Callable[[logging.Logger], None]) -> str:
+    """Emit via `logger_name` and return only that logger's output as seen by a root handler.
+
+    A handler on the root logger stands in for a log-shipping sink litellm does not own.
+    The name predicate keeps the assertion scoped to the logger under test, so records
+    from any other logger cannot decide the result.
+
+    This idiom only reaches root when nothing between the logger and root stops
+    propagation. `callHandlers` re-checks `propagate` at every level as it walks up, so
+    an ANCESTOR with `propagate = False` ends the walk early and this returns an empty
+    string no matter what was emitted; forcing it on the logger under test, as done
+    below, is not enough. For a logger whose ancestors are configured that way, attach
+    the capture handler to the logger itself and assert on that instead, and always
+    assert the captured output is non-empty so a silent miss cannot pass.
+    """
+    buf = StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.addFilter(lambda record: record.name == logger_name)
+    lg = logging.getLogger(logger_name)
+    saved = (lg.level, lg.propagate, logging.root.level)
+    lg.setLevel(logging.DEBUG)
+    lg.propagate = True
+    logging.root.setLevel(logging.DEBUG)
+    logging.root.addHandler(handler)
+    try:
+        emit(lg)
+        return buf.getvalue()
+    finally:
+        logging.root.removeHandler(handler)
+        lg.setLevel(saved[0])
+        lg.propagate = saved[1]
+        logging.root.setLevel(saved[2])
+
+
+def test_third_party_logger_messages_are_redacted():
+    for logger_name in THIRD_PARTY_LOGGERS:
+        output = _capture_from_logger(logger_name, lambda lg: lg.error("value %s", SECRET))
+
+        assert output.strip(), f"no record captured for {logger_name}"
+        assert SECRET not in output, f"{logger_name} leaked a secret"
+        assert "REDACTED" in output, f"{logger_name} was not redacted"
+
+
+def test_third_party_logger_tracebacks_are_redacted():
+    def emit(lg: logging.Logger) -> None:
+        try:
+            raise ValueError("value " + SECRET)
+        except ValueError:
+            lg.error("call failed", exc_info=True)
+
+    for logger_name in THIRD_PARTY_LOGGERS:
+        output = _capture_from_logger(logger_name, emit)
+
+        assert output.strip(), f"no record captured for {logger_name}"
+        assert SECRET not in output, f"{logger_name} leaked a secret in a traceback"
+        assert "REDACTED" in output, f"{logger_name} traceback was not redacted"
+
+
+UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+def test_redaction_survives_uvicorn_logging_reconfiguration():
+    """Proxy startup hands uvicorn a logging config, and `dictConfig` replaces the handlers
+    of every logger it names. Redaction is attached to the logger rather than to a handler
+    so that it outlives that; moving it onto a handler would fail here.
+
+    The config below is written out rather than imported from the one litellm ships on
+    purpose. What is under test is `dictConfig` semantics, so any config that names the
+    loggers exercises it; importing the real one would add coupling without adding
+    coverage. The capture reads the reconfigured logger's own handler because the config
+    sets `propagate = False`, which is where uvicorn's handler sits in a running proxy.
+    """
+    saved = tuple(
+        (logging.getLogger(name), logging.getLogger(name).handlers[:], logging.getLogger(name).level)
+        for name in UVICORN_LOGGERS
+    )
+    uvicorn_shaped_config: dict[str, object] = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "handlers": {"default": {"class": "logging.StreamHandler"}},
+        "loggers": {name: {"handlers": ["default"], "level": "INFO", "propagate": False} for name in UVICORN_LOGGERS},
+    }
+    try:
+        logging.config.dictConfig(uvicorn_shaped_config)
+
+        for logger_name in THIRD_PARTY_LOGGERS:
+            filters = logging.getLogger(logger_name).filters
+            assert _secret_filter in filters, f"{logger_name} lost redaction across reconfiguration"
+
+        buf = StringIO()
+        reconfigured = logging.getLogger("uvicorn.error")
+        reconfigured.addHandler(logging.StreamHandler(buf))
+        reconfigured.setLevel(logging.DEBUG)
+        reconfigured.error("value %s", SECRET)
+        output = buf.getvalue()
+
+        assert output.strip(), "no record captured for uvicorn.error"
+        assert SECRET not in output, "uvicorn.error leaked a secret after reconfiguration"
+        assert "REDACTED" in output, "uvicorn.error was not redacted after reconfiguration"
+    finally:
+        for lg, handlers, level in saved:
+            lg.handlers[:] = handlers
+            lg.setLevel(level)
+            lg.propagate = True

@@ -3,6 +3,7 @@ Test A2A model routing in proxy.
 
 Maps to: litellm/proxy/agent_endpoints/a2a_routing.py
 """
+
 import os
 import sys
 
@@ -31,6 +32,7 @@ async def test_route_a2a_model_bypasses_router():
     mock_router.model_names = ["gpt-4", "gpt-3.5-turbo"]
     mock_router.deployment_names = []
     mock_router.has_model_id = Mock(return_value=False)
+    mock_router.is_recognized_model = Mock(return_value=False)
     mock_router.model_group_alias = None
     mock_router.router_general_settings = Mock(pass_through_all_models=False)
     mock_router.default_deployment = None
@@ -39,14 +41,14 @@ async def test_route_a2a_model_bypasses_router():
 
     # Mock agent in registry
     from litellm.types.agents import AgentResponse
-    
+
     mock_agent = AgentResponse(
         agent_id="test-agent-id",
         agent_name="test-agent",
         agent_card_params={"url": "http://agent.example.com"},
         litellm_params=None,
     )
-    
+
     mock_registry = Mock()
     mock_registry.get_agent_by_name = Mock(return_value=mock_agent)
 
@@ -72,7 +74,7 @@ async def test_route_a2a_model_bypasses_router():
             assert call_kwargs["api_base"] == "http://agent.example.com"
 
 
-@pytest.mark.asyncio  
+@pytest.mark.asyncio
 async def test_route_non_a2a_model_raises_error_if_not_in_router():
     """Test that non-a2a models that aren't in router raise an error"""
 
@@ -87,6 +89,7 @@ async def test_route_non_a2a_model_raises_error_if_not_in_router():
     mock_router.model_names = ["gpt-4", "gpt-3.5-turbo"]
     mock_router.deployment_names = []
     mock_router.has_model_id = Mock(return_value=False)
+    mock_router.is_recognized_model = Mock(return_value=False)
     mock_router.model_group_alias = None
     mock_router.router_general_settings = Mock(pass_through_all_models=False)
     mock_router.default_deployment = None
@@ -95,7 +98,7 @@ async def test_route_non_a2a_model_raises_error_if_not_in_router():
 
     # Should raise ProxyModelNotFoundError
     from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-    
+
     with pytest.raises(ProxyModelNotFoundError):
         await route_request(
             data=data,

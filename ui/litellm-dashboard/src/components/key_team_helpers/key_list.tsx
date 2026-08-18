@@ -1,6 +1,7 @@
 import { Setter } from "@/types";
 import { useEffect, useState } from "react";
 import { keyListCall, Member, Organization } from "../networking";
+import type { ObjectPermission } from "../object_permission_types";
 
 export interface Team {
   team_id: string;
@@ -12,7 +13,10 @@ export interface Team {
   rpm_limit: number | null;
   organization_id: string;
   created_at: string;
+  updated_at?: string | null;
   keys: KeyResponse[];
+  keys_count?: number;
+  members_count?: number;
   members_with_roles: Member[];
   spend: number;
   access_group_ids?: string[];
@@ -44,6 +48,7 @@ export interface KeyResponse {
   budget_reset_at: string;
   allowed_cache_controls: string[];
   allowed_routes: string[];
+  key_type: string | null;
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
   model_max_budget: Record<string, number>;
@@ -53,7 +58,9 @@ export interface KeyResponse {
   organization_id: string | null;
   org_id?: string | null;
   created_at: string;
+  created_by?: string;
   updated_at: string;
+  settings_updated_at?: string | null;
   last_active: string | null;
   team_spend: number;
   team_alias: string;
@@ -85,16 +92,11 @@ export interface KeyResponse {
   user_tpm_limit: number;
   user_rpm_limit: number;
   user_email: string;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    mcp_tool_permissions?: Record<string, string[]>;
-    vector_stores: string[];
-    agents?: string[];
-    agent_access_groups?: string[];
-  };
+  object_permission?: ObjectPermission | null;
   access_group_ids?: string[];
+  budget_fallbacks?: Record<string, string[]>;
+  router_settings?: Record<string, unknown> | null;
+  budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;
   last_rotation_at?: string;
@@ -162,9 +164,7 @@ const useKeyList = ({
 
   const fetchKeys = async (params: Record<string, unknown> = {}): Promise<void> => {
     try {
-      console.log("calling fetchKeys");
       if (!accessToken) {
-        console.log("accessToken", accessToken);
         return;
       }
       setIsLoading(true);
@@ -185,7 +185,6 @@ const useKeyList = ({
         null,
         expand.join(","),
       );
-      console.log("data", data);
       setKeyData(data);
       setError(null);
     } catch (err) {
@@ -197,16 +196,6 @@ const useKeyList = ({
 
   useEffect(() => {
     fetchKeys();
-    console.log(
-      "selectedTeam",
-      selectedTeam,
-      "currentOrg",
-      currentOrg,
-      "accessToken",
-      accessToken,
-      "selectedKeyAlias",
-      selectedKeyAlias,
-    );
   }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
 
   const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {

@@ -16,7 +16,7 @@ async def test_async_realtime_uses_max_size_parameter():
     """
     Test that Azure's async_realtime method uses the REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
     constant for the max_size parameter to handle large base64 audio payloads.
-    
+
     This verifies the fix for: https://github.com/BerriAI/litellm/issues/15747
     """
     from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -35,15 +35,23 @@ async def test_async_realtime_uses_max_size_parameter():
     class DummyAsyncContextManager:
         def __init__(self, value):
             self.value = value
+
         async def __aenter__(self):
             return self.value
+
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
     shared_context = get_shared_realtime_ssl_context()
-    with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
-         patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
-        
+    with (
+        patch(
+            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
+        ) as mock_ws_connect,
+        patch(
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
+    ):
+
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -60,7 +68,7 @@ async def test_async_realtime_uses_max_size_parameter():
         # Verify websockets.connect was called with the max_size parameter
         mock_ws_connect.assert_called_once()
         called_kwargs = mock_ws_connect.call_args[1]
-        
+
         # Verify max_size is set (default None for unlimited, matching OpenAI's SDK)
         assert "max_size" in called_kwargs
         assert called_kwargs["max_size"] is None
@@ -86,7 +94,7 @@ async def test_construct_url_default_beta_protocol():
         model="gpt-4o-realtime-preview",
         api_version="2024-10-01-preview",
     )
-    
+
     assert url.startswith("wss://my-endpoint.openai.azure.com/openai/realtime?")
     assert "/openai/realtime?" in url
     assert "/openai/v1/realtime" not in url
@@ -108,7 +116,7 @@ async def test_construct_url_beta_protocol_explicit():
         api_version="2024-10-01-preview",
         realtime_protocol="beta",
     )
-    
+
     assert "/openai/realtime?" in url
     assert "/openai/v1/realtime" not in url
 
@@ -128,7 +136,7 @@ async def test_construct_url_ga_protocol():
         api_version="2024-10-01-preview",
         realtime_protocol="GA",
     )
-    
+
     assert url.startswith("wss://my-endpoint.openai.azure.com/openai/v1/realtime?")
     assert "/openai/v1/realtime?" in url
     # Ensure it doesn't have both paths
@@ -137,6 +145,103 @@ async def test_construct_url_ga_protocol():
     assert "model=gpt-4o-realtime-preview" in url
     assert "api-version" not in url
     assert "deployment" not in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_forwards_transcription_intent_ga():
+    """
+    Transcription sessions connect with intent=transcription. The Azure handler
+    must forward that query param so gpt-realtime-whisper opens a transcription
+    session instead of a normal realtime session.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime-whisper",
+        api_version="2025-04-01-preview",
+        realtime_protocol="GA",
+        query_params={"model": "gpt-realtime-whisper", "intent": "transcription"},
+    )
+
+    assert "/openai/v1/realtime?" in url
+    assert "intent=transcription" in url
+    assert "model=" not in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_forwards_transcription_intent_ga_without_model_query():
+    """
+    OpenAI-compatible transcription clients may connect with only
+    intent=transcription and send the transcription model in session.update.
+    Preserve that query shape instead of forcing model= into the upstream URL.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime-whisper",
+        api_version="2025-04-01-preview",
+        realtime_protocol="GA",
+        query_params={"intent": "transcription"},
+    )
+
+    assert url == (
+        "wss://my-endpoint.openai.azure.com/openai/v1/realtime"
+        "?intent=transcription"
+    )
+
+
+@pytest.mark.asyncio
+async def test_construct_url_forwards_transcription_intent_beta():
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="whisper-deploy",
+        api_version="2024-10-01-preview",
+        query_params={"intent": "transcription"},
+    )
+
+    assert "/openai/realtime?" in url
+    assert "deployment=whisper-deploy" in url
+    assert "intent=transcription" in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_encodes_intent_value():
+    """A crafted intent value must be URL-encoded, not injected as raw query params."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime-whisper",
+        api_version="2025-04-01-preview",
+        realtime_protocol="GA",
+        query_params={"intent": "transcription&foo=bar"},
+    )
+    assert "intent=transcription%26foo%3Dbar" in url
+    assert "&foo=bar" not in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_no_intent_when_absent():
+    """No intent param leaks into the URL when not provided."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-4o-realtime-preview",
+        api_version="2024-10-01-preview",
+        realtime_protocol="GA",
+        query_params={"model": "gpt-4o-realtime-preview"},
+    )
+    assert "intent=" not in url
 
 
 @pytest.mark.asyncio
@@ -153,7 +258,7 @@ async def test_construct_url_v1_protocol():
         api_version="2024-10-01-preview",
         realtime_protocol="v1",
     )
-    
+
     assert "/openai/v1/realtime?" in url
     assert url.count("/realtime") == 1
 
@@ -200,14 +305,22 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
     class DummyAsyncContextManager:
         def __init__(self, value):
             self.value = value
+
         async def __aenter__(self):
             return self.value
+
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-    with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
-         patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
-        
+    with (
+        patch(
+            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
+        ) as mock_ws_connect,
+        patch(
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
+    ):
+
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -231,6 +344,10 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
         assert "model=gpt-4o-realtime-preview" in called_url
         assert "api-version" not in called_url
         assert "deployment" not in called_url
+        assert (
+            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
+            is False
+        )
 
 
 @pytest.mark.asyncio
@@ -253,13 +370,21 @@ async def test_async_realtime_ga_without_api_version():
     class DummyAsyncContextManager:
         def __init__(self, value):
             self.value = value
+
         async def __aenter__(self):
             return self.value
+
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-    with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
-         patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
+    with (
+        patch(
+            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
+        ) as mock_ws_connect,
+        patch(
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
+    ):
 
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
@@ -341,6 +466,45 @@ async def test_realtime_protocol_from_litellm_params():
 
 
 @pytest.mark.asyncio
+async def test_arealtime_transcription_intent_defaults_to_ga(monkeypatch):
+    """
+    Azure gpt-realtime-whisper transcription connects on the GA /openai/v1/realtime
+    path. If the DB model lacks realtime_protocol, infer GA from intent=transcription.
+    """
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(
+        realtime_main,
+        "azure_realtime",
+        MagicMock(async_realtime=mock_async_realtime),
+    )
+
+    def fake_get_llm_provider(model, api_base=None, api_key=None):
+        return (
+            "gpt-realtime-whisper",
+            "azure",
+            "test-key",
+            "https://my-endpoint.openai.azure.com",
+        )
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+
+    await realtime_main._arealtime(
+        model="azure/gpt-realtime-whisper",
+        websocket=MagicMock(),
+        api_key="test-key",
+        api_version="2025-04-01-preview",
+        query_params={"intent": "transcription"},
+        litellm_logging_obj=MagicMock(),
+    )
+
+    called_kwargs = mock_async_realtime.call_args.kwargs
+    assert called_kwargs["realtime_protocol"] == "GA"
+    assert called_kwargs["query_params"] == {"intent": "transcription"}
+
+
+@pytest.mark.asyncio
 async def test_async_realtime_default_maintains_backwards_compatibility():
     """
     Test that not passing realtime_protocol maintains the original beta behavior.
@@ -361,14 +525,22 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
     class DummyAsyncContextManager:
         def __init__(self, value):
             self.value = value
+
         async def __aenter__(self):
             return self.value
+
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-    with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
-         patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
-        
+    with (
+        patch(
+            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
+        ) as mock_ws_connect,
+        patch(
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
+    ):
+
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -387,5 +559,7 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
         called_url = mock_ws_connect.call_args[0][0]
         assert "/openai/realtime?" in called_url
         assert "/openai/v1/realtime" not in called_url
-
-
+        assert (
+            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
+            is True
+        )

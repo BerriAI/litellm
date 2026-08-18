@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+import litellm
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.gemini.image_edit.transformation import GeminiImageEditConfig
 
 
@@ -19,6 +21,7 @@ class TestGeminiImageEditTransformation:
 
     def test_map_openai_params(self) -> None:
         optional_params: Dict[str, object] = {
+            "n": 2,
             "size": "1792x1024",
             "response_format": "b64_json",
             "quality": "high",
@@ -30,20 +33,77 @@ class TestGeminiImageEditTransformation:
             drop_params=False,
         )
 
-        assert mapped["aspectRatio"] == "16:9"
+        assert mapped["imageConfig"] == {"aspectRatio": "16:9"}
+        assert mapped["sampleCount"] == 2
         assert "response_format" not in mapped
         assert "quality" not in mapped
+
+    def test_map_openai_params_with_image_size_for_gemini_3(self) -> None:
+        optional_params: Dict[str, object] = {
+            "size": "768x1376",
+        }
+
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+            model="gemini-3-pro-image-preview",
+            drop_params=False,
+        )
+
+        assert mapped["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "1K"}
+
+    def test_map_openai_params_forwards_image_config_as_is(self) -> None:
+        optional_params: Dict[str, object] = {
+            "size": "1024x1024",
+            "imageConfig": {"aspectRatio": "16:9", "imageSize": "512px"},
+        }
+
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+            model="gemini-3-pro-image-preview",
+            drop_params=False,
+        )
+
+        assert mapped["imageConfig"] == {"aspectRatio": "16:9", "imageSize": "512px"}
+
+    def test_map_openai_params_parses_form_image_config_json(self) -> None:
+        optional_params: Dict[str, object] = {
+            "imageConfig": '{"aspectRatio":"16:9","imageSize":"1K"}',
+        }
+
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+            model="gemini-3-pro-image-preview",
+            drop_params=False,
+        )
+
+        assert mapped["imageConfig"] == {"aspectRatio": "16:9", "imageSize": "1K"}
+
+    def test_map_openai_params_rejects_malformed_form_image_config_json(
+        self,
+    ) -> None:
+        optional_params: Dict[str, object] = {
+            "imageConfig": "{bad",
+        }
+
+        with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+            self.config.map_openai_params(
+                image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+                model="gemini-3-pro-image-preview",
+                drop_params=False,
+            )
+
+        assert "`imageConfig` must be valid JSON" in str(exc_info.value)
 
     def test_transform_image_edit_request(self) -> None:
         image_bytes = b"fake_image_data"
         image = BytesIO(image_bytes)
         optional_params = {
             "sampleCount": 2,
-            "aspectRatio": "16:9",
+            "imageConfig": {"aspectRatio": "16:9", "imageSize": "2K"},
         }
 
         request_body, files = self.config.transform_image_edit_request(
-            model=self.model,
+            model="gemini-3-pro-image-preview",
             prompt=self.prompt,
             image=[image],  # Gemini pipeline passes list of images
             image_edit_optional_request_params=optional_params,
@@ -61,7 +121,28 @@ class TestGeminiImageEditTransformation:
         assert base64.b64decode(inline_data["data"]) == image_bytes
 
         generation_config = request_body["generationConfig"]
+        assert generation_config["candidateCount"] == 2
         assert generation_config["imageConfig"]["aspectRatio"] == "16:9"
+        assert generation_config["imageConfig"]["imageSize"] == "2K"
+
+    def test_transform_image_edit_request_omits_image_size_for_gemini_25(self) -> None:
+        image = BytesIO(b"fake_image_data")
+        optional_params = {
+            "imageConfig": {"aspectRatio": "16:9", "imageSize": "2K"},
+        }
+
+        request_body, _ = self.config.transform_image_edit_request(
+            model=self.model,
+            prompt=self.prompt,
+            image=[image],
+            image_edit_optional_request_params=optional_params,
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert request_body["generationConfig"]["imageConfig"] == {
+            "aspectRatio": "16:9"
+        }
 
     def test_transform_image_edit_request_multiple_images(self) -> None:
         image_one = BytesIO(b"image_one")
@@ -93,7 +174,9 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-one").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -105,13 +188,24 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-two").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-two").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
                     }
                 },
-            ]
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 35,
+                "candidatesTokenCount": 1716,
+                "totalTokenCount": 1751,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 30},
+                    {"modality": "IMAGE", "tokenCount": 5},
+                ],
+            },
         }
 
         mock_response = MagicMock(spec=httpx.Response)
@@ -133,6 +227,19 @@ class TestGeminiImageEditTransformation:
         assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode(
             "utf-8"
         )
+
+        usage = image_response.model_dump()["usage"]
+        assert usage["input_tokens"] == 35
+        assert usage["output_tokens"] == 1716
+        assert usage["prompt_tokens"] == 35
+        assert usage["completion_tokens"] == 1716
+        assert usage["prompt_tokens_details"]["image_tokens"] == 5
+        assert usage["completion_tokens_details"]["image_tokens"] == 1716
+
+        logging_usage = StandardLoggingPayloadSetup.get_usage_as_dict(
+            response_obj=image_response.model_dump()
+        )
+        assert logging_usage["completion_tokens_details"]["image_tokens"] == 1716
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         optional_params = {}
@@ -157,4 +264,3 @@ class TestGeminiImageEditTransformation:
         Without this, Gemini returns: "Invalid JSON payload received. Unexpected token."
         """
         assert self.config.use_multipart_form_data() is False
-

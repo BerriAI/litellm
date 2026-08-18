@@ -57,10 +57,10 @@ def test_token_counter_basic():
 def test_token_counter_with_prefix():
     messages = [
         {"role": "user", "content": "Who won the world cup in 2022?"},
-        {"role": "assistant", "content": "Argentina", "prefix": True}
+        {"role": "assistant", "content": "Argentina", "prefix": True},
     ]
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-    assert tokens == 22 , f"Expected 22 tokens, got {tokens}"
+    assert tokens == 22, f"Expected 22 tokens, got {tokens}"
 
 
 def test_token_counter_normal_plus_function_calling():
@@ -95,6 +95,50 @@ def test_token_counter_normal_plus_function_calling():
 
 
 # test_token_counter_normal_plus_function_calling()
+
+
+def test_token_counter_legacy_function_call_counts_arguments():
+    """
+    Regression for VERIA-492 (Token-counter function_call bypass).
+
+    The legacy OpenAI assistant `function_call` field carries arbitrary text in
+    `arguments`. Before the fix, `_count_messages` had no branch for
+    `function_call` and fell through to the unsupported-key `continue`, so an
+    assistant turn could smuggle unlimited text past `token_counter` and the
+    proxy `/utils/token_counter` endpoint (and downstream pre-call budget /
+    `get_modified_max_tokens` math). After the fix it must be counted the
+    same as the equivalent `tool_calls` payload.
+    """
+    long_arg = "A" * 4000
+    fc_messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "function_call": {"name": "search", "arguments": long_arg},
+        },
+    ]
+    tc_messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": long_arg},
+                }
+            ],
+        },
+    ]
+    fc_tokens = token_counter(model="gpt-3.5-turbo", messages=fc_messages)
+    tc_tokens = token_counter(model="gpt-3.5-turbo", messages=tc_messages)
+    assert fc_tokens == tc_tokens, (
+        f"function_call arguments must count like tool_calls arguments; "
+        f"got function_call={fc_tokens}, tool_calls={tc_tokens}"
+    )
+    assert fc_tokens > 500, f"4000-char arguments payload must contribute real tokens, got {fc_tokens}"
 
 
 @pytest.mark.parametrize(
@@ -200,7 +244,12 @@ def test_tokenizers():
             model="meta-llama/llama-3-70b-instruct", text=sample_text
         )
 
-        llama3_tokenizer = create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
+        try:
+            llama3_tokenizer = create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
+        except Exception as e:
+            pytest.skip(
+                f"custom tokenizer download failed (HF hub unreachable): {e}"
+            )
         llama3_tokens_2 = token_counter(
             custom_tokenizer=llama3_tokenizer, text=sample_text
         )
@@ -214,10 +263,10 @@ def test_tokenizers():
         # model hub is unreachable (e.g. in CI).  In that case the count will
         # equal the openai count and the differentiation assertion is skipped.
         if openai_tokens == llama2_tokens:
-            pytest.skip("llama2 fell back to tiktoken (HF hub unreachable); skipping differentiation assertion")
-        assert (
-            llama2_tokens != llama3_tokens_1
-        ), "Token values are not different."
+            pytest.skip(
+                "llama2 fell back to tiktoken (HF hub unreachable); skipping differentiation assertion"
+            )
+        assert llama2_tokens != llama3_tokens_1, "Token values are not different."
 
         assert (
             llama3_tokens_1 == llama3_tokens_2
@@ -255,9 +304,7 @@ def test_encoding_and_decoding():
 
         # llama2 encoding + decoding
         llama2_tokens = encode(model="meta-llama/Llama-2-7b-chat", text=sample_text)
-        llama2_text = decode(
-            model="meta-llama/Llama-2-7b-chat", tokens=llama2_tokens
-        )
+        llama2_text = decode(model="meta-llama/Llama-2-7b-chat", tokens=llama2_tokens)
 
         assert llama2_text == sample_text
     except Exception as e:
@@ -439,12 +486,37 @@ def test_gpt_4o_token_counter():
 @pytest.mark.parametrize(
     "img_url",
     [
-        "https://blog.purpureus.net/assets/blog/personal_key_rotation/simplified-asset-graph.jpg",
+        "https://example.com/test-image.png",
         "data:image/png;base64,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",
     ],
 )
-def test_img_url_token_counter(img_url):
+def test_img_url_token_counter(img_url, monkeypatch):
+    """
+    Verify get_image_dimensions returns valid (width, height) for both an
+    HTTPS URL and a base64 data URI. The HTTPS branch is exercised with a
+    mocked HTTP fetch so the test is hermetic - it can't break when a
+    third-party image URL goes away.
+    """
+    import base64
     from litellm.litellm_core_utils.token_counter import get_image_dimensions
+
+    # Minimal valid 1x1 PNG, served by the mocked safe_get for the URL case.
+    _tiny_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+
+    if img_url.startswith(("http://", "https://")):
+
+        class _FakeResponse:
+            headers = {"Content-Length": str(len(_tiny_png))}
+
+            def read(self):
+                return _tiny_png
+
+        monkeypatch.setattr(
+            "litellm.litellm_core_utils.token_counter.safe_get",
+            lambda client, url, **kw: _FakeResponse(),
+        )
 
     width, height = get_image_dimensions(data=img_url)
 
@@ -494,7 +566,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
-
 
 # Clear the cache at module load to ensure clean state
 _select_tokenizer_helper.cache_clear()
@@ -655,57 +726,50 @@ def test_bad_input_token_counter(model, messages):
 def test_token_counter_with_anthropic_tool_use():
     """
     Test that _count_anthropic_content() correctly handles tool_use blocks.
-    
+
     Validates that:
     - 'name' field is counted (string)
     - 'input' field is counted (dict serialized to string)
     - Metadata fields ('type', 'id') are skipped
     """
     messages = [
-        {
-            "role": "user",
-            "content": "What's the weather in San Francisco?"
-        },
+        {"role": "user", "content": "What's the weather in San Francisco?"},
         {
             "role": "assistant",
             "content": [
-                {
-                    "type": "text",
-                    "text": "I'll check the weather for you."
-                },
+                {"type": "text", "text": "I'll check the weather for you."},
                 {
                     "type": "tool_use",
                     "id": "toolu_01234567890",  # Should be skipped
                     "name": "get_weather",  # Should be counted
                     "input": {  # Should be counted (serialized)
                         "location": "San Francisco, CA",
-                        "unit": "fahrenheit"
-                    }
-                }
-            ]
-        }
+                        "unit": "fahrenheit",
+                    },
+                },
+            ],
+        },
     ]
-    
+
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + "I'll check" text + "get_weather" name + input dict
-    assert tokens > 15, f"Expected reasonable token count for message with tool_use, got {tokens}"
+    assert (
+        tokens > 15
+    ), f"Expected reasonable token count for message with tool_use, got {tokens}"
 
 
 def test_token_counter_with_anthropic_tool_result():
     """
     Test that _count_anthropic_content() correctly handles tool_result blocks.
-    
+
     Validates that:
     - 'content' field (when string) is counted
     - Metadata fields ('type', 'tool_use_id') are skipped
     - Full conversation with tool_use → tool_result flow works
     """
     messages = [
-        {
-            "role": "user",
-            "content": "What's the weather in San Francisco?"
-        },
+        {"role": "user", "content": "What's the weather in San Francisco?"},
         {
             "role": "assistant",
             "content": [
@@ -713,11 +777,9 @@ def test_token_counter_with_anthropic_tool_result():
                     "type": "tool_use",
                     "id": "toolu_01234567890",
                     "name": "get_weather",
-                    "input": {
-                        "location": "San Francisco, CA"
-                    }
+                    "input": {"location": "San Francisco, CA"},
                 }
-            ]
+            ],
         },
         {
             "role": "user",
@@ -725,21 +787,23 @@ def test_token_counter_with_anthropic_tool_result():
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_01234567890",  # Should be skipped
-                    "content": "The weather in San Francisco is 65°F and sunny."  # Should be counted
+                    "content": "The weather in San Francisco is 65°F and sunny.",  # Should be counted
                 }
-            ]
-        }
+            ],
+        },
     ]
-    
+
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
-    assert tokens > 25, f"Expected reasonable token count for conversation with tool_result, got {tokens}"
+    assert (
+        tokens > 25
+    ), f"Expected reasonable token count for conversation with tool_result, got {tokens}"
 
 
 def test_token_counter_with_nested_tool_result():
     """
     Test that _count_anthropic_content() recursively handles nested content lists.
-    
+
     Validates that:
     - tool_result with 'content' as a list (not string) is handled
     - Nested content blocks are recursively counted via _count_content_list()
@@ -755,28 +819,27 @@ def test_token_counter_with_nested_tool_result():
                     "content": [  # Nested list - should recursively count
                         {
                             "type": "text",
-                            "text": "The weather in San Francisco is 65°F and sunny."
+                            "text": "The weather in San Francisco is 65°F and sunny.",
                         },
-                        {
-                            "type": "text",
-                            "text": "UV index is moderate."
-                        }
-                    ]
+                        {"type": "text", "text": "UV index is moderate."},
+                    ],
                 }
-            ]
+            ],
         }
     ]
-    
+
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count both nested text blocks
-    assert tokens > 15, f"Expected reasonable token count for nested tool_result, got {tokens}"
+    assert (
+        tokens > 15
+    ), f"Expected reasonable token count for nested tool_result, got {tokens}"
 
 
 def test_token_counter_tool_use_and_result_combined():
     """
     Test dynamic field inference with multiple tool_use and tool_result blocks.
-    
+
     Validates that:
     - Multiple tool_use blocks in same message are handled
     - Multiple tool_result blocks in same message are handled
@@ -786,28 +849,28 @@ def test_token_counter_tool_use_and_result_combined():
     messages = [
         {
             "role": "user",
-            "content": "What's the weather in San Francisco and New York?"
+            "content": "What's the weather in San Francisco and New York?",
         },
         {
             "role": "assistant",
             "content": [
                 {
                     "type": "text",
-                    "text": "I'll check the weather in both cities for you."
+                    "text": "I'll check the weather in both cities for you.",
                 },
                 {
                     "type": "tool_use",
                     "id": "toolu_01A",
                     "name": "get_weather",
-                    "input": {"location": "San Francisco, CA"}
+                    "input": {"location": "San Francisco, CA"},
                 },
                 {
                     "type": "tool_use",
                     "id": "toolu_01B",
                     "name": "get_weather",
-                    "input": {"location": "New York, NY"}
-                }
-            ]
+                    "input": {"location": "New York, NY"},
+                },
+            ],
         },
         {
             "role": "user",
@@ -815,31 +878,33 @@ def test_token_counter_tool_use_and_result_combined():
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_01A",
-                    "content": "San Francisco: 65°F, sunny"
+                    "content": "San Francisco: 65°F, sunny",
                 },
                 {
                     "type": "tool_result",
                     "tool_use_id": "toolu_01B",
-                    "content": "New York: 45°F, cloudy"
-                }
-            ]
+                    "content": "New York: 45°F, cloudy",
+                },
+            ],
         },
         {
             "role": "assistant",
-            "content": "The weather in San Francisco is 65°F and sunny, while New York is cooler at 45°F and cloudy."
-        }
+            "content": "The weather in San Francisco is 65°F and sunny, while New York is cooler at 45°F and cloudy.",
+        },
     ]
-    
+
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count all text, tool names, inputs, and results
-    assert tokens > 60, f"Expected substantial token count for full tool conversation, got {tokens}"
+    assert (
+        tokens > 60
+    ), f"Expected substantial token count for full tool conversation, got {tokens}"
 
 
 def test_token_counter_with_image_url():
     """
     Test that _count_image_tokens() correctly handles image_url content blocks.
-    
+
     Validates that:
     - image_url as dict with 'url' and 'detail' is handled
     - image_url as string is handled
@@ -851,29 +916,26 @@ def test_token_counter_with_image_url():
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": "What's in this image?"
-                },
+                {"type": "text", "text": "What's in this image?"},
                 {
                     "type": "image_url",
                     "image_url": {
                         "url": "https://example.com/image.jpg",
-                        "detail": "low"  # Should use low token count (85 base tokens)
-                    }
-                }
-            ]
+                        "detail": "low",  # Should use low token count (85 base tokens)
+                    },
+                },
+            ],
         }
     ]
-    
+
     tokens_dict = token_counter(
         model="gpt-3.5-turbo",
         messages=messages_dict,
-        use_default_image_token_count=True  # Avoid actual HTTP request
+        use_default_image_token_count=True,  # Avoid actual HTTP request
     )
     assert tokens_dict > 0, f"Expected positive token count, got {tokens_dict}"
     assert tokens_dict > 85, f"Expected at least base image tokens, got {tokens_dict}"
-    
+
     # Test with string format (defaults to auto/low)
     messages_str = [
         {
@@ -881,19 +943,19 @@ def test_token_counter_with_image_url():
             "content": [
                 {
                     "type": "image_url",
-                    "image_url": "https://example.com/image.jpg"  # String format
+                    "image_url": "https://example.com/image.jpg",  # String format
                 }
-            ]
+            ],
         }
     ]
-    
+
     tokens_str = token_counter(
-        model="gpt-3.5-turbo",
-        messages=messages_str,
-        use_default_image_token_count=True
+        model="gpt-3.5-turbo", messages=messages_str, use_default_image_token_count=True
     )
-    assert tokens_str > 0, f"Expected positive token count for string image_url, got {tokens_str}"
-    
+    assert (
+        tokens_str > 0
+    ), f"Expected positive token count for string image_url, got {tokens_str}"
+
     # Test invalid detail value raises error
     messages_invalid = [
         {
@@ -903,24 +965,26 @@ def test_token_counter_with_image_url():
                     "type": "image_url",
                     "image_url": {
                         "url": "https://example.com/image.jpg",
-                        "detail": "invalid"  # Should raise ValueError
-                    }
+                        "detail": "invalid",  # Should raise ValueError
+                    },
                 }
-            ]
+            ],
         }
     ]
-    
+
     try:
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
         assert False, "Expected ValueError for invalid detail value"
     except ValueError as e:
-        assert "Invalid detail value" in str(e), f"Expected detail validation error, got: {e}"
+        assert "Invalid detail value" in str(
+            e
+        ), f"Expected detail validation error, got: {e}"
 
 
 def test_token_counter_with_thinking_content():
     """
     Test that _count_content_list() correctly handles Claude's extended thinking content blocks.
-    
+
     Validates that:
     - 'thinking' content type is recognized and counted
     - 'thinking' text field is counted
@@ -933,9 +997,9 @@ def test_token_counter_with_thinking_content():
             "content": [
                 {
                     "type": "text",
-                    "text": "Analyze this complex problem: who came first, chicken or egg"
+                    "text": "Analyze this complex problem: who came first, chicken or egg",
                 }
-            ]
+            ],
         },
         {
             "role": "assistant",
@@ -943,31 +1007,27 @@ def test_token_counter_with_thinking_content():
                 {
                     "type": "thinking",
                     "thinking": "This is actually a fascinating question that touches on philosophy, biology, and semantics. Let me break this down: The egg came first from an evolutionary biology perspective.",
-                    "signature": "EqcLCkYICxgCKkCrqu6lP..."  # Should be skipped
+                    "signature": "EqcLCkYICxgCKkCrqu6lP...",  # Should be skipped
                 },
                 {
                     "type": "text",
-                    "text": "# The Chicken-or-Egg Question: A Multi-Layered Answer\n\n## **The Short Answer: The Egg Came First**"
-                }
-            ]
+                    "text": "# The Chicken-or-Egg Question: A Multi-Layered Answer\n\n## **The Short Answer: The Egg Came First**",
+                },
+            ],
         },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Thanks"
-                }
-            ]
-        }
+        {"role": "user", "content": [{"type": "text", "text": "Thanks"}]},
     ]
-    
-    tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages)
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
     assert tokens > 0, f"Expected positive token count, got {tokens}"
     # Should count: user message + thinking text + response text + "Thanks"
     # The thinking text alone is ~30 tokens, plus other content should be > 50 total
-    assert tokens > 50, f"Expected substantial token count for message with thinking, got {tokens}"
-    
+    assert (
+        tokens > 50
+    ), f"Expected substantial token count for message with thinking, got {tokens}"
+
     # Test that thinking block without 'thinking' field doesn't crash (edge case)
     messages_no_thinking = [
         {
@@ -976,18 +1036,81 @@ def test_token_counter_with_thinking_content():
                 {
                     "type": "thinking",
                     # No 'thinking' field - should count as 0 tokens
-                    "signature": "EqcLCkYICxgCKkCrqu6lP..."
+                    "signature": "EqcLCkYICxgCKkCrqu6lP...",
                 },
-                {
-                    "type": "text",
-                    "text": "Response"
-                }
-            ]
+                {"type": "text", "text": "Response"},
+            ],
         }
     ]
-    
-    tokens_no_thinking = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking)
-    assert tokens_no_thinking > 0, f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
-    # Should only count "Response" and message overhead
-    assert tokens_no_thinking < 15, f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
+    tokens_no_thinking = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking
+    )
+    assert (
+        tokens_no_thinking > 0
+    ), f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
+    # Should only count "Response" and message overhead
+    assert (
+        tokens_no_thinking < 15
+    ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+
+
+def test_token_counter_with_tool_reference_block():
+    """
+    Regression test: a message containing an Anthropic tool-search
+    `tool_reference` content block must NOT raise.
+
+    Before the fix, token_counter raised
+    `Invalid content item type: tool_reference`. On the streaming
+    anthropic_messages proxy path this nulled response_cost and caused the
+    SpendLogs row to be dropped, silently undercounting cost. token_counter
+    must instead count the referenced tool name and return a positive count.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me look up the right tool."},
+                {"type": "tool_reference", "tool_name": "search_knowledge_base"},
+            ],
+        }
+    ]
+
+    # Must not raise, and must produce a positive token count.
+    tokens = token_counter_new(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages
+    )
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+
+    # A tool_reference with no/empty tool_name must also be handled gracefully.
+    messages_empty = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_reference", "tool_name": ""}],
+        }
+    ]
+    tokens_empty = token_counter_new(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=messages_empty
+    )
+    assert tokens_empty >= 0
+
+
+def test_count_content_list_rejects_unknown_type():
+    """
+    An unrecognized content block type must raise, and the error message must
+    enumerate the supported types (including `tool_reference`). This pins the
+    catch-all contract so a future block type isn't silently dropped.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError) as exc_info:
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "totally_unknown_block"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    message = str(exc_info.value)
+    assert "Invalid content item type: totally_unknown_block" in message
+    assert "tool_reference" in message

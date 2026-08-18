@@ -1,40 +1,136 @@
 import asyncio
+import json
 import os
-from typing import Any, Dict, Set
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import TypeAdapter
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 try:
     from prisma.errors import RecordNotFoundError
 except ImportError:
-    RecordNotFoundError = Exception  # type: ignore
+    RecordNotFoundError = Exception
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
+    AUDIT_ACTIONS,
     CommonProxyErrors,
     KeyManagementSystem,
+    LiteLLM_AuditLogs,
+    LitellmTableNames,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import ConfigOverridesRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.config_overrides import (
     ConfigOverrideSettingsResponse,
     HashicorpVaultConfig,
 )
 
-router = APIRouter()
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
+router: Final = APIRouter()
+
+
+class _ConfigOverrideRow(Protocol):
+    config_value: str | Mapping[str, object] | None
+
+
+class _ConfigOverridesTableClient(Protocol):
+    async def find_unique(self, where: Mapping[str, str]) -> _ConfigOverrideRow | None: ...
+
+    async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> object: ...
+
+    async def delete(self, where: Mapping[str, str]) -> object: ...
+
+
+def _config_overrides_table(prisma_client: "PrismaClient") -> _ConfigOverridesTableClient:
+    return ConfigOverridesRepository(prisma_client).table
+
+
+_AUDIT_REDACTED: Final = "***REDACTED***"
+
+
+def _redact_config(config: Mapping[str, object] | None) -> dict[str, str]:
+    """Strip values from a config snapshot before audit-log emission.
+
+    Hashicorp Vault config carries ``vault_token``, ``approle_secret_id``,
+    ``client_key`` etc.  Persisting them verbatim into ``LiteLLM_AuditLogs``
+    would let anyone with read access to the audit table harvest the
+    proxy's KMS credentials.  Keep keys, redact values.
+    """
+    if not config:
+        return {}
+    return {k: _AUDIT_REDACTED for k in config}
+
+
+def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
+    if task.cancelled():
+        return
+    exc: Final = task.exception()
+    if exc is not None:
+        verbose_proxy_logger.warning("Failed to write hashicorp-vault config audit log: %s", exc)
+
+
+async def _emit_hashicorp_vault_audit_log(
+    *,
+    action: AUDIT_ACTIONS,
+    before_config: Mapping[str, object] | None,
+    after_config: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: str | None,
+) -> None:
+    """Emit an audit-log row for a /config_overrides/hashicorp_vault mutation.
+
+    Mirrors the ``store_audit_logs``-gated pattern from
+    ``team_callback_endpoints.py``.  Captured under
+    ``LiteLLM_ConfigOverrides`` so the row co-locates with the table it
+    mutates.
+    """
+    import litellm
+
+    if litellm.store_audit_logs is not True:
+        return
+
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_audit_log_for_update,
+    )
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    task: Final = asyncio.create_task(
+        create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
+                object_id="hashicorp_vault",
+                action=action,
+                updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
+                before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
+            )
+        )
+    )
+    task.add_done_callback(_log_audit_task_exception)
+
 
 # --- Hashicorp Vault constants ---
 
-HASHICORP_ENV_VAR_MAPPING: Dict[str, str] = {
+HASHICORP_ENV_VAR_MAPPING: Final[dict[str, str]] = {
     "vault_addr": "HCP_VAULT_ADDR",
     "vault_token": "HCP_VAULT_TOKEN",
     "approle_role_id": "HCP_VAULT_APPROLE_ROLE_ID",
@@ -48,23 +144,21 @@ HASHICORP_ENV_VAR_MAPPING: Dict[str, str] = {
     "vault_path_prefix": "HCP_VAULT_PATH_PREFIX",
 }
 
-HASHICORP_SENSITIVE_FIELDS: Set[str] = {
+HASHICORP_SENSITIVE_FIELDS: Final[set[str]] = {
     "vault_token",
     "approle_secret_id",
     "client_key",
 }
 
-_sensitive_masker = SensitiveDataMasker()
+_sensitive_masker: Final = SensitiveDataMasker()
 
 
 # --- Shared helpers ---
 
 
-def _mask_sensitive_fields(
-    data: Dict[str, Any], sensitive_fields: Set[str]
-) -> Dict[str, Any]:
+def _mask_sensitive_fields(data: Mapping[str, object], sensitive_fields: set[str]) -> dict[str, object]:
     """Mask sensitive fields for API responses. Non-sensitive fields are left as-is."""
-    masked = {}
+    masked: Final[dict[str, object]] = {}
     for key, value in data.items():
         if value is not None and key in sensitive_fields and isinstance(value, str):
             masked[key] = _sensitive_masker._mask_value(value)
@@ -73,16 +167,22 @@ def _mask_sensitive_fields(
     return masked
 
 
-def _get_current_env_values(env_var_mapping: Dict[str, str]) -> Dict[str, Any]:
+def _get_current_env_values(env_var_mapping: dict[str, str]) -> dict[str, str | None]:
     """Read current env var values as fallback when no DB record exists."""
-    values = {}
+    values: Final = {}
     for field_name, env_var_name in env_var_mapping.items():
         env_value = os.environ.get(env_var_name)
         values[field_name] = env_value
     return values
 
 
-def _extract_field_type(field_info: Dict[str, Any]) -> str:
+class _JsonSchemaField(TypedDict, total=False):
+    type: ReadOnly[str]
+    anyOf: ReadOnly[Sequence["_JsonSchemaField"]]
+    description: ReadOnly[str]
+
+
+def _extract_field_type(field_info: _JsonSchemaField) -> str:
     """Extract the non-null type from a Pydantic v2 JSON schema field."""
     if "type" in field_info:
         return field_info["type"]
@@ -92,11 +192,12 @@ def _extract_field_type(field_info: Dict[str, Any]) -> str:
     return "string"
 
 
-def _build_field_schema(model_class: type) -> Dict[str, Any]:
+def _build_field_schema(model_class: type[BaseModel]) -> dict[str, object]:
     """Build field_schema dict from a Pydantic model for UI rendering."""
-    schema = TypeAdapter(model_class).json_schema(by_alias=True)
-    properties = {}
-    for field_name, field_info in schema.get("properties", {}).items():
+    schema: Final = TypeAdapter(model_class).json_schema(by_alias=True)
+    raw_properties: Final[Mapping[str, _JsonSchemaField]] = schema.get("properties", {})
+    properties: Final = {}
+    for field_name, field_info in raw_properties.items():
         properties[field_name] = {
             "description": field_info.get("description", ""),
             "type": _extract_field_type(field_info),
@@ -107,14 +208,14 @@ def _build_field_schema(model_class: type) -> Dict[str, Any]:
     }
 
 
-def _parse_config_value(raw: Any) -> Dict[str, Any]:
+def _parse_config_value(raw: str | Mapping[str, object]) -> dict[str, object]:
     """Parse a config_value from DB (may be JSON string or dict)."""
     if isinstance(raw, str):
         return safe_json_loads(raw, default={})
     return dict(raw)
 
 
-def _set_env_vars(config_data: Dict[str, Any]) -> None:
+def _set_env_vars(config_data: Mapping[str, object]) -> None:
     """Set HCP_VAULT_* env vars from config data. Unsets vars for missing/None/empty fields."""
     for field_name, env_var_name in HASHICORP_ENV_VAR_MAPPING.items():
         value = config_data.get(field_name)
@@ -144,6 +245,10 @@ def _clear_hashicorp_vault_state(proxy_config: Any) -> None:
 async def update_hashicorp_vault_config(
     config: HashicorpVaultConfig,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: str | None = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """
     Update Hashicorp Vault secret manager configuration.
@@ -164,21 +269,24 @@ async def update_hashicorp_vault_config(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
-    config_data = config.model_dump(exclude_none=True)
+    config_data: dict[str, object] = config.model_dump(exclude_none=True)
 
     # Merge ALL fields the user didn't send: try DB first, fall back to env vars.
     # Omitted field = keep existing; empty string = clear/remove the field.
-    existing_record = await prisma_client.db.litellm_configoverrides.find_unique(
+    existing_record: Final = await _config_overrides_table(prisma_client).find_unique(
         where={"config_type": "hashicorp_vault"}
     )
+    existing_decrypted: dict[str, object] | None = None
+    env_values: dict[str, str | None] = {}
     if existing_record is not None and existing_record.config_value is not None:
-        existing_data = _parse_config_value(existing_record.config_value)
+        existing_data: Final = _parse_config_value(existing_record.config_value)
         existing_decrypted = proxy_config._decrypt_db_variables(existing_data)
         for field in HASHICORP_ENV_VAR_MAPPING:
             if field not in config_data and existing_decrypted.get(field):
                 config_data[field] = existing_decrypted[field]
     else:
-        # No DB record yet — merge from current env vars
+        # No DB record (or DB record with null config_value) — merge from
+        # current env vars instead.
         env_values = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
         for field in HASHICORP_ENV_VAR_MAPPING:
             if field not in config_data and env_values.get(field):
@@ -188,14 +296,10 @@ async def update_hashicorp_vault_config(
     config_data = {k: v for k, v in config_data.items() if v != ""}
 
     # Validate that the config has enough fields to initialize
-    has_vault_addr = bool(config_data.get("vault_addr"))
-    has_token_auth = bool(config_data.get("vault_token"))
-    has_approle_auth = bool(
-        config_data.get("approle_role_id") and config_data.get("approle_secret_id")
-    )
-    has_tls_cert_auth = bool(
-        config_data.get("client_cert") and config_data.get("client_key")
-    )
+    has_vault_addr: Final = bool(config_data.get("vault_addr"))
+    has_token_auth: Final = bool(config_data.get("vault_token"))
+    has_approle_auth: Final = bool(config_data.get("approle_role_id") and config_data.get("approle_secret_id"))
+    has_tls_cert_auth: Final = bool(config_data.get("client_cert") and config_data.get("client_key"))
 
     if not has_vault_addr:
         raise HTTPException(
@@ -212,7 +316,7 @@ async def update_hashicorp_vault_config(
         )
 
     # Snapshot current env vars so we can restore on failure
-    previous_env = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+    previous_env: Final = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
 
     # Set env vars and verify the secret manager can initialize before persisting
     _set_env_vars(config_data)
@@ -221,18 +325,16 @@ async def update_hashicorp_vault_config(
         proxy_config.initialize_secret_manager(key_management_system="hashicorp_vault")
     except Exception as e:
         _set_env_vars(previous_env)
-        verbose_proxy_logger.exception(
-            "Error reinitializing Hashicorp Vault secret manager: %s", str(e)
-        )
+        verbose_proxy_logger.exception("Error reinitializing Hashicorp Vault secret manager: %s", str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Failed to initialize secret manager: {e}",
         )
 
     # Only persist to DB after successful init
-    encrypted_data = proxy_config._encrypt_env_variables(config_data)
-    config_value = safe_dumps(encrypted_data)
-    await prisma_client.db.litellm_configoverrides.upsert(
+    encrypted_data: Final = proxy_config._encrypt_env_variables(config_data)
+    config_value: Final = safe_dumps(encrypted_data)
+    await _config_overrides_table(prisma_client).upsert(
         where={"config_type": "hashicorp_vault"},
         data={
             "create": {
@@ -247,6 +349,22 @@ async def update_hashicorp_vault_config(
 
     # Update change-detection cache so the background reload doesn't redundantly re-init
     proxy_config._last_hashicorp_vault_config = safe_json_loads(config_value)
+
+    # Mutating the proxy's KMS config affects every secret retrieval going
+    # forward — emit an audit-log row so the action is traceable even
+    # though the secret_manager_client itself was just swapped under us.
+    # Action keys off row existence (a row with NULL ``config_value`` is
+    # still an update). ``before_config`` falls back to env vars when the
+    # row was absent or its ``config_value`` was NULL.
+    before_config: Final = existing_decrypted if existing_decrypted is not None else env_values
+    action: Final[AUDIT_ACTIONS] = "updated" if existing_record is not None else "created"
+    await _emit_hashicorp_vault_audit_log(
+        action=action,
+        before_config=before_config,
+        after_config=config_data,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
 
     return {
         "message": "Hashicorp Vault configuration updated successfully",
@@ -267,9 +385,11 @@ async def get_hashicorp_vault_config(
     Get current Hashicorp Vault configuration.
     Returns decrypted values from DB, or falls back to current env vars.
     """
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Admin Viewer follows the read-parity rule.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail="Only admin users can view config overrides",
@@ -281,19 +401,19 @@ async def get_hashicorp_vault_config(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
-    field_schema = _build_field_schema(HashicorpVaultConfig)
+    field_schema: Final = _build_field_schema(HashicorpVaultConfig)
 
     # Try to load from DB
-    db_record = await prisma_client.db.litellm_configoverrides.find_unique(
+    db_record: Final = await _config_overrides_table(prisma_client).find_unique(
         where={"config_type": "hashicorp_vault"}
     )
 
     if db_record is not None and db_record.config_value is not None:
-        config_data = _parse_config_value(db_record.config_value)
+        config_data: Final = _parse_config_value(db_record.config_value)
 
         # Decrypt then mask sensitive fields so plaintext secrets are never sent to the UI
-        decrypted_data = proxy_config._decrypt_db_variables(config_data)
-        masked_data = _mask_sensitive_fields(decrypted_data, HASHICORP_SENSITIVE_FIELDS)
+        decrypted_data: Final[Mapping[str, object]] = proxy_config._decrypt_db_variables(config_data)
+        masked_data: Final = _mask_sensitive_fields(decrypted_data, HASHICORP_SENSITIVE_FIELDS)
 
         return ConfigOverrideSettingsResponse(
             config_type="hashicorp_vault",
@@ -302,8 +422,8 @@ async def get_hashicorp_vault_config(
         )
 
     # Fallback to env vars — also mask sensitive values
-    env_values = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
-    masked_env_values = _mask_sensitive_fields(env_values, HASHICORP_SENSITIVE_FIELDS)
+    env_values: Final = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+    masked_env_values: Final = _mask_sensitive_fields(env_values, HASHICORP_SENSITIVE_FIELDS)
 
     return ConfigOverrideSettingsResponse(
         config_type="hashicorp_vault",
@@ -319,6 +439,10 @@ async def get_hashicorp_vault_config(
 )
 async def delete_hashicorp_vault_config(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: str | None = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """Delete Hashicorp Vault configuration. Idempotent."""
     from litellm.proxy.proxy_server import prisma_client, proxy_config
@@ -335,17 +459,38 @@ async def delete_hashicorp_vault_config(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
+    # Capture the prior config before delete so the audit-log row can
+    # show *what* was removed (keys only — values get redacted).
+    existing_record: Final = await _config_overrides_table(prisma_client).find_unique(
+        where={"config_type": "hashicorp_vault"}
+    )
+    before_config: dict[str, object] | None = None
+    if existing_record is not None and existing_record.config_value is not None:
+        try:
+            before_config = proxy_config._decrypt_db_variables(_parse_config_value(existing_record.config_value))
+        except Exception:
+            before_config = None
+
     # Delete DB record if it exists — ignore if not found
+    deleted = False
     try:
-        await prisma_client.db.litellm_configoverrides.delete(
-            where={"config_type": "hashicorp_vault"}
-        )
+        await _config_overrides_table(prisma_client).delete(where={"config_type": "hashicorp_vault"})
+        deleted = True
     except RecordNotFoundError:
-        verbose_proxy_logger.debug(
-            "No existing Hashicorp Vault config record to delete"
-        )
+        verbose_proxy_logger.debug("No existing Hashicorp Vault config record to delete")
 
     _clear_hashicorp_vault_state(proxy_config)
+
+    # Only emit audit log if a row was actually removed; an idempotent
+    # delete on a non-existent row produces no security-relevant change.
+    if deleted:
+        await _emit_hashicorp_vault_audit_log(
+            action="deleted",
+            before_config=before_config,
+            after_config=None,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
 
     return {
         "message": "Hashicorp Vault configuration deleted successfully",
@@ -375,7 +520,7 @@ async def test_hashicorp_vault_connection(
             detail="Only admin users can test Vault connection",
         )
 
-    client = litellm.secret_manager_client
+    client: Final = litellm.secret_manager_client
     if not isinstance(client, HashicorpSecretManager):
         raise HTTPException(
             status_code=400,
@@ -384,7 +529,7 @@ async def test_hashicorp_vault_connection(
 
     # Step 1: Authenticate (exercises AppRole login, TLS cert login, or direct token)
     try:
-        headers = await asyncio.to_thread(client._get_request_headers)
+        headers: Final[dict[str, str]] = await asyncio.to_thread(client._get_request_headers)
     except Exception as e:
         raise HTTPException(
             status_code=502,
@@ -393,13 +538,11 @@ async def test_hashicorp_vault_connection(
 
     # Step 2: Verify the token is valid via token/lookup-self
     try:
-        async_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.SecretManager
-        )
-        lookup_url = f"{client.vault_addr}/v1/auth/token/lookup-self"
+        async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.SecretManager)
+        lookup_url: Final = f"{client.vault_addr}/v1/auth/token/lookup-self"
         if client.vault_namespace:
             headers["X-Vault-Namespace"] = client.vault_namespace
-        response = await async_client.get(lookup_url, headers=headers)
+        response: Final = await async_client.get(lookup_url, headers=headers)
         response.raise_for_status()
     except Exception as e:
         raise HTTPException(

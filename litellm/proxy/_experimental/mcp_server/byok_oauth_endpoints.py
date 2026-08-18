@@ -18,11 +18,11 @@ import hashlib
 import html as _html_module
 import time
 import uuid
-from typing import Dict, Optional, cast
-from urllib.parse import urlencode, urlparse
+from typing import Final, cast
+from urllib.parse import urlencode
 
 import jwt
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
@@ -30,19 +30,24 @@ from litellm.proxy._experimental.mcp_server.db import store_user_credential
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    TOKEN_NO_CACHE_HEADERS,
+    validate_loopback_redirect_uri,
+)
+from litellm.proxy._types import UserAPIKeyAuth
 
 # ---------------------------------------------------------------------------
 # In-memory store for pending authorization codes.
 # Each entry: {code: {api_key, server_id, code_challenge, redirect_uri, user_id, expires_at}}
 # ---------------------------------------------------------------------------
-_byok_auth_codes: Dict[str, dict] = {}
+_byok_auth_codes: Final[dict[str, dict]] = {}
 
 # Authorization codes expire after 5 minutes.
-_AUTH_CODE_TTL_SECONDS = 300
+_AUTH_CODE_TTL_SECONDS: Final = 300
 # Hard cap to prevent memory exhaustion from incomplete OAuth flows.
-_AUTH_CODES_MAX_SIZE = 1000
+_AUTH_CODES_MAX_SIZE: Final = 1000
 
-router = APIRouter(tags=["mcp"])
+router: Final = APIRouter(tags=["mcp"])
 
 
 # ---------------------------------------------------------------------------
@@ -52,8 +57,8 @@ router = APIRouter(tags=["mcp"])
 
 def _verify_pkce(code_verifier: str, code_challenge: str) -> bool:
     """Return True iff SHA-256(code_verifier) == code_challenge (base64url, no padding)."""
-    digest = hashlib.sha256(code_verifier.encode()).digest()
-    computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    digest: Final = hashlib.sha256(code_verifier.encode()).digest()
+    computed: Final = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
     return computed == code_challenge
 
 
@@ -63,10 +68,67 @@ def _verify_pkce(code_verifier: str, code_challenge: str) -> bool:
 
 
 def _purge_expired_codes() -> None:
-    now = time.time()
-    expired = [k for k, v in _byok_auth_codes.items() if v["expires_at"] < now]
+    now: Final = time.time()
+    expired: Final = [k for k, v in _byok_auth_codes.items() if v["expires_at"] < now]
     for k in expired:
         del _byok_auth_codes[k]
+
+
+def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
+    """RFC 6749 §5.2 token-endpoint error body: ``{"error": "<code>"}``.
+    FastAPI's default ``HTTPException`` renders ``{"detail": ...}`` which
+    spec-compliant OAuth clients parsing the ``error`` field won't recognize.
+    """
+    return JSONResponse(status_code=status, content={"error": code}, headers=TOKEN_NO_CACHE_HEADERS)
+
+
+def _user_id_from_session_cookie(request: Request) -> str | None:
+    """Return user_id from the UI ``token`` cookie (HS256-signed with
+    ``master_key``), or None if missing/invalid.
+
+    The /token endpoint in this file ALSO issues master-key-signed JWTs
+    (type="byok_session") for MCP-client-side use. They must not be
+    accepted here as UI sessions — otherwise a leaked byok_session token
+    could be replayed as a cookie to re-authorize BYOK writes. Distinguish
+    by requiring a ``login_method`` claim (UI tokens set ``"sso"`` or
+    ``"username_password"``; byok_session tokens never set it) and
+    rejecting any token whose ``type`` identifies it as non-UI.
+    """
+    # Inline import avoids a circular dep (proxy_server -> mcp_server router).
+    from litellm.proxy.proxy_server import master_key
+
+    if not master_key:
+        return None
+    token: Final = request.cookies.get("token")
+    if not token:
+        return None
+    try:
+        payload: Final = jwt.decode(
+            token,
+            master_key,
+            algorithms=["HS256"],
+            # Require an expiry claim so a leaked UI session cookie has a
+            # bounded lifetime. PyJWT verifies exp by default when present;
+            # require=["exp"] additionally rejects tokens that omit it.
+            options={"require": ["exp"]},
+        )
+    except jwt.InvalidTokenError:
+        return None
+    if payload.get("type") == "byok_session":
+        return None
+    if payload.get("login_method") not in ("sso", "username_password"):
+        return None
+    user_id: Final = payload.get("user_id")
+    return user_id if isinstance(user_id, str) and user_id else None
+
+
+async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:
+    """Require the UI session cookie. Programmatic BYOK management uses
+    ``POST /v1/mcp/server/{id}/user-credential`` instead."""
+    user_id: Final = _user_id_from_session_cookie(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="login_required")
+    return UserAPIKeyAuth(api_key="byok_session_cookie", user_id=user_id)
 
 
 def _build_authorize_html(
@@ -84,7 +146,7 @@ def _build_authorize_html(
     """Build the 2-step BYOK OAuth authorization page HTML."""
 
     # Escape all user-supplied / externally-derived values before interpolation
-    e = _html_module.escape
+    e: Final = _html_module.escape
     server_name = e(server_name)
     server_initial = e(server_initial)
     client_id = e(client_id)
@@ -95,9 +157,8 @@ def _build_authorize_html(
     server_id = e(server_id)
 
     # Build access checklist rows
-    access_rows = "".join(
-        f'<div class="access-item"><span class="check">&#10003;</span>{e(item)}</div>'
-        for item in access_items
+    access_rows: Final = "".join(
+        f'<div class="access-item"><span class="check">&#10003;</span>{e(item)}</div>' for item in access_items
     )
     access_section = ""
     if access_rows:
@@ -113,7 +174,9 @@ def _build_authorize_html(
     # Help link for step 2
     help_link_html = ""
     if help_url:
-        help_link_html = f'<a class="help-link" href="{e(help_url)}" target="_blank">Where do I find my API key? &#8599;</a>'
+        help_link_html = (
+            f'<a class="help-link" href="{e(help_url)}" target="_blank">Where do I find my API key? &#8599;</a>'
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -536,7 +599,7 @@ def _build_authorize_html(
 @router.get("/.well-known/oauth-authorization-server", include_in_schema=False)
 async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
     """RFC 8414 Authorization Server Metadata for the BYOK OAuth flow."""
-    base_url = get_request_base_url(request)
+    base_url: Final = get_request_base_url(request)
     return JSONResponse(
         {
             "issuer": base_url,
@@ -552,7 +615,7 @@ async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
 @router.get("/.well-known/oauth-protected-resource", include_in_schema=False)
 async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 Protected Resource Metadata pointing back at this server."""
-    base_url = get_request_base_url(request)
+    base_url: Final = get_request_base_url(request)
     return JSONResponse(
         {
             "resource": base_url,
@@ -569,24 +632,31 @@ async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
 @router.get("/v1/mcp/oauth/authorize", include_in_schema=False)
 async def byok_authorize_get(
     request: Request,
-    client_id: Optional[str] = None,
-    redirect_uri: Optional[str] = None,
-    response_type: Optional[str] = None,
-    code_challenge: Optional[str] = None,
-    code_challenge_method: Optional[str] = None,
-    state: Optional[str] = None,
-    server_id: Optional[str] = None,
+    client_id: str | None = None,
+    redirect_uri: str | None = None,
+    response_type: str | None = None,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+    state: str | None = None,
+    server_id: str | None = None,
 ) -> HTMLResponse:
     """
     Show the BYOK API-key entry form.
 
     The MCP client navigates the user here; the user types their API key and
     clicks "Connect & Authorize", which POSTs back to this same path.
+
+    This GET is intentionally unauthenticated: it only renders HTML with no
+    state change. The POST handler enforces ``user_api_key_auth`` and pins
+    the stored credential to the authenticated session.
     """
     if response_type != "code":
         raise HTTPException(status_code=400, detail="response_type must be 'code'")
     if not redirect_uri:
         raise HTTPException(status_code=400, detail="redirect_uri is required")
+    # Validate here too so the user sees the rejection before typing their
+    # API key into the HTML form (the POST handler also validates).
+    validate_loopback_redirect_uri(redirect_uri)
     if not code_challenge:
         raise HTTPException(status_code=400, detail="code_challenge is required")
 
@@ -600,18 +670,18 @@ async def byok_authorize_get(
                 global_mcp_server_manager,
             )
 
-            registry = global_mcp_server_manager.get_registry()
+            registry: Final = global_mcp_server_manager.get_registry()
             if server_id in registry:
-                srv = registry[server_id]
+                srv: Final = registry[server_id]
                 server_name = srv.server_name or srv.name
                 access_items = list(srv.byok_description or [])
                 help_url = srv.byok_api_key_help_url or ""
         except Exception:
             pass
 
-    server_initial = (server_name[0].upper()) if server_name else "S"
+    server_initial: Final = (server_name[0].upper()) if server_name else "S"
 
-    html = _build_authorize_html(
+    html: Final = _build_authorize_html(
         server_name=server_name,
         server_initial=server_initial,
         client_id=client_id or "",
@@ -636,6 +706,7 @@ async def byok_authorize_post(
     state: str = Form(default=""),
     server_id: str = Form(default=""),
     api_key: str = Form(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(_byok_session_auth),
 ) -> RedirectResponse:
     """
     Process the BYOK API-key form submission.
@@ -645,36 +716,41 @@ async def byok_authorize_post(
     """
     _purge_expired_codes()
 
-    # Validate redirect_uri scheme to prevent open redirect
-    parsed_uri = urlparse(redirect_uri)
-    if parsed_uri.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="Invalid redirect_uri scheme")
+    validate_loopback_redirect_uri(redirect_uri)
 
     # Reject new codes if the store is at capacity (prevents memory exhaustion
     # from a burst of abandoned OAuth flows).
     if len(_byok_auth_codes) >= _AUTH_CODES_MAX_SIZE:
-        raise HTTPException(
-            status_code=503, detail="Too many pending authorization flows"
-        )
+        raise HTTPException(status_code=503, detail="Too many pending authorization flows")
 
     if code_challenge_method != "S256":
-        raise HTTPException(
-            status_code=400, detail="Only S256 code_challenge_method is supported"
-        )
+        raise HTTPException(status_code=400, detail="Only S256 code_challenge_method is supported")
 
-    auth_code = str(uuid.uuid4())
+    # Identity comes from the authenticated session, not the OAuth client_id
+    # form field (RFC 6749 §2.2: client_id identifies the client application,
+    # not the user). We do bind the code to the submitted client_id so the
+    # /token call must present the same value (RFC 6749 §4.1.3).
+    user_id: Final = user_api_key_dict.user_id
+    if not user_id:
+        raise HTTPException(status_code=401, detail="login_required")
+
+    auth_code: Final = str(uuid.uuid4())
     _byok_auth_codes[auth_code] = {
         "api_key": api_key,
         "server_id": server_id,
         "code_challenge": code_challenge,
         "redirect_uri": redirect_uri,
-        "user_id": client_id,  # external client passes LiteLLM user-id as client_id
+        # RFC 6749 §4.1.3 defense-in-depth: if the authorization request
+        # declared a client_id, the token request must submit the same
+        # value. Stored even though we don't pre-register clients.
+        "client_id": client_id,
+        "user_id": user_id,
         "expires_at": time.time() + _AUTH_CODE_TTL_SECONDS,
     }
 
-    params = urlencode({"code": auth_code, "state": state})
-    separator = "&" if "?" in redirect_uri else "?"
-    location = f"{redirect_uri}{separator}{params}"
+    params: Final = urlencode({"code": auth_code, "state": state})
+    separator: Final = "&" if "?" in redirect_uri else "?"
+    location: Final = f"{redirect_uri}{separator}{params}"
     return RedirectResponse(url=location, status_code=302)
 
 
@@ -704,34 +780,56 @@ async def byok_token(
     _purge_expired_codes()
 
     if grant_type != "authorization_code":
-        raise HTTPException(status_code=400, detail="unsupported_grant_type")
+        return _oauth_token_error("unsupported_grant_type")
 
-    record = _byok_auth_codes.get(code)
+    record: Final = _byok_auth_codes.get(code)
     if record is None:
-        raise HTTPException(status_code=400, detail="invalid_grant")
+        return _oauth_token_error("invalid_grant")
 
     if time.time() > record["expires_at"]:
         del _byok_auth_codes[code]
-        raise HTTPException(status_code=400, detail="invalid_grant")
+        return _oauth_token_error("invalid_grant")
 
     # PKCE verification
     if not _verify_pkce(code_verifier, record["code_challenge"]):
-        raise HTTPException(status_code=400, detail="invalid_grant")
+        return _oauth_token_error("invalid_grant")
+
+    # RFC 6749 §4.1.3: if redirect_uri was sent with the authorization
+    # request, the token request MUST include the identical value.
+    # OAuth 2.1 draft-15 §4.1.3 drops this requirement — strict OAuth 2.1
+    # clients will omit it. Enforce equality ONLY when the client
+    # actually submitted a value, so we stay RFC 6749-backward-compatible
+    # without breaking OAuth 2.1 clients. PKCE + client_id binding
+    # (checked below) cover the security role redirect_uri played.
+    if record.get("redirect_uri") and redirect_uri and redirect_uri != record["redirect_uri"]:
+        return _oauth_token_error("invalid_grant")
+
+    # RFC 6749 §4.1.3: if the client was identified at /authorize, the
+    # /token request MUST authenticate as the same client. We don't
+    # pre-register clients, so an empty stored client_id skips the check.
+    if record.get("client_id") and client_id != record["client_id"]:
+        return _oauth_token_error("invalid_grant")
+
+    server_id: Final[str] = record["server_id"]
+    api_key_value: Final[str] = record["api_key"]
+    # user_id is stamped by the authenticated /authorize POST. No client_id
+    # fallback — that fallback was the credential-hijack primitive. The
+    # token-endpoint client_id is informational per RFC 6749 and is not
+    # cross-checked against user_id (which identifies the resource owner,
+    # not the client application).
+    user_id: Final[str] = record.get("user_id") or ""
+    if not user_id:
+        return _oauth_token_error("invalid_grant")
+
+    # Verify preconditions that would fail token issuance BEFORE consuming
+    # the code or writing to the DB — otherwise a misconfigured proxy
+    # (missing master_key) silently persists the user's credential without
+    # ever returning an access token, and the user has no way to recover.
+    if master_key is None:
+        return _oauth_token_error("server_error", status=500)
 
     # Consume the code (one-time use)
     del _byok_auth_codes[code]
-
-    server_id: str = record["server_id"]
-    api_key_value: str = record["api_key"]
-    # Prefer the user_id that was stored when the code was issued; fall back to
-    # whatever client_id the token request supplies (they should match).
-    user_id: str = record.get("user_id") or client_id
-
-    if not user_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot determine user_id; pass LiteLLM user id as client_id",
-        )
 
     # Persist the BYOK credential
     if prisma_client is not None:
@@ -756,19 +854,12 @@ async def byok_token(
                 server_id,
                 exc,
             )
-            raise HTTPException(status_code=500, detail="Failed to store credential")
+            return _oauth_token_error("server_error", status=500)
     else:
-        verbose_proxy_logger.warning(
-            "byok_token: prisma_client is None — credential not persisted"
-        )
+        verbose_proxy_logger.warning("byok_token: prisma_client is None — credential not persisted")
 
-    if master_key is None:
-        raise HTTPException(
-            status_code=500, detail="Master key not configured; cannot issue token"
-        )
-
-    now = int(time.time())
-    payload = {
+    now: Final = int(time.time())
+    payload: Final = {
         "user_id": user_id,
         "server_id": server_id,
         # "type" distinguishes this from regular proxy auth tokens.
@@ -778,12 +869,13 @@ async def byok_token(
         "iat": now,
         "exp": now + 3600,
     }
-    access_token = jwt.encode(payload, cast(str, master_key), algorithm="HS256")
+    access_token: Final = jwt.encode(payload, cast(str, master_key), algorithm="HS256")
 
     return JSONResponse(
         {
             "access_token": access_token,
             "token_type": "bearer",
             "expires_in": 3600,
-        }
+        },
+        headers=TOKEN_NO_CACHE_HEADERS,
     )

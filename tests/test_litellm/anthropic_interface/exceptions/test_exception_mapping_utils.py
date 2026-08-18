@@ -12,7 +12,9 @@ class TestCreateErrorResponse:
 
     def test_400_invalid_request_error(self):
         """Test 400 maps to invalid_request_error."""
-        response = AnthropicExceptionMapping.create_error_response(400, "Invalid request")
+        response = AnthropicExceptionMapping.create_error_response(
+            400, "Invalid request"
+        )
         assert response["type"] == "error"
         assert response["error"]["type"] == "invalid_request_error"
         assert response["error"]["message"] == "Invalid request"
@@ -35,17 +37,23 @@ class TestCreateErrorResponse:
 
     def test_429_rate_limit_error(self):
         """Test 429 maps to rate_limit_error."""
-        response = AnthropicExceptionMapping.create_error_response(429, "Rate limit exceeded")
+        response = AnthropicExceptionMapping.create_error_response(
+            429, "Rate limit exceeded"
+        )
         assert response["error"]["type"] == "rate_limit_error"
 
     def test_500_api_error(self):
         """Test 500 maps to api_error."""
-        response = AnthropicExceptionMapping.create_error_response(500, "Internal error")
+        response = AnthropicExceptionMapping.create_error_response(
+            500, "Internal error"
+        )
         assert response["error"]["type"] == "api_error"
 
     def test_with_request_id(self):
         """Test request_id is included when provided."""
-        response = AnthropicExceptionMapping.create_error_response(400, "Error", request_id="req_123")
+        response = AnthropicExceptionMapping.create_error_response(
+            400, "Error", request_id="req_123"
+        )
         assert response["request_id"] == "req_123"
 
     def test_unknown_status_defaults_to_api_error(self):
@@ -60,25 +68,40 @@ class TestExtractErrorMessage:
     def test_bedrock_format(self):
         """Test extraction from Bedrock format: {"detail": {"message": "..."}}"""
         bedrock_msg = '{"detail":{"message":"Input is too long for requested model."}}'
-        assert AnthropicExceptionMapping.extract_error_message(bedrock_msg) == "Input is too long for requested model."
+        assert (
+            AnthropicExceptionMapping.extract_error_message(bedrock_msg)
+            == "Input is too long for requested model."
+        )
 
     def test_aws_message_format(self):
         """Test extraction from AWS format: {"Message": "..."}"""
         msg = '{"Message":"Bearer Token has expired"}'
-        assert AnthropicExceptionMapping.extract_error_message(msg) == "Bearer Token has expired"
+        assert (
+            AnthropicExceptionMapping.extract_error_message(msg)
+            == "Bearer Token has expired"
+        )
 
     def test_generic_message_format(self):
         """Test extraction from generic format: {"message": "..."}"""
         msg = '{"message":"Some error occurred"}'
-        assert AnthropicExceptionMapping.extract_error_message(msg) == "Some error occurred"
+        assert (
+            AnthropicExceptionMapping.extract_error_message(msg)
+            == "Some error occurred"
+        )
 
     def test_plain_string(self):
         """Test plain string is returned as-is."""
-        assert AnthropicExceptionMapping.extract_error_message("Plain error message") == "Plain error message"
+        assert (
+            AnthropicExceptionMapping.extract_error_message("Plain error message")
+            == "Plain error message"
+        )
 
     def test_invalid_json(self):
         """Test invalid JSON is returned as-is."""
-        assert AnthropicExceptionMapping.extract_error_message("Not JSON {invalid}") == "Not JSON {invalid}"
+        assert (
+            AnthropicExceptionMapping.extract_error_message("Not JSON {invalid}")
+            == "Not JSON {invalid}"
+        )
 
     def test_empty_dict(self):
         """Test empty dict returns original string."""
@@ -92,7 +115,7 @@ class TestTransformToAnthropicError:
         """Test that Anthropic errors pass through unchanged."""
         anthropic_error = {
             "type": "error",
-            "error": {"type": "rate_limit_error", "message": "Rate limited"}
+            "error": {"type": "rate_limit_error", "message": "Rate limited"},
         }
         raw = json.dumps(anthropic_error)
         result = AnthropicExceptionMapping.transform_to_anthropic_error(
@@ -108,7 +131,7 @@ class TestTransformToAnthropicError:
         anthropic_error = {
             "type": "error",
             "error": {"type": "api_error", "message": "Server error"},
-            "request_id": "req_existing"
+            "request_id": "req_existing",
         }
         raw = json.dumps(anthropic_error)
         result = AnthropicExceptionMapping.transform_to_anthropic_error(
@@ -122,7 +145,7 @@ class TestTransformToAnthropicError:
         """Test that request_id is added to Anthropic error if missing."""
         anthropic_error = {
             "type": "error",
-            "error": {"type": "api_error", "message": "Server error"}
+            "error": {"type": "api_error", "message": "Server error"},
         }
         raw = json.dumps(anthropic_error)
         result = AnthropicExceptionMapping.transform_to_anthropic_error(

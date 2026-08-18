@@ -1,75 +1,103 @@
 """
-Test for interactions endpoint agent parameter handling.
+Tests for managed-agent interaction routing.
 
-Tests that the /v1beta/interactions endpoint correctly extracts
-the `agent` parameter as a fallback when `model` is not provided.
+Custom Gemini agents are identified by ``agent`` (name/id), not ``model``.
+The proxy must not pass the agent name as ``model`` or LiteLLM may route to
+openai/* wildcards instead of Gemini interactions.
 """
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 
 class TestInteractionsAgentParameter:
-    """Test agent parameter handling in interactions endpoint."""
+    """Proxy endpoint must keep agent and model separate."""
 
-    def test_agent_parameter_fallback_logic(self):
-        """
-        Test the core logic: model or agent extraction.
-
-        This tests the fix in endpoints.py line ~267:
-        model=data.get("model") or data.get("agent")
-        """
-        # Case 1: Only agent provided (Deep Research use case)
+    def test_create_interaction_uses_model_only_from_body(self):
+        """POST /v1beta/interactions: model kwarg is only the request's model field."""
         data = {
-            "agent": "deep-research-pro-preview-12-2025",
-            "input": "Research quantum computing",
-            "background": True,
+            "agent": "mqy-custom-slides-agent",
+            "input": "hello",
         }
-        model = data.get("model") or data.get("agent")
-        assert model == "deep-research-pro-preview-12-2025"
+        # Fixed behavior: do NOT fall back agent → model
+        model_for_routing = data.get("model")
+        assert model_for_routing is None
+        assert data.get("agent") == "mqy-custom-slides-agent"
 
-        # Case 2: Only model provided (normal use case)
+    def test_model_field_still_used_when_present(self):
         data = {
             "model": "gemini-2.5-flash",
-            "input": "Hello world",
+            "input": "hello",
         }
-        model = data.get("model") or data.get("agent")
-        assert model == "gemini-2.5-flash"
+        model_for_routing = data.get("model")
+        assert model_for_routing == "gemini-2.5-flash"
 
-        # Case 3: Both provided (model takes precedence)
-        data = {
-            "model": "gemini-2.5-flash",
-            "agent": "deep-research-pro-preview-12-2025",
-            "input": "Test",
-        }
-        model = data.get("model") or data.get("agent")
-        assert model == "gemini-2.5-flash"
 
-        # Case 4: Neither provided
-        data = {
-            "input": "Test",
-        }
-        model = data.get("model") or data.get("agent")
-        assert model is None
+class TestInteractionsAgentOnlyProviderRouting:
+    """SDK: agent-only create must not call get_llm_provider on the agent name."""
 
-    def test_route_type_in_skip_model_routing_list(self):
-        """
-        Test that acreate_interaction is in the list of routes
-        that skip model-based routing.
+    @patch("litellm.interactions.main.interactions_http_handler")
+    @patch("litellm.interactions.main.get_provider_interactions_api_config")
+    @patch("litellm.get_llm_provider")
+    def test_agent_only_skips_get_llm_provider(
+        self,
+        mock_get_llm_provider,
+        mock_get_config,
+        mock_handler,
+    ):
+        from litellm.interactions.main import create
+        from litellm.types.interactions import InteractionsAPIResponse
 
-        This tests the fix in route_llm_request.py.
-        """
-        # The list of routes that skip model routing for interactions
-        skip_model_routing_routes = [
-            "acreate_interaction",
-            "aget_interaction",
-            "adelete_interaction",
-            "acancel_interaction",
-        ]
+        mock_get_config.return_value = MagicMock()
+        mock_handler.create_interaction.return_value = InteractionsAPIResponse(
+            id="int-1",
+            status="completed",
+            object="interaction",
+        )
 
-        # acreate_interaction should be in the list (this is the fix)
-        assert "acreate_interaction" in skip_model_routing_routes
+        logging_obj = MagicMock()
+        create(
+            agent="mqy-custom-slides-agent",
+            input="test",
+            custom_llm_provider="gemini",
+            litellm_logging_obj=logging_obj,
+        )
 
-        # All interaction routes should be covered
-        assert "aget_interaction" in skip_model_routing_routes
-        assert "adelete_interaction" in skip_model_routing_routes
-        assert "acancel_interaction" in skip_model_routing_routes
+        mock_get_llm_provider.assert_not_called()
+        call_kwargs = mock_handler.create_interaction.call_args.kwargs
+        assert call_kwargs["agent"] == "mqy-custom-slides-agent"
+        assert call_kwargs["model"] is None
+        assert call_kwargs["custom_llm_provider"] == "gemini"
+
+    @patch("litellm.interactions.main.interactions_http_handler")
+    @patch("litellm.interactions.main.get_provider_interactions_api_config")
+    @patch("litellm.get_llm_provider")
+    def test_proxy_mistake_model_equals_agent_is_corrected(
+        self,
+        mock_get_llm_provider,
+        mock_get_config,
+        mock_handler,
+    ):
+        """If model was wrongly set to the agent name, clear it before the HTTP call."""
+        from litellm.interactions.main import create
+        from litellm.types.interactions import InteractionsAPIResponse
+
+        mock_get_config.return_value = MagicMock()
+        mock_handler.create_interaction.return_value = InteractionsAPIResponse(
+            id="int-1",
+            status="completed",
+            object="interaction",
+        )
+
+        logging_obj = MagicMock()
+        create(
+            model="mqy-custom-slides-agent",
+            agent="mqy-custom-slides-agent",
+            input="test",
+            custom_llm_provider="gemini",
+            litellm_logging_obj=logging_obj,
+        )
+
+        mock_get_llm_provider.assert_not_called()
+        assert mock_handler.create_interaction.call_args.kwargs["model"] is None

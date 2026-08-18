@@ -1,6 +1,7 @@
 """
 Tests for IBM watsonx.ai rerank transformation functionality.
 """
+
 import json
 import re
 import uuid
@@ -27,7 +28,10 @@ class TestIBMWatsonXRerankTransform:
         api_base = "https://us-south.ml.cloud.ibm.com"
         model = "watsonx/cross-encoder/ms-marco-minilm-l-12-v2"
         url = self.config.get_complete_url(api_base, model)
-        assert url == "https://us-south.ml.cloud.ibm.com/ml/v1/text/rerank?version=2024-03-13"
+        assert (
+            url
+            == "https://us-south.ml.cloud.ibm.com/ml/v1/text/rerank?version=2024-03-13"
+        )
 
     def test_map_cohere_rerank_params_basic(self):
         """Test basic parameter mapping for IBM watsonx.ai rerank."""
@@ -64,7 +68,9 @@ class TestIBMWatsonXRerankTransform:
         }
 
         request_body = self.config.transform_rerank_request(
-            model="cross-encoder/ms-marco-minilm-l-12-v2", optional_rerank_params=optional_params, headers={}
+            model="cross-encoder/ms-marco-minilm-l-12-v2",
+            optional_rerank_params=optional_params,
+            headers={},
         )
 
         assert request_body["model_id"] == "cross-encoder/ms-marco-minilm-l-12-v2"
@@ -73,7 +79,7 @@ class TestIBMWatsonXRerankTransform:
         assert request_body["documents"] == optional_params["documents"]
         assert request_body["top_n"] == 2
         assert request_body["return_documents"] is True
-        
+
     def test_transform_rerank_response_success(self):
         """Test successful response transformation."""
         # Mock IBM watsonx.ai response format
@@ -83,9 +89,15 @@ class TestIBMWatsonXRerankTransform:
                 {
                     "index": 0,
                     "score": 6.53515625,
-                    "input": {"text": "Python is great for beginners due to simple syntax."},
+                    "input": {
+                        "text": "Python is great for beginners due to simple syntax."
+                    },
                 },
-                {"index": 1, "score": -7.1875, "input": {"text": "JavaScript runs in browsers and is versatile."}},
+                {
+                    "index": 1,
+                    "score": -7.1875,
+                    "input": {"text": "JavaScript runs in browsers and is versatile."},
+                },
             ],
             "input_token_count": 62,
         }
@@ -114,10 +126,16 @@ class TestIBMWatsonXRerankTransform:
         assert len(result.results) == 2
         assert result.results[0]["index"] == 0
         assert result.results[0]["relevance_score"] == 6.53515625
-        assert result.results[0]["document"]["text"] == "Python is great for beginners due to simple syntax."
+        assert (
+            result.results[0]["document"]["text"]
+            == "Python is great for beginners due to simple syntax."
+        )
         assert result.results[1]["index"] == 1
         assert result.results[1]["relevance_score"] == -7.1875
-        assert result.results[1]["document"]["text"] == "JavaScript runs in browsers and is versatile."
+        assert (
+            result.results[1]["document"]["text"]
+            == "JavaScript runs in browsers and is versatile."
+        )
 
         # # Verify metadata
         assert result.meta["tokens"]["input_tokens"] == 62

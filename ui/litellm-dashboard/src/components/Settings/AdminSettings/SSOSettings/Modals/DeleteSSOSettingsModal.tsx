@@ -2,7 +2,7 @@ import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettin
 import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import React from "react";
 import DeleteResourceModal from "../../../../common_components/DeleteResourceModal";
-import NotificationsManager from "../../../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "../../../../shared/errorUtils";
 import { detectSSOProvider } from "../utils";
 
@@ -29,6 +29,10 @@ const DeleteSSOSettingsModal: React.FC<DeleteSSOSettingsModalProps> = ({ isVisib
       generic_authorization_endpoint: null,
       generic_token_endpoint: null,
       generic_userinfo_endpoint: null,
+      saml_idp_metadata_url: null,
+      saml_idp_metadata_xml: null,
+      saml_sp_entity_id: null,
+      saml_allow_unsolicited: null,
       proxy_base_url: null,
       user_email: null,
       sso_provider: null,
@@ -38,12 +42,12 @@ const DeleteSSOSettingsModal: React.FC<DeleteSSOSettingsModalProps> = ({ isVisib
 
     await editSSOSettings(clearSettings, {
       onSuccess: () => {
-        NotificationsManager.success("SSO settings cleared successfully");
+        toast.success("SSO settings cleared successfully");
         onCancel();
         onSuccess();
       },
       onError: (error) => {
-        NotificationsManager.fromBackend("Failed to clear SSO settings: " + parseErrorMessage(error));
+        toast.fromError("Failed to clear SSO settings: " + parseErrorMessage(error));
       },
     });
   };

@@ -5,6 +5,7 @@ These tests validate URL construction, header generation, request payload
 building, and response parsing without requiring a live Anthropic API key
 or beta access to the Skills API.
 """
+
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -68,6 +69,15 @@ class TestAnthropicSkillsConfigURLConstruction:
             skill_id="skill_abc123",
         )
         assert url == f"{FAKE_API_BASE}/v1/skills/skill_abc123"
+
+    def test_url_with_skill_id_encodes_path_segment(self):
+        url = self.config.get_complete_url(
+            api_base=FAKE_API_BASE,
+            endpoint="skills",
+            skill_id="../../files?x=1#frag",
+        )
+
+        assert url == f"{FAKE_API_BASE}/v1/skills/..%2F..%2Ffiles%3Fx%3D1%23frag"
 
     def test_url_falls_back_to_anthropic_default(self):
         with patch(

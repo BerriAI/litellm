@@ -1,4 +1,4 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { testMCPSemanticFilter } from "@/components/networking";
 
 export interface TestResult {
@@ -18,9 +18,7 @@ const parseFilterHeaders = (headers: FilterHeaders): TestResult | null => {
   }
 
   const [total, selected] = headers.filter.split("->").map(Number);
-  const tools = headers.tools
-    ? headers.tools.split(",").map((name) => name.trim())
-    : [];
+  const tools = headers.tools ? headers.tools.split(",").map((name) => name.trim()) : [];
 
   return { totalTools: total, selectedTools: selected, tools };
 };
@@ -31,41 +29,40 @@ export const runSemanticFilterTest = async ({
   testQuery,
   setIsTesting,
   setTestResult,
+  setTestError,
 }: {
   accessToken: string;
   testModel: string;
   testQuery: string;
   setIsTesting: (value: boolean) => void;
   setTestResult: (result: TestResult | null) => void;
+  setTestError: (error: string | null) => void;
 }) => {
   if (!testQuery || !testModel || !accessToken) {
-    NotificationManager.error("Please enter a query and select a model");
+    toast.error("Please enter a query and select a model");
     return;
   }
 
   setIsTesting(true);
   setTestResult(null);
+  setTestError(null);
 
   try {
-    const { headers } = await testMCPSemanticFilter(
-      accessToken,
-      testModel,
-      testQuery
-    );
+    const { headers } = await testMCPSemanticFilter(accessToken, testModel, testQuery);
     const parsedResult = parseFilterHeaders(headers);
 
     if (!parsedResult) {
-      NotificationManager.warning(
-        "Semantic filter is not enabled or no tools were filtered"
-      );
+      toast.warning("Semantic filter is not enabled or no tools were filtered");
       return;
     }
 
     setTestResult(parsedResult);
-    NotificationManager.success("Semantic filter test completed successfully");
+    toast.success("Semantic filter test completed successfully");
   } catch (error) {
     console.error("Test failed:", error);
-    NotificationManager.error("Failed to test semantic filter");
+    const message = error instanceof Error && error.message ? error.message : "Failed to test semantic filter";
+    setTestError(message);
+    toast.error("Failed to test semantic filter");
   } finally {
     setIsTesting(false);
   }

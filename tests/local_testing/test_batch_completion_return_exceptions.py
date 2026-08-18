@@ -9,7 +9,7 @@ msg2 = [{"role": "user", "content": "hi 2"}]
 
 def test_batch_completion_return_exceptions_true():
     """Test batch_completion's return_exceptions.
-    
+
     With an invalid API key, we expect an error to be returned rather than raised.
     The error type may be AuthenticationError (from API) or InternalServerError
     (from connection issues), depending on network conditions.
@@ -22,5 +22,10 @@ def test_batch_completion_return_exceptions_true():
 
     # batch_completion should return exceptions rather than raise them
     # Accept either AuthenticationError (API rejected key) or InternalServerError (network issues)
-    assert isinstance(res[0], (litellm.exceptions.AuthenticationError, litellm.exceptions.InternalServerError)), \
-        f"Expected AuthenticationError or InternalServerError, got {type(res[0])}"
+    assert isinstance(
+        res[0],
+        (
+            litellm.exceptions.AuthenticationError,
+            litellm.exceptions.InternalServerError,
+        ),
+    ), f"Expected AuthenticationError or InternalServerError, got {type(res[0])}"

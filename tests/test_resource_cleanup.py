@@ -2,6 +2,7 @@
 Test that async HTTP clients are properly cleaned up to prevent resource leaks.
 Issue: https://github.com/BerriAI/litellm/issues/12107
 """
+
 import asyncio
 import os
 import warnings

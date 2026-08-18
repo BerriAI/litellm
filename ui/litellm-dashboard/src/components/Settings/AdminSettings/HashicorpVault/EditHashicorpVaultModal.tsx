@@ -3,7 +3,7 @@
 import { useHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides/useHashicorpVaultConfig";
 import { useUpdateHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides/useUpdateHashicorpVaultConfig";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button, Divider, Form, Input, Modal, Space, Typography } from "antd";
 import React, { useEffect } from "react";
 import { SENSITIVE_FIELDS, FIELD_LABELS } from "./constants";
@@ -42,11 +42,7 @@ interface EditHashicorpVaultModalProps {
   onSuccess: () => void;
 }
 
-const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({
-  isVisible,
-  onCancel,
-  onSuccess,
-}) => {
+const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVisible, onCancel, onSuccess }) => {
   const [form] = Form.useForm();
   const { accessToken } = useAuthorized();
   const { data } = useHashicorpVaultConfig();
@@ -85,11 +81,11 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({
 
     mutate(config, {
       onSuccess: () => {
-        NotificationManager.success("Hashicorp Vault configuration updated successfully");
+        toast.success("Hashicorp Vault configuration updated successfully");
         onSuccess();
       },
       onError: (err) => {
-        NotificationManager.fromBackend(err);
+        toast.fromError(err);
       },
     });
   };
@@ -111,22 +107,11 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({
     const isSensitive = SENSITIVE_FIELDS.has(fieldName);
     const existingValue = rawValues[fieldName];
     const hasExistingValue = isSensitive && existingValue != null && existingValue !== "";
-    const placeholder = hasExistingValue
-      ? `Leave blank to keep existing (${existingValue})`
-      : fieldSchema?.description;
+    const placeholder = hasExistingValue ? `Leave blank to keep existing (${existingValue})` : fieldSchema?.description;
 
     return (
-      <Form.Item
-        key={fieldName}
-        name={fieldName}
-        label={FIELD_LABELS[fieldName] ?? fieldName}
-        rules={rules}
-      >
-        {isSensitive ? (
-          <Input.Password placeholder={placeholder} />
-        ) : (
-          <Input placeholder={fieldSchema?.description} />
-        )}
+      <Form.Item key={fieldName} name={fieldName} label={FIELD_LABELS[fieldName] ?? fieldName} rules={rules}>
+        {isSensitive ? <Input.Password placeholder={placeholder} /> : <Input placeholder={fieldSchema?.description} />}
       </Form.Item>
     );
   };

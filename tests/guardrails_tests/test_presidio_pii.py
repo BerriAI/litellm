@@ -153,7 +153,7 @@ async def test_presidio_pre_call_hook_with_blocked_entities():
                 "content": "My credit card is 4111-1111-1111-1111 and my email is test@example.com.",
             },
         ],
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
     }
 
     # Mock objects needed for the pre-call hook
@@ -201,7 +201,7 @@ async def test_presidio_pre_call_hook_with_different_call_types(call_type):
                 "content": "My credit card is 4111-1111-1111-1111 and my email is test@example.com. My phone number is 555-123-4567",
             },
         ],
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
     }
 
     # Mock objects needed for the pre-call hook
@@ -286,7 +286,7 @@ async def test_output_parsing():
     ]
 
     response = mock_completion(
-        model="gpt-3.5-turbo",
+        model="gpt-5-mini",
         messages=filtered_message,
         mock_response="Hello <PERSON>! How can I assist you today?",
     )

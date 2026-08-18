@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)
+sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import (
     CallbackDelete,
@@ -27,25 +25,23 @@ class MockPrismaClient:
             "litellm_settings": {"success_callback": ["langfuse"]},
             "environment_variables": {
                 "LANGFUSE_PUBLIC_KEY": "any-public-key",
-                "LANGFUSE_SECRET_KEY": "any-secret-key", 
+                "LANGFUSE_SECRET_KEY": "any-secret-key",
                 "LANGFUSE_HOST": "https://exampleopenaiendpoint-production-c715.up.railway.app",
             },
         }
-        
+
         # Mock the config update/upsert
         self.db.litellm_config.upsert = AsyncMock()
-        
+
         # Mock config retrieval for get_config/callbacks
-        self.db.litellm_config.find_first = AsyncMock(
-            side_effect=self._mock_find_first
-        )
-        
+        self.db.litellm_config.find_first = AsyncMock(side_effect=self._mock_find_first)
+
         # Mock for get_generic_data
         self.get_generic_data = AsyncMock(side_effect=self._mock_get_generic_data)
-        
+
         # Mock insert_data method (required by delete_callback endpoint)
         self.insert_data = AsyncMock(return_value=MagicMock())
-        
+
         # Mock jsonify_object method (required by config endpoints)
         self.jsonify_object = lambda obj: obj
 
@@ -56,12 +52,12 @@ class MockPrismaClient:
             if param_name == "litellm_settings":
                 return MagicMock(
                     param_name="litellm_settings",
-                    param_value=self.config_data["litellm_settings"]
+                    param_value=self.config_data["litellm_settings"],
                 )
             elif param_name == "environment_variables":
                 return MagicMock(
-                    param_name="environment_variables", 
-                    param_value=self.config_data["environment_variables"]
+                    param_name="environment_variables",
+                    param_value=self.config_data["environment_variables"],
                 )
         return None
 
@@ -71,12 +67,12 @@ class MockPrismaClient:
             if value == "litellm_settings":
                 return MagicMock(
                     param_name="litellm_settings",
-                    param_value=self.config_data["litellm_settings"]
+                    param_value=self.config_data["litellm_settings"],
                 )
             elif value == "environment_variables":
                 return MagicMock(
                     param_name="environment_variables",
-                    param_value=self.config_data["environment_variables"]
+                    param_value=self.config_data["environment_variables"],
                 )
             elif value in ["general_settings", "router_settings"]:
                 return None
@@ -94,9 +90,7 @@ class MockPrismaClient:
 def mock_auth():
     """Mock admin user authentication"""
     return UserAPIKeyAuth(
-        user_id="test_admin",
-        user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234"
+        user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
     )
 
 
@@ -109,6 +103,7 @@ def mock_prisma():
 def mock_encrypt_value_helper(value, key=None, new_encryption_key=None):
     """Mock encryption - just return the value as-is for testing"""
     return value
+
 
 def mock_decrypt_value_helper(value, key=None, return_original_value=False):
     """Mock decryption - just return the value as-is for testing"""
