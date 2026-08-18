@@ -194,4 +194,23 @@ describe("EditUserModal", () => {
     expect(onSubmit).not.toHaveBeenCalled();
     await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1));
   });
+
+  it("forwards null fields from the loaded user unchanged", async () => {
+    const actor = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const { onSubmit } = renderModal({ user: { ...USER, spend: null, max_budget: null, budget_duration: null } });
+
+    await save(actor);
+
+    const nulledPayload = {
+      user_email: "seed@example.com",
+      user_id: "user-123",
+      user_role: "internal_user",
+      spend: null,
+      max_budget: null,
+      budget_duration: null,
+    };
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0]?.[0]).toEqual(nulledPayload);
+  });
 });
