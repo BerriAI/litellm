@@ -79,7 +79,15 @@ async def _handle_completed_batch(
     # The generic retrieval helper keeps raising for callers that explicitly ask
     # for a missing output file.
     if batch.output_file_id is None:
-        return 0.0, Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), []
+        return BatchCostUsageResult(
+            cost=0.0,
+            usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+            models=[],
+            successful_requests=0,
+            failed_requests=await _count_error_file_failed_requests(
+                batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
+            ),
+        )
 
     file_content = await _fetch_batch_output_file_content(batch, custom_llm_provider, litellm_params=litellm_params)
     error_file_failed_requests: Final = await _count_error_file_failed_requests(
@@ -328,9 +336,7 @@ async def _fetch_batch_managed_file_content(
             resolved_file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
             verbose_logger.debug("Extracted LLM output file ID from unified file ID: %s", resolved_file_id)
         except (IndexError, AttributeError) as e:
-            verbose_logger.error(
-                "Failed to extract LLM output file ID from unified file ID: %s, error: %s", file_id, e
-            )
+            verbose_logger.error("Failed to extract LLM output file ID from unified file ID: %s, error: %s", file_id, e)
 
     # Build kwargs for afile_content with credentials from litellm_params
     file_content_kwargs: Final = {
