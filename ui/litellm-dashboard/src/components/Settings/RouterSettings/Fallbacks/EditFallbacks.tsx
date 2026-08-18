@@ -9,7 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { LoaderCircle, Pencil } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
-import NotificationManager from "../../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
 
@@ -69,7 +69,7 @@ export default function EditFallbacks({
     setIsSaving(true);
     try {
       await onChange(updatedFallbacks);
-      NotificationManager.success(`Fallbacks for ${primaryModel} updated successfully!`);
+      toast.success(`Fallbacks for ${primaryModel} updated successfully!`);
       onClose();
     } catch (error) {
       console.error("Error updating fallbacks:", error);

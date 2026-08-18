@@ -35,7 +35,7 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
 import { fetchTeamModels } from "../organisms/create_key_button";
 import NumericalInput from "../shared/numerical_input";
@@ -205,7 +205,7 @@ export function KeyEditView({
         const response = await tagListCall(accessToken);
         setTagsList(response);
       } catch (error) {
-        NotificationsManager.fromBackend("Error fetching tags: " + error);
+        toast.fromError("Error fetching tags: " + error);
       }
     };
     fetchTags();
@@ -493,13 +493,17 @@ export function KeyEditView({
         <NumericalInput min={0} />
       </Form.Item>
 
-      <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" showDetailedDescriptions={false} />
+      <Form.Item name="tpm_limit_type" initialValue={null} noStyle>
+        <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" showDetailedDescriptions={false} />
+      </Form.Item>
 
       <Form.Item label="RPM Limit" name="rpm_limit">
         <NumericalInput min={0} />
       </Form.Item>
 
-      <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" showDetailedDescriptions={false} />
+      <Form.Item name="rpm_limit_type" initialValue={null} noStyle>
+        <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" showDetailedDescriptions={false} />
+      </Form.Item>
 
       <Form.Item
         label={
@@ -840,15 +844,16 @@ export function KeyEditView({
 
       {/* Auto-Rotation Settings */}
       <div className="mb-4">
-        <KeyLifecycleSettings
-          form={form}
-          autoRotationEnabled={autoRotationEnabled}
-          onAutoRotationChange={setAutoRotationEnabled}
-          rotationInterval={rotationInterval}
-          onRotationIntervalChange={setRotationInterval}
-          neverExpire={neverExpire}
-          onNeverExpireChange={setNeverExpire}
-        />
+        <Form.Item name="duration" initialValue="" noStyle>
+          <KeyLifecycleSettings
+            autoRotationEnabled={autoRotationEnabled}
+            onAutoRotationChange={setAutoRotationEnabled}
+            rotationInterval={rotationInterval}
+            onRotationIntervalChange={setRotationInterval}
+            neverExpire={neverExpire}
+            onNeverExpireChange={setNeverExpire}
+          />
+        </Form.Item>
       </div>
 
       {/* Hidden form field for token */}

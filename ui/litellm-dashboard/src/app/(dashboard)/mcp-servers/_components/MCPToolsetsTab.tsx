@@ -1,9 +1,9 @@
 import React, { useState, useCallback } from "react";
-import { Button, Text, Title } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Modal, Form, Input, message, Spin } from "antd";
-import { PlusIcon } from "@heroicons/react/outline";
 import { SortingState } from "@tanstack/react-table";
-import { Inbox } from "lucide-react";
+import { Inbox, Plus } from "lucide-react";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
@@ -212,7 +212,7 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
         {/* Left panel: Available Tools */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-2">
-            <Text className="text-sm font-semibold text-gray-700">Available Tools</Text>
+            <p className="text-sm font-semibold text-gray-700">Available Tools</p>
           </div>
           <Input
             placeholder="Search MCP servers..."
@@ -223,9 +223,9 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
           />
           <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 300 }}>
             {filteredServers.length === 0 ? (
-              <Text className="text-gray-400 text-sm">
+              <p className="text-gray-400 text-sm">
                 {mcpServers.length === 0 ? "No MCP servers configured" : "No servers match your search"}
-              </Text>
+              </p>
             ) : (
               filteredServers.map((server) => (
                 <MCPToolList
@@ -246,12 +246,12 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
 
         {/* Right panel: Your Toolset */}
         <div className="w-72 shrink-0">
-          <Text className="text-sm font-semibold text-gray-700 mb-2 block">
+          <p className="text-sm font-semibold text-gray-700 mb-2 block">
             Your Toolset <span className="text-xs font-normal text-gray-400">({selectedTools.length} tools)</span>
-          </Text>
+          </p>
           <div className="space-y-1 overflow-y-auto" style={{ maxHeight: 340 }}>
             {selectedTools.length === 0 ? (
-              <Text className="text-gray-400 text-sm">No tools added yet</Text>
+              <p className="text-gray-400 text-sm">No tools added yet</p>
             ) : (
               selectedTools.map((tool, idx) => (
                 <button
@@ -278,7 +278,8 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
         <Button variant="secondary" onClick={onClose}>
           Cancel
         </Button>
-        <Button onClick={handleSubmit} loading={saving}>
+        <Button onClick={handleSubmit} disabled={saving} aria-busy={saving}>
+          {saving && <UiLoadingSpinner className="size-4" />}
           {initialToolset ? "Save Changes" : "Create Toolset"}
         </Button>
       </div>
@@ -406,14 +407,15 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
     <div className="mt-4">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <Title>MCP Toolsets</Title>
-          <Text className="text-gray-500 text-sm">
+          <h3 className="text-lg font-medium text-gray-900">MCP Toolsets</h3>
+          <p className="text-gray-500 text-sm">
             Curated collections of tools from one or more MCP servers. Assign toolsets to keys and teams via the MCP
             permissions dropdown.
-          </Text>
+          </p>
         </div>
         {isAdmin && (
-          <Button icon={PlusIcon} onClick={() => setCreateOpen(true)}>
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus />
             New Toolset
           </Button>
         )}
