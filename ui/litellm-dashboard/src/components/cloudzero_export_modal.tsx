@@ -1,8 +1,19 @@
 import React, { useState, useEffect } from "react";
-import { Text, Button, Callout, TextInput } from "@tremor/react";
-import { Modal, Form, Spin, Select } from "antd";
+import { Text, Button, Callout } from "@tremor/react";
+import { Modal, Spin, Select } from "antd";
+import { z } from "zod/v4";
 import { getGlobalLitellmHeaderName } from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Input } from "@/components/ui/input";
+import { useZodForm } from "@/lib/forms/useZodForm";
+
+const cloudZeroSettingsSchema = z.object({
+  api_key: z.string().min(1, "Please enter your CloudZero API key"),
+  connection_id: z.string().min(1, "Please enter the CloudZero connection ID"),
+});
 
 interface CloudZeroExportModalProps {
   isOpen: boolean;
@@ -10,10 +21,7 @@ interface CloudZeroExportModalProps {
   accessToken: string | null;
 }
 
-interface CloudZeroSettings {
-  api_key: string;
-  connection_id: string;
-}
+type CloudZeroSettings = z.output<typeof cloudZeroSettingsSchema>;
 
 interface CloudZeroSettingsView {
   api_key_masked: string;
@@ -24,7 +32,9 @@ interface CloudZeroSettingsView {
 type ExportType = "cloudzero" | "csv";
 
 const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onClose, accessToken }) => {
-  const [form] = Form.useForm();
+  const form = useZodForm(cloudZeroSettingsSchema, {
+    defaultValues: { api_key: "", connection_id: "" },
+  });
   const [loading, setLoading] = useState(false);
   const [existingSettings, setExistingSettings] = useState<CloudZeroSettingsView | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(false);
@@ -53,9 +63,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
         const settings = await response.json();
         setExistingSettings(settings);
         // Pre-populate form with existing settings (except masked API key)
-        form.setFieldsValue({
-          connection_id: settings.connection_id,
-        });
+        form.setValue("connection_id", settings.connection_id);
       } else if (response.status !== 404) {
         // 404 means no settings configured yet, which is fine
         const errorData = await response.json();
@@ -172,7 +180,11 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
     if (exportType === "cloudzero") {
       // Check if settings exist, if not save them first
       if (!existingSettings) {
-        const values = await form.validateFields();
+        let values: CloudZeroSettings | undefined;
+        await form.handleSubmit((formValues) => {
+          values = formValues;
+        })();
+        if (!values) return;
         const success = await handleSaveCloudZeroSettings(values);
         if (!success) return;
       }
@@ -183,7 +195,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
   };
 
   const handleModalClose = () => {
-    form.resetFields();
+    form.reset();
     setExportType("cloudzero");
     setExistingSettings(null);
     onClose();
@@ -268,23 +280,21 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
                 )}
 
                 {!existingSettings && (
-                  <Form form={form} layout="vertical">
-                    <Form.Item
-                      label="CloudZero API Key"
-                      name="api_key"
-                      rules={[{ required: true, message: "Please enter your CloudZero API key" }]}
-                    >
-                      <TextInput type="password" placeholder="Enter your CloudZero API key" />
-                    </Form.Item>
+                  <form onSubmit={(event) => event.preventDefault()}>
+                    <FieldGroup>
+                      <FormField control={form.control} name="api_key" label="CloudZero API Key">
+                        {({ ref, ...field }) => (
+                          <PasswordInput {...field} ref={ref} placeholder="Enter your CloudZero API key" />
+                        )}
+                      </FormField>
 
-                    <Form.Item
-                      label="Connection ID"
-                      name="connection_id"
-                      rules={[{ required: true, message: "Please enter the CloudZero connection ID" }]}
-                    >
-                      <TextInput placeholder="Enter CloudZero connection ID" />
-                    </Form.Item>
-                  </Form>
+                      <FormField control={form.control} name="connection_id" label="Connection ID">
+                        {({ ref, ...field }) => (
+                          <Input {...field} ref={ref} placeholder="Enter CloudZero connection ID" />
+                        )}
+                      </FormField>
+                    </FieldGroup>
+                  </form>
                 )}
               </>
             )}
