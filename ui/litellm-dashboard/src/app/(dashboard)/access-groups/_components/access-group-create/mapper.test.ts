@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildAccessGroupCreateBody, emptyAccessGroupFormValues } from "./mapper";
+import { emptyAccessGroupFormValues } from "../access-group-form/schema";
+import { buildAccessGroupCreateBody } from "./mapper";
 
 describe("buildAccessGroupCreateBody", () => {
   it("sends only the trimmed name for a minimal create", () => {

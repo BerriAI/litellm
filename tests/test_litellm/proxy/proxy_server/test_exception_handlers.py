@@ -243,6 +243,23 @@ async def test_otel_request_validation_exception_handler_returns_a_problem_on_th
 
 
 @pytest.mark.asyncio
+async def test_otel_request_validation_exception_handler_answers_a_bad_body_on_the_control_plane_with_a_422_problem():
+    """A merge-patch body with an unknown key must not be a silent no-op, so `/management/v1`
+    turns body validation errors into a 422 problem document that names the field."""
+    errors = [{"loc": ["body", "descripton"], "msg": "Extra inputs are not permitted", "type": "extra_forbidden"}]
+    exc = RequestValidationError(errors)
+    request = _make_request(path="/management/v1/access-groups/ag-1")
+
+    response = await otel_request_validation_exception_handler(request=request, exc=exc)
+    body = json.loads(response.body)
+
+    assert response.status_code == 422
+    assert response.media_type == "application/problem+json"
+    assert body["type"] == "urn:litellm:error:invalid-request-body"
+    assert body["detail"] == "descripton: Extra inputs are not permitted"
+
+
+@pytest.mark.asyncio
 async def test_otel_request_validation_exception_handler_leaves_other_routes_on_422():
     """The problem+json branch is scoped by path prefix. A route that merely contains
     the word management, or sits above the prefix, keeps the shape its callers parse."""

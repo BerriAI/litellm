@@ -113,6 +113,19 @@ describe("OrgSettingsForm", () => {
     expect(patchOrganization).toHaveBeenCalledWith("org-1", { organization_alias: "acme-2" });
   });
 
+  it("sends every field edited before the first save, not just the first one", async () => {
+    const user = userEvent.setup();
+    const { patchOrganization } = renderForm();
+
+    await user.clear(screen.getByLabelText("Organization Name"));
+    await user.type(screen.getByLabelText("Organization Name"), "acme-2");
+    await user.click(screen.getByRole("button", { name: "clear-models" }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(patchOrganization).toHaveBeenCalledTimes(1));
+    expect(patchOrganization).toHaveBeenCalledWith("org-1", { organization_alias: "acme-2", models: [] });
+  });
+
   it("saves a sub-cent max budget the browser would veto under a 0.01 step", async () => {
     const user = userEvent.setup();
     const { patchOrganization } = renderForm();

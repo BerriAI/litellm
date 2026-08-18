@@ -7599,6 +7599,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/access-groups/{access_group_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Access Group
+         * @description Update one access group as a JSON merge patch: a key that is sent is written, `null` clears
+         *     it (a cleared list becomes `[]`), and a key that is omitted keeps its value. Unknown keys
+         *     are refused with a 422 so a typo is never a silent no-op.
+         *
+         *     Proxy admins only. Errors are RFC 9457 problem documents.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --request PATCH 'http://0.0.0.0:4000/management/v1/access-groups/<access_group_id>'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"description": "Production models", "access_model_names": ["gpt-5.2"]}'
+         *     ```
+         */
+        patch: operations["patch_access_group_management_v1_access_groups__access_group_id__patch"];
+        trace?: never;
+    };
     "/management/v1/budgets": {
         parameters: {
             query?: never;
@@ -21261,6 +21290,27 @@ export interface components {
             /** Model Names */
             model_names: string[];
         };
+        /**
+         * AccessGroupPatchRequest
+         * @description `PATCH /management/v1/access-groups/{id}` body: a JSON merge patch, so an unknown key is a 422 rather
+         *     than a silent no-op.
+         */
+        AccessGroupPatchRequest: {
+            /** Access Agent Ids */
+            access_agent_ids?: string[] | null;
+            /** Access Group Name */
+            access_group_name?: string | null;
+            /** Access Mcp Server Ids */
+            access_mcp_server_ids?: string[] | null;
+            /** Access Model Names */
+            access_model_names?: string[] | null;
+            /** Assigned Key Ids */
+            assigned_key_ids?: string[] | null;
+            /** Assigned Team Ids */
+            assigned_team_ids?: string[] | null;
+            /** Description */
+            description?: string | null;
+        };
         /** AccessGroupResponse */
         AccessGroupResponse: {
             /** Access Agent Ids */
@@ -26089,6 +26139,10 @@ export interface components {
             invitation_id: string;
             /** Is Accepted */
             is_accepted: boolean;
+        };
+        /** ItemResponse[AccessGroupResponse] */
+        ItemResponse_AccessGroupResponse_: {
+            data: components["schemas"]["AccessGroupResponse"];
         };
         /** JWTKeyMappingResponse */
         JWTKeyMappingResponse: {
@@ -31537,6 +31591,25 @@ export interface components {
              * @description New status: 'published' or 'production'.
              */
             version_status: string;
+        };
+        /**
+         * ProblemDetail
+         * @description RFC 9457 problem details, served as `application/problem+json`.
+         */
+        ProblemDetail: {
+            /**
+             * Allowed
+             * @default null
+             */
+            allowed: string[] | null;
+            /** Detail */
+            detail: string;
+            /** Status */
+            status: number;
+            /** Title */
+            title: string;
+            /** Type */
+            type: string;
         };
         /** Prompt */
         Prompt: {
@@ -46269,6 +46342,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    patch_access_group_management_v1_access_groups__access_group_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                access_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGroupPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemResponse_AccessGroupResponse_"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
         };

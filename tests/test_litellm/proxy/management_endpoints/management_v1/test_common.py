@@ -14,8 +14,11 @@ from litellm.proxy.management_endpoints.management_v1.common import (
     PROBLEM_CONTENT_TYPE,
     ManagementProblem,
     _declared_query_params,
+    add_problem_detail_component,
     problem_response,
+    problem_responses,
     reject_unknown_query_params,
+    validation_problem,
 )
 
 
@@ -100,6 +103,60 @@ def test_declared_query_params_is_empty_when_the_route_has_no_dependant():
         }
     )
     assert _declared_query_params(request) == frozenset()
+
+
+def test_a_body_validation_error_is_a_422_problem_naming_the_field():
+    problem = validation_problem([{"loc": ("body", "descripton"), "msg": "Extra inputs are not permitted"}])
+    assert problem.status == 422
+    assert problem.type.endswith("invalid-request-body")
+    assert problem.detail == "descripton: Extra inputs are not permitted"
+
+
+def test_a_query_validation_error_stays_a_400_problem():
+    problem = validation_problem([{"loc": ("query", "page_size"), "msg": "Input should be <= 100"}])
+    assert problem.status == 400
+    assert problem.type.endswith("invalid-query-parameter")
+    assert problem.detail == "page_size: Input should be <= 100"
+
+
+def test_a_mixed_error_list_reports_only_the_body_errors_as_a_422():
+    problem = validation_problem(
+        [
+            {"loc": ("query", "page"), "msg": "Input should be >= 1"},
+            {"loc": ["body", "access_model_names"], "msg": "Input should be a valid list"},
+        ]
+    )
+    assert problem.status == 422
+    assert problem.detail == "access_model_names: Input should be a valid list"
+
+
+def test_an_empty_error_list_is_a_400_with_a_generic_detail():
+    problem = validation_problem([])
+    assert problem.status == 400
+    assert problem.detail == "The request query parameters are invalid."
+
+
+def test_problem_responses_declares_each_code_as_a_problem_document():
+    responses = problem_responses(404, 422)
+    assert sorted(responses) == [404, 422]
+    assert responses[404]["description"] == "Not Found"
+    assert responses[422]["content"] == {
+        PROBLEM_CONTENT_TYPE: {"schema": {"$ref": "#/components/schemas/ProblemDetail"}}
+    }
+
+
+def test_add_problem_detail_component_registers_the_schema_once_and_leaves_the_rest_alone():
+    schema = {"openapi": "3.1.0", "components": {"schemas": {"Other": {"type": "object"}}}}
+    added = add_problem_detail_component(schema)
+    assert set(added["components"]["schemas"]) == {"Other", "ProblemDetail"}
+    assert added["components"]["schemas"]["ProblemDetail"]["required"] == ["type", "title", "status", "detail"]
+    assert schema["components"]["schemas"] == {"Other": {"type": "object"}}
+    assert add_problem_detail_component(added) is added
+
+
+def test_add_problem_detail_component_creates_the_components_section_when_missing():
+    added = add_problem_detail_component({"openapi": "3.1.0"})
+    assert set(added["components"]["schemas"]) == {"ProblemDetail"}
 
 
 # fastapi removed these in 0.140.7, which `pyproject.toml` still allows via
