@@ -372,13 +372,14 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should call onCancel when cancel button is clicked", async () => {
+  it("should call onCancel without submitting the form when cancel button is clicked", async () => {
     const onCancelMock = vi.fn();
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={onCancelMock}
-        onSubmit={async () => {}}
+        onSubmit={onSubmitMock}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -386,14 +387,11 @@ describe("KeyEditView", () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
-    });
-
-    const cancelButton = screen.getByRole("button", { name: /cancel/i });
+    const cancelButton = await screen.findByRole("button", { name: /cancel/i });
     await userEvent.click(cancelButton);
 
     expect(onCancelMock).toHaveBeenCalledTimes(1);
+    expect(onSubmitMock).not.toHaveBeenCalled();
   });
 
   it("should display key alias input field", async () => {
