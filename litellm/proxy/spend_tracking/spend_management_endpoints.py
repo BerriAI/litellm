@@ -3184,7 +3184,9 @@ async def view_spend_logs(
             if len(response) > 0:
                 daily_spend: Final[dict[date, float]] = {}  # mutable-ok: aggregate database groups by day
                 daily_api_spend: Final[dict[date, dict[str, float]]] = {}  # mutable-ok: aggregate groups by key
-                daily_user_spend: Final[dict[date, dict[str | None, float]]] = {}  # mutable-ok: aggregate groups by user
+                daily_user_spend: Final[
+                    dict[date, dict[str | None, float]]
+                ] = {}  # mutable-ok: aggregate groups by user
                 daily_model_spend: Final[dict[date, dict[str, float]]] = {}  # mutable-ok: aggregate groups by model
                 for record in response:
                     spend_date = _legacy_spend_log_summary_date(record["spend_date"])
