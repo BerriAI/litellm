@@ -449,6 +449,35 @@ def _estimate_dispatched_failure_usage(model: str, request_input: object, system
     return Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
 
 
+_INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
+    call_type.value
+    for call_type in (
+        CallTypes.completion,
+        CallTypes.acompletion,
+        CallTypes.text_completion,
+        CallTypes.atext_completion,
+        CallTypes.anthropic_messages,
+        CallTypes.aanthropic_messages,
+        CallTypes.responses,
+        CallTypes.aresponses,
+        CallTypes.embedding,
+        CallTypes.aembedding,
+        CallTypes.moderation,
+        CallTypes.amoderation,
+        CallTypes.image_generation,
+        CallTypes.aimage_generation,
+        CallTypes.speech,
+        CallTypes.aspeech,
+        CallTypes.rerank,
+        CallTypes.arerank,
+        CallTypes.generate_content,
+        CallTypes.agenerate_content,
+        CallTypes.generate_content_stream,
+        CallTypes.agenerate_content_stream,
+    )
+)
+
+
 def _failure_usage_to_lift(model_call_details: Mapping[str, object], dispatched: bool) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
@@ -460,6 +489,8 @@ def _failure_usage_to_lift(model_call_details: Mapping[str, object], dispatched:
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
     if not dispatched or model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
+        return None
+    if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
     optional_params: Final = model_call_details.get("optional_params")
     system_input: Final = (

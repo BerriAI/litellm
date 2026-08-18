@@ -517,6 +517,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                     "first_api_call_start_time": datetime.now(),
                     "model": "gpt-3.5-turbo",
                     "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
                 }
             ),
             "metadata": {},
@@ -582,6 +583,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                     "first_api_call_start_time": datetime.now(),
                     "model": "gpt-3.5-turbo",
                     "messages": [{"role": "user", "content": "mid-stream failure"}],
+                    "call_type": "acompletion",
                     "combined_usage_object": recovered_usage,
                     "response_cost": 3.5e-05,
                 }
@@ -605,6 +607,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                     "first_api_call_start_time": datetime.now(),
                     "model": "gpt-3.5-turbo",
                     "messages": "a plain text-completion prompt string",
+                    "call_type": "atext_completion",
                 }
             ),
             "metadata": {},
@@ -616,7 +619,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         assert estimated.prompt_tokens > 0
         assert estimated.completion_tokens == 0
 
-    def _dispatched_request_data(self, messages, optional_params):
+    def _dispatched_request_data(self, messages, optional_params, call_type="acompletion"):
         from datetime import datetime
 
         return {
@@ -626,10 +629,33 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                     "model": "gpt-3.5-turbo",
                     "messages": messages,
                     "optional_params": optional_params,
+                    "call_type": call_type,
                 }
             ),
             "metadata": {},
         }
+
+    @pytest.mark.asyncio
+    async def test_embedding_string_list_input_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        embedding_input = ["first embedding text", "second embedding text"]
+        request_data = self._dispatched_request_data(embedding_input, {}, call_type="aembedding")
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", text="".join(embedding_input))
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_transcription_checksum_not_estimated(self):
+        request_data = self._dispatched_request_data("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", {}, call_type="atranscription")
+        await self._run(request_data)
+
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
 
     @pytest.mark.asyncio
     async def test_anthropic_system_prompt_counted_in_estimate(self):
