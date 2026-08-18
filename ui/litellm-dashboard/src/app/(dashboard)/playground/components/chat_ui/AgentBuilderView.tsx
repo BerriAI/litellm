@@ -20,7 +20,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import CodeBlock from "@/components/CodeBlock";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   keyCreateCall,
   modelCreateCall,
@@ -240,7 +240,7 @@ export default function AgentBuilderView({
       return list;
     } catch (e) {
       console.error(e);
-      NotificationsManager.fromBackend("Failed to load agents");
+      toast.fromError("Failed to load agents");
       return [];
     } finally {
       setLoadingAgents(false);
@@ -333,7 +333,7 @@ export default function AgentBuilderView({
 
   const handleSaveAgent = async () => {
     if (!accessToken || !draftName?.trim() || !draftUnderlyingModel) {
-      NotificationsManager.fromBackend("Name and underlying model are required");
+      toast.fromError("Name and underlying model are required");
       return;
     }
     setSaving(true);
@@ -360,7 +360,7 @@ export default function AgentBuilderView({
       setSelectedId(created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null);
       goToTab("chat");
     } catch (e) {
-      NotificationsManager.fromBackend("Failed to save agent");
+      toast.fromError("Failed to save agent");
     } finally {
       setSaving(false);
     }
@@ -368,7 +368,7 @@ export default function AgentBuilderView({
 
   const handleUpdateAgent = async () => {
     if (!accessToken || !selectedAgent || !selectedAgentModelId || !draftName?.trim() || !draftUnderlyingModel) {
-      NotificationsManager.fromBackend("Name and underlying model are required");
+      toast.fromError("Name and underlying model are required");
       return;
     }
     setSaving(true);
@@ -388,13 +388,13 @@ export default function AgentBuilderView({
         },
         selectedAgentModelId,
       );
-      NotificationsManager.success("Agent updated successfully");
+      toast.success("Agent updated successfully");
       const list = await loadAgents();
       const stillSelected = list.find((a) => getAgentModelId(a) === selectedAgentModelId);
       const target = stillSelected ?? list[0];
       setSelectedId(target ? getAgentSelectionKey(target) : null);
     } catch (e) {
-      NotificationsManager.fromBackend("Failed to update agent");
+      toast.fromError("Failed to update agent");
     } finally {
       setSaving(false);
     }
@@ -412,12 +412,12 @@ export default function AgentBuilderView({
       const keyValue = response?.key ?? null;
       if (keyValue) {
         setCreatedKeyValue(keyValue);
-        NotificationsManager.success("Virtual key created. Use it in the curl example below.");
+        toast.success("Virtual key created. Use it in the curl example below.");
       } else {
-        NotificationsManager.fromBackend("Key created but value not returned");
+        toast.fromError("Key created but value not returned");
       }
     } catch (e) {
-      NotificationsManager.fromBackend("Failed to create key for agent");
+      toast.fromError("Failed to create key for agent");
     } finally {
       setCreatingKey(false);
     }
@@ -433,12 +433,12 @@ export default function AgentBuilderView({
     setDeleting(true);
     try {
       await modelDeleteCall(accessToken, selectedAgentModelId);
-      NotificationsManager.success("Agent deleted");
+      toast.success("Agent deleted");
       const list = await loadAgents();
       const remaining = list.filter((a) => getAgentModelId(a) !== selectedAgentModelId);
       setSelectedId(remaining.length > 0 ? getAgentSelectionKey(remaining[0]) : null);
     } catch (e) {
-      NotificationsManager.fromBackend("Failed to delete agent");
+      toast.fromError("Failed to delete agent");
     } finally {
       setDeleting(false);
       setConfirmingDelete(false);

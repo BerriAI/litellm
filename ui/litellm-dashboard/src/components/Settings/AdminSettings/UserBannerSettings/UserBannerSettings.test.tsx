@@ -16,10 +16,6 @@ vi.mock("@/app/(dashboard)/hooks/userBanner/useUpdateUserBanner", () => ({
   useUpdateUserBanner: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 import { useUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUserBanner";
 import { useUpdateUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUpdateUserBanner";
 
