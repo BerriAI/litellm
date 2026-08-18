@@ -636,6 +636,34 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         }
 
     @pytest.mark.asyncio
+    async def test_image_message_estimated_without_fetching_image(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this image"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "http://127.0.0.1:1/unreachable.png", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+        request_data = self._dispatched_request_data(messages, {})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", messages=messages, use_default_image_token_count=True
+        )
+        assert estimated.prompt_tokens == expected
+        assert estimated.prompt_tokens > 0
+
+    @pytest.mark.asyncio
     async def test_embedding_string_list_input_counted_in_estimate(self):
         import litellm as litellm_module
         from litellm.types.utils import Usage

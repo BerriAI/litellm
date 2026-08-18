@@ -430,7 +430,9 @@ def _count_request_input_tokens(model: str, request_input: object, system_input:
     text_entries: Final = tuple(entry for entry in request_input if isinstance(entry, str))
     if len(text_entries) == len(request_input):
         return system_tokens + litellm.token_counter(model=model, text="".join(text_entries))
-    return system_tokens + litellm.token_counter(model=model, messages=request_input)
+    return system_tokens + litellm.token_counter(
+        model=model, messages=request_input, use_default_image_token_count=True
+    )
 
 
 def _estimate_dispatched_failure_usage(model: str, request_input: object, system_input: object) -> Usage | None:
