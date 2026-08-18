@@ -105,14 +105,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
   const [maxIterations, setMaxIterations] = useState<number | null>(null);
   const [maxBudgetPerSession, setMaxBudgetPerSession] = useState<number | null>(null);
 
-  // Latest upstream card selection from auto-discovery (skills, capabilities,
-  // name, description). Dynamic agent forms don't render fields for those,
-  // so we overlay this onto agent_card_params at submit.
   const [appliedDiscoveredSelection, setAppliedDiscoveredSelection] = useState<DiscoveredAgentCardSelection | null>(
     null,
   );
 
-  // Fetch agent type metadata on mount
   useEffect(() => {
     const fetchMetadata = async () => {
       try {
@@ -1008,7 +1004,6 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
     >
       <TooltipProvider>
         <div className="mt-4">
-          {/* Step indicator */}
           <Steps current={currentStep} size="small" className="mb-8">
             <Step title="Configure" />
             <Step title="Entitlements" />
@@ -1027,7 +1022,6 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             </form>
           </FormProvider>
 
-          {/* Footer navigation */}
           <div className="mt-6 flex items-center justify-between border-t border-border pt-6">
             <div>
               {currentStep > 0 && currentStep < 4 && (
