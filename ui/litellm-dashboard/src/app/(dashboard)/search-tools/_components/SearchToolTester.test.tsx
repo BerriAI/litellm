@@ -123,6 +123,8 @@ describe("SearchToolTester", () => {
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
     expect(screen.getByText("Searching...")).toBeInTheDocument();
+
+    expect(await screen.findByText("Test Result 1")).toBeInTheDocument();
   });
 
   it("should display search results after successful search", async () => {
@@ -407,6 +409,8 @@ describe("SearchToolTester", () => {
     await user.click(searchButton);
     expect(input).toBeDisabled();
     expect(searchButton).toBeDisabled();
+
+    await waitFor(() => expect(searchButton).toBeEnabled());
   });
 
   it("should display result links that open in new tab", async () => {
