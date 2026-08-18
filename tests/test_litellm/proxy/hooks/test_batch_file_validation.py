@@ -2060,3 +2060,28 @@ def test_estimate_entry_output_tokens_prefers_max_tokens_over_max_output_tokens(
     }
 
     assert rate_limiter._estimate_entry_output_tokens(entry, None) == 50
+
+
+@pytest.mark.parametrize(
+    ("body_extra", "expected"),
+    [
+        ({"max_tokens": 40, "n": 10}, 400),
+        ({"max_tokens": 40, "best_of": 5}, 200),
+        ({"max_tokens": 40, "n": 3, "best_of": 5}, 200),
+        ({"max_tokens": 40, "n": 0}, 40),
+        ({"max_tokens": 40, "n": -2}, 40),
+        ({"n": 3}, 2997),
+    ],
+)
+def test_estimate_entry_output_tokens_multiplies_candidate_count(body_extra, expected):
+    """A row generating n / best_of candidates consumes that many completions'
+    worth of output tokens, so the OTPM reservation must scale with the
+    effective candidate count. Pre-fix a `max_tokens: 40, n: 10` row consumed
+    up to 400 output tokens while reserving only 40."""
+    rate_limiter = _output_estimator()
+    entry = {
+        "url": "/v1/chat/completions",
+        "body": {"model": "gpt-4o", "messages": [], **body_extra},
+    }
+
+    assert rate_limiter._estimate_entry_output_tokens(entry, None) == expected

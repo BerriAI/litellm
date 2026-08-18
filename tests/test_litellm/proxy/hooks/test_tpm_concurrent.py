@@ -3394,6 +3394,84 @@ def test_split_quota_helpers_handle_non_mapping_inputs(rate_limiter):
 
 
 @pytest.mark.parametrize(
+    ("data", "call_type", "expected"),
+    [
+        ({"max_tokens": "30.0"}, "", 30),
+        ({"max_tokens": "not-a-number"}, "", None),
+        ({"max_tokens": True}, "", None),
+        ({"max_output_tokens": "30.0"}, "responses", 30),
+        ({"max_output_tokens": "nan"}, "responses", None),
+        ({"generationConfig": {"maxOutputTokens": "12.5"}}, "agenerate_content", 12),
+        ({"generationConfig": {"maxOutputTokens": "oops"}}, "agenerate_content", None),
+    ],
+)
+def test_get_explicit_output_cap_tolerates_unparseable_values(
+    rate_limiter, data, call_type, expected
+):
+    """A client-supplied cap the proxy cannot parse must fall back to the
+    no-cap output estimate instead of raising ValueError and 500ing the
+    request before it ever reaches the provider."""
+    handler, _cache = rate_limiter
+
+    assert handler._get_explicit_output_cap(data, call_type) == expected
+
+
+@pytest.mark.asyncio
+async def test_project_io_counters_not_double_charged_when_reservation_disabled(
+    monkeypatch,
+):
+    """With LITELLM_TPM_TOKEN_RESERVATION_ENABLED=false the first
+    should_rate_limit pass used to +1 every ITPM/OTPM counter on top of the
+    full reservation _reserve_project_io_tokens_or_raise always makes,
+    permanently inflating each bucket by one token per request."""
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    cache = DualCache()
+    handler = RateLimitHandler(internal_usage_cache=InternalUsageCache(cache))
+    assert handler.tpm_reservation_enabled is False
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-io-no-reservation"),
+        project_id="proj-io-no-reservation",
+        project_metadata={
+            "model_itpm_limit": {"bedrock_mantle/claude-opus": 1000000},
+            "model_otpm_limit": {"bedrock_mantle/claude-opus": 1000000},
+        },
+    )
+    data = {
+        "model": "bedrock_mantle/claude-opus",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 50,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    stash = get_request_stash()
+    assert stash is not None
+    assert stash.itpm_reserved_tokens > 0
+    assert stash.otpm_reserved_tokens > 0
+
+    for descriptor_key, reserved in (
+        ("model_per_project_itpm", stash.itpm_reserved_tokens),
+        ("model_per_project_otpm", stash.otpm_reserved_tokens),
+    ):
+        counter_key = handler.create_rate_limit_keys(
+            key=descriptor_key,
+            value="proj-io-no-reservation:bedrock_mantle/claude-opus",
+            rate_limit_type="tokens",
+        )
+        cached = await cache.async_get_cache(key=counter_key, local_only=True)
+        assert int(cached or 0) == reserved, (
+            f"{descriptor_key} counter {cached} != reserved {reserved}: "
+            "first-pass should_rate_limit double-charged the bucket"
+        )
+
+
+@pytest.mark.parametrize(
     ("call_type", "data"),
     [
         (

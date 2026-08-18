@@ -429,12 +429,20 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             ),
             None,
         )
+        candidate_count: Final = max(
+            (
+                v
+                for v in (body.get("n"), body.get("best_of"))
+                if isinstance(v, int) and not isinstance(v, bool) and v > 1
+            ),
+            default=1,
+        )
         if explicit_cap is not None:
             try:
-                return max(0, int(explicit_cap))
+                return max(0, int(explicit_cap)) * candidate_count
             except (TypeError, ValueError):
                 pass
-        return self.parallel_request_limiter.no_max_tokens_output_floor(min_configured_otpm_limit)
+        return self.parallel_request_limiter.no_max_tokens_output_floor(min_configured_otpm_limit) * candidate_count
 
     @staticmethod
     def _has_applicable_batch_rate_limits(
