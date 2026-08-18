@@ -159,7 +159,7 @@ class TestBlackForestLabsVideoTransformation:
 
         assert mapped["keyframes"] == ["https://example.com/first.png"]
 
-    def test_create_response_returns_the_job_handle_and_keeps_the_polling_url(self):
+    def test_create_response_returns_the_job_handle_and_keeps_the_region(self):
         video = self.config.transform_video_create_response(
             model="flux-3-video",
             raw_response=_response({"id": JOB_ID, "polling_url": POLLING_URL, "cost": None}),
@@ -168,11 +168,61 @@ class TestBlackForestLabsVideoTransformation:
             request_data={"duration": 8, "resolution": "fhd"},
         )
 
-        assert extract_original_video_id(video.id) == JOB_ID
         assert video.status == "queued"
         assert video.seconds == "8"
         assert video.size == "fhd"
-        assert video._hidden_params["polling_url"] == POLLING_URL
+
+        # The region survives inside the id, which is all the status call gets.
+        status_url, _ = self.config.transform_video_status_retrieve_request(
+            video_id=video.id,
+            api_base=API_BASE,
+            litellm_params=None,
+            headers={},
+        )
+        assert status_url == POLLING_URL
+
+    def test_status_url_falls_back_to_the_api_base_without_a_region(self):
+        video = self.config.transform_video_create_response(
+            model="flux-3-video",
+            raw_response=_response({"id": JOB_ID, "polling_url": None}),
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="black_forest_labs",
+        )
+
+        assert extract_original_video_id(video.id) == JOB_ID
+
+        status_url, _ = self.config.transform_video_status_retrieve_request(
+            video_id=video.id,
+            api_base=API_BASE,
+            litellm_params=None,
+            headers={},
+        )
+        assert status_url == f"{API_BASE}/v1/get_result?id={JOB_ID}"
+
+    def test_content_request_targets_the_same_region_as_the_status_call(self):
+        video = self.config.transform_video_create_response(
+            model="flux-3-video",
+            raw_response=_response({"id": JOB_ID, "polling_url": POLLING_URL}),
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="black_forest_labs",
+        )
+
+        content_url, _ = self.config.transform_video_content_request(
+            video_id=video.id,
+            api_base=API_BASE,
+            litellm_params=None,
+            headers={},
+        )
+        assert content_url == POLLING_URL
+
+    def test_a_packed_region_outside_bfl_is_rejected(self):
+        with pytest.raises(BlackForestLabsError, match="not within the bfl.ai domain"):
+            self.config.transform_video_status_retrieve_request(
+                video_id=f"{JOB_ID}@attacker.example.com",
+                api_base=API_BASE,
+                litellm_params=None,
+                headers={},
+            )
 
     def test_create_response_without_a_job_id_raises(self):
         with pytest.raises(BlackForestLabsError):

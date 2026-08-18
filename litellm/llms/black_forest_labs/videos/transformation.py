@@ -8,7 +8,10 @@ API Reference: https://docs.bfl.ai/api-reference/utility/generate-a-video-with-f
 """
 
 import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final  # noqa: TID251  # BaseVideoConfig types its payloads dict[str, Any]
+from urllib.parse import urlparse
 
 import httpx
 
@@ -37,11 +40,11 @@ from ..common_utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
+    LiteLLMLoggingObj = _LiteLLMLoggingObj  # rebind-ok: the TYPE_CHECKING alias for the runtime Any below
 else:
-    LiteLLMLoggingObj = Any
+    LiteLLMLoggingObj = Any  # rebind-ok: runtime stand-in for the type-only Logging alias
 
-VIDEO_MODELS: Final[dict[str, str]] = {"flux-3-video": "/v1/flux-3-video"}
+VIDEO_MODELS: Final[Mapping[str, str]] = MappingProxyType({"flux-3-video": "/v1/flux-3-video"})
 
 RESOLUTIONS: Final = ("hd", "fhd")
 ASPECT_RATIOS: Final = ("21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16", "auto")
@@ -50,20 +53,49 @@ MAX_DURATION: Final = 20
 
 # BFL reports one of these on GET /v1/get_result. Anything outside the terminal
 # set is still running.
-_TERMINAL_STATUSES: Final[dict[str, str]] = {
-    "Ready": "completed",
-    "Error": "failed",
-    "Content Moderated": "failed",
-    "Request Moderated": "failed",
-    "Task not found": "failed",
-}
-_IN_PROGRESS_STATUSES: Final[dict[str, str]] = {
-    "Pending": "queued",
-    "Queued": "queued",
-    "Reasoning": "in_progress",
-    "Generating": "in_progress",
-    "Uploading": "in_progress",
-}
+_TERMINAL_STATUSES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "Ready": "completed",
+        "Error": "failed",
+        "Content Moderated": "failed",
+        "Request Moderated": "failed",
+        "Task not found": "failed",
+    }
+)
+_IN_PROGRESS_STATUSES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "Pending": "queued",
+        "Queued": "queued",
+        "Reasoning": "in_progress",
+        "Generating": "in_progress",
+        "Uploading": "in_progress",
+    }
+)
+
+# BFL dispatches each job to a regional host and hands that host back in
+# ``polling_url``. The global host answers 404 for a regional job, so the region
+# has to survive from submission through to status and content retrieval. The
+# only value carried across those calls is the video id, so the region travels
+# inside it, behind a separator BFL's own UUIDs never contain.
+_REGION_SEPARATOR: Final = "@"
+
+
+def _pack_region(job_id: str, polling_url: str | None) -> str:
+    """Attach the polling host to a job id, when it differs from the default."""
+    if not polling_url:
+        return job_id
+    host: Final = (urlparse(polling_url).hostname or "").lower()
+    if not host or host == urlparse(DEFAULT_API_BASE).hostname:
+        return job_id
+    return f"{job_id}{_REGION_SEPARATOR}{host}"
+
+
+def _unpack_region(job_id: str) -> tuple[str, str | None]:
+    """Split a packed id back into the bare job id and its polling host."""
+    if _REGION_SEPARATOR not in job_id:
+        return job_id, None
+    bare, _, host = job_id.partition(_REGION_SEPARATOR)
+    return bare, host or None
 
 
 class BlackForestLabsVideoConfig(BaseVideoConfig):
@@ -79,8 +111,8 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
     to a region.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:
-        return [
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseVideoConfig signature
+        return [  # mutable-ok: BaseVideoConfig signature
             "model",
             "seconds",
             "size",
@@ -91,10 +123,10 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
 
     def map_openai_params(
         self,
-        video_create_optional_params: dict,
+        video_create_optional_params: dict,  # mutable-ok: BaseVideoConfig signature
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: BaseVideoConfig signature
         """
         Map OpenAI video params onto FLUX 3 params.
 
@@ -102,40 +134,43 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         - ``size`` -> ``resolution`` tier, by the shorter side
         - ``input_reference`` -> a single ``keyframes`` entry, which selects i2v
         """
-        mapped: dict[str, Any] = {}
-
-        seconds = video_create_optional_params.get("seconds")
-        if seconds is not None:
-            duration = self._map_duration(seconds)
-            if duration is not None:
-                mapped["duration"] = duration
-
-        size = video_create_optional_params.get("size")
-        if size is not None:
-            resolution = self._map_size_to_resolution(size)
-            if resolution is not None:
-                mapped["resolution"] = resolution
-
-        input_reference = video_create_optional_params.get("input_reference")
-        if input_reference is not None:
-            mapped["keyframes"] = [input_reference]
-
         supported: Final = self.get_supported_openai_params(model)
-        mapped.update(
-            {
-                key: value
-                for key, value in video_create_optional_params.items()
-                if key not in supported and key not in ("seconds", "size", "input_reference")
-            }
-        )
+        remapped: Final = ("seconds", "size", "input_reference")
 
-        return mapped
+        duration: Final = self._map_duration(video_create_optional_params.get("seconds"))
+        resolution: Final = self._map_size_to_resolution(video_create_optional_params.get("size"))
+        input_reference: Final = video_create_optional_params.get("input_reference")
+
+        translated: Final = {  # mutable-ok: JSON request payload
+            key: value
+            for key, value in (
+                ("duration", duration),
+                ("resolution", resolution),
+                (
+                    "keyframes",
+                    [input_reference]  # mutable-ok: JSON request payload
+                    if input_reference is not None
+                    else None,  # mutable-ok: JSON request payload
+                ),
+            )
+            if value is not None
+        }
+        passthrough: Final = {  # mutable-ok: JSON request payload
+            key: value
+            for key, value in video_create_optional_params.items()
+            if key not in supported and key not in remapped
+        }
+
+        return {  # mutable-ok: JSON request payload
+            **translated,
+            **passthrough,
+        }  # mutable-ok: JSON request payload
 
     def _map_duration(self, seconds: object) -> int | None:
         if not isinstance(seconds, (int, float, str)):
             return None
         try:
-            duration = int(float(seconds))
+            duration: Final = int(float(seconds))
         except (TypeError, ValueError):
             return None
         return max(MIN_DURATION, min(MAX_DURATION, duration))
@@ -159,16 +194,18 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: BaseVideoConfig signature
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
-        if litellm_params and litellm_params.api_key:
-            api_key = api_key or litellm_params.api_key
+    ) -> dict:  # mutable-ok: BaseVideoConfig signature
+        # Bind a new name rather than rebinding the caller's parameter.
+        request_api_key: Final = api_key or (litellm_params.api_key if litellm_params else None)
 
+        # Resolve BFL credentials only. Falling back to ``litellm.api_key`` would
+        # send another provider's generic key to api.bfl.ai.
         final_api_key: Final = (
-            api_key or litellm.api_key or get_secret_str("BFL_API_KEY") or get_secret_str("BLACK_FOREST_LABS_API_KEY")
+            request_api_key or get_secret_str("BFL_API_KEY") or get_secret_str("BLACK_FOREST_LABS_API_KEY")
         )
 
         if not final_api_key:
@@ -178,7 +215,7 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
             )
 
         headers.update(
-            {
+            {  # mutable-ok: JSON request payload
                 "x-key": final_api_key,
                 "Content-Type": "application/json",
                 "Accept": "application/json",
@@ -190,37 +227,46 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: BaseVideoConfig signature
     ) -> str:
-        base_url: str = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
+        base_url: Final[str] = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
         return base_url.rstrip("/")
 
     def _get_model_endpoint(self, model: str) -> str:
-        model_name = model.lower().split("/")[-1]
+        model_name: Final = model.lower().split("/")[-1]
         if model_name in VIDEO_MODELS:
             return VIDEO_MODELS[model_name]
-        raise ValueError(f"Unknown BFL video model: {model_name}. Supported models: {list(VIDEO_MODELS.keys())}")
+        raise ValueError(
+            f"Unknown BFL video model: {model_name}. Supported models: {list(VIDEO_MODELS.keys())}"  # mutable-ok: one-shot, for an error message
+        )
 
     def transform_video_create_request(
         self,
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict,
+        video_create_optional_request_params: dict,  # mutable-ok: BaseVideoConfig signature
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, list, str]:
-        request_data: dict[str, Any] = {"prompt": prompt}
-        request_data.update(video_create_optional_request_params)
-        request_data["mode"] = self._infer_mode(request_data)
+        headers: dict,  # mutable-ok: BaseVideoConfig signature
+    ) -> tuple[dict, list, str]:  # mutable-ok: BaseVideoConfig signature
+        base_request: Final = {  # mutable-ok: JSON request payload
+            "prompt": prompt,
+            **video_create_optional_request_params,
+        }  # mutable-ok: JSON request payload
+        mode: Final = self._infer_mode(base_request)
 
-        if request_data["mode"] == "draft_enhance":
-            request_data.pop("prompt", None)
+        # draft_enhance re-renders a cached draft, so it carries no prompt.
+        request_data: Final = {  # mutable-ok: JSON request payload
+            **{  # mutable-ok: JSON request payload
+                key: value for key, value in base_request.items() if not (mode == "draft_enhance" and key == "prompt")
+            },  # mutable-ok: JSON request payload
+            "mode": mode,
+        }
 
         url: Final = f"{api_base}{self._get_model_endpoint(model)}"
-        return request_data, [], url
+        return request_data, [], url  # mutable-ok: JSON request payload
 
-    def _infer_mode(self, request_data: dict) -> str:
+    def _infer_mode(self, request_data: Mapping[str, Any]) -> str:
         """FLUX 3 discriminates on ``mode``; derive it from the inputs given."""
         if request_data.get("mode"):
             return str(request_data["mode"])
@@ -238,7 +284,7 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: dict | None = None,  # mutable-ok: BaseVideoConfig signature
     ) -> VideoObject:
         """
         Submission answers with the job handle, not the finished video:
@@ -260,8 +306,12 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         if polling_url:
             assert_bfl_polling_url(polling_url)
 
+        # The region has to outlive this response, and the id is the only value
+        # the status and content calls receive.
+        regional_job_id: Final = _pack_region(job_id, polling_url)
+
         video_obj: Final = VideoObject(
-            id=job_id,
+            id=regional_job_id,
             object="video",
             status="queued",
             created_at=int(time.time()),
@@ -274,10 +324,8 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
             if request_data.get("resolution"):
                 video_obj.size = str(request_data["resolution"])
 
-        video_obj._hidden_params = {"polling_url": polling_url}
-
         if custom_llm_provider:
-            video_obj.id = encode_video_id_with_provider(job_id, custom_llm_provider, model)
+            video_obj.id = encode_video_id_with_provider(regional_job_id, custom_llm_provider, model)
 
         return video_obj
 
@@ -286,9 +334,9 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
-        return self._get_result_url(video_id, api_base), {}
+        headers: dict,  # mutable-ok: BaseVideoConfig signature
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig signature
+        return self._get_result_url(video_id, api_base), {}  # mutable-ok: JSON request payload
 
     def transform_video_status_retrieve_response(
         self,
@@ -307,17 +355,24 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         )
 
         if bfl_status in _TERMINAL_STATUSES and _TERMINAL_STATUSES[bfl_status] == "failed":
-            video_obj.error = {
+            video_obj.error = {  # mutable-ok: JSON request payload
                 "code": bfl_status,
                 "message": str(response_data.get("details") or bfl_status),
             }
 
         cost: Final = response_data.get("cost")
         if cost is not None:
-            video_obj.usage = {"credits": cost}
+            video_obj.usage = {  # mutable-ok: VideoObject field
+                "credits": cost
+            }  # mutable-ok: JSON request payload
 
         if custom_llm_provider and video_obj.id:
-            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
+            # Re-attach the region: BFL echoes a bare job id, but the caller may
+            # reuse this id for content retrieval and must land on the same host.
+            polled_url: Final = str(raw_response.request.url) if raw_response.request else None
+            video_obj.id = encode_video_id_with_provider(
+                _pack_region(video_obj.id, polled_url), custom_llm_provider, None
+            )
 
         return video_obj
 
@@ -330,7 +385,7 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         if not isinstance(progress, (int, float, str)):
             return None
         try:
-            value = float(progress)
+            value: Final = float(progress)
         except (TypeError, ValueError):
             return None
         # BFL reports a 0..1 fraction; VideoObject.progress is a percentage.
@@ -341,10 +396,10 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict,  # mutable-ok: BaseVideoConfig signature
         variant: str | None = None,
-    ) -> tuple[str, dict]:
-        return self._get_result_url(video_id, api_base), {}
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig signature
+        return self._get_result_url(video_id, api_base), {}  # mutable-ok: JSON request payload
 
     def transform_video_content_response(
         self,
@@ -370,9 +425,9 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         video_response.raise_for_status()
         return video_response.content
 
-    def _extract_video_url(self, response_data: dict) -> str:
+    def _extract_video_url(self, response_data: Mapping[str, Any]) -> str:
         status: Final = response_data.get("status", "Pending")
-        result: Final = response_data.get("result") or {}
+        result: Final[Mapping[str, Any]] = response_data.get("result") or MappingProxyType({})
         video_url: Final = result.get("sample")
 
         if video_url:
@@ -389,10 +444,19 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         )
 
     def _get_result_url(self, video_id: str, api_base: str) -> str:
-        original_video_id: Final = extract_original_video_id(video_id)
-        return f"{api_base.rstrip('/')}/v1/get_result?id={original_video_id}"
+        """Build the polling URL, honouring the region the job was dispatched to.
 
-    def _parse_json(self, raw_response: httpx.Response) -> dict:
+        The global host answers 404 for a regional job, so a packed id sends the
+        request back to the host BFL named at submission.
+        """
+        original_video_id: Final = extract_original_video_id(video_id)
+        job_id, region_host = _unpack_region(original_video_id)
+        host: Final = f"https://{region_host}" if region_host else api_base.rstrip("/")
+        result_url: Final = f"{host}/v1/get_result?id={job_id}"
+        assert_bfl_polling_url(result_url)
+        return result_url
+
+    def _parse_json(self, raw_response: httpx.Response) -> dict:  # mutable-ok: decoded JSON body
         try:
             return raw_response.json()
         except Exception as e:
@@ -407,9 +471,9 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-        extra_body: dict[str, Any] | None = None,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: BaseVideoConfig signature
+        extra_body: dict[str, Any] | None = None,  # mutable-ok: BaseVideoConfig signature
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig signature
         raise NotImplementedError("video remix is not supported by the FLUX 3 video API")
 
     def transform_video_remix_response(
@@ -424,12 +488,12 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict,  # mutable-ok: BaseVideoConfig signature
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
-    ) -> tuple[str, dict]:
+        extra_query: dict[str, Any] | None = None,  # mutable-ok: BaseVideoConfig signature
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig signature
         raise NotImplementedError("video listing is not supported by the FLUX 3 video API")
 
     def transform_video_list_response(
@@ -437,7 +501,7 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, str]:  # mutable-ok: BaseVideoConfig signature
         raise NotImplementedError("video listing is not supported by the FLUX 3 video API")
 
     def transform_video_delete_request(
@@ -445,8 +509,8 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict,  # mutable-ok: BaseVideoConfig signature
+    ) -> tuple[str, dict]:  # mutable-ok: BaseVideoConfig signature
         raise NotImplementedError("video delete is not supported by the FLUX 3 video API")
 
     def transform_video_delete_response(
@@ -457,6 +521,9 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         raise NotImplementedError("video delete is not supported by the FLUX 3 video API")
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | httpx.Headers
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: BaseVideoConfig signature
     ) -> BlackForestLabsError:
         return BlackForestLabsError(status_code=status_code, message=error_message)
