@@ -869,6 +869,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "container",
                         "image_edit",
                         "embedding",
+                        "guardrail",
                         "image_generation",
                         "video_generation",
                         "moderation",
@@ -975,6 +976,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "items": {
                         "type": "string",
                     },
+                },
+                "guardrail_cost_per_unit": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number"},
                 },
                 "search_context_cost_per_query": {
                     "type": "object",

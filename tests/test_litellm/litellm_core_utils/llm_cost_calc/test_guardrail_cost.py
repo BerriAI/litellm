@@ -89,6 +89,17 @@ def test_guardrail_information_cost_single_entry_and_garbage():
     assert guardrail_information_cost([{"guardrail_cost": "bad"}]) == 0.0
 
 
+def test_guardrail_information_cost_ignores_negative_and_non_finite():
+    entries = [
+        {"guardrail_name": "forged-negative", "guardrail_cost": -0.005},
+        {"guardrail_name": "forged-nan", "guardrail_cost": float("nan")},
+        {"guardrail_name": "forged-inf", "guardrail_cost": float("inf")},
+        {"guardrail_name": "real", "guardrail_cost": 0.0003},
+    ]
+    assert guardrail_information_cost(entries) == pytest.approx(0.0003)
+    assert guardrail_information_cost({"guardrail_cost": -1.0}) == 0.0
+
+
 def test_cost_breakdown_with_guardrail_merges_and_creates():
     assert cost_breakdown_with_guardrail(None, 0.0) is None
     untouched = {"input_cost": 0.1, "total_cost": 0.4}

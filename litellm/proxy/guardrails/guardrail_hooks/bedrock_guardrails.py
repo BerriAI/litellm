@@ -873,6 +873,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         credentials, aws_region_name = self._load_credentials()
         allow_chunking: Final = not self._content_uses_contextual_grounding(content)
 
+        completed_chunk_usages: Final[list[BedrockGuardrailUsage]] = []  # mutable-ok: billed-chunk usage accumulator
         try:
             responses: Final = await self._apply_guardrail_content_with_chunking(
                 content=content,
@@ -884,6 +885,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 event_type=event_type,
                 start_time=start_time,
                 allow_chunking=allow_chunking,
+                completed_chunk_usages=completed_chunk_usages,
             )
         except HTTPException as exc:
             if not isinstance(exc.detail, dict):
@@ -915,6 +917,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         allow_chunking: bool,
+        completed_chunk_usages: list[BedrockGuardrailUsage],  # mutable-ok: billed-chunk usage accumulator
     ) -> tuple[BedrockContentChunkResult, ...]:
         """Post `content` to ApplyGuardrail, chunking only if AWS rejects it as too large.
 
@@ -961,6 +964,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data,
                 event_type=event_type,
                 start_time=start_time,
+                completed_chunk_usages=completed_chunk_usages,
             )
             return (
                 BedrockContentChunkResult(
@@ -991,6 +995,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                             event_type=event_type,
                             start_time=start_time,
                             allow_chunking=allow_chunking,
+                            completed_chunk_usages=completed_chunk_usages,
                         )
                         for batch in batches
                     ]
@@ -1017,6 +1022,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     event_type=event_type,
                     start_time=start_time,
                     allow_chunking=allow_chunking,
+                    completed_chunk_usages=completed_chunk_usages,
                 )
                 second_results: Final = await self._apply_guardrail_content_with_chunking(
                     content=second_half,
@@ -1028,6 +1034,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     event_type=event_type,
                     start_time=start_time,
                     allow_chunking=allow_chunking,
+                    completed_chunk_usages=completed_chunk_usages,
                 )
                 combined_results: Final = tuple(first_results) + tuple(second_results)
                 if is_single_item_text_split:
@@ -1047,6 +1054,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
+        completed_chunk_usages: list[BedrockGuardrailUsage],  # mutable-ok: passed through to the single-call layer
     ) -> BedrockGuardrailResponse:
         """Post one ApplyGuardrail call for `content`, retrying with exponential
         backoff on AWS ThrottlingException (HTTP 429).
@@ -1074,6 +1082,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     request_data=request_data,
                     event_type=event_type,
                     start_time=start_time,
+                    completed_chunk_usages=completed_chunk_usages,
                 )
             except HTTPException as exc:
                 if (
@@ -1095,6 +1104,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
+        completed_chunk_usages: list[BedrockGuardrailUsage],  # mutable-ok: billed-chunk usage accumulator
     ) -> BedrockGuardrailResponse:
         """Make exactly one signed ApplyGuardrail HTTP call for `content` and
         parse the result. Raises HTTPException on a guardrail block or any
@@ -1110,7 +1120,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         A block is logged here rather than by the caller: it ends the whole chunking
         flow immediately, with no further chunks attempted, so there is no later
-        merged response for the caller to log instead.
+        merged response for the caller to log instead. The logged usage still spans
+        the whole logical request: chunks that passed before the block appended what
+        AWS billed them to ``completed_chunk_usages``, and the attempt log sums those
+        with the blocking call's own usage.
         """
         bedrock_request_data: Final = {  # mutable-ok: outbound JSON request body
             **base_request_data,
@@ -1154,10 +1167,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     event_type=event_type,
                     start_time=start_time,
                     aws_region_name=aws_region_name,
+                    completed_chunk_usages=completed_chunk_usages,
                 )
                 raise self._get_http_exception_for_blocked_guardrail(
                     bedrock_guardrail_response, request_data=request_data
                 )
+            response_usage: Final = bedrock_guardrail_response.get("usage")
+            if isinstance(response_usage, dict):
+                completed_chunk_usages.append(
+                    response_usage
+                )  # rebind-ok: accumulator threaded from make_bedrock_api_request, recording this billed call
             return bedrock_guardrail_response
 
         status_code, detail_message = self._parse_bedrock_guardrail_error_response(httpx_response)
@@ -1176,16 +1195,30 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         aws_region_name: str | None,
+        completed_chunk_usages: Sequence[BedrockGuardrailUsage],
     ) -> None:
-        """Log a single ApplyGuardrail HTTP attempt as-is (its own status,
-        derived from its own response). Used only for the blocked-content
-        case, which ends the whole chunking flow immediately."""
+        """Log the blocking ApplyGuardrail attempt, which ends the whole chunking
+        flow immediately. Its status derives from its own response, but its usage
+        (and so its cost) spans every billed call of the logical request: the
+        chunks that passed before the block plus the blocking call itself."""
+        blocking_usage: Final = json_response.get("usage")
+        billed_usages: Final[tuple[BedrockGuardrailUsage, ...]] = tuple(completed_chunk_usages) + (
+            (blocking_usage,) if isinstance(blocking_usage, dict) else ()
+        )
+        logged_json_response: Final = (
+            {  # mutable-ok: raw AWS JSON payload carrying the total billed usage
+                **json_response,
+                "usage": self._sum_usage_counters(billed_usages),
+            }
+            if completed_chunk_usages
+            else json_response
+        )
         tracing_detail: Final = self._build_tracing_detail(
-            BedrockGuardrailResponse(**json_response), aws_region_name=aws_region_name
+            BedrockGuardrailResponse(**logged_json_response), aws_region_name=aws_region_name
         )
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=json_response,
+            guardrail_json_response=logged_json_response,
             request_data=request_data or {},  # mutable-ok: logging helper requires a dict
             guardrail_status=self._get_bedrock_guardrail_response_status(response=httpx_response),
             start_time=start_time.timestamp(),
@@ -1511,15 +1544,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Keys are taken from the responses rather than from a fixed list, so a counter
         this code does not know about (AWS has added several) is still summed and
         reported instead of being silently dropped to zero."""
-        chunk_usages: Final = tuple(
-            chunk_result.response.get("usage") or {}  # mutable-ok: read-only empty fallback
-            for chunk_result in chunk_results
+        return BedrockGuardrail._sum_usage_counters(
+            tuple(
+                chunk_result.response.get("usage") or {}  # mutable-ok: read-only empty fallback
+                for chunk_result in chunk_results
+            )
         )
+
+    @staticmethod
+    def _sum_usage_counters(usages: Sequence[BedrockGuardrailUsage]) -> BedrockGuardrailUsage:
         return cast(  # cast-ok: TypedDict assembled from a comprehension
             BedrockGuardrailUsage,
             {  # mutable-ok: builds the TypedDict payload
-                key: sum(usage.get(key) or 0 for usage in chunk_usages)
-                for key in dict.fromkeys(key for usage in chunk_usages for key in usage)
+                key: sum(usage.get(key) or 0 for usage in usages)
+                for key in dict.fromkeys(key for usage in usages for key in usage)
             },
         )
 

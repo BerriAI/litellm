@@ -4869,8 +4869,7 @@ def _guardrail_kwargs(response_cost):
 
 
 def test_payload_response_cost_includes_guardrail_cost(logging_obj):
-    """LIT-5651: guardrail invocations billed by the provider must count in
-    response_cost so spend and budget enforcement see them like token cost."""
+    """LIT-5651: provider-billed guardrail cost must count in response_cost."""
     payload = _build_success_payload(logging_obj, _guardrail_kwargs(response_cost=0.0000429))
 
     assert payload is not None
