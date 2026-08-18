@@ -5079,24 +5079,43 @@ async def test_apply_guardrail_failure_logs_a_dict_not_a_bare_string():
     assert "error" in logged
 
 
-def test_build_tracing_detail_surfaces_usage_counters():
-    """LIT-5650: the billable usage block Bedrock returns per ApplyGuardrail call must
-    land on the tracing detail as guardrail_usage so it reaches spend logs as a
-    sibling of guardrail_response (which default redaction replaces wholesale)."""
+def test_build_tracing_detail_surfaces_usage_counters_and_cost(monkeypatch):
+    """LIT-5650/LIT-5651: the billable usage block Bedrock returns per ApplyGuardrail
+    call must land on the tracing detail as guardrail_usage, priced into
+    guardrail_cost, so spend logs and budgets see what AWS bills."""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "bedrock/guardrails": {
+                "guardrail_cost_per_unit": {
+                    "topicPolicyUnits": 0.00015,
+                    "contentPolicyUnits": 0.00015,
+                    "wordPolicyUnits": 0.0,
+                }
+            }
+        },
+    )
     guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
     detail = guardrail._build_tracing_detail(
         {
             "action": "GUARDRAIL_INTERVENED",
             "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0, "oddball": "not-an-int"},
-        }
+        },
+        aws_region_name="us-east-1",
     )
 
     assert detail["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0}
+    assert detail["guardrail_cost"] == pytest.approx(0.00045)
 
 
 def test_build_tracing_detail_omits_guardrail_usage_when_bedrock_reports_none():
     guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
 
-    assert "guardrail_usage" not in guardrail._build_tracing_detail({"action": "NONE"})
-    assert "guardrail_usage" not in guardrail._build_tracing_detail({"action": "NONE", "usage": {}})
+    for detail in (
+        guardrail._build_tracing_detail({"action": "NONE"}, aws_region_name="us-east-1"),
+        guardrail._build_tracing_detail({"action": "NONE", "usage": {}}, aws_region_name="us-east-1"),
+    ):
+        assert "guardrail_usage" not in detail
+        assert "guardrail_cost" not in detail
