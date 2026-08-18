@@ -96,6 +96,55 @@ describe("ChatUI", () => {
     });
   });
 
+  it("should show the SDK type by its human label rather than its wire value", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /get code/i }));
+
+    const sdkTrigger = await screen.findByLabelText("SDK Type");
+    expect(sdkTrigger).toHaveTextContent("OpenAI SDK");
+
+    await user.click(sdkTrigger);
+    await user.click(await screen.findByRole("option", { name: "Azure SDK" }));
+
+    expect(await screen.findByLabelText("SDK Type")).toHaveTextContent("Azure SDK");
+  });
+
+  it("should show the voice by its human label rather than its wire value", async () => {
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await selectComboboxOption("Select an endpoint", "/v1/audio/speech");
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Voice")).toHaveTextContent("Alloy - Professional and confident");
+    });
+  });
+
   it("should allow the user to select a model", async () => {
     render(
       <ChatUI

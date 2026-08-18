@@ -820,7 +820,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               <Button type="submit" variant="secondary" onClick={cancel} disabled={isSaving}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSaving}>
+              <Button type="submit" disabled={isSaving} aria-busy={isSaving}>
                 {isSaving && <UiLoadingSpinner className="size-4" />}
                 Save Changes
               </Button>

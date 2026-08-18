@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { Text, Button, Callout } from "@tremor/react";
 import { Modal, Spin, Select } from "antd";
+import { CircleCheck, FileDown } from "lucide-react";
 import { z } from "zod/v4";
 import { getGlobalLitellmHeaderName } from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
 const cloudZeroSettingsSchema = z.object({
@@ -242,7 +245,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
       <div className="space-y-4">
         {/* Export Type Selection */}
         <div>
-          <Text className="font-medium mb-2 block">Export Destination</Text>
+          <p className="text-sm font-medium mb-2 block">Export Destination</p>
           <Select value={exportType} onChange={setExportType} options={exportOptions} className="w-full" size="large" />
         </div>
 
@@ -256,27 +259,15 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
             ) : (
               <>
                 {existingSettings && (
-                  <Callout
-                    title="Existing CloudZero Configuration"
-                    icon={() => (
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                        />
-                      </svg>
-                    )}
-                    color="green"
-                    className="mb-4"
-                  >
-                    <Text>
+                  <Alert className="mb-4">
+                    <CircleCheck />
+                    <AlertTitle>Existing CloudZero Configuration</AlertTitle>
+                    <AlertDescription>
                       API Key: {existingSettings.api_key_masked}
                       <br />
                       Connection ID: {existingSettings.connection_id}
-                    </Text>
-                  </Callout>
+                    </AlertDescription>
+                  </Alert>
                 )}
 
                 {!existingSettings && (
@@ -303,25 +294,27 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
 
         {/* CSV Export Info */}
         {exportType === "csv" && (
-          <Callout
-            title="CSV Export"
-            icon={() => (
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-              </svg>
-            )}
-            color="blue"
-          >
-            <Text>Export your usage data as a CSV file for analysis in spreadsheet applications.</Text>
-          </Callout>
+          <Alert variant="info">
+            <FileDown />
+            <AlertTitle>CSV Export</AlertTitle>
+            <AlertDescription>
+              Export your usage data as a CSV file for analysis in spreadsheet applications.
+            </AlertDescription>
+          </Alert>
         )}
 
         {/* Action Buttons */}
         <div className="flex justify-end space-x-2 pt-4">
-          <Button variant="secondary" onClick={handleModalClose}>
+          <Button type="button" variant="secondary" onClick={handleModalClose}>
             Cancel
           </Button>
-          <Button onClick={handleExport} loading={loading || exportLoading} disabled={loading || exportLoading}>
+          <Button
+            type="button"
+            onClick={handleExport}
+            disabled={loading || exportLoading}
+            aria-busy={loading || exportLoading}
+          >
+            {(loading || exportLoading) && <UiLoadingSpinner className="size-4" />}
             {exportType === "cloudzero" ? "Export to CloudZero" : "Export CSV"}
           </Button>
         </div>

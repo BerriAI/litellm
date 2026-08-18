@@ -187,6 +187,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
           <Field>
             <FieldLabel htmlFor={`${fieldId}-type`}>Type</FieldLabel>
             <Select
+              items={INTENT_TYPES}
               value={effectiveConfig.competitor_intent_type}
               onValueChange={(v: string | null) => v !== null && handleConfigChange("competitor_intent_type", v)}
             >
@@ -260,6 +261,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
           <Field>
             <FieldLabel htmlFor={`${fieldId}-competitor-comparison`}>Policy: Competitor comparison</FieldLabel>
             <Select
+              items={COMPETITOR_COMPARISON_POLICIES}
               value={effectiveConfig.policy?.competitor_comparison ?? "refuse"}
               onValueChange={(v: string | null) => v !== null && handlePolicyChange("competitor_comparison", v)}
             >
@@ -281,6 +283,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
               Policy: Possible competitor comparison
             </FieldLabel>
             <Select
+              items={POSSIBLE_COMPETITOR_COMPARISON_POLICIES}
               value={effectiveConfig.policy?.possible_competitor_comparison ?? "reframe"}
               onValueChange={(v: string | null) =>
                 v !== null && handlePolicyChange("possible_competitor_comparison", v)

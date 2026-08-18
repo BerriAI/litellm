@@ -3,23 +3,14 @@ import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useMo
 import { useQueryClient } from "@tanstack/react-query";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
-import {
-  Card,
-  Grid,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Text,
-  Title,
-  Button as TremorButton,
-} from "@tremor/react";
-import { Button, Modal, Tooltip } from "antd";
+import { KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button as AntdButton, Modal, Tooltip } from "antd";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
@@ -477,10 +468,11 @@ export default function ModelInfoView({
   if (isLoadingModel) {
     return (
       <div className="p-4">
-        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft className="size-4" />
           Back to Models
-        </TremorButton>
-        <Text>Loading...</Text>
+        </Button>
+        <p className="text-sm">Loading...</p>
       </div>
     );
   }
@@ -489,10 +481,11 @@ export default function ModelInfoView({
   if (!modelData) {
     return (
       <div className="p-4">
-        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft className="size-4" />
           Back to Models
-        </TremorButton>
-        <Text>Model not found</Text>
+        </Button>
+        <p className="text-sm">Model not found</p>
       </div>
     );
   }
@@ -599,40 +592,42 @@ export default function ModelInfoView({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+          <Button variant="ghost" onClick={onClose} className="mb-4">
+            <ArrowLeft className="size-4" />
             Back to Models
-          </TremorButton>
-          <Title>Public Model Name: {getDisplayModelName(modelData)}</Title>
+          </Button>
+          <h2 className="text-xl font-semibold">Public Model Name: {getDisplayModelName(modelData)}</h2>
           <div className="flex items-center cursor-pointer">
-            <Text className="text-gray-500 font-mono">{modelData.model_info.id}</Text>
-            <Button
+            <span className="text-sm text-muted-foreground font-mono">{modelData.model_info.id}</span>
+            <AntdButton
               type="text"
               size="small"
               icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              aria-label="Copy model ID"
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
               className={`left-2 z-10 transition-all duration-200 ${
                 copiedStates["model-id"]
                   ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
             />
           </div>
         </div>
         <div className="flex gap-2">
           {(!isAnyAutoRouter || isComplexityRouterModel) && (
-            <Button
+            <AntdButton
               icon={<RefreshIcon className="h-4 w-4" />}
               onClick={handleTestConnection}
               className="flex items-center gap-2"
               data-testid="test-connection-button"
             >
               Test Connection
-            </Button>
+            </AntdButton>
           )}
 
           {!isAnyAutoRouter && (
             <>
-              <Button
+              <AntdButton
                 icon={<KeyIcon className="h-4 w-4" />}
                 onClick={() => setIsUpdateCredentialsModalOpen(true)}
                 className="flex items-center"
@@ -640,9 +635,9 @@ export default function ModelInfoView({
                 data-testid="update-api-key-button"
               >
                 Update API Key
-              </Button>
+              </AntdButton>
 
-              <Button
+              <AntdButton
                 icon={<KeyIcon className="h-4 w-4" />}
                 onClick={() => setIsCredentialModalOpen(true)}
                 className="flex items-center"
@@ -650,10 +645,10 @@ export default function ModelInfoView({
                 data-testid="reuse-credentials-button"
               >
                 Re-use Credentials
-              </Button>
+              </AntdButton>
             </>
           )}
-          <Button
+          <AntdButton
             danger
             icon={<TrashIcon className="h-4 w-4" />}
             onClick={() => setIsDeleteModalOpen(true)}
@@ -662,29 +657,33 @@ export default function ModelInfoView({
             data-testid="delete-model-button"
           >
             {deleteLabel}
-          </Button>
+          </AntdButton>
         </div>
       </div>
 
-      <TabGroup>
-        <TabList className="mb-6">
-          <Tab>Overview</Tab>
-          <Tab>Raw JSON</Tab>
-        </TabList>
+      <Tabs defaultValue="overview">
+        <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
+            Raw JSON
+          </TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
-          <TabPanel>
+        <div>
+          <TabsContent value="overview" keepMounted>
             {/* Overview Grid */}
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6 mb-6">
-              <Card>
-                <Text>Provider</Text>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+              <Card className="block p-6">
+                <p className="text-sm">Provider</p>
                 <div className="mt-2 flex items-center space-x-2">
                   {modelData.provider && <Logo provider={modelData.provider} className="w-4 h-4" />}
-                  <Title>{modelData.provider || "Not Set"}</Title>
+                  <h3 className="text-lg font-medium">{modelData.provider || "Not Set"}</h3>
                 </div>
               </Card>
-              <Card>
-                <Text>LiteLLM Model</Text>
+              <Card className="block p-6">
+                <p className="text-sm">LiteLLM Model</p>
                 <div className="mt-2 overflow-hidden">
                   <Tooltip title={modelData.litellm_model_name || "Not Set"}>
                     <div className="break-all text-sm font-medium leading-relaxed cursor-pointer">
@@ -693,17 +692,17 @@ export default function ModelInfoView({
                   </Tooltip>
                 </div>
               </Card>
-              <Card>
-                <Text>Pricing</Text>
+              <Card className="block p-6">
+                <p className="text-sm">Pricing</p>
                 <div className="mt-2">
-                  <Text>Input: ${modelData.input_cost}/1M tokens</Text>
-                  <Text>Output: ${modelData.output_cost}/1M tokens</Text>
+                  <p className="text-sm">Input: ${modelData.input_cost}/1M tokens</p>
+                  <p className="text-sm">Output: ${modelData.output_cost}/1M tokens</p>
                 </div>
               </Card>
-            </Grid>
+            </div>
 
             {/* Audit info shown as a subtle banner below the overview */}
-            <div className="mb-6 text-sm text-gray-500 flex items-center gap-x-6">
+            <div className="mb-6 text-sm text-muted-foreground flex items-center gap-x-6">
               <div className="flex items-center gap-x-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -736,20 +735,20 @@ export default function ModelInfoView({
             </div>
 
             {/* Settings Card */}
-            <Card>
+            <Card className="block p-6">
               <div className="flex justify-between items-center mb-4">
-                <Title>Model Settings</Title>
+                <h3 className="text-lg font-medium">Model Settings</h3>
                 <div className="flex gap-2">
                   {isAutoRouterModel && canEditModel && !isEditing && (
-                    <TremorButton onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
+                    <Button onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
                       Edit Auto Router
-                    </TremorButton>
+                    </Button>
                   )}
                   {canEditModel ? (
                     !isEditing && (
-                      <TremorButton onClick={() => setIsEditing(true)} className="flex items-center">
+                      <Button onClick={() => setIsEditing(true)} className="flex items-center">
                         Edit Settings
-                      </TremorButton>
+                      </Button>
                     )
                   ) : (
                     <Tooltip title="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
@@ -778,20 +777,18 @@ export default function ModelInfoView({
                   healthCheckModelOptions={healthCheckModelOptions}
                 />
               ) : (
-                <Text>Loading...</Text>
+                <p className="text-sm">Loading...</p>
               )}
             </Card>
-          </TabPanel>
+          </TabsContent>
 
-          <TabPanel>
-            <Card>
-              <pre className="bg-gray-100 p-4 rounded-sm text-xs overflow-auto">
-                {JSON.stringify(modelData, null, 2)}
-              </pre>
+          <TabsContent value="raw" keepMounted>
+            <Card className="block p-6">
+              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
             </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+          </TabsContent>
+        </div>
+      </Tabs>
 
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
@@ -836,7 +833,7 @@ export default function ModelInfoView({
           onCancel={() => setIsCredentialModalOpen(false)}
           title="Using Existing Credential"
         >
-          <Text>{modelData.litellm_params.litellm_credential_name}</Text>
+          <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
         </Modal>
       )}
 
@@ -867,9 +864,9 @@ export default function ModelInfoView({
         open={isAutoRouterTestModalOpen}
         onCancel={() => setIsAutoRouterTestModalOpen(false)}
         footer={[
-          <Button key="close" onClick={() => setIsAutoRouterTestModalOpen(false)}>
+          <AntdButton key="close" onClick={() => setIsAutoRouterTestModalOpen(false)}>
             Close
-          </Button>,
+          </AntdButton>,
         ]}
         width={700}
       >

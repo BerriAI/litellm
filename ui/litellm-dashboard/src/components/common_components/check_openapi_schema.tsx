@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, InputNumber, Select } from "antd";
-import { TextInput } from "@tremor/react";
+import { Form, Input as AntdInput, InputNumber, Select } from "antd";
+import { Input } from "@/components/ui/input";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Tooltip } from "antd";
 import { getOpenAPISchema } from "../networking";
@@ -186,7 +186,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
 
     let inputComponent;
     if (isJSONField(key, property)) {
-      inputComponent = <Input.TextArea rows={4} placeholder="Enter as JSON" className="font-mono" />;
+      inputComponent = <AntdInput.TextArea rows={4} placeholder="Enter as JSON" className="font-mono" />;
     } else if (property.enum) {
       inputComponent = (
         <Select>
@@ -200,9 +200,9 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
     } else if (type === "number" || type === "integer") {
       inputComponent = <InputNumber style={{ width: "100%" }} precision={type === "integer" ? 0 : undefined} />;
     } else if (key === "duration") {
-      inputComponent = <TextInput placeholder="eg: 30s, 30h, 30d" />;
+      inputComponent = <Input placeholder="eg: 30s, 30h, 30d" />;
     } else {
-      inputComponent = <TextInput placeholder={tooltip || ""} />;
+      inputComponent = <Input placeholder={tooltip || ""} />;
     }
 
     return (

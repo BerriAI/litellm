@@ -22,4 +22,22 @@ describe("PromptMessagesCard", () => {
     fireEvent.click(screen.getByRole("button", { name: /add message/i }));
     expect(onAddMessage).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["user", "User"],
+    ["assistant", "Assistant"],
+    ["system", "System"],
+  ])("shows the %s role by its human label", (role, label) => {
+    render(
+      <PromptMessagesCard
+        messages={[{ role, content: "Hello" }]}
+        onAddMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+        onRemoveMessage={vi.fn()}
+        onMoveMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Message 1 role" })).toHaveTextContent(label);
+  });
 });
