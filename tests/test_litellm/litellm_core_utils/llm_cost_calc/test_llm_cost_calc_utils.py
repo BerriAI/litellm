@@ -1781,6 +1781,81 @@ def test_service_tier_fallback_pricing():
     ), f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
 
 
+def test_service_tier_ultrafast_pricing():
+    """An ultrafast request bills the *_ultrafast rates for all token types.
+
+    Regression for the ultrafast service tier being absent from ServiceTier:
+    the cost-key lookup silently returned the standard keys, undercounting
+    every ultrafast request.
+    """
+    cached_tokens = 200
+    cache_write_tokens = 300
+    text_tokens = 500
+    usage = Usage(
+        prompt_tokens=text_tokens + cached_tokens + cache_write_tokens,
+        completion_tokens=400,
+        total_tokens=text_tokens + cached_tokens + cache_write_tokens + 400,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+    model_info: ModelInfo = {
+        "key": "gpt-5.6-sol",
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 3e-05,
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token_ultrafast": 5e-05,
+        "output_cost_per_token_ultrafast": 3e-04,
+        "cache_creation_input_token_cost_ultrafast": 6.25e-05,
+        "cache_read_input_token_cost_ultrafast": 5e-06,
+    }
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-5.6-sol",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="ultrafast",
+        model_info=model_info,
+    )
+
+    expected_prompt_cost = (
+        text_tokens * 5e-05 + cached_tokens * 5e-06 + cache_write_tokens * 6.25e-05
+    )
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost == pytest.approx(400 * 3e-04)
+
+
+def test_service_tier_ultrafast_fallback_pricing():
+    """Without *_ultrafast keys an ultrafast request bills the standard rate, not zero.
+
+    Guards the suffix fallback in _get_cost_per_unit: "_fast" is a substring of
+    "_ultrafast", so a shortest-first suffix match would strip the wrong suffix
+    and price the request at 0.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    std_prompt_cost, std_completion_cost = generic_cost_per_token(
+        model="gpt-5.6-sol",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=None,
+    )
+    ultrafast_prompt_cost, ultrafast_completion_cost = generic_cost_per_token(
+        model="gpt-5.6-sol",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="ultrafast",
+    )
+
+    assert std_prompt_cost + std_completion_cost > 0
+    assert ultrafast_prompt_cost == pytest.approx(std_prompt_cost)
+    assert ultrafast_completion_cost == pytest.approx(std_completion_cost)
+
+
 @pytest.mark.parametrize(
     "model",
     [
@@ -2322,7 +2397,11 @@ def test_service_tier_suffixes_constant_in_sync_with_enum():
     from litellm.litellm_core_utils.llm_cost_calc.utils import _SERVICE_TIER_SUFFIXES
     from litellm.types.utils import ServiceTier
 
-    assert _SERVICE_TIER_SUFFIXES == tuple(f"_{st.value}" for st in ServiceTier)
+    assert set(_SERVICE_TIER_SUFFIXES) == {f"_{st.value}" for st in ServiceTier}
+    # longest-first so a substring match resolves "_ultrafast" before "_fast"
+    assert list(_SERVICE_TIER_SUFFIXES) == sorted(
+        _SERVICE_TIER_SUFFIXES, key=len, reverse=True
+    )
 
 
 def test_get_cost_per_unit_falls_back_from_service_tier_key_to_base():
