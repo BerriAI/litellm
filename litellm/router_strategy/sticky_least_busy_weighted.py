@@ -23,6 +23,7 @@ Independent from the base handler: own singleton, own Prometheus metric names
 (litellm_sticky_weighted_routing_*), and own Redis key prefix (sticky_lb_weighted:).
 """
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -1448,14 +1449,28 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
         the key would expire and in-flight decrements would hit a fresh key at 0,
         going negative. By refreshing TTL on every access, the key only expires
         after cache_ttl seconds of ZERO activity to that deployment.
+
+        Non-blocking: when a running event loop is available (the normal proxy
+        request path), the Redis EXPIRE is scheduled asynchronously via the
+        async variant so it never stalls the event loop. Without a running loop
+        (sync callers / tests) it falls back to the original synchronous call.
         """
         try:
-            if (
-                self.router_cache.redis_cache is not None
-                and hasattr(self.router_cache.redis_cache, "redis_client")
-                and self.router_cache.redis_cache.redis_client is not None
-            ):
-                self.router_cache.redis_cache.redis_client.expire(cache_key, self.cache_ttl)
+            if self.router_cache.redis_cache is None:
+                return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop: fall back to the original synchronous path.
+                if (
+                    hasattr(self.router_cache.redis_cache, "redis_client")
+                    and self.router_cache.redis_cache.redis_client is not None
+                ):
+                    self.router_cache.redis_cache.redis_client.expire(
+                        cache_key, self.cache_ttl
+                    )
+                return
+            loop.create_task(self._async_refresh_cache_ttl(cache_key))
         except Exception:
             pass  # Best-effort — if Redis is down, we can't refresh TTL anyway
 
@@ -1586,6 +1601,70 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
     # CustomLogger Callbacks - Request Tracking
     # =========================================================================
 
+    def _non_blocking_cache_delta(
+        self,
+        cache_key: str,
+        value: int,
+        ttl: Optional[int],
+        load_key_source: str,
+        action: str = "increment",
+    ) -> Optional[int]:
+        """
+        Synchronous entry point for a request-count delta (increment/decrement).
+
+        Returns an in-memory delta'd value immediately so routing decisions see
+        a correct count, and schedules the Redis write asynchronously on the
+        running event loop so a slow Redis never blocks the request hot path.
+
+        If no event loop is running (sync callers / tests), falls back to a
+        direct synchronous Redis delta — preserving the original behavior.
+
+        The async decrement path already uses `await async_increment_cache`;
+        this mirrors it for the sync callback signatures (log_pre_api_call and
+        the sync log_success/log_failure callbacks) without changing them.
+        """
+        # Decide dispatch first to avoid double-applying the in-memory cache
+        # (the sync fallback's increment_cache also touches in-memory).
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop: fall back to the original synchronous Redis path.
+            try:
+                return self.router_cache.increment_cache(
+                    key=cache_key, value=value, ttl=ttl
+                )
+            except Exception as e:
+                verbose_router_logger.error(
+                    f"StickyLeastBusy sync increment_cache error: {e}"
+                )
+                return None
+
+        # Running loop: apply in-memory synchronously for an immediate
+        # correct value, then defer the Redis write so it can never block.
+        immediate: Optional[int] = None
+        if self.router_cache.in_memory_cache is not None:
+            immediate = self.router_cache.in_memory_cache.increment_cache(
+                cache_key, value, ttl=ttl
+            )
+
+        async def _do_redis_delta() -> None:
+            try:
+                await self.router_cache.async_increment_cache(
+                    key=cache_key, value=value, ttl=ttl
+                )
+            except Exception as e:
+                verbose_router_logger.warning(
+                    f"StickyLeastBusy async Redis {action} failed (non-blocking): {e}"
+                )
+                self._counter_events.labels(
+                    action,
+                    "redis_async_failed_in_memory_used",
+                    load_key_source,
+                ).inc()
+
+        loop.create_task(_do_redis_delta())
+        return immediate
+
     def log_pre_api_call(self, model, messages, kwargs):
         """Increment in-flight count. Deduped by litellm_call_id for streaming."""
         debug_enabled = verbose_router_logger.isEnabledFor(logging.DEBUG)
@@ -1642,7 +1721,9 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
                 return
 
             cache_key = self._get_request_count_cache_key(model_group, dep_id, load_key)
-            new_value = self.router_cache.increment_cache(key=cache_key, value=1, ttl=self.cache_ttl)
+            new_value = self._non_blocking_cache_delta(
+                cache_key, 1, self.cache_ttl, load_key_source, action="increment"
+            )
             if litellm_call_id and new_value is not None:
                 self._remember_incremented_call_id(litellm_call_id)
             if new_value is not None:
@@ -1744,8 +1825,8 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
                 return
 
             cache_key = self._get_request_count_cache_key(model_group, dep_id, load_key)
-            new_value = self.router_cache.increment_cache(
-                key=cache_key, value=-1, ttl=self.cache_ttl
+            new_value = self._non_blocking_cache_delta(
+                cache_key, -1, self.cache_ttl, load_key_source, action="decrement"
             )
             if new_value is not None:
                 self._refresh_cache_ttl(cache_key)
