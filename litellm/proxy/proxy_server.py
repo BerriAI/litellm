@@ -5691,6 +5691,25 @@ class ProxyConfig:
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
 
+                ## resolve routing/classifier plugin dotted paths, matching load_config: the router's
+                ## deployment ids were hashed from the RESOLVED params, so hashing the raw strings
+                ## here would compute different ids and evict every plugin-bearing auto-router ##
+                complexity_router_config = model["litellm_params"].get("complexity_router_config")
+                if isinstance(complexity_router_config, dict):
+                    try:
+                        resolve_complexity_router_plugins(
+                            model_name=model.get("model_name", ""),
+                            complexity_router_config=complexity_router_config,
+                            config_file_path=user_config_file_path,
+                        )
+                    except Exception as e:  # noqa: BLE001 -- a plugin module broken on disk must not evict valid deployments
+                        verbose_proxy_logger.warning(
+                            "Failed to resolve complexity-router plugins in _delete_deployment: %s. "
+                            "Skipping deployment cleanup to avoid removing valid models.",
+                            str(e),
+                        )
+                        return None
+
                 ## check if they have model-id's ##
                 model_id = model.get("model_info", {}).get("id", None)
                 if model_id is None:
