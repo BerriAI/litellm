@@ -9,6 +9,7 @@ across pods or stop races; the hook reads active jobs through a short-TTL cache.
 import asyncio
 import hashlib
 import random
+import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -55,7 +56,7 @@ _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 
 # The judge answers with a small JSON object; a tighter budget truncates the JSON
 # mid-object and the attempt is lost to an error row.
-JUDGE_MAX_OUTPUT_TOKENS: Final = 500
+JUDGE_MAX_OUTPUT_TOKENS: Final = 1500
 
 _MAX_ERROR_CHARS: Final = 500
 
@@ -323,6 +324,14 @@ def _sample_hits(request_id: str, job_id: str, percentage: float) -> bool:
     digest: Final = hashlib.sha256(f"{job_id}:{request_id}".encode()).digest()
     bucket: Final = int.from_bytes(digest[:8], "big") / float(2**64)
     return bucket * 100.0 < percentage
+
+
+def _failure_detail(e: BaseException) -> str:
+    """Exception class, message, and the raising frame, so an attempt's error row names
+    the faulty code path without needing debug logs on the pod."""
+    frames: Final = traceback.extract_tb(e.__traceback__)
+    location: Final = f" at {frames[-1].filename.rsplit('/', 1)[-1]}:{frames[-1].lineno}" if frames else ""
+    return f"{type(e).__name__}{location}: {e}"
 
 
 def _judge_call_cost(response: object) -> float:
@@ -764,7 +773,9 @@ class ShadowEvalLogger(CustomLogger):
         try:
             response: Final = await router.acompletion(
                 model=target_model,
-                messages=messages,  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
+                messages=[  # mutable-ok: provider transforms rewrite messages in place, so the router gets its own copy
+                    dict(m) for m in messages
+                ],  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
                 metadata=shadow_metadata,
                 num_retries=0,
                 fallbacks=[],  # mutable-ok: SDK kwarg; a failed shadow is a recorded error, never a spend multiplier
@@ -772,7 +783,7 @@ class ShadowEvalLogger(CustomLogger):
             )
         except Exception as e:  # noqa: BLE001  # provider errors become error rows, not crashes
             verbose_logger.debug("shadow_eval: router call failed: %s", e)
-            return _CallFailure(f"shadow router call failed: {e}")
+            return _CallFailure(f"shadow router call failed: {_failure_detail(e)}")
         text: Final = _chat_final_text(response)
         if not text:
             return _CallFailure("shadow router returned an empty response")
