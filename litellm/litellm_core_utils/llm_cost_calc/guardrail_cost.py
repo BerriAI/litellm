@@ -1,3 +1,4 @@
+import math
 from collections.abc import Mapping
 from typing import Final
 
@@ -46,6 +47,13 @@ def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str 
     return sum(units * pricing.guardrail_cost_per_unit.get(counter, 0.0) for counter, units in usage_units.items())
 
 
+def _billable_entry_cost(entry: GuardrailCostEntry) -> float:
+    cost: Final = entry.guardrail_cost
+    if cost is None or not math.isfinite(cost) or cost <= 0.0:
+        return 0.0
+    return cost
+
+
 def guardrail_information_cost(guardrail_information: object) -> float:
     try:
         parsed: Final = _GUARDRAIL_INFORMATION_ADAPTER.validate_python(guardrail_information)
@@ -54,8 +62,8 @@ def guardrail_information_cost(guardrail_information: object) -> float:
     if parsed is None:
         return 0.0
     if isinstance(parsed, GuardrailCostEntry):
-        return parsed.guardrail_cost or 0.0
-    return sum(entry.guardrail_cost or 0.0 for entry in parsed)
+        return _billable_entry_cost(parsed)
+    return sum(_billable_entry_cost(entry) for entry in parsed)
 
 
 def cost_breakdown_with_guardrail(cost_breakdown: CostBreakdown | None, guardrail_cost: float) -> CostBreakdown | None:
