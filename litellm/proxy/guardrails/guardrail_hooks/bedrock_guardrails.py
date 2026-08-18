@@ -31,6 +31,7 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import bedrock_guardrail_cost
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -899,6 +900,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             request_data=request_data,
             event_type=event_type,
             start_time=start_time,
+            aws_region_name=aws_region_name,
         )
         return merged_response
 
@@ -1151,6 +1153,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     request_data=request_data,
                     event_type=event_type,
                     start_time=start_time,
+                    aws_region_name=aws_region_name,
                 )
                 raise self._get_http_exception_for_blocked_guardrail(
                     bedrock_guardrail_response, request_data=request_data
@@ -1172,11 +1175,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
+        aws_region_name: str | None,
     ) -> None:
         """Log a single ApplyGuardrail HTTP attempt as-is (its own status,
         derived from its own response). Used only for the blocked-content
         case, which ends the whole chunking flow immediately."""
-        tracing_detail: Final = self._build_tracing_detail(BedrockGuardrailResponse(**json_response))
+        tracing_detail: Final = self._build_tracing_detail(
+            BedrockGuardrailResponse(**json_response), aws_region_name=aws_region_name
+        )
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=json_response,
@@ -1195,6 +1201,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
+        aws_region_name: str | None,
     ) -> None:
         """Log one logical ApplyGuardrail call -- possibly several chunk calls
         under the hood -- using its final merged response, so a chunked
@@ -1205,7 +1212,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         ``Output.__type`` with an exception marker. That marker survives the merge,
         so the status is derived from the merged response rather than assumed to be
         a success, which is what the pre-chunking code reported for that shape."""
-        tracing_detail: Final = self._build_tracing_detail(merged_response)
+        tracing_detail: Final = self._build_tracing_detail(merged_response, aws_region_name=aws_region_name)
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=dict(merged_response),  # mutable-ok: logging helper requires a dict
@@ -2036,7 +2043,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return (status_code, err)
         return (status_code, message)
 
-    def _build_tracing_detail(self, response: BedrockGuardrailResponse) -> GuardrailTracingDetail:
+    def _build_tracing_detail(
+        self, response: BedrockGuardrailResponse, aws_region_name: str | None
+    ) -> GuardrailTracingDetail:
         """
         Build the tracing detail from the raw Bedrock response, before
         redaction, so downstream loggers (OTEL, Langfuse, ...) get the
@@ -2060,6 +2069,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             }
             if usage_units:
                 tracing_detail["guardrail_usage"] = usage_units
+                tracing_detail["guardrail_cost"] = bedrock_guardrail_cost(
+                    usage_units=usage_units, aws_region_name=aws_region_name
+                )
         return tracing_detail
 
     def _extract_violation_category_names(self, response: BedrockGuardrailResponse) -> list[str]:

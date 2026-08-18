@@ -31,11 +31,13 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
@@ -2197,10 +2199,20 @@ class ProxyBaseLLMRequestProcessing:
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         recover_response_cost: Final = not response_cost and hidden_params.get("response_cost") is None
-        response_cost_for_headers: Final = (
+        llm_cost_for_headers: Final = (
             self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
             if recover_response_cost
             else response_cost
+        )
+        _, request_metadata_bucket = get_or_create_metadata_bucket(self.data)
+        guardrail_cost_for_headers: Final = guardrail_information_cost(
+            request_metadata_bucket.get("standard_logging_guardrail_information")
+        )
+        response_cost_for_headers: Final = (
+            (llm_cost_for_headers if isinstance(llm_cost_for_headers, (int, float)) else 0.0)
+            + guardrail_cost_for_headers
+            if guardrail_cost_for_headers > 0
+            else llm_cost_for_headers
         )
 
         fastapi_response.headers.update(
