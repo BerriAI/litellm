@@ -74,14 +74,6 @@ const mergeDay = (a: DailyData, b: DailyData): DailyData => ({
   breakdown: mergeBreakdown(a.breakdown, b.breakdown),
 });
 
-/**
- * Combine daily activity pages into one series with a single entry per date.
- *
- * The backend paginates over raw spend rows, so a date whose rows straddle a
- * page boundary comes back once per page, each entry holding only that page's
- * share of the day. Concatenating those entries leaves duplicate dates that
- * under-report every per-day figure in the charts and the CSV export.
- */
 export const mergeDailyResults = (existing: readonly DailyData[], incoming: readonly DailyData[]): DailyData[] =>
   incoming.reduce<DailyData[]>(
     (acc, day) => {

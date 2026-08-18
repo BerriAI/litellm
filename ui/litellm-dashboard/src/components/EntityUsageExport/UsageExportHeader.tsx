@@ -34,7 +34,6 @@ interface UsageExportHeaderProps {
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
-  /** Blocks the export while the data on screen does not cover the whole requested range. */
   exportDisabled?: boolean;
   exportDisabledReason?: string;
 }

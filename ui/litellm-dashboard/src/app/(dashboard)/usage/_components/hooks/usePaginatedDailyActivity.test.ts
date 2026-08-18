@@ -119,6 +119,24 @@ describe("usePaginatedDailyActivity", () => {
     expect(result.current.incomplete).toBe(false);
   });
 
+  it("stays incomplete while the first page is still in flight", async () => {
+    let resolveFirstPage: (value: ReturnType<typeof page>) => void = () => {};
+    const fetchFn = vi.fn().mockReturnValueOnce(
+      new Promise<ReturnType<typeof page>>((resolve) => {
+        resolveFirstPage = resolve;
+      }),
+    );
+
+    const { result } = renderHook(() => usePaginatedDailyActivity({ fetchFn, args, enabled: true }));
+
+    await waitFor(() => expect(result.current.loading).toBe(true), { timeout: 3000 });
+    expect(result.current.incomplete).toBe(true);
+
+    resolveFirstPage(page("2026-06-25", 22.38, 1, 1));
+
+    await waitFor(() => expect(result.current.incomplete).toBe(false), { timeout: 3000 });
+  });
+
   it("flags the range as incomplete when a page fetch fails instead of looking complete", async () => {
     const fetchFn = vi
       .fn()

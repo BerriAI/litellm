@@ -49,9 +49,7 @@ interface UsePaginatedDailyActivityReturn {
   isFetchingMore: boolean;
   progress: PaginationProgress;
   cancelled: boolean;
-  /** True when a page fetch failed, so the data on screen covers only part of the range. */
   failed: boolean;
-  /** True whenever the data on screen is known not to cover the whole requested range. */
   incomplete: boolean;
   cancel: () => void;
 }
@@ -250,7 +248,7 @@ export function usePaginatedDailyActivity({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, fetchFn, argsKey]);
 
-  const incomplete = isFetchingMore || cancelled || failed;
+  const incomplete = loading || isFetchingMore || cancelled || failed;
 
   return { data, loading, isFetchingMore, progress, cancelled, failed, incomplete, cancel };
 }
