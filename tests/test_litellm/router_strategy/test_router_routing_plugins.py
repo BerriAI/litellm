@@ -221,7 +221,7 @@ def test_filter_by_routing_plugin_candidates_narrows_and_raises_when_empty():
 
 
 def test_json_default_stable_id_is_stable_across_instances():
-    """_generate_model_id's json.dumps `default=` fallback must not embed an object's
+    """generate_model_id's json.dumps `default=` fallback must not embed an object's
     memory address (e.g. plain str() on an object with no custom __repr__ falls back
     to object.__repr__'s `<module.Class object at 0x...>`) -- that would make the
     deployment id churn on every process restart for any deployment whose
@@ -232,7 +232,7 @@ def test_json_default_stable_id_is_stable_across_instances():
     assert router._json_default_stable_id(LanguageDetector()) != router._json_default_stable_id(TenantPolicy())
 
 
-def test_generate_model_id_is_stable_when_litellm_params_contain_a_plugin_instance():
+def testgenerate_model_id_is_stable_when_litellm_params_contain_a_plugin_instance():
     """End-to-end: a deployment id built from litellm_params containing a routing
     plugin instance (e.g. complexity_router_config.plugins) must be identical across
     separate calls, not just non-crashing."""
@@ -242,8 +242,8 @@ def test_generate_model_id_is_stable_when_litellm_params_contain_a_plugin_instan
         "complexity_router_config": {"plugins": [LanguageDetector()]},
     }
 
-    id1 = router._generate_model_id("smart-router", litellm_params)
-    id2 = router._generate_model_id(
+    id1 = router.generate_model_id("smart-router", litellm_params)
+    id2 = router.generate_model_id(
         "smart-router",
         {
             "model": "auto_router/complexity_router",
