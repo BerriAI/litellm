@@ -3132,46 +3132,45 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: dict[str, object] = {
+            filter_query: Final[dict[str, object]] = {  # mutable-ok: optional filters are assembled before the read
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date
                 }
             }
 
-            effective_api_key: str | None = None
-            effective_request_id: str | None = None
-            effective_user_id: str | None = None
-            if api_key is not None and isinstance(api_key, str):
-                effective_api_key = prisma_client.hash_token(token=api_key) if api_key.startswith("sk-") else api_key
+            effective_api_key: Final[str | None] = (
+                (prisma_client.hash_token(token=api_key) if api_key.startswith("sk-") else api_key)
+                if isinstance(api_key, str)
+                else None
+            )
+            effective_request_id: Final[str | None] = request_id if isinstance(request_id, str) else None
+            effective_user_id: Final[str | None] = user_id if isinstance(user_id, str) else None
+            if effective_api_key is not None:
                 filter_query["api_key"] = effective_api_key
-            if request_id is not None and isinstance(request_id, str):
-                effective_request_id = request_id
-                filter_query["request_id"] = request_id
-            if user_id is not None and isinstance(user_id, str):
-                effective_user_id = user_id
-                filter_query["user"] = user_id
+            if effective_request_id is not None:
+                filter_query["request_id"] = effective_request_id
+            if effective_user_id is not None:
+                filter_query["user"] = effective_user_id
 
             # Check if user wants unsummarized data
             if not summarize:
                 if is_request_id_lookup:
-                    data = await _find_spend_logs(
+                    return await _find_spend_logs(
                         prisma_client,
                         where=filter_query,
                         take=take,
                         skip=skip,
                     )
-                else:
-                    data = await _find_legacy_spend_log_page(
-                        prisma_client,
-                        start_time_gte=start_date_obj,
-                        start_time_lte=end_date_obj,
-                        api_key=effective_api_key,
-                        user_id=effective_user_id,
-                        take=take,
-                        skip=skip,
-                    )
-                return data
+                return await _find_legacy_spend_log_page(
+                    prisma_client,
+                    start_time_gte=start_date_obj,
+                    start_time_lte=end_date_obj,
+                    api_key=effective_api_key,
+                    user_id=effective_user_id,
+                    take=take,
+                    skip=skip,
+                )
 
             response: Final = await _summarize_legacy_spend_logs(
                 prisma_client,
@@ -3183,10 +3182,10 @@ async def view_spend_logs(
             )
 
             if len(response) > 0:
-                daily_spend: dict[date, float] = {}
-                daily_api_spend: dict[date, dict[str, float]] = {}
-                daily_user_spend: dict[date, dict[str | None, float]] = {}
-                daily_model_spend: dict[date, dict[str, float]] = {}
+                daily_spend: Final[dict[date, float]] = {}  # mutable-ok: aggregate database groups by day
+                daily_api_spend: Final[dict[date, dict[str, float]]] = {}  # mutable-ok: aggregate groups by key
+                daily_user_spend: Final[dict[date, dict[str | None, float]]] = {}  # mutable-ok: aggregate groups by user
+                daily_model_spend: Final[dict[date, dict[str, float]]] = {}  # mutable-ok: aggregate groups by model
                 for record in response:
                     spend_date = _legacy_spend_log_summary_date(record["spend_date"])
                     record_api_key = record["api_key"] or ""
@@ -3204,9 +3203,9 @@ async def view_spend_logs(
                     daily_model_spend.setdefault(spend_date, {})[record_model] = (
                         daily_model_spend.setdefault(spend_date, {}).get(record_model, 0.0) + record_spend
                     )
-                return_list: list[dict[str, object]] = []
+                return_list: Final[list[dict[str, object]]] = []  # mutable-ok: append the ordered legacy response rows
                 for spend_date in sorted(daily_spend):
-                    day_result: dict[str, object] = {
+                    day_result: Final[dict[str, object]] = {  # mutable-ok: add per-key totals before emitting the row
                         "users": daily_user_spend[spend_date],
                         "models": daily_model_spend[spend_date],
                         "spend": daily_spend[spend_date],
@@ -3248,21 +3247,19 @@ async def view_spend_logs(
                 scoped_filter["user"] = user_id
 
             if is_request_id_lookup:
-                data = await _find_spend_logs(
+                return await _find_spend_logs(
                     prisma_client,
                     where=scoped_filter,
                     take=take,
                     skip=skip,
                 )
-            else:
-                data = await _find_legacy_spend_log_page(
-                    prisma_client,
-                    api_key=scoped_filter.get("api_key"),
-                    user_id=scoped_filter.get("user"),
-                    take=take,
-                    skip=skip,
-                )
-            return data
+            return await _find_legacy_spend_log_page(
+                prisma_client,
+                api_key=scoped_filter.get("api_key"),
+                user_id=scoped_filter.get("user"),
+                take=take,
+                skip=skip,
+            )
 
         return None
 
