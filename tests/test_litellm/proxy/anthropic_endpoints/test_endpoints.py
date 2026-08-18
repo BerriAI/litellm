@@ -221,6 +221,73 @@ class TestStripTotalTokens(unittest.TestCase):
         assert response.usage == {"input_tokens": 100, "output_tokens": 50}
 
 
+class TestCountTokensEstimateSignal:
+    """`/v1/messages/count_tokens` must not pass off a local-tokenizer estimate as
+    an authoritative count (issue #37102).
+
+    When Bedrock's CountTokens API does not support a model (e.g. Claude Opus 5 /
+    Sonnet 5) litellm silently falls back to a local tokenizer, which understates
+    the count. The provider path records the upstream reply in `original_response`;
+    the local fallback leaves it None. The endpoint keys off that to flag estimates.
+    """
+
+    async def _call_endpoint(self, token_count_response):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        request_body = {
+            "model": "claude-opus-5",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value=request_body)),
+            patch.object(proxy_server, "token_counter", new=AsyncMock(return_value=token_count_response)),
+        ):
+            return await ep.count_tokens(request=MagicMock(), user_api_key_dict=MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_local_fallback_is_flagged_as_estimate(self):
+        """Bedrock CountTokens unsupported -> local tokenizer fallback -> the
+        endpoint must mark the count as an estimate instead of returning a bare
+        200 that looks authoritative."""
+        from litellm.types.utils import TokenCountResponse
+
+        # What the internal token_counter returns after Bedrock rejects the model
+        # and it falls back to the local tokenizer: note original_response is None.
+        local_fallback = TokenCountResponse(
+            total_tokens=11208,
+            request_model="claude-opus-5",
+            model_used="claude-opus-5",
+            tokenizer_type="huggingface_tokenizer",
+        )
+
+        response = await self._call_endpoint(local_fallback)
+
+        assert response["input_tokens"] == 11208
+        assert response["litellm_estimate"] is True
+        assert response["litellm_tokenizer_used"] == "huggingface_tokenizer"
+
+    @pytest.mark.asyncio
+    async def test_authoritative_provider_count_is_not_flagged(self):
+        """When Bedrock's CountTokens API actually answered (original_response set),
+        the count is exact and the response stays the bare Anthropic shape."""
+        from litellm.types.utils import TokenCountResponse
+
+        authoritative = TokenCountResponse(
+            total_tokens=26,
+            request_model="claude-sonnet-4-6",
+            model_used="claude-sonnet-4-6",
+            tokenizer_type="bedrock_api",
+            original_response={"inputTokens": 26},
+        )
+
+        response = await self._call_endpoint(authoritative)
+
+        assert response == {"input_tokens": 26}
+
+
 class TestStripTotalTokensFeatureFlag(unittest.TestCase):
     """The strip is gated behind `litellm.strip_anthropic_total_tokens`.
 

@@ -282,7 +282,11 @@ async def test_anthropic_messages_count_tokens_endpoint():
         assert isinstance(response, dict)
         assert "input_tokens" in response
         assert response["input_tokens"] == 15
-        assert len(response) == 1  # Should only contain input_tokens
+        # No original_response on the mock => local tokenizer was used, so the
+        # count is surfaced as an estimate rather than an authoritative figure
+        # (issue #37102).
+        assert response["litellm_estimate"] is True
+        assert response["litellm_tokenizer_used"] == "openai_tokenizer"
 
         print("✅ Anthropic endpoint test passed!")
 
@@ -354,7 +358,10 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         assert isinstance(response, dict)
         assert "input_tokens" in response
         assert response["input_tokens"] == 12
-        assert len(response) == 1  # Should only contain input_tokens
+        # Local tokenizer (no original_response) => flagged as an estimate
+        # (issue #37102).
+        assert response["litellm_estimate"] is True
+        assert response["litellm_tokenizer_used"] == "openai_tokenizer"
 
         print("✅ Non-Anthropic model test passed!")
 

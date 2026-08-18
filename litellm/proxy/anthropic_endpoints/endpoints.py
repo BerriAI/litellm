@@ -287,8 +287,28 @@ async def count_tokens(
         elif isinstance(token_response, dict):
             _token_response_dict = token_response
 
-        # Convert the internal response to Anthropic API format
-        return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
+        # Convert the internal response to Anthropic API format.
+        #
+        # Only a provider CountTokens API (e.g. Bedrock/Anthropic) returns an exact
+        # count, and every such path records the upstream reply in `original_response`.
+        # When it is absent the count came from litellm's local tokenizer and is an
+        # APPROXIMATION -- for models Bedrock's CountTokens API rejects (e.g. Claude
+        # Opus 5 / Sonnet 5) that tokenizer is miscalibrated and understates the count.
+        # Flag the estimate so callers doing context management do not treat it as
+        # authoritative and overrun the model's window.
+        # https://github.com/BerriAI/litellm/issues/37102
+        is_estimate = _token_response_dict.get("original_response") is None
+        return {
+            "input_tokens": _token_response_dict.get("total_tokens", 0),
+            **(
+                {
+                    "litellm_estimate": True,
+                    "litellm_tokenizer_used": _token_response_dict.get("tokenizer_type"),
+                }
+                if is_estimate
+                else {}
+            ),
+        }
 
     except HTTPException:
         raise
