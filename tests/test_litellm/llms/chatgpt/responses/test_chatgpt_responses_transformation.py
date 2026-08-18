@@ -158,6 +158,109 @@ class TestChatGPTResponsesAPITransformation:
             "function": {"name": "hello"},
         }
 
+    def _transform_headers(
+        self, input: list[dict[str, str]], litellm_params: GenericLiteLLMParams
+    ) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        ChatGPTResponsesAPIConfig().transform_responses_api_request(
+            model="chatgpt/gpt-5.4",
+            input=input,
+            response_api_optional_request_params={},
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        return headers
+
+    def test_derived_session_id_is_stable_as_conversation_grows(self):
+        params = GenericLiteLLMParams(chatgpt_derive_session_id=True)
+        first_turn = [{"role": "user", "content": "start of conversation"}]
+        later_turn = first_turn + [
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "follow-up"},
+        ]
+
+        headers_one = self._transform_headers(first_turn, params)
+        headers_two = self._transform_headers(later_turn, params)
+
+        assert headers_one["session_id"].startswith("litellm-derived-")
+        assert headers_one["session_id"] == headers_two["session_id"]
+
+    def test_derived_session_id_differs_across_conversations(self):
+        params = GenericLiteLLMParams(chatgpt_derive_session_id=True)
+
+        headers_one = self._transform_headers(
+            [{"role": "user", "content": "conversation a"}], params
+        )
+        headers_two = self._transform_headers(
+            [{"role": "user", "content": "conversation b"}], params
+        )
+
+        assert headers_one["session_id"] != headers_two["session_id"]
+
+    def test_explicit_session_id_wins_over_derivation(self):
+        params = GenericLiteLLMParams(
+            chatgpt_derive_session_id=True, litellm_session_id="explicit-1"
+        )
+
+        headers = self._transform_headers([{"role": "user", "content": "hi"}], params)
+
+        assert "session_id" not in headers
+
+    def test_proxy_trace_id_does_not_block_derivation(self):
+        params = GenericLiteLLMParams(
+            chatgpt_derive_session_id=True,
+            litellm_trace_id="b6c2977a-0652-43de-a9a6-165822f439f6",
+        )
+        headers = {"session_id": params.litellm_trace_id}
+
+        ChatGPTResponsesAPIConfig().transform_responses_api_request(
+            model="chatgpt/gpt-5.4",
+            input=[{"role": "user", "content": "hi"}],
+            response_api_optional_request_params={},
+            litellm_params=params,
+            headers=headers,
+        )
+
+        assert headers["session_id"].startswith("litellm-derived-")
+
+    def test_different_api_keys_derive_different_session_ids(self):
+        input = [{"role": "user", "content": "shared prefix"}]
+        params_a = GenericLiteLLMParams(
+            chatgpt_derive_session_id=True,
+            litellm_metadata={"user_api_key_hash": "key-a"},
+        )
+        params_b = GenericLiteLLMParams(
+            chatgpt_derive_session_id=True,
+            litellm_metadata={"user_api_key_hash": "key-b"},
+        )
+
+        headers_a = self._transform_headers(input, params_a)
+        headers_b = self._transform_headers(input, params_b)
+
+        assert headers_a["session_id"] != headers_b["session_id"]
+        assert headers_a["session_id"] == self._transform_headers(input, params_a)["session_id"]
+
+    def test_quoted_false_string_does_not_enable_derivation(self):
+        params = GenericLiteLLMParams(chatgpt_derive_session_id="false")
+
+        headers = self._transform_headers([{"role": "user", "content": "hi"}], params)
+
+        assert "session_id" not in headers
+
+    def test_quoted_true_string_enables_derivation(self):
+        params = GenericLiteLLMParams(chatgpt_derive_session_id="true")
+
+        headers = self._transform_headers([{"role": "user", "content": "hi"}], params)
+
+        assert headers["session_id"].startswith("litellm-derived-")
+
+    def test_no_derivation_without_flag(self):
+        headers = self._transform_headers(
+            [{"role": "user", "content": "hi"}], GenericLiteLLMParams()
+        )
+
+        assert "session_id" not in headers
+
     @pytest.mark.parametrize(
         ("model_name", "response_model"),
         [

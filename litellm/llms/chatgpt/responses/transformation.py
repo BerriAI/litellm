@@ -23,9 +23,12 @@ from ..authenticator import Authenticator
 from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
+    derive_chatgpt_session_id,
     ensure_chatgpt_session_id,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
+    get_explicit_chatgpt_session_id,
+    should_derive_chatgpt_session_id,
 )
 
 
@@ -82,6 +85,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             request["instructions"] = base_instructions
         request["store"] = False
         request["stream"] = True
+        should_derive: Final = should_derive_chatgpt_session_id(litellm_params)
+        if should_derive and get_explicit_chatgpt_session_id(litellm_params) is None:
+            derived: Final = derive_chatgpt_session_id(litellm_params, request.get("instructions"), input)
+            headers["session_id"] = derived  # rebind-ok: must land in the dict validate_environment built
         include: Final = list(request.get("include") or [])
         if "reasoning.encrypted_content" not in include:
             include.append("reasoning.encrypted_content")
