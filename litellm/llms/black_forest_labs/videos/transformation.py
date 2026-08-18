@@ -20,12 +20,12 @@ from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    _get_httpx_client,  # pyright: ignore[reportPrivateUsage]  # the shared client factory every provider uses to fetch generated media
     get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.videos.main import VideoObject
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
 from litellm.types.videos.utils import (
     encode_video_id_with_provider,
     extract_original_video_id,
@@ -123,7 +123,7 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
 
     def map_openai_params(
         self,
-        video_create_optional_params: dict,  # mutable-ok: BaseVideoConfig signature
+        video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: BaseVideoConfig signature
@@ -369,12 +369,23 @@ class BlackForestLabsVideoConfig(BaseVideoConfig):
         if custom_llm_provider and video_obj.id:
             # Re-attach the region: BFL echoes a bare job id, but the caller may
             # reuse this id for content retrieval and must land on the same host.
-            polled_url: Final = str(raw_response.request.url) if raw_response.request else None
+            polled_url: Final = self._polled_url(raw_response)
             video_obj.id = encode_video_id_with_provider(
                 _pack_region(video_obj.id, polled_url), custom_llm_provider, None
             )
 
         return video_obj
+
+    def _polled_url(self, raw_response: httpx.Response) -> str | None:
+        """The URL this response came from, when httpx recorded one.
+
+        ``Response.request`` raises rather than returning None when the response
+        was built without a request, which is the case in unit tests.
+        """
+        try:
+            return str(raw_response.request.url)
+        except RuntimeError:
+            return None
 
     def _map_status(self, bfl_status: str) -> str:
         if bfl_status in _TERMINAL_STATUSES:
