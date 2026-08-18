@@ -6,6 +6,7 @@ import { UnifiedSelector } from "./UnifiedSelector";
 import TagSelector from "@/components/tag_management/TagSelector";
 import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
@@ -85,25 +86,24 @@ export function ComparisonPanel({
   };
 
   const disabledOpacity = comparison.useAdvancedParams ? 1 : 0.4;
-  const disabledTextColor = comparison.useAdvancedParams ? "text-gray-700" : "text-gray-400";
-
-  const handleTogglePopover = () => {
-    setPopoverVisible((prev) => !prev);
-  };
+  const disabledTextColor = comparison.useAdvancedParams ? "text-foreground" : "text-muted-foreground";
 
   const handleClosePopover = () => {
     setPopoverVisible(false);
   };
 
   const settingsContent = (
-    <div className="w-[300px] max-h-[65vh] overflow-y-auto relative">
-      {/* Close button in top right */}
-      <button
+    <div className="relative max-h-[65vh] w-[300px] overflow-y-auto">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        className="absolute top-0 right-0 z-10 text-muted-foreground"
+        aria-label="Close settings"
         onClick={handleClosePopover}
-        className="absolute top-0 right-0 p-1 hover:bg-gray-100 rounded-sm transition-colors text-gray-500 hover:text-gray-700 z-10"
       >
-        <X size={14} />
-      </button>
+        <X />
+      </Button>
 
       <div className="space-y-2">
         {/* Sync Checkbox */}
@@ -123,10 +123,12 @@ export function ComparisonPanel({
 
         {/* General Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">General Settings</h4>
+          <h4 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+            General Settings
+          </h4>
           <div className="space-y-2">
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Tags</label>
+              <label className="mb-0.5 block text-xs font-medium text-muted-foreground">Tags</label>
               <TagSelector
                 value={comparison.tags}
                 onChange={(value) => handleSettingChange("tags", value)}
@@ -134,7 +136,7 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Vector Stores</label>
+              <label className="mb-0.5 block text-xs font-medium text-muted-foreground">Vector Stores</label>
               <VectorStoreSelector
                 value={comparison.vectorStores}
                 onChange={(value) => handleSettingChange("vectorStores", value)}
@@ -142,7 +144,7 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Guardrails</label>
+              <label className="mb-0.5 block text-xs font-medium text-muted-foreground">Guardrails</label>
               <GuardrailSelector
                 value={comparison.guardrails}
                 onChange={(value) => handleSettingChange("guardrails", value)}
@@ -153,7 +155,9 @@ export function ComparisonPanel({
         </div>
         {/* Advanced Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">Advanced Settings</h4>
+          <h4 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+            Advanced Settings
+          </h4>
           <div className="space-y-2">
             <div className="flex items-center gap-2 pb-1">
               <Checkbox
@@ -211,9 +215,9 @@ export function ComparisonPanel({
   );
 
   return (
-    <div className="bg-white first:border-l-0 border-l border-gray-200 flex flex-col min-h-0">
-      <div className="border-b flex items-center justify-between gap-3 px-4 py-3">
-        <div className="flex items-center gap-3 flex-1">
+    <div className="flex min-h-0 flex-col border-l border-border bg-background first:border-l-0">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+        <div className="flex flex-1 items-center gap-3">
           <UnifiedSelector
             value={currentSelection}
             options={selectorOptions}
@@ -222,27 +226,12 @@ export function ComparisonPanel({
             onChange={(value) => onUpdate(isA2AMode ? { agent: value } : { model: value })}
           />
           <div className="flex items-center gap-2">
-            <Popover
-              open={popoverVisible}
-              onOpenChange={() => {
-                // Prevent automatic closing - we control it manually
-              }}
-            >
+            <Popover open={popoverVisible} onOpenChange={setPopoverVisible}>
               <PopoverTrigger
-                render={
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleTogglePopover();
-                    }}
-                    className={`p-2 rounded-lg transition-colors ${
-                      popoverVisible ? "bg-gray-200 text-gray-700" : "hover:bg-gray-100 text-gray-600"
-                    }`}
-                  >
-                    <Settings size={18} />
-                  </button>
-                }
-              />
+                render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Panel settings" />}
+              >
+                <Settings />
+              </PopoverTrigger>
               <PopoverContent side="bottom" align="end" className="w-auto">
                 {settingsContent}
               </PopoverContent>
@@ -250,15 +239,19 @@ export function ComparisonPanel({
           </div>
         </div>
         {canRemove && (
-          <button
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            aria-label="Remove comparison"
             onClick={(event) => {
               event.stopPropagation();
               onRemove();
             }}
-            className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
           >
-            <X size={18} />
-          </button>
+            <X />
+          </Button>
         )}
       </div>
       <div className="relative flex-1 flex flex-col min-h-0">

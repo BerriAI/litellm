@@ -881,7 +881,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
           const requestProxyBaseUrl =
             simplified && proxySettings
-              ? proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined
+              ? (proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined)
               : customProxyBaseUrl || undefined;
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
@@ -1474,15 +1474,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <Tooltip>
                       <TooltipTrigger
                         render={
-                          <button
+                          <Button
                             type="button"
-                            className="inline-flex"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="text-muted-foreground"
                             aria-label="About MCP servers and toolsets"
                             onClick={() => setIsToolsetsInfoModalVisible(true)}
                           />
                         }
                       >
-                        <Info className="size-3.5 cursor-pointer text-gray-400" />
+                        <Info className="size-3.5" />
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         {endpointType === EndpointType.MCP
@@ -1611,13 +1613,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                                   <span className="flex items-center gap-1 text-xs font-medium text-green-600">
                                     <Key className="size-3" /> Connected
                                   </span>
-                                  <button
+                                  <Button
                                     type="button"
-                                    className="text-xs text-gray-400 underline hover:text-blue-500"
+                                    variant="link"
+                                    size="xs"
+                                    className="h-auto px-0 text-muted-foreground"
                                     onClick={() => setByokModalServer(server)}
                                   >
                                     Reconnect
-                                  </button>
+                                  </Button>
                                 </div>
                               ) : (
                                 <Button
@@ -1968,13 +1972,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             </>
                           )}
                         </div>
-                        <button
+                        <Button
                           type="button"
-                          className="text-xs text-blue-500 hover:text-blue-700"
+                          variant="link"
+                          size="xs"
+                          className="h-auto px-0"
                           onClick={() => codeInterpreter.setEnabled(false)}
                         >
                           Disable
-                        </button>
+                        </Button>
                       </div>
                       {!isLoading && (
                         <div className="flex flex-wrap gap-2">
@@ -1983,14 +1989,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             "Create a PNG bar chart comparing AI gateway providers including LiteLLM",
                             "Generate a CSV of LLM pricing data and visualize it as a line chart",
                           ].map((prompt, idx) => (
-                            <button
+                            <Button
                               key={idx}
                               type="button"
-                              className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
+                              variant="outline"
+                              size="xs"
+                              className="h-auto rounded-full px-3 py-1.5 font-normal"
                               onClick={() => setInputMessage(prompt)} // lgtm[js/xss-through-dom]
                             >
                               {prompt}
-                            </button>
+                            </Button>
                           ))}
                         </div>
                       )}

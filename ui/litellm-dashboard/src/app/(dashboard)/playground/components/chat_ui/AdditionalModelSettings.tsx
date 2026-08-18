@@ -221,7 +221,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
               className="w-full accent-primary disabled:cursor-not-allowed"
               onChange={(event) => handleTemperatureChange(Number(event.target.value))}
             />
-            <div className="mt-1 flex justify-between text-xs text-gray-400">
+            <div className="mt-1 flex justify-between text-xs text-muted-foreground">
               <span>0</span>
               <span>1.0</span>
               <span>2.0</span>
@@ -267,7 +267,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
               className="w-full accent-primary disabled:cursor-not-allowed"
               onChange={(event) => handleMaxTokensChange(Number(event.target.value))}
             />
-            <div className="mt-1 flex justify-between text-xs text-gray-400">
+            <div className="mt-1 flex justify-between text-xs text-muted-foreground">
               <span>1</span>
               <span>32768</span>
             </div>

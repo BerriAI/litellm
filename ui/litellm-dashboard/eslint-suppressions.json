@@ -948,11 +948,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/playground/components/compareUI/components/ModelSelector.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/playground/components/complianceUI/ComplianceUI.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 2

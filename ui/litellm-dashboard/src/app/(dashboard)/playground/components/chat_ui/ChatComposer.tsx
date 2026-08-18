@@ -56,14 +56,15 @@ export function ChatComposer({
       {showSuggestions && suggestions.length > 0 && (
         <div className="flex w-full flex-col gap-1.5" data-testid="chat-suggested-actions">
           {suggestions.map((suggestion) => (
-            <button
+            <Button
               key={suggestion}
               type="button"
-              className="w-full truncate rounded-lg border border-border/50 bg-card/30 px-3 py-1.5 text-left text-[12px] leading-snug text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground"
+              variant="outline"
+              className="h-auto w-full justify-start truncate rounded-lg border-border/50 bg-card/30 px-3 py-1.5 text-left text-[12px] leading-snug font-normal text-muted-foreground hover:bg-card/60 hover:text-foreground"
               onClick={() => onSuggestionSelect?.(suggestion)}
             >
               {suggestion}
-            </button>
+            </Button>
           ))}
         </div>
       )}
