@@ -296,6 +296,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       transport: effectiveTransport,
       static_headers: initialStaticHeaders,
       env_vars: initialEnvVars,
+      env_json: initialEnvJson,
       extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
       dcr_bridge: Boolean(mcpServer.dcr_bridge),
@@ -784,7 +785,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           }
         } else {
           // Dedicated fields path (command/args + env JSON)
-          let parsedEnv: Record<string, string> = {};
+          let parsedEnv: Record<string, string> = rawEnvJson === undefined && mcpServer.env ? { ...mcpServer.env } : {};
           if (rawEnvJson) {
             try {
               const env = JSON.parse(rawEnvJson);
