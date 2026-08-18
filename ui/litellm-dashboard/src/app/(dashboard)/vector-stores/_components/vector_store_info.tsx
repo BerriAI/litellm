@@ -155,11 +155,11 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       </div>
 
       <Tabs defaultValue="details">
-        <TabsList className="mb-6">
-          <TabsTrigger value="details" className="flex-none">
+        <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
+          <TabsTrigger value="details" className="flex-none rounded-none px-4 py-2">
             Details
           </TabsTrigger>
-          <TabsTrigger value="test" className="flex-none">
+          <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
             Test Vector Store
           </TabsTrigger>
         </TabsList>
