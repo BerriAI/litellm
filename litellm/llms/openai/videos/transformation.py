@@ -579,7 +579,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
         This path is used by POST /videos/characters and must send video/mp4,
         not image/* content types.
         """
-        filename: Final = getattr(video, "name", None) or "input_video.mp4"
+        raw_filename: Final = getattr(video, "name", None)
+        filename: Final = raw_filename if isinstance(raw_filename, str) and raw_filename else "input_video.mp4"
         content_type: Final = self._get_video_content_type(video=video, filename=filename)
         files_list.append((field_name, (filename, video, content_type)))
 

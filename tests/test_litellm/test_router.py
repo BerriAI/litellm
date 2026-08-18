@@ -7381,6 +7381,59 @@ def test_model_info_is_active_for_environment_matrix(monkeypatch):
         model_info_is_active_for_environment(model_info={"supported_environments": ["production"]})
 
 
+def test_get_deployment_credentials_returns_credential_fields_only():
+    """
+    get_deployment_credentials projects a deployment's litellm_params through
+    CredentialLiteLLMParams, so credential fields survive and routing-only params
+    (tpm/rpm and friends) are filtered out.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                    "tpm": 1000,
+                },
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials(model_id="deployment-1")
+
+    assert credentials is not None
+    assert credentials["aws_access_key_id"] == "test-access-key"
+    assert credentials["aws_secret_access_key"] == "test-secret-key"
+    assert credentials["aws_region_name"] == "us-east-1"
+    assert "tpm" not in credentials
+
+
+def test_get_deployment_credentials_returns_none_for_blocked_deployment():
+    """
+    A paused deployment must not hand out credentials, so passthrough file / batch
+    callers cannot keep using it by resolving credentials directly.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "test-access-key",
+                },
+                "model_info": {"id": "deployment-1", "blocked": True},
+            }
+        ],
+    )
+
+    assert router.get_deployment_credentials(model_id="deployment-1") is None
+    assert router.get_deployment_credentials(model_id="does-not-exist") is None
+
+
 def test_pre_call_checks_uses_deployment_model_when_model_info_lookup_raises(monkeypatch):
     """
     The supported-params check must run against the deployment's own

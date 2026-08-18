@@ -16,7 +16,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
+from litellm.proxy._types import LiteLLM_UserTable, NewTeamRequest, NewUserResponse
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -8344,3 +8344,53 @@ class TestPersistReturnToCookieSharedHelper:
         resp = Response()
         _persist_return_to_cookie(resp, "https://cp.example.com/ui?page=models")
         assert "litellm_cp_return_to=" in self._cookie(resp)
+
+
+def test_cast_and_deepcopy_default_team_params_from_dict():
+    """A dict-shaped litellm.default_team_params is turned into a NewTeamRequest with
+    the SSO group's id and name layered on top, and the caller's dict is not mutated."""
+    default_team_params = {"max_budget": 10.0, "budget_duration": "1d", "models": ["special-gpt-5"]}
+
+    result = SSOAuthenticationHandler._cast_and_deepcopy_litellm_default_team_params(
+        default_team_params=default_team_params,
+        team_request=NewTeamRequest(team_id="ignored", team_alias="ignored"),
+        litellm_team_id="team-abc",
+        litellm_team_name="Engineering",
+    )
+
+    assert isinstance(result, NewTeamRequest)
+    assert result.team_id == "team-abc"
+    assert result.team_alias == "Engineering"
+    assert result.max_budget == 10.0
+    assert result.budget_duration == "1d"
+    assert result.models == ["special-gpt-5"]
+    assert default_team_params == {
+        "max_budget": 10.0,
+        "budget_duration": "1d",
+        "models": ["special-gpt-5"],
+    }
+
+
+def test_cast_and_deepcopy_default_team_params_from_model():
+    """A DefaultTeamSSOParams-shaped default overlays the incoming request, so the
+    incoming team id survives while the configured defaults win on the fields they set."""
+    litellm.default_team_params = DefaultTeamSSOParams(
+        max_budget=25.0, budget_duration="7d", models=["special-gpt-5"]
+    )
+
+    try:
+        result = SSOAuthenticationHandler._cast_and_deepcopy_litellm_default_team_params(
+            default_team_params=litellm.default_team_params,
+            team_request=NewTeamRequest(team_id="team-abc", team_alias="Engineering"),
+            litellm_team_id="team-abc",
+            litellm_team_name="Engineering",
+        )
+    finally:
+        litellm.default_team_params = None
+
+    assert isinstance(result, NewTeamRequest)
+    assert result.team_id == "team-abc"
+    assert result.team_alias == "Engineering"
+    assert result.max_budget == 25.0
+    assert result.budget_duration == "7d"
+    assert result.models == ["special-gpt-5"]

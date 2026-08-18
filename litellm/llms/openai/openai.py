@@ -2465,13 +2465,9 @@ class OpenAIAssistantsAPI(BaseLLM):
             **message_data,
         )
 
-        response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage.model_validate(thread_message.dict())
-        else:
-            response_obj = OpenAIMessage.model_validate(thread_message.dict())
-        return response_obj
+        return OpenAIMessage.model_validate(thread_message.model_dump())
 
     # fmt: off
 
@@ -2544,13 +2540,9 @@ class OpenAIAssistantsAPI(BaseLLM):
             **message_data,
         )
 
-        response_obj: OpenAIMessage | None = None
         if getattr(thread_message, "status", None) is None:
             thread_message.status = "completed"
-            response_obj = OpenAIMessage.model_validate(thread_message.dict())
-        else:
-            response_obj = OpenAIMessage.model_validate(thread_message.dict())
-        return response_obj
+        return OpenAIMessage.model_validate(thread_message.model_dump())
 
     async def async_get_messages(
         self,
@@ -2671,7 +2663,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         message_thread: Final = await openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.model_dump())
 
     # fmt: off
 
@@ -2757,7 +2749,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         message_thread: Final = openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread.model_validate(message_thread.model_dump())
 
     async def async_get_thread(
         self,
@@ -2780,7 +2772,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         response: Final = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.model_dump())
 
     # fmt: off
 
@@ -2846,7 +2838,7 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         response: Final = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread.model_validate(response.model_dump())
 
     def delete_thread(self):
         pass
