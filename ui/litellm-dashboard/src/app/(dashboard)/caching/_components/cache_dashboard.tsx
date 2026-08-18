@@ -1,7 +1,7 @@
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useEffect, useState } from "react";
 import { toast } from "@/lib/toast";
-import UsageDatePicker from "@/components/shared/usage_date_picker";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { BarChart } from "@/components/shared/charts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -190,7 +190,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               Metrics&quot; on the Usage page or individual requests in the Logs page.
             </p>
 
-            <div className="mt-4 grid grid-cols-1 items-center gap-4 md:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 items-center gap-4 md:grid-cols-[1fr_1fr_auto]">
               <Combobox
                 multiple
                 items={uniqueApiKeys}
@@ -251,7 +251,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 </ComboboxContent>
               </Combobox>
 
-              <UsageDatePicker
+              <AdvancedDatePicker
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
