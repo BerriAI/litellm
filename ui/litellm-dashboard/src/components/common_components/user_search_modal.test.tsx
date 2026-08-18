@@ -138,6 +138,29 @@ describe("UserSearchModal submit payload", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ role: "admin" });
   });
 
+  it("keeps the picked identity when the option showing the current value is reselected", async () => {
+    const { user, onSubmit } = setup();
+
+    await searchByEmail(user, "pick");
+
+    vi.mocked(userFilterUICall).mockResolvedValue([] as never);
+    const idInput = screen.getByLabelText("User ID");
+    await user.click(idInput);
+    await user.type(idInput, "zzz");
+    await waitFor(() => expect(userFilterUICall).toHaveBeenCalledTimes(2), { timeout: 3000 });
+
+    await user.click(screen.getByPlaceholderText("Search by email"));
+    await user.click(await screen.findByRole("option", { name: "picked@example.com" }));
+
+    await user.click(save());
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      user_email: "picked@example.com",
+      user_id: "u-1",
+    });
+  });
+
   it("does not submit on Enter in any field, while the button still does", async () => {
     const { user, onSubmit } = setup();
 
