@@ -736,11 +736,11 @@ export default function ModelInfoView({
       </div>
 
       <Tabs defaultValue="overview">
-        <TabsList className="mb-6">
-          <TabsTrigger value="overview" className="flex-none">
+        <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
-          <TabsTrigger value="raw" className="flex-none">
+          <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
             Raw JSON
           </TabsTrigger>
         </TabsList>
