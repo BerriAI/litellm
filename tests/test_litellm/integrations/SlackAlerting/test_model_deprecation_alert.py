@@ -359,3 +359,37 @@ async def test_should_not_alert_or_claim_the_lock_within_a_day_of_a_sent_alert(m
 
     pod_lock_manager.acquire_lock.assert_not_awaited()
     mock_send_alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_should_back_off_a_full_day_after_a_pass_raises(monkeypatch):
+    """A misconfigured webhook raises on every send, which must log once a day rather than every poll"""
+    monkeypatch.setattr(litellm, "model_cost", DEAD_MODEL_COST)
+    alerting = SlackAlerting(
+        alerting=["slack"], alert_types=[AlertType.model_deprecation_warnings]
+    )
+    router = _make_router([DEAD_ALIAS_DEPLOYMENT])
+    slept: list[float] = []
+
+    async def stop_after_second_pass(seconds):
+        slept.append(seconds)
+        if len(slept) == 2:
+            raise asyncio.CancelledError
+
+    with (
+        patch.object(
+            alerting,
+            "send_alert",
+            new_callable=AsyncMock,
+            side_effect=ValueError("Missing SLACK_WEBHOOK_URL from environment"),
+        ) as mock_send_alert,
+        patch(
+            "litellm.integrations.SlackAlerting.slack_alerting.asyncio.sleep",
+            side_effect=stop_after_second_pass,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await alerting.run_scheduled_deprecation_check(get_llm_router=lambda: router)
+
+    assert slept == [DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS] * 2
+    assert mock_send_alert.await_count == 2

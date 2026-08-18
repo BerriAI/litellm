@@ -1140,13 +1140,16 @@ Model Info:
         """Poll every pass for a loaded router, the alert being on, and no alert in the last day, then alert
 
         A pass that could not alert (no router yet, alert type off, a sibling pod holds the daily lock, or a
-        redis blip at claim time) is retried on the next poll instead of costing a day
+        redis blip at claim time) is retried on the next poll instead of costing a day, while a pass that
+        raised (a missing webhook, say) backs off a full day so a misconfiguration logs once, not every poll
         """
         while True:
             try:
                 await self._run_deprecation_alert_pass(get_llm_router(), pod_lock_manager)
             except Exception as e:  # noqa: BLE001  # a failed alert must not kill the loop
                 verbose_proxy_logger.exception("Error in model deprecation alert loop: %s", e)
+                await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)
+                continue
             await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
 
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
