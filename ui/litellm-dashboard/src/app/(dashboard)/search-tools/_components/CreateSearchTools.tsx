@@ -249,8 +249,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               name="api_key"
               rules={[{ required: false, message: "Please enter an API key" }]}
             >
-              <Input
-                type="password"
+              <AntdInput.Password
                 placeholder="Enter your API key"
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
