@@ -59,6 +59,12 @@ function describeScoreAgainstBoundaries(
   return named(`at or above ${complexReasoning}`, "REASONING");
 }
 
+function describePlanModeFloor(matchedKeyword: string | undefined): string {
+  if (matchedKeyword === "exit_plan_mode") return "Plan-mode floor (exit_plan_mode tool)";
+  if (matchedKeyword) return `Plan-mode floor: "${matchedKeyword}"`;
+  return "Plan-mode floor";
+}
+
 function describeCause(decision: RoutingDecision): string {
   const { cause, classifier_model: classifierModel, matched_keyword: matchedKeyword, tier_label: tierLabel } = decision;
 
@@ -73,6 +79,8 @@ function describeCause(decision: RoutingDecision): string {
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
     case "semantic_keyword_match":
       return "Semantic keyword match";
+    case "plan_mode":
+      return describePlanModeFloor(matchedKeyword);
     case "session_affinity_pin":
       return "Pinned to session";
     case "session_affinity_escalation":
@@ -85,6 +93,8 @@ function describeCause(decision: RoutingDecision): string {
       return "Adaptive bandit";
     case "default_fallback":
       return "Default model, no route matched";
+    case "classifier_fallback":
+      return "Fallback tier, LLM classifier failed";
     case "default_model_fallback":
       return "Default model, LLM classifier failed";
     default:
@@ -139,7 +149,7 @@ export function RoutingDecisionCard({
   // boundary would claim something untrue. Keyed off the cause rather than a marker
   // inside `signals`, which redaction can remove.
   const scoreExplanation =
-    score !== undefined && decision.cause !== "reasoning_override"
+    score !== undefined && decision.cause !== "reasoning_override" && decision.cause !== "plan_mode"
       ? describeScoreAgainstBoundaries(score, tierBoundaries, tierLabel !== undefined)
       : null;
 

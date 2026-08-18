@@ -196,6 +196,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token: Required[float | None]
     input_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     input_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
+    input_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_creation_input_token_cost: float | None
     cache_creation_input_token_cost_above_200k_tokens: float | None
     cache_creation_input_token_cost_above_272k_tokens: float | None
@@ -204,9 +205,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_1hr: float | None
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
+    cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost_above_200k_tokens: float | None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens: float | None
@@ -238,6 +241,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
+    output_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     regional_processing_uplift_multiplier_eu: (
         float | None
     )  # OpenAI EU data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
@@ -2767,12 +2771,23 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
-    # The LLM classifier failed and classifier_fallback is 'default_model', so the request
-    # went to default_model without being classified. Distinct from "default_fallback",
+    # The operator's classifier plugin (classifier_type 'custom') decided the tier.
+    "classifier_plugin",
+    # The LLM classifier or classifier plugin failed on a router with an operator-defined
+    # tier set, so the request routed to the configured fallback_tier without being classified.
+    "classifier_fallback",
+    # The LLM classifier or classifier plugin failed and classifier_fallback is
+    # 'default_model', so the request went to default_model without being classified.
+    # Distinct from "default_fallback",
     # which is a tier having no model configured rather than classification not happening.
     "default_model_fallback",
     "literal_keyword_match",
     "semantic_keyword_match",
+    # A plan-mode sentinel (Claude Code / Copilot plan mode) was detected on the request and
+    # plan_mode_min_tier decided the tier: either it raised what the pipeline chose (classifier,
+    # keyword rule, or session pin), or the floor was already the top configured tier and the
+    # classifier was skipped. The matched sentinel rides in matched_keyword.
+    "plan_mode",
     "session_affinity_pin",
     "session_affinity_escalation",
     "default_fallback",
@@ -3009,6 +3024,16 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     surface it as a queryable span attribute without parsing the raw
     guardrail_response blob."""
 
+    guardrail_usage: ReadOnly[Mapping[str, int] | None]
+    """Provider-reported billable usage counters for this invocation, keyed by the
+    provider's counter name (e.g. Bedrock's ``contentPolicyUnits``). Kept as a
+    sibling of guardrail_response so spend-log prompt redaction never drops it."""
+
+    guardrail_cost: ReadOnly[float | None]
+    """USD cost of this guardrail invocation, priced from ``guardrail_usage`` by the
+    provider hook. Summed into the request's ``response_cost`` so it counts against
+    spend and budgets like token cost."""
+
 
 class EvalVerdict(TypedDict, total=False):
     criterion_name: str
@@ -3052,6 +3077,8 @@ class GuardrailTracingDetail(TypedDict, total=False):
     risk_score: float | None
     violation_categories: list[str] | None
     guardrail_action: str | None
+    guardrail_usage: ReadOnly[Mapping[str, int] | None]
+    guardrail_cost: ReadOnly[float | None]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3091,8 +3118,9 @@ class CostBreakdown(TypedDict, total=False):
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
     output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
     reasoning_cost: float  # Cost of reasoning tokens (subset of output_cost)
-    total_cost: float  # Total cost (input + output + tool usage)
+    total_cost: ReadOnly[float]  # Total cost (input + output + tool usage + guardrail)
     tool_usage_cost: float  # Cost of usage of built-in tools
+    guardrail_cost: ReadOnly[float]  # Cost of guardrail invocations billed by the guardrail provider
     additional_costs: dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
@@ -3279,6 +3307,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: float | None = None
     input_cost_per_token_priority: float | None = None
+    input_cost_per_token_ultrafast: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens: float | None = None
@@ -3286,9 +3315,11 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_creation_input_token_cost_flex: float | None = None
     cache_creation_input_token_cost_priority: float | None = None
+    cache_creation_input_token_cost_ultrafast: float | None = None
     cache_creation_input_audio_token_cost: float | None = None
     cache_read_input_token_cost_flex: float | None = None
     cache_read_input_token_cost_priority: float | None = None
+    cache_read_input_token_cost_ultrafast: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
@@ -3315,6 +3346,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_batches: float | None = None
     output_cost_per_token_flex: float | None = None
     output_cost_per_token_priority: float | None = None
+    output_cost_per_token_ultrafast: float | None = None
     output_cost_per_audio_token: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
@@ -3464,6 +3496,7 @@ all_litellm_params = (
         "bos_token",
         "eos_token",
         "request_timeout",
+        "client_side_timeout",
         "complete_response",
         "self",
         "client",
@@ -3695,6 +3728,7 @@ class LlmProviders(str, Enum):
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
+    VALKEY = "valkey"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
@@ -3743,9 +3777,10 @@ LlmProvidersSet: Final = {provider.value for provider in LlmProviders}
 OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.OPENAI.value,
     LlmProviders.HOSTED_VLLM.value,
+    LlmProviders.LITELLM_PROXY.value,
 }
 
-ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai"]
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
 
 LIST_BATCHES_SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(get_args(ListBatchesSupportedProvider))
 
@@ -3982,6 +4017,7 @@ class ServiceTier(Enum):
     FLEX = "flex"
     PRIORITY = "priority"
     FAST = "fast"
+    ULTRAFAST = "ultrafast"
 
 
 class DataResidency(Enum):

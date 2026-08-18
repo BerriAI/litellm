@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useDiscountConfig } from "./use_discount_config";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => ""),
@@ -70,7 +70,7 @@ describe("useDiscountConfig", () => {
         await result.current.fetchDiscountConfig();
       });
 
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/failed to fetch/i));
+      expect(toast.fromError).toHaveBeenCalledWith(expect.stringMatching(/failed to fetch/i));
     });
   });
 
@@ -84,9 +84,7 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        "Please select a provider and enter discount percentage",
-      );
+      expect(toast.fromError).toHaveBeenCalledWith("Please select a provider and enter discount percentage");
     });
 
     it("should return false and notify when no discount is provided", async () => {
@@ -98,9 +96,7 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        "Please select a provider and enter discount percentage",
-      );
+      expect(toast.fromError).toHaveBeenCalledWith("Please select a provider and enter discount percentage");
     });
 
     it("should return false and notify when the discount exceeds 100", async () => {
@@ -112,7 +108,7 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/0%.*100%/i));
+      expect(toast.fromError).toHaveBeenCalledWith(expect.stringMatching(/0%.*100%/i));
     });
 
     it("should return false and notify when the provider already exists in the config", async () => {
@@ -135,7 +131,7 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
+      expect(toast.fromError).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
     });
 
     it("should save the config and return true on a valid new provider", async () => {
@@ -156,7 +152,7 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(true);
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Discount configuration updated successfully");
+      expect(toast.success).toHaveBeenCalledWith("Discount configuration updated successfully");
     });
   });
 

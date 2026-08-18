@@ -2064,6 +2064,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/comprehendmedical": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Comprehend Medical Sdk Proxy Route
+         * @description AWS-SDK-shaped pass-through for Amazon Comprehend Medical: point the SDK's
+         *     `endpoint_url` at `/comprehendmedical` and the operation is read from the
+         *     `X-Amz-Target` header, per the AWS JSON 1.1 protocol.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+         */
+        post: operations["comprehend_medical_sdk_proxy_route_comprehendmedical_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/comprehendmedical/{operation}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Comprehend Medical Proxy Route
+         * @description Pass-through for Amazon Comprehend Medical, e.g. `POST /comprehendmedical/DetectEntitiesV2`.
+         *
+         *     The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
+         *     using the proxy's AWS credentials.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+         */
+        post: operations["comprehend_medical_proxy_route_comprehendmedical__operation__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/callback/delete": {
         parameters: {
             query?: never;
@@ -7987,6 +8036,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/info": {
         parameters: {
             query?: never;
@@ -8625,6 +8716,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_ocr_post"];
         delete?: never;
@@ -11296,6 +11392,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/complexity_router/scorer_defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Complexity Scorer Defaults
+         * @description Return the complexity router's shipped heuristic scorer defaults, for the dashboard to prefill with.
+         */
+        get: operations["get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/endpoints": {
         parameters: {
             query?: never;
@@ -13942,6 +14058,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Daily Activity Aggregated
+         * @description Aggregated daily activity for teams without pagination, including per-team breakdown.
+         *
+         *     One SQL GROUPING SETS pass returns every day in the range regardless of row
+         *     volume, so callers never reassemble pages. Same response shape as the
+         *     paginated endpoint with page metadata pinned to a single page.
+         *
+         *     Args:
+         *         team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+         *         start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+         *         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+         *         model (Optional[str]): Filter by model name.
+         *         api_key (Optional[str]): Filter by API key.
+         *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+         *         timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+         *     Returns:
+         *         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
+         */
+        get: operations["get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -14651,6 +14802,48 @@ export interface paths {
          */
         post: operations["add_team_callbacks_team__team_id__callback_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/{team_id}/callback/{callback_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Team Callback
+         * @description Remove a single callback from a team
+         *
+         *     The team's other callbacks stay registered and keep firing. Use this instead of
+         *     POST /team/{team_id}/disable_logging, which clears every callback on the team at once.
+         *
+         *     Every entry registered under this callback_name is removed, across callback types, so a
+         *     callback registered for both "success" and "failure" is deregistered by one call.
+         *
+         *     Parameters:
+         *     - team_id (str, required): The unique identifier for the team
+         *     - callback_name (str, required): The name of the callback to remove, matched exactly as it was
+         *       registered with POST /team/{team_id}/callback (e.g. "langfuse", "langsmith", "gcs")
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI. Teams still
+         *     on the deprecated callback_settings metadata shape hold no such entries, so this returns 404 for
+         *     them; POST /team/{team_id}/disable_logging remains the way to clear those.
+         *
+         *     Returns 404 if the team does not exist, or if callback_name is not registered for the team.
+         */
+        delete: operations["delete_team_callback_team__team_id__callback__callback_name__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -17600,6 +17793,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_v1_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/model/info": {
         parameters: {
             query?: never;
@@ -17777,6 +18012,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_v1_ocr_post"];
         delete?: never;
@@ -21461,7 +21701,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -23525,6 +23765,27 @@ export interface components {
              * @description Timezone for date handling
              */
             timezone?: string | null;
+        };
+        /**
+         * ComplexityScorerDefaults
+         * @description The complexity router's shipped heuristic scorer defaults.
+         *
+         *     The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so
+         *     a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+         */
+        ComplexityScorerDefaults: {
+            /** Dimension Weights */
+            dimension_weights: {
+                [key: string]: number;
+            };
+            /** Tier Boundaries */
+            tier_boundaries: {
+                [key: string]: number;
+            };
+            /** Token Thresholds */
+            token_thresholds: {
+                [key: string]: number;
+            };
         };
         /**
          * ComplexityTier
@@ -25958,7 +26219,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -26047,8 +26308,11 @@ export interface components {
              * @description Keywords/phrases that trigger this rule (lexical or semantic match)
              */
             keywords: string[];
-            /** @description Tier to route to when this rule matches */
-            tier: components["schemas"]["ComplexityTier"];
+            /**
+             * Tier
+             * @description Tier to route to when this rule matches: a built-in tier name, or with tier_definitions set, one of the defined tier names
+             */
+            tier: string;
         };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
@@ -27092,6 +27356,8 @@ export interface components {
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
             cache_creation_input_token_cost_priority?: number | null;
+            /** Cache Creation Input Token Cost Ultrafast */
+            cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -27112,6 +27378,8 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Cache Read Input Token Cost Ultrafast */
+            cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -27176,6 +27444,8 @@ export interface components {
             input_cost_per_token_flex?: number | null;
             /** Input Cost Per Token Priority */
             input_cost_per_token_priority?: number | null;
+            /** Input Cost Per Token Ultrafast */
+            input_cost_per_token_ultrafast?: number | null;
             /** Input Cost Per Video Per Second */
             input_cost_per_video_per_second?: number | null;
             /** Input Cost Per Video Per Second Above 128K Tokens */
@@ -27273,6 +27543,8 @@ export interface components {
             output_cost_per_token_flex?: number | null;
             /** Output Cost Per Token Priority */
             output_cost_per_token_priority?: number | null;
+            /** Output Cost Per Token Ultrafast */
+            output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -27337,6 +27609,18 @@ export interface components {
              * @default false
              */
             use_xai_oauth: boolean | null;
+            /** Valkey Embedding Field */
+            valkey_embedding_field?: string | null;
+            /** Valkey Host */
+            valkey_host?: string | null;
+            /** Valkey Password */
+            valkey_password?: string | null;
+            /** Valkey Port */
+            valkey_port?: number | null;
+            /** Valkey Ssl */
+            valkey_ssl?: boolean | null;
+            /** Valkey Text Field */
+            valkey_text_field?: string | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -29019,6 +29303,70 @@ export interface components {
             tags: {
                 [key: string]: string | string[];
             };
+        };
+        /** ModelDeprecationInfo */
+        ModelDeprecationInfo: {
+            /**
+             * Days Until Deprecation
+             * @description Days remaining until the deprecation date. Negative if the model is already deprecated.
+             */
+            days_until_deprecation: number;
+            /**
+             * Deprecation Date
+             * Format: date
+             * @description The date (UTC) when the model becomes deprecated.
+             */
+            deprecation_date: string;
+            /**
+             * Litellm Model
+             * @description The underlying litellm model string the deprecation date is sourced from.
+             */
+            litellm_model?: string | null;
+            /**
+             * Litellm Provider
+             * @description The provider this model belongs to.
+             */
+            litellm_provider?: string | null;
+            /**
+             * Model Name
+             * @description The public name of the model on the proxy (model_group).
+             */
+            model_name: string;
+            /**
+             * Status
+             * @description 'deprecated' if the date has passed, 'imminent' if it falls within warn_within_days, 'upcoming' otherwise.
+             * @enum {string}
+             */
+            status: "upcoming" | "imminent" | "deprecated";
+        };
+        /** ModelDeprecationResponse */
+        ModelDeprecationResponse: {
+            /**
+             * Checked At
+             * Format: date-time
+             * @description UTC timestamp when the deprecation snapshot was generated.
+             */
+            checked_at: string;
+            /**
+             * Deprecated
+             * @description Models whose deprecation date has already passed.
+             */
+            deprecated?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Imminent
+             * @description Models whose deprecation date is within warn_within_days from today and require immediate migration planning.
+             */
+            imminent?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Upcoming
+             * @description Models with a future deprecation date outside the warn window.
+             */
+            upcoming?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Warn Within Days
+             * @description The window (in days) used to bucket 'imminent' models.
+             */
+            warn_within_days: number;
         };
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
@@ -31990,6 +32338,11 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Prompt
+             * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
+             */
+            classification_prompt?: string | null;
+            /**
              * Classifier Context Include Assistant Turns
              * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
              * @default false
@@ -32009,7 +32362,7 @@ export interface components {
             classifier_context_window_size: number;
             /**
              * Classifier Fallback
-             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm'.
+             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm' or 'custom'.
              * @default heuristic
              * @enum {string}
              */
@@ -32017,12 +32370,23 @@ export interface components {
             /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' */
             classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
             /**
+             * Classifier Plugin
+             * @description Not settable over HTTP; the classifier plugin is a runtime object
+             */
+            classifier_plugin?: null;
+            /**
+             * Classifier Plugin Timeout Ms
+             * @description Timeout budget for the classifier plugin call, in milliseconds. On expiry the fallback path decides the tier. Only applies when classifier_type is 'custom'.
+             * @default 3000
+             */
+            classifier_plugin_timeout_ms: number;
+            /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, or an LLM call
+             * @description Classification strategy: local regex/keyword scoring, an LLM call, or a custom classifier plugin
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "llm";
+            classifier_type: "heuristic" | "llm" | "custom";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -32062,6 +32426,11 @@ export interface components {
              */
             escalation_keywords?: string[] | null;
             /**
+             * Fallback Tier
+             * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
+             */
+            fallback_tier?: string | null;
+            /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
              */
@@ -32072,6 +32441,16 @@ export interface components {
              * @default 0.5
              */
             match_threshold: number;
+            /**
+             * Plan Mode Min Tier
+             * @description When set, requests carrying a coding-agent plan-mode sentinel (Claude Code plan mode, VS Code Copilot Plan mode, Copilot CLI's exit_plan_mode tool) are routed to at least this tier: the classified tier still wins when it is higher, and the floor also overrides a session-affinity pin to a lower tier for exactly the turns carrying the sentinel, without rewriting the pin -- the first turn after plan mode exits routes as if plan mode had never happened. Names a built-in tier, or with tier_definitions set, one of the defined tier names (list order is ascending severity, same as keyword_tier_rules). Unset disables detection entirely. The sentinels ride in client-injected prompt text, so a caller who pastes one can spend up to this tier's models -- never down, and never outside the configured pools.
+             */
+            plan_mode_min_tier?: string | null;
+            /**
+             * Plan Mode Patterns
+             * @description Additional case-sensitive literal sentinels that mark a request as plan mode, on top of the built-in Claude Code and Copilot ones. For clients whose plan-mode wording the built-ins don't cover, or after a client release changes its strings.
+             */
+            plan_mode_patterns?: string[] | null;
             /**
              * Plugins
              * @description Not settable over HTTP; routing plugins are runtime objects
@@ -32128,6 +32507,11 @@ export interface components {
             tier_boundaries?: {
                 [key: string]: number;
             };
+            /**
+             * Tier Definitions
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             */
+            tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
              * Tier Distance Penalty
              * @description Score penalty per tier-step away from the classified tier when adaptive=True
@@ -33051,7 +33435,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -33416,6 +33800,26 @@ export interface components {
             updated_team_memberships: components["schemas"]["LiteLLM_TeamMembership"][];
             /** Updated Users */
             updated_users: components["schemas"]["LiteLLM_UserTable"][];
+        };
+        /** TeamCallbackDeleteResponse */
+        TeamCallbackDeleteResponse: {
+            data: components["schemas"]["TeamCallbackDeleteResponseData"];
+            /** Message */
+            message: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "success";
+        };
+        /** TeamCallbackDeleteResponseData */
+        TeamCallbackDeleteResponseData: {
+            /** Failure Callbacks */
+            failure_callbacks: string[];
+            /** Success Callbacks */
+            success_callbacks: string[];
+            /** Team Id */
+            team_id: string;
         };
         /**
          * TeamListItem
@@ -33879,6 +34283,22 @@ export interface components {
             litellm_params: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * TierDefinition
+         * @description An operator-defined tier: the name the LLM classifier must return and its rubric description.
+         */
+        TierDefinition: {
+            /**
+             * Description
+             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which inherits the built-in criteria when omitted
+             */
+            description?: string | null;
+            /**
+             * Name
+             * @description Tier name; becomes a value the LLM classifier can return and a key of `tiers`
+             */
+            name: string;
         };
         /**
          * TokenCountDetailsResponse
@@ -35099,13 +35519,29 @@ export interface components {
             /** Status */
             status: string;
             /** Time Series */
-            time_series: {
-                [key: string]: unknown;
-            }[];
+            time_series: components["schemas"]["UsageChartPoint"][];
             /** Trend */
             trend: string;
             /** Type */
             type: string;
+            /** Usage Units */
+            usage_units: {
+                [key: string]: number;
+            };
+            /** Usage Units By Key */
+            usage_units_by_key: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Usage Units By Team */
+            usage_units_by_team: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Usage Units Daily */
+            usage_units_daily: components["schemas"]["UsageUnitsDailyPoint"][];
         };
         /** UsageLogEntry */
         UsageLogEntry: {
@@ -35142,9 +35578,7 @@ export interface components {
         /** UsageOverviewResponse */
         UsageOverviewResponse: {
             /** Chart */
-            chart: {
-                [key: string]: unknown;
-            }[];
+            chart: components["schemas"]["UsageChartPoint"][];
             /** Passrate */
             passRate: number;
             /** Rows */
@@ -35153,6 +35587,10 @@ export interface components {
             totalBlocked: number;
             /** Totalrequests */
             totalRequests: number;
+            /** Totalusageunits */
+            totalUsageUnits: {
+                [key: string]: number;
+            };
         };
         /** UsageOverviewRow */
         UsageOverviewRow: {
@@ -35176,6 +35614,19 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /** Usageunits */
+            usageUnits: {
+                [key: string]: number;
+            };
+        };
+        /** UsageUnitsDailyPoint */
+        UsageUnitsDailyPoint: {
+            /** Date */
+            date: string;
+            /** Units */
+            units: {
+                [key: string]: number;
+            };
         };
         /**
          * UserAPIKeyAuth
@@ -36015,6 +36466,8 @@ export interface components {
             cache_creation_input_token_cost_flex?: number | null;
             /** Cache Creation Input Token Cost Priority */
             cache_creation_input_token_cost_priority?: number | null;
+            /** Cache Creation Input Token Cost Ultrafast */
+            cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
             /** Cache Read Input Token Cost */
@@ -36035,6 +36488,8 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Cache Read Input Token Cost Ultrafast */
+            cache_read_input_token_cost_ultrafast?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -36099,6 +36554,8 @@ export interface components {
             input_cost_per_token_flex?: number | null;
             /** Input Cost Per Token Priority */
             input_cost_per_token_priority?: number | null;
+            /** Input Cost Per Token Ultrafast */
+            input_cost_per_token_ultrafast?: number | null;
             /** Input Cost Per Video Per Second */
             input_cost_per_video_per_second?: number | null;
             /** Input Cost Per Video Per Second Above 128K Tokens */
@@ -36196,6 +36653,8 @@ export interface components {
             output_cost_per_token_flex?: number | null;
             /** Output Cost Per Token Priority */
             output_cost_per_token_priority?: number | null;
+            /** Output Cost Per Token Ultrafast */
+            output_cost_per_token_ultrafast?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -36260,6 +36719,18 @@ export interface components {
              * @default false
              */
             use_xai_oauth: boolean | null;
+            /** Valkey Embedding Field */
+            valkey_embedding_field?: string | null;
+            /** Valkey Host */
+            valkey_host?: string | null;
+            /** Valkey Password */
+            valkey_password?: string | null;
+            /** Valkey Port */
+            valkey_port?: number | null;
+            /** Valkey Ssl */
+            valkey_ssl?: boolean | null;
+            /** Valkey Text Field */
+            valkey_text_field?: string | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -39441,6 +39912,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ComplianceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    comprehend_medical_sdk_proxy_route_comprehendmedical_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    comprehend_medical_proxy_route_comprehendmedical__operation__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -46708,6 +47230,37 @@ export interface operations {
             };
         };
     };
+    model_deprecations_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     model_info_v1_model_info_get: {
         parameters: {
             query?: {
@@ -50448,6 +51001,26 @@ export interface operations {
             };
         };
     };
+    get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplexityScorerDefaults"];
+                };
+            };
+        };
+    };
     get_supported_endpoints_public_endpoints_get: {
         parameters: {
             query?: never;
@@ -53354,6 +53927,43 @@ export interface operations {
             };
         };
     };
+    get_team_daily_activity_aggregated_team_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_team_team_delete_post: {
         parameters: {
             query?: never;
@@ -54051,6 +54661,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_team_callback_team__team_id__callback__callback_name__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path: {
+                team_id: string;
+                callback_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamCallbackDeleteResponse"];
                 };
             };
             /** @description Validation Error */
@@ -58521,6 +59166,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    model_deprecations_v1_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

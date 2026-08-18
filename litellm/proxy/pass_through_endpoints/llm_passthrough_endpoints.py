@@ -9,6 +9,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
+from types import MappingProxyType
 from typing import Annotated, Any, Final, cast
 
 import httpx
@@ -1077,6 +1078,130 @@ async def bedrock_proxy_route(
     )
 
     return received_value
+
+
+COMPREHEND_MEDICAL_TARGET_PREFIX: Final = "ComprehendMedical_20181030"
+
+
+def _resolve_comprehend_medical_region() -> str | None:
+    region_candidates: Final = (
+        get_secret_str(secret_name="AWS_REGION_NAME"),
+        get_secret_str(secret_name="AWS_REGION"),
+        get_secret_str(secret_name="AWS_DEFAULT_REGION"),
+    )
+    return next((region for region in region_candidates if region), None)
+
+
+@router.post(
+    "/comprehendmedical/{operation}",
+    tags=["AWS Comprehend Medical Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def comprehend_medical_proxy_route(
+    operation: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Pass-through for Amazon Comprehend Medical, e.g. `POST /comprehendmedical/DetectEntitiesV2`.
+
+    The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
+    using the proxy's AWS credentials.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+    """
+    try:
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+        from botocore.credentials import Credentials
+    except ImportError:
+        raise ImportError("Missing boto3 to call comprehendmedical. Run 'pip install boto3'.")
+
+    from .llm_provider_handlers.comprehend_medical_passthrough_logging_handler import (
+        COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS,
+    )
+
+    if operation not in COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported Comprehend Medical operation: {operation}. "
+                f"Supported operations: {', '.join(sorted(COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS))}"
+            ),
+        )
+
+    aws_region_name: Final = _resolve_comprehend_medical_region()
+    if aws_region_name is None:
+        raise HTTPException(
+            status_code=400,
+            detail="AWS region not found. Set AWS_REGION_NAME in the proxy environment.",
+        )
+
+    try:
+        data: Final = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    if "stream" in data:
+        raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
+
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    credentials: Final[Credentials] = BaseAWSLLM().get_credentials(aws_region_name=aws_region_name)
+    sigv4: Final = SigV4Auth(credentials, "comprehendmedical", aws_region_name)
+    headers: Final = MappingProxyType(
+        {
+            "Content-Type": "application/x-amz-json-1.1",
+            "X-Amz-Target": f"{COMPREHEND_MEDICAL_TARGET_PREFIX}.{operation}",
+        }
+    )
+    target_url: Final = f"https://comprehendmedical.{aws_region_name}.amazonaws.com/"
+    _request: Final = AWSRequest(method="POST", url=target_url, data=json.dumps(data), headers=headers)
+    sigv4.add_auth(_request)
+    prepped: Final = _request.prepare()
+
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=operation,
+        target=str(prepped.url),
+        custom_headers=prepped.headers,
+        custom_llm_provider="comprehendmedical",
+    )
+    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepped.body)
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.post(
+    "/comprehendmedical",
+    tags=["AWS Comprehend Medical Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def comprehend_medical_sdk_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    AWS-SDK-shaped pass-through for Amazon Comprehend Medical: point the SDK's
+    `endpoint_url` at `/comprehendmedical` and the operation is read from the
+    `X-Amz-Target` header, per the AWS JSON 1.1 protocol.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+    """
+    target_header: Final = request.headers.get("x-amz-target", "")
+    target_prefix, _, operation = target_header.partition(".")
+    if target_prefix != COMPREHEND_MEDICAL_TARGET_PREFIX or not operation:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Expected an X-Amz-Target header of the form {COMPREHEND_MEDICAL_TARGET_PREFIX}.<Operation>",
+        )
+    return await comprehend_medical_proxy_route(
+        operation=operation,
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+    )
 
 
 def _resolve_vertex_model_from_router(

@@ -1466,6 +1466,94 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
 
 
 # =========================================================================== #
+# _handle_completed_batch threads the deployment's model identity + pricing
+# =========================================================================== #
+
+
+def _bedrock_row(model: str, input_tokens: int, output_tokens: int) -> dict[str, object]:
+    return {
+        "modelInput": {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]},
+        "modelOutput": {
+            "model": model,
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+        },
+        "recordId": "r",
+    }
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monkeypatch) -> None:
+    """A bedrock batch must price from the deployment model, not the response model."""
+    rows = [_bedrock_row("claude-sonnet-4-6", 18, 10)] * 100
+
+    async def fake_fetch(batch: object, custom_llm_provider: str, litellm_params: dict | None = None) -> bytes:
+        return _vertex_jsonl(rows)
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
+
+    cost, usage, _ = await bu._handle_completed_batch(
+        _batch("of"),
+        custom_llm_provider="bedrock",
+        model_name="bedrock/global.anthropic.claude-sonnet-4-6",
+    )
+
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (1800, 1000, 2800)
+    # 3e-06 / 1.5e-05 on-demand, halved for batch.
+    assert cost == pytest.approx(1800 * 3e-06 / 2 + 1000 * 1.5e-05 / 2)
+
+    # The response model alone cannot price a bedrock batch: this is the $0 bug.
+    zero_cost, zero_usage, _ = await bu._handle_completed_batch(
+        _batch("of"),
+        custom_llm_provider="bedrock",
+        model_name=None,
+    )
+    assert zero_cost == 0.0
+    assert zero_usage.total_tokens == 2800
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch) -> None:
+    """A deployment's configured rates must win over the global cost map."""
+    rows = [_success_row(model="gemini-2.5-flash", usage=_usage(60, 75))]
+
+    async def fake_fetch(batch: object, custom_llm_provider: str, litellm_params: dict | None = None) -> bytes:
+        return _vertex_jsonl(rows)
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
+
+    free_cost, _, _ = await bu._handle_completed_batch(
+        _batch("of"),
+        custom_llm_provider="vertex_ai",
+        model_name="vertex_ai/gemini-2.5-flash",
+        model_info={
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "input_cost_per_token_batches": 0.0,
+            "output_cost_per_token_batches": 0.0,
+        },
+    )
+    assert free_cost == 0.0
+
+    billed_cost, _, _ = await bu._handle_completed_batch(
+        _batch("of"),
+        custom_llm_provider="vertex_ai",
+        model_name="vertex_ai/gemini-2.5-flash",
+        model_info=None,
+    )
+    assert billed_cost > 0.0
+
+
+# =========================================================================== #
 # _get_batch_job_usage_from_response_body: bedrock usage shapes
 # =========================================================================== #
 
