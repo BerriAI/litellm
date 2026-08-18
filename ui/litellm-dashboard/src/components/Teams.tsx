@@ -543,7 +543,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   },
                 ]}
               >
-                <UIInput placeholder="" data-testid="team-name-input" />
+                <UIInput data-testid="team-name-input" />
               </Form.Item>
               {(() => {
                 const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
