@@ -19,6 +19,7 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    _join_url_paths,
     azure_proxy_route,
     bedrock_llm_proxy_route,
     create_pass_through_route,
@@ -74,7 +75,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test joining base URL with no path and a path
         base_url = httpx.URL("https://api.example.com")
         path = "/v1/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Base URL with no path: '{base_url}' + '{path}' → '{result}'")
@@ -83,7 +84,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test joining base URL with path and another path
         base_url = httpx.URL("https://api.example.com/v1")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Base URL with path: '{base_url}' + '{path}' → '{result}'")
@@ -92,7 +93,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test with path not starting with slash
         base_url = httpx.URL("https://api.example.com/v1")
         path = "chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Path without leading slash: '{base_url}' + '{path}' → '{result}'")
@@ -101,7 +102,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test with base URL having trailing slash
         base_url = httpx.URL("https://api.example.com/v1/")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Base URL with trailing slash: '{base_url}' + '{path}' → '{result}'")
@@ -3470,3 +3471,189 @@ class TestAzureProxyRouteServiceLevelIndexCreate:
             )
 
             mock_handler.assert_awaited_once()
+
+
+class TestComprehendMedicalProxyRoute:
+    def _mock_request(self, body: object) -> Mock:
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_request.json = AsyncMock(return_value=body)
+        return mock_request
+
+    @pytest.mark.asyncio
+    async def test_signs_and_forwards_detect_entities_v2(self):
+        from botocore.credentials import Credentials
+
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_proxy_route,
+        )
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+            LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+            LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+        )
+
+        request_body = {"Text": "Patient was prescribed 40mg atorvastatin daily."}
+        mock_request = self._mock_request(request_body)
+        mock_endpoint_func = AsyncMock(return_value={"Entities": []})
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                side_effect=lambda secret_name: "us-east-1" if secret_name == "AWS_REGION_NAME" else None,
+            ),
+            patch(
+                "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM.get_credentials",
+                return_value=Credentials("test-access-key", "test-secret-key"),
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+                return_value=mock_endpoint_func,
+            ) as mock_create_route,
+        ):
+            result = await comprehend_medical_proxy_route(
+                operation="DetectEntitiesV2",
+                request=mock_request,
+                fastapi_response=Mock(),
+                user_api_key_dict=Mock(),
+            )
+
+        assert result == {"Entities": []}
+        call_kwargs = mock_create_route.call_args.kwargs
+        assert call_kwargs["target"] == "https://comprehendmedical.us-east-1.amazonaws.com/"
+        assert call_kwargs["custom_llm_provider"] == "comprehendmedical"
+        assert "_forward_headers" not in call_kwargs
+        signed_headers = dict(call_kwargs["custom_headers"])
+        assert signed_headers["X-Amz-Target"] == "ComprehendMedical_20181030.DetectEntitiesV2"
+        assert signed_headers["Content-Type"] == "application/x-amz-json-1.1"
+        assert signed_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert "/comprehendmedical/aws4_request" in signed_headers["Authorization"]
+        assert getattr(mock_request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY) == request_body
+        assert json.loads(getattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)) == request_body
+        mock_endpoint_func.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            "Detect-Entities",
+            "Detect/../secrets",
+            "",
+            "a" * 200,
+            "DetectEntities",
+            "StartEntitiesDetectionV2Job",
+        ],
+    )
+    async def test_rejects_unsupported_operations(self, operation):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_proxy_route,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await comprehend_medical_proxy_route(
+                operation=operation,
+                request=self._mock_request({"Text": "hi"}),
+                fastapi_response=Mock(),
+                user_api_key_dict=Mock(),
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", [{"Text": "hi", "stream": True}, {"Text": "hi", "stream": False}, ["Text"]])
+    async def test_rejects_stream_key_and_non_object_bodies(self, body):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_proxy_route,
+        )
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+            return_value="us-east-1",
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await comprehend_medical_proxy_route(
+                    operation="DetectEntitiesV2",
+                    request=self._mock_request(body),
+                    fastapi_response=Mock(),
+                    user_api_key_dict=Mock(),
+                )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_missing_region_returns_400(self):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_proxy_route,
+        )
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await comprehend_medical_proxy_route(
+                    operation="DetectPHI",
+                    request=self._mock_request({"Text": "hi"}),
+                    fastapi_response=Mock(),
+                    user_api_key_dict=Mock(),
+                )
+        assert exc_info.value.status_code == 400
+
+    def test_comprehendmedical_is_a_mapped_pass_through_route(self):
+        from litellm.proxy._types import LiteLLMRoutes
+
+        assert "/comprehendmedical" in LiteLLMRoutes.mapped_pass_through_routes.value
+
+    @pytest.mark.asyncio
+    async def test_sdk_route_reads_operation_from_x_amz_target(self):
+        from botocore.credentials import Credentials
+
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_sdk_proxy_route,
+        )
+
+        mock_request = self._mock_request({"Text": "hi"})
+        mock_request.headers = {"x-amz-target": "ComprehendMedical_20181030.DetectPHI"}
+        mock_endpoint_func = AsyncMock(return_value={"Entities": []})
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                side_effect=lambda secret_name: "us-east-1" if secret_name == "AWS_REGION_NAME" else None,
+            ),
+            patch(
+                "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM.get_credentials",
+                return_value=Credentials("test-access-key", "test-secret-key"),
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+                return_value=mock_endpoint_func,
+            ) as mock_create_route,
+        ):
+            result = await comprehend_medical_sdk_proxy_route(
+                request=mock_request,
+                fastapi_response=Mock(),
+                user_api_key_dict=Mock(),
+            )
+
+        assert result == {"Entities": []}
+        signed_headers = dict(mock_create_route.call_args.kwargs["custom_headers"])
+        assert signed_headers["X-Amz-Target"] == "ComprehendMedical_20181030.DetectPHI"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "target_header",
+        ["", "ComprehendMedical_20181030", "WrongService.DetectPHI", "ComprehendMedical_20181030."],
+    )
+    async def test_sdk_route_rejects_bad_x_amz_target(self, target_header):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_sdk_proxy_route,
+        )
+
+        mock_request = self._mock_request({"Text": "hi"})
+        mock_request.headers = {"x-amz-target": target_header}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await comprehend_medical_sdk_proxy_route(
+                request=mock_request,
+                fastapi_response=Mock(),
+                user_api_key_dict=Mock(),
+            )
+        assert exc_info.value.status_code == 400

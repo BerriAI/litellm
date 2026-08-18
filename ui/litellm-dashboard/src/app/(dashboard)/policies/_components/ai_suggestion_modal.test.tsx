@@ -96,7 +96,7 @@ describe("AiSuggestionModal", () => {
     expect(screen.getByRole("button", { name: "Suggest Policies" })).toBeDisabled();
 
     await pickModel(user);
-    expect(screen.getByRole("button", { name: "Suggest Policies" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Suggest Policies" })).toBeEnabled();
   });
 
   it("sends the examples, description and model to the suggest API", async () => {

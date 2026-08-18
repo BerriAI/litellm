@@ -328,6 +328,7 @@ from litellm.proxy.common_utils.load_config_utils import (
     get_config_file_contents_from_gcs,
     get_file_contents_from_s3,
 )
+from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -358,7 +359,9 @@ from litellm.proxy.common_utils.timezone_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    end_user_cache_key,
     get_management_object_ttl,
+    tag_cache_key,
 )
 from litellm.proxy.config_resolvers import resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
@@ -648,6 +651,10 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
+from litellm.types.proxy.model_deprecation import (
+    DEFAULT_DEPRECATION_WARN_DAYS,
+    ModelDeprecationResponse,
+)
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     DeploymentTypedDict,
@@ -864,7 +871,7 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
-async def proxy_shutdown_event():
+async def proxy_shutdown_event() -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
@@ -958,7 +965,7 @@ async def _initialize_shared_aiohttp_session():
 
 
 @asynccontextmanager
-async def proxy_startup_event(app: FastAPI):
+async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     global \
         prisma_client, \
         master_key, \
@@ -2780,7 +2787,7 @@ async def _increment_end_user_and_tag_spend_counters(
     if end_user_id is not None:
         await _init_and_increment_unreserved_spend_counter(
             counter_key=f"spend:end_user:{end_user_id}",
-            source_cache_key=f"end_user_id:{end_user_id}",
+            source_cache_key=end_user_cache_key(end_user_id),
             increment=response_cost,
             reserved_counter_keys=reserved_counter_keys,
         )
@@ -2795,7 +2802,7 @@ async def _increment_end_user_and_tag_spend_counters(
         seen_tags.add(tag_name)
         await _init_and_increment_unreserved_spend_counter(
             counter_key=f"spend:tag:{tag_name}",
-            source_cache_key=f"tag:{tag_name}",
+            source_cache_key=tag_cache_key(tag_name),
             increment=response_cost,
             reserved_counter_keys=reserved_counter_keys,
         )
@@ -3134,7 +3141,7 @@ async def update_cache(
         if end_user_id is None or response_cost is None:
             return
 
-        _id: Final = f"end_user_id:{end_user_id}"
+        _id: Final = end_user_cache_key(end_user_id)
         try:
             # Fetch the existing cost for the given user
             cached_end_user: Final = await user_api_key_cache.async_get_cache(key=_id)
@@ -3226,7 +3233,7 @@ async def update_cache(
                 if not tag_name or not isinstance(tag_name, str):
                     continue
 
-                cache_key = f"tag:{tag_name}"
+                cache_key = tag_cache_key(tag_name)
                 # Fetch the existing tag object from cache
                 cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
                 if cached_tag is None:
@@ -3732,11 +3739,11 @@ _DB_OVERLAY_REMOTE_MODULE_LIST_FIELDS: Final[dict[str, tuple[str, ...]]] = {
 }
 
 
-def _is_remote_module_url(value: Any) -> bool:
+def _is_remote_module_url(value: object) -> bool:
     return isinstance(value, str) and (value.startswith("s3://") or value.startswith("gcs://"))
 
 
-def _scrub_guardrail_inner(inner: dict[str, Any]) -> None:
+def _scrub_guardrail_inner(inner: dict[str, JsonValue]) -> None:
     """Strip remote-URL entries from a guardrail's ``callbacks`` list
     and ``guardrail`` (v2 module-path) field. Mutates in place."""
     cbs: Final = inner.get("callbacks")
@@ -3756,7 +3763,7 @@ def _scrub_guardrail_inner(inner: dict[str, Any]) -> None:
         inner["guardrail"] = None
 
 
-def _scrub_db_overlay_remote_module_loads(section: str, db_value: Any) -> Any:
+def _scrub_db_overlay_remote_module_loads(section: str, db_value: JsonValue) -> JsonValue:
     """Strip ``s3://`` / ``gcs://`` entries from the DB-overlay value for
     fields whose contents reach ``get_instance_fn``. The same scheme is
     allowed from a YAML config (the documented operator flow) but a
@@ -4064,8 +4071,8 @@ class ProxyConfig:
 
     def __init__(self) -> None:
         self.config: dict[str, Any] = {}
-        self._last_semantic_filter_config: dict[str, Any] | None = None
-        self._last_hashicorp_vault_config: dict[str, Any] | None = None
+        self._last_semantic_filter_config: dict[str, object] | None = None
+        self._last_hashicorp_vault_config: dict[str, object] | None = None
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
         self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
@@ -5955,7 +5962,7 @@ class ProxyConfig:
         )
 
     @staticmethod
-    def _parse_router_settings_value(value: Any) -> dict | None:
+    def _parse_router_settings_value(value: object) -> dict | None:
         """
         Parse a router_settings value that may be a dict or a JSON/YAML string.
 
@@ -6499,7 +6506,7 @@ class ProxyConfig:
           as "all models deleted" and must not evict existing router deployments.
         """
         try:
-            new_models: Final = await ModelRepository(prisma_client).table.find_many()
+            new_models: Final[list[_ModelTableRow]] = await ModelRepository(prisma_client).table.find_many()
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -7563,9 +7570,9 @@ def _get_client_requested_model_for_streaming(request_data: dict) -> str:
     return requested_model if isinstance(requested_model, str) else ""
 
 
-def _is_positive_int_like(value: Any) -> bool:
+def _is_positive_int_like(value: str | float | None) -> bool:
     try:
-        return int(value) > 0
+        return value is not None and int(value) > 0
     except (TypeError, ValueError):
         return False
 
@@ -7832,7 +7839,7 @@ _STREAM_KEEPALIVE: Final = object()
 
 _KEEPALIVE_MIN_SECONDS: Final = 1.0
 _KEEPALIVE_MAX_SECONDS: Final = 300.0
-_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 async def _iter_with_keepalive(
@@ -7887,7 +7894,7 @@ async def _iter_with_keepalive(
 
 
 class _DeploymentKeepaliveConfig(NamedTuple):
-    keepalive_seconds: Any
+    keepalive_seconds: object
     allow_client_override: bool
 
 
@@ -7945,7 +7952,7 @@ def _is_explicit_keepalive_disable(raw: object) -> bool:
         return False
 
 
-def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response: object = None) -> float:
+def _resolve_keepalive_seconds(request_data: Mapping[str, object], response: object = None) -> float:
     deployment_config: Final = _keepalive_from_deployment_config(request_data, response)
     deployment_raw: Final = deployment_config.keepalive_seconds if deployment_config is not None else None
     allow_client_override: Final = deployment_config.allow_client_override if deployment_config is not None else False
@@ -7992,7 +7999,7 @@ def _resolve_keepalive_seconds(request_data: Mapping[str, Any], response: object
 _KEEPALIVE_CACHE_TTL_SECONDS: Final = 5.0
 
 
-def _make_keepalive_resolver(request_data: Mapping[str, Any]) -> Callable[[object], float]:
+def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[object], float]:
     """Wrap `_resolve_keepalive_seconds` with a memo keyed on the serving
     deployment's model_id. The steady-state case (no mid-stream fallback, the
     overwhelming majority of streams) sees the same model_id on every chunk, so
@@ -9784,7 +9791,7 @@ async def model_info(
     )
 
 
-def _blocked_response_usage(original_response: Any | None) -> "litellm.Usage":
+def _blocked_response_usage(original_response: object | None) -> "litellm.Usage":
     """
     Token usage for a synthetic guardrail-blocked response.
 
@@ -10371,6 +10378,8 @@ async def moderations(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.moderations(): Exception occured - %s", e)
+        if isinstance(e, ProxyException):
+            raise
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
@@ -12303,7 +12312,7 @@ def _enrich_model_info_with_litellm_data(
 
 async def _get_caller_byok_team_scope(
     user_api_key_dict: UserAPIKeyAuth | None,
-    prisma_client: Any | None,
+    prisma_client: PrismaClient | None,
 ) -> set[str] | None:
     """
     Return the team IDs whose BYOK rows the caller is allowed to see via
@@ -12338,7 +12347,7 @@ async def _get_caller_byok_team_scope(
     return key_team_scope | set(user_row.teams or [])
 
 
-def _byok_row_outside_caller_teams(model_info_dict: dict[str, Any], allowed_team_ids: set[str] | None) -> bool:
+def _byok_row_outside_caller_teams(model_info_dict: dict[str, JsonValue], allowed_team_ids: set[str] | None) -> bool:
     """Whether a team BYOK row belongs to a team the caller is not a member of.
 
     `team_id` is only set on team BYOK rows; non-team rows fall through
@@ -12360,15 +12369,15 @@ _SORTED_SEARCH_DB_FETCH_CAP: Final = 500
 
 
 async def _fetch_db_models_for_search(
-    prisma_client: Any,
-    proxy_config: Any,
+    prisma_client: PrismaClient,
+    proxy_config: ProxyConfig,
     search_lower: str,
     db_model_ids_in_router: set[str],
     router_models_count: int,
     page: int,
     size: int,
     sort_by: str | None,
-    is_byok_outside_caller_teams: Callable[[dict[str, Any]], bool],
+    is_byok_outside_caller_teams: Callable[[dict[str, JsonValue]], bool],
 ) -> tuple[list[dict[str, Any]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
@@ -12414,7 +12423,7 @@ async def _fetch_db_models_for_search(
         if not is_byok_outside_caller_teams(m.model_info if isinstance(m.model_info, dict) else {})
     ]
 
-    decrypted: Final[list[dict[str, Any]]] = []
+    decrypted: Final[list[dict[str, object]]] = []
     for db_model in matching_db_rows:
         decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
         if decrypted_models:
@@ -12426,8 +12435,8 @@ async def _fetch_db_models_for_search(
 async def _apply_search_filter_to_models(
     all_models: list[dict[str, Any]],
     search: str,
-    prisma_client: Any | None,
-    proxy_config: Any,
+    prisma_client: PrismaClient | None,
+    proxy_config: ProxyConfig,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     page: int = 1,
     size: int = 50,
@@ -12466,7 +12475,7 @@ async def _apply_search_filter_to_models(
         prisma_client=prisma_client,
     )
 
-    def _is_byok_outside_caller_teams(model_info_dict: dict[str, Any]) -> bool:
+    def _is_byok_outside_caller_teams(model_info_dict: dict[str, JsonValue]) -> bool:
         return _byok_row_outside_caller_teams(model_info_dict, allowed_team_ids)
 
     def _model_matches_search(m: dict[str, Any]) -> bool:
@@ -12532,7 +12541,7 @@ async def _apply_search_filter_to_models(
     return filtered_router_models + db_models, search_total_count
 
 
-def _normalize_datetime_for_sorting(dt: Any) -> datetime | None:
+def _normalize_datetime_for_sorting(dt: object) -> datetime | None:
     """
     Normalize a datetime value to a timezone-aware UTC datetime for sorting.
 
@@ -12685,7 +12694,7 @@ def _paginate_models_response(
     size: int,
     total_count: int | None,
     search: str | None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Paginate models and return response dictionary.
 
@@ -12724,7 +12733,7 @@ def _paginate_models_response(
     }
 
 
-def _team_models_resolve_to_names(team_models: list[str], access_groups: dict[str, Any]) -> list[str]:
+def _team_models_resolve_to_names(team_models: list[str], access_groups: Mapping[str, Sequence[str]]) -> list[str]:
     """Expand team model entries (including access group names) to concrete model names."""
     resolved: Final[list[str]] = []
     for name in team_models:
@@ -13600,7 +13609,7 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
-def _deployment_matches_allowed_model_names(model: dict[str, Any], allowed_model_names: set[str]) -> bool:
+def _deployment_matches_allowed_model_names(model: dict[str, JsonValue], allowed_model_names: set[str]) -> bool:
     """Match a router deployment against allowed public model names.
 
     Team-scoped rows store an internal routing key in ``model_name``; callers
@@ -13921,6 +13930,48 @@ async def model_info_v1(
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
+
+
+@router.get(
+    "/model/deprecations",
+    tags=("model management",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ModelDeprecationResponse,
+)
+@router.get(
+    "/v1/model/deprecations",
+    tags=("model management",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ModelDeprecationResponse,
+)
+async def model_deprecations(
+    warn_within_days: int = DEFAULT_DEPRECATION_WARN_DAYS,
+) -> ModelDeprecationResponse:
+    """List models with known deprecation/sunset dates, bucketed by urgency.
+
+    Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+    (and any per-deployment `model_info.deprecation_date` overrides) for the
+    models configured on this proxy.
+
+    Parameters:
+        warn_within_days: Window (in days) used to bucket "imminent" models,
+            30 by default.
+
+    Returns:
+        A payload with three lists of `ModelDeprecationInfo` entries:
+
+        - `deprecated`: deprecation date is in the past, so these requests may
+          fail at any time.
+        - `imminent`: deprecation date is within `warn_within_days` from today.
+        - `upcoming`: deprecation date is further out.
+
+    Example:
+    ```shell
+    curl -X GET 'http://localhost:4000/model/deprecations' \\
+        -H 'Authorization: Bearer sk-1234'
+    ```
+    """
+    return collect_model_deprecations(llm_router=llm_router, warn_within_days=warn_within_days)
 
 
 def _get_model_group_info(
@@ -14860,7 +14911,7 @@ async def _rollback_onboarding_invite_claim(
         verbose_proxy_logger.exception("Failed to roll back onboarding invitation after session key mint failed.")
 
 
-async def _generate_onboarding_ui_session_token(user_obj: Any) -> str:
+async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     global master_key, general_settings
 
     response: Final = await generate_key_helper_fn(
@@ -15975,7 +16026,7 @@ def _general_settings_ui_litellm_default(
     return False if spec["type"] == "Boolean" else None
 
 
-def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> GeneralSettingsUILiteLLMValue:
+def _validate_general_settings_ui_litellm_value(field_name: str, value: object) -> GeneralSettingsUILiteLLMValue:
     spec: Final = _GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name]
     field_type: Final = spec["type"]
     if value is None or value == "":
@@ -16015,7 +16066,7 @@ def _validate_general_settings_ui_litellm_value(field_name: str, value: Any) -> 
 
 
 async def _persist_general_settings_ui_litellm_field(
-    field_name: str, value: Any, user_api_key_dict: UserAPIKeyAuth
+    field_name: str, value: object, user_api_key_dict: UserAPIKeyAuth
 ) -> dict:
     validated: Final = _validate_general_settings_ui_litellm_value(field_name, value)
     config: Final = await proxy_config.get_config()

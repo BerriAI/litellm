@@ -41,6 +41,7 @@ from litellm.proxy._types import (
     CallTypes,
     LiteLLM_ManagedFileTable,
     LiteLLM_ManagedObjectTable,
+    ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -423,13 +424,26 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         # This is because the encoded object ids stored in the managed objects table do not contain the provider information
         # To support provider filtering, we would need to store the provider information in the encoded object ids
         if provider:
-            raise Exception("Filtering by 'provider' is not supported when using managed batches.")
+            raise ProxyException(
+                message="Filtering by 'provider' is not supported when using managed batches.",
+                type="invalid_request_error",
+                param="provider",
+                code=400,
+            )
 
         # Model name filtering is not supported for managed batches
         # This is because the encoded object ids stored in the managed objects table do not contain the model name
         # A hash of the model name + litellm_params for the model name is encoded as the model id. This is not sufficient to reliably map the target model names to the model ids.
         if target_model_names:
-            raise Exception("Filtering by 'target_model_names' is not supported when using managed batches.")
+            raise ProxyException(
+                message="Filtering by 'target_model_names' is not supported when using managed batches.",
+                type="invalid_request_error",
+                param="target_model_names",
+                code=400,
+            )
+
+        if limit == 0:
+            return build_list_page([])
 
         owner_filter = build_owner_filter(user_api_key_dict)
         if owner_filter is None:

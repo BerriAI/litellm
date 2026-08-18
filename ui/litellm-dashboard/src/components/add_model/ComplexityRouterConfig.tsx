@@ -4,9 +4,13 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
+import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+
+export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
 const { Text } = Typography;
 
@@ -82,6 +86,24 @@ export interface AdaptiveRouterWeights {
 
 export const DEFAULT_ADAPTIVE_WEIGHTS: AdaptiveRouterWeights = { quality: 0.3, cost: 0.7 };
 
+export type HeuristicScoringRole = "decides" | "fallback_only" | "never";
+
+/**
+ * Whether the heuristic scorer runs on this router at all, which is what gates its knobs. An LLM
+ * classifier still falls back to the scorer unless the fallback is the default model, so the gate cannot be
+ * a plain classifier_type check.
+ */
+export const heuristicScoringRoleFor = (
+  classifierType: ClassifierType,
+  classifierFallback: ClassifierFallback | undefined,
+): HeuristicScoringRole => {
+  if (classifierType === "heuristic") return "decides";
+  return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
+};
+
+export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
+  heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+
 export type AdaptiveEligible = "all" | "classified_tier";
 
 export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
@@ -89,6 +111,8 @@ export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
   tier_labels?: ComplexityTierLabels;
+  /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
+  default_model?: string;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
@@ -102,6 +126,13 @@ export interface ComplexityRouterConfigValue {
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  /**
+   * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
+   * payload so the router tracks the backend defaults rather than freezing today's numbers.
+   */
+  tier_boundaries?: TierBoundaries;
+  token_thresholds?: TokenThresholds;
+  dimension_weights?: DimensionWeights;
 }
 
 interface ComplexityRouterConfigProps {
@@ -174,11 +205,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
-  // The deployment's default model is derived from the tiers on submit, mirroring the order
-  // add_auto_router_tab uses, so the fallback option is offered exactly when one will exist.
-  const hasDefaultModel = Boolean(
-    value.tiers.MEDIUM[0] || value.tiers.SIMPLE[0] || value.tiers.COMPLEX[0] || value.tiers.REASONING[0],
-  );
+  const derivedDefaultModel = resolveComplexityDefaultModel(value.tiers);
+  const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
@@ -193,6 +221,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       ...value,
       tiers: { ...value.tiers, [tier]: models },
     });
+  };
+
+  // Clearing the select drops the key entirely rather than storing "", so an emptied pin reads as
+  // "track the tiers" everywhere downstream instead of as a blank model name.
+  const handleDefaultModelChange = (model: string | undefined) => {
+    onChange({ ...value, default_model: model || undefined });
   };
 
   const handleTierLabelChange = (tier: keyof ComplexityTiers, label: string) => {
@@ -281,6 +315,36 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             </div>
           );
         })}
+        <Divider style={{ margin: "16px 0" }} />
+
+        <div className="mb-2">
+          <div className="flex items-center gap-2 mb-2">
+            <Text strong style={{ fontSize: 16 }}>
+              Default Model
+            </Text>
+            <Tooltip title="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
+              <InfoCircleOutlined className="text-gray-400" />
+            </Tooltip>
+          </div>
+          <AntdSelect
+            value={value.default_model || undefined}
+            onChange={handleDefaultModelChange}
+            placeholder={
+              derivedDefaultModel
+                ? `Derived from tiers: ${derivedDefaultModel}`
+                : "Add a model to the Simple or Medium tier"
+            }
+            aria-label="Default model"
+            showSearch
+            allowClear
+            style={{ width: "100%" }}
+            options={modelOptions}
+          />
+          <Text type="secondary" style={{ display: "block", marginTop: 4, fontSize: 12 }}>
+            Used when the tier the request lands in has no model, and when the classifier fails with &quot;Route to the
+            default model&quot; selected.
+          </Text>
+        </div>
       </Card>
 
       <Divider />
@@ -304,7 +368,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}
-                hasDefaultModel={hasDefaultModel}
+                defaultModel={defaultModel}
               />
             ),
           },

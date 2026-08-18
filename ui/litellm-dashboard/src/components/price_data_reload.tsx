@@ -28,7 +28,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
 
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   cancelModelCostMapReload,
   getModelCostMapReloadStatus,
@@ -148,7 +148,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleHardRefresh = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -157,16 +157,16 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       const response = await reloadModelCostMap(accessToken);
 
       if (response.status === "success") {
-        NotificationsManager.success(`Price data reloaded successfully! ${response.models_count || 0} models updated.`);
+        toast.success(`Price data reloaded successfully! ${response.models_count || 0} models updated.`);
         onReloadSuccess?.();
         await fetchReloadStatus();
         await fetchSourceInfo();
       } else {
-        NotificationsManager.fromBackend("Failed to reload price data");
+        toast.fromError("Failed to reload price data");
       }
     } catch (error) {
       console.error("Error reloading price data:", error);
-      NotificationsManager.fromBackend("Failed to reload price data. Please try again.");
+      toast.fromError("Failed to reload price data. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -174,13 +174,13 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleScheduleReload = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
     const intervalHours = Number(hours);
     if (!isValidReloadInterval(intervalHours)) {
-      NotificationsManager.fromBackend("Hours must be a whole number between 1 and 168");
+      toast.fromError("Hours must be a whole number between 1 and 168");
       return;
     }
 
@@ -189,15 +189,15 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       const response = await scheduleModelCostMapReload(accessToken, intervalHours);
 
       if (response.status === "success") {
-        NotificationsManager.success(`Periodic reload scheduled for every ${intervalHours} hours`);
+        toast.success(`Periodic reload scheduled for every ${intervalHours} hours`);
         setShowScheduleModal(false);
         await fetchReloadStatus();
       } else {
-        NotificationsManager.fromBackend("Failed to schedule periodic reload");
+        toast.fromError("Failed to schedule periodic reload");
       }
     } catch (error) {
       console.error("Error scheduling reload:", error);
-      NotificationsManager.fromBackend("Failed to schedule periodic reload. Please try again.");
+      toast.fromError("Failed to schedule periodic reload. Please try again.");
     } finally {
       setIsScheduling(false);
     }
@@ -205,7 +205,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleCancelReload = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -214,14 +214,14 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       const response = await cancelModelCostMapReload(accessToken);
 
       if (response.status === "success") {
-        NotificationsManager.success("Periodic reload cancelled successfully");
+        toast.success("Periodic reload cancelled successfully");
         await fetchReloadStatus();
       } else {
-        NotificationsManager.fromBackend("Failed to cancel periodic reload");
+        toast.fromError("Failed to cancel periodic reload");
       }
     } catch (error) {
       console.error("Error cancelling reload:", error);
-      NotificationsManager.fromBackend("Failed to cancel periodic reload. Please try again.");
+      toast.fromError("Failed to cancel periodic reload. Please try again.");
     } finally {
       setIsCancelling(false);
     }

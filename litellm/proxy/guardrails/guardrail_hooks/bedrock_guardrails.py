@@ -2053,6 +2053,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_action: Final = response.get("action")
         if isinstance(bedrock_action, str):
             tracing_detail["guardrail_action"] = bedrock_action
+        usage: Final = response.get("usage")
+        if isinstance(usage, dict):
+            usage_units: Final = {  # mutable-ok: json.dumps'd into spend log metadata downstream
+                key: value for key, value in usage.items() if isinstance(value, int)
+            }
+            if usage_units:
+                tracing_detail["guardrail_usage"] = usage_units
         return tracing_detail
 
     def _extract_violation_category_names(self, response: BedrockGuardrailResponse) -> list[str]:
