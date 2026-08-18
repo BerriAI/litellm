@@ -1998,6 +1998,18 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
         return values
 
 
+class TeamCallbackDeleteResponseData(LiteLLMPydanticObjectBase):
+    team_id: str
+    success_callbacks: tuple[str, ...]
+    failure_callbacks: tuple[str, ...]
+
+
+class TeamCallbackDeleteResponse(LiteLLMPydanticObjectBase):
+    status: Literal["success"]
+    message: str
+    data: TeamCallbackDeleteResponseData
+
+
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: list[str] | None = []
     failure_callback: list[str] | None = []
