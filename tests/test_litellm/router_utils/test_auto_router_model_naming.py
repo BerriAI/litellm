@@ -138,6 +138,38 @@ def test_validate_rejects_ambiguous_tier_labels(tier_labels, expected_fragment):
     assert expected_fragment in violation
 
 
+def test_validate_rejects_an_unregistered_classifier_plugin_name():
+    """A stored name the registry does not hold must be refused at write time, not at load."""
+    violation = validate_complexity_router_config_write(
+        complexity_router_config={
+            "tiers": VALID_TIERS,
+            "classifier_type": "custom",
+            "classifier_plugin": "no-such-plugin",
+        }
+    )
+    assert violation is not None
+    assert "complexity_router_config is invalid" in violation
+    assert "not a registered classifier plugin" in violation
+
+
+def test_validate_accepts_a_registered_classifier_plugin_name(monkeypatch):
+    import litellm
+
+    class _Classifier:
+        async def classify(self, context):
+            return "SIMPLE"
+
+    monkeypatch.setitem(litellm.classifier_plugin_registry, "tier-by-team", _Classifier())
+    violation = validate_complexity_router_config_write(
+        complexity_router_config={
+            "tiers": VALID_TIERS,
+            "classifier_type": "custom",
+            "classifier_plugin": "tier-by-team",
+        }
+    )
+    assert violation is None
+
+
 @pytest.mark.parametrize(
     "complexity_router_config",
     [

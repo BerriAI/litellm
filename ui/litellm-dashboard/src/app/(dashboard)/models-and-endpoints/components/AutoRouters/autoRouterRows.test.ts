@@ -99,6 +99,23 @@ describe("autoRouterRows", () => {
     expect(row.typeLabel).toBe("LLM Classifier");
   });
 
+  it("labels a router using a custom classifier plugin", () => {
+    const row = toAutoRouterRow(
+      {
+        ...complexityDeployment,
+        litellm_params: {
+          ...complexityDeployment.litellm_params,
+          complexity_router_config: { tiers: {}, classifier_type: "custom", classifier_plugin: "tier-by-team" },
+        },
+      },
+      0,
+      ADMIN,
+      null,
+    );
+
+    expect(row.typeLabel).toBe("Custom classifier");
+  });
+
   it("treats a deployment carrying complexity_router_config as complexity even off the canonical model string", () => {
     expect(isComplexityRouter({ model: "auto_router/legacy", complexity_router_config: { tiers: {} } })).toBe(true);
   });

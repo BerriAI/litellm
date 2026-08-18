@@ -293,6 +293,21 @@ def test_classifier_plugin_is_not_settable_over_http():
         _request("what is 2+2", classifier_type="custom", classifier_plugin="my_module.instance")
 
 
+@pytest.mark.asyncio
+async def test_list_classifier_plugins_returns_sorted_registry_names(monkeypatch):
+    import litellm
+    from litellm.proxy.management_endpoints.auto_router_endpoints import list_classifier_plugins
+
+    class _Classifier:
+        async def classify(self, context):
+            return "SIMPLE"
+
+    monkeypatch.setitem(litellm.classifier_plugin_registry, "tier-by-team", _Classifier())
+    monkeypatch.setitem(litellm.classifier_plugin_registry, "spend-aware", _Classifier())
+    response = await list_classifier_plugins(user_api_key_dict=ADMIN)
+    assert response.classifier_plugins == ("spend-aware", "tier-by-team")
+
+
 class TestAutoRouterBenchmarks:
     from litellm.proxy.management_endpoints.auto_router_endpoints import _SessionAggRow
 

@@ -246,6 +246,22 @@ def test_resolve_complexity_router_plugins_rejects_synchronous_classify_method(t
         )
 
 
+def test_resolve_classifier_plugin_prefers_the_registry_over_dotted_import(monkeypatch):
+    import litellm
+    from litellm.proxy.proxy_server import resolve_classifier_plugin
+
+    class _Classifier:
+        async def classify(self, context):
+            return "SIMPLE"
+
+    instance = _Classifier()
+    monkeypatch.setitem(litellm.classifier_plugin_registry, "tier-by-team", instance)
+    resolved = resolve_classifier_plugin(
+        plugin_path="tier-by-team", config_file_path=None, source_label="classifier_plugins.tier-by-team"
+    )
+    assert resolved is instance
+
+
 def test_resolve_complexity_router_plugins_leaves_live_classifier_instance_alone():
     class _Classifier:
         async def classify(self, context):

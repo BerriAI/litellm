@@ -546,12 +546,29 @@ class ComplexityRouterConfig(BaseModel):
     classifier_plugin: ClassifierPlugin | None = Field(
         default=None,
         description=(
-            "Custom classifier deciding the tier; required when classifier_type is 'custom'. In the proxy "
-            "config, a dotted path to a ClassifierPlugin instance (resolved at startup, like plugins). Its "
-            "classify(context) receives the request messages and metadata (caller identity included) and "
+            "Custom classifier deciding the tier; required when classifier_type is 'custom'. A name from "
+            "the proxy config's top-level classifier_plugins registry (what the Admin UI saves), or in the "
+            "proxy config a dotted path to a ClassifierPlugin instance (resolved at startup, like plugins). "
+            "Its classify(context) receives the request messages and metadata (caller identity included) and "
             "returns the name of the tier to route to, or None to decline and let classifier_fallback decide."
         ),
     )
+
+    @field_validator("classifier_plugin", mode="before")
+    @classmethod
+    def _resolve_registered_classifier_plugin(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        import litellm
+
+        registered: Final = litellm.classifier_plugin_registry.get(value)
+        if registered is None:
+            raise ValueError(
+                f"{value!r} is not a registered classifier plugin; declare it under "
+                "classifier_plugins in the proxy config"
+            )
+        return registered
+
     classifier_plugin_timeout_ms: int = Field(
         default=3000,
         gt=0,

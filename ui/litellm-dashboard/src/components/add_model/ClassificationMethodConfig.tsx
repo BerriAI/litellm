@@ -3,6 +3,7 @@ import { Select as AntdSelect, Card, InputNumber, Radio, Space, Switch, Tooltip,
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
+import { useClassifierPlugins } from "@/app/(dashboard)/hooks/autoRouter/useClassifierPlugins";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassifierFallback,
@@ -11,6 +12,7 @@ import {
   DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
   DEFAULT_CLASSIFIER_FALLBACK,
+  DEFAULT_CLASSIFIER_PLUGIN_TIMEOUT_MS,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
   NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
@@ -35,18 +37,29 @@ const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
   "names stay fixed. The scoring below no longer runs at all, since a failed classifier routes to the default " +
   "model instead:";
 
+const PLUGIN_WITH_HEURISTIC_FALLBACK =
+  "This router classifies with your own classifier plugin, so the tier comes from whatever the plugin decides. The " +
+  "four tier names stay fixed. The scoring below is the heuristic, which now runs only when the plugin fails:";
+
+const PLUGIN_WITH_DEFAULT_MODEL_FALLBACK =
+  "This router classifies with your own classifier plugin, so the tier comes from whatever the plugin decides. The " +
+  "four tier names stay fixed. The scoring below no longer runs at all, since a failed plugin routes to the default " +
+  "model instead:";
+
 /**
- * What the scoring breakdown below it actually describes. A custom prompt means the score no longer
- * decides the tier, and pairing one with the default-model fallback means the heuristic never runs
- * at all, so the panel must not keep implying a score is involved on either router.
+ * What the scoring breakdown below it actually describes. A custom prompt or a classifier plugin means
+ * the score no longer decides the tier, and pairing either with the default-model fallback means the
+ * heuristic never runs at all, so the panel must not keep implying a score is involved.
  */
 const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
+  const fallsBackToDefaultModel = value.classifier_fallback === "default_model";
+  if (value.classifier_type === "custom") {
+    return fallsBackToDefaultModel ? PLUGIN_WITH_DEFAULT_MODEL_FALLBACK : PLUGIN_WITH_HEURISTIC_FALLBACK;
+  }
   const usesCustomPrompt =
     value.classifier_type === "llm" && Boolean(value.classifier_llm_config?.system_prompt?.trim());
   if (!usesCustomPrompt) return DEFAULT_SCORING_EXPLANATION;
-  return value.classifier_fallback === "default_model"
-    ? CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK
-    : CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK;
+  return fallsBackToDefaultModel ? CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK : CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK;
 };
 
 /**
@@ -105,6 +118,43 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
   );
 };
 
+const ClassifierFallbackPicker: React.FC<{
+  fallback: ClassifierFallback | undefined;
+  onChange: (fallback: ClassifierFallback) => void;
+  defaultModel: string | undefined;
+}> = ({ fallback, onChange, defaultModel }) => (
+  <div>
+    <Text strong style={{ display: "block", marginBottom: 4 }}>
+      If the classifier fails
+    </Text>
+    <Radio.Group value={fallback ?? DEFAULT_CLASSIFIER_FALLBACK} onChange={(e) => onChange(e.target.value)}>
+      <Space direction="vertical">
+        <Radio value="heuristic">
+          <Text>Score with the heuristic</Text>{" "}
+          <Text type="secondary">— right when the classifier grades complexity too</Text>
+        </Radio>
+        <Radio value="default_model" disabled={!defaultModel}>
+          <Tooltip
+            title={
+              defaultModel
+                ? "Change it from the Default Model select."
+                : "Set a default model on this router to use this option"
+            }
+          >
+            <span>
+              <Text>Route to the default model{defaultModel ? ` (${defaultModel})` : ""}</Text>{" "}
+              <Text type="secondary">— right when your classifier grades something other than complexity</Text>
+            </span>
+          </Tooltip>
+        </Radio>
+      </Space>
+    </Radio.Group>
+    <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+      Applies when the classifier call errors, times out, or returns an unparseable response.
+    </Text>
+  </div>
+);
+
 interface ClassificationMethodConfigProps {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
@@ -125,11 +175,20 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   showValidationErrors = false,
   defaultModel,
 }) => {
-  const hasDefaultModel = Boolean(defaultModel);
   const classifierModelMissing =
     showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
+  const classifierPluginMissing =
+    showValidationErrors && value.classifier_type === "custom" && !value.classifier_plugin;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
+
+  const { data: registeredPlugins, isError: pluginsError } = useClassifierPlugins();
+  // A failed fetch leaves the registry unknown, not empty: offering the stored name anyway is what keeps
+  // opening this form on an existing custom router from silently clearing its plugin on the next save.
+  const registryIsEmpty = !pluginsError && registeredPlugins !== undefined && registeredPlugins.length === 0;
+  const pluginOptions = Array.from(
+    new Set([...(registeredPlugins ?? []), ...(value.classifier_plugin ? [value.classifier_plugin] : [])]),
+  ).map((name) => ({ value: name, label: name }));
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     const nextValue: ComplexityRouterConfigValue = {
@@ -153,7 +212,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           : undefined,
       classifier_context_include_assistant_turns:
         classifierType === "llm" ? value.classifier_context_include_assistant_turns : undefined,
-      classifier_fallback: classifierType === "llm" ? value.classifier_fallback : undefined,
+      classifier_fallback: classifierType === "heuristic" ? undefined : value.classifier_fallback,
+      classifier_plugin: classifierType === "custom" ? value.classifier_plugin : undefined,
+      classifier_plugin_timeout_ms:
+        classifierType === "custom"
+          ? value.classifier_plugin_timeout_ms ?? DEFAULT_CLASSIFIER_PLUGIN_TIMEOUT_MS
+          : undefined,
     };
     onChange(nextValue);
   };
@@ -178,6 +242,18 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         timeout_ms: timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
       },
     });
+  };
+
+  const handleClassifierPluginChange = (classifierPlugin: string) => {
+    onChange({
+      ...value,
+      classifier_plugin: classifierPlugin,
+      classifier_plugin_timeout_ms: value.classifier_plugin_timeout_ms ?? DEFAULT_CLASSIFIER_PLUGIN_TIMEOUT_MS,
+    });
+  };
+
+  const handleClassifierPluginTimeoutChange = (timeoutMs: number | null) => {
+    onChange({ ...value, classifier_plugin_timeout_ms: timeoutMs ?? DEFAULT_CLASSIFIER_PLUGIN_TIMEOUT_MS });
   };
 
   const handleClassificationRubricChange = (classificationRubric: ClassificationRubric) => {
@@ -245,6 +321,15 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             <Text strong>LLM Classifier</Text>{" "}
             <Text type="secondary">— use a model to decide the tier (e.g. a small/fast model)</Text>
           </Radio>
+          <Radio value="custom" disabled={registryIsEmpty && value.classifier_type !== "custom"}>
+            <Text strong>Custom classifier</Text>{" "}
+            <Text type="secondary">— let a classifier plugin registered in the proxy config decide the tier</Text>
+          </Radio>
+          {registryIsEmpty && (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Declare classifier_plugins in the proxy config to enable custom classifiers
+            </Text>
+          )}
         </Space>
       </Radio.Group>
 
@@ -321,39 +406,11 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               classificationRubric={classificationRubric}
             />
           </div>
-          <div>
-            <Text strong style={{ display: "block", marginBottom: 4 }}>
-              If the classifier fails
-            </Text>
-            <Radio.Group
-              value={value.classifier_fallback ?? DEFAULT_CLASSIFIER_FALLBACK}
-              onChange={(e) => handleClassifierFallbackChange(e.target.value)}
-            >
-              <Space direction="vertical">
-                <Radio value="heuristic">
-                  <Text>Score with the heuristic</Text>{" "}
-                  <Text type="secondary">— right when the classifier grades complexity too</Text>
-                </Radio>
-                <Radio value="default_model" disabled={!hasDefaultModel}>
-                  <Tooltip
-                    title={
-                      hasDefaultModel
-                        ? "Change it from the Default Model select."
-                        : "Set a default model on this router to use this option"
-                    }
-                  >
-                    <span>
-                      <Text>Route to the default model{defaultModel ? ` (${defaultModel})` : ""}</Text>{" "}
-                      <Text type="secondary">— right when your prompt grades something other than complexity</Text>
-                    </span>
-                  </Tooltip>
-                </Radio>
-              </Space>
-            </Radio.Group>
-            <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
-              Applies when the classifier call errors, times out, or returns an unparseable response.
-            </Text>
-          </div>
+          <ClassifierFallbackPicker
+            fallback={value.classifier_fallback}
+            onChange={handleClassifierFallbackChange}
+            defaultModel={defaultModel}
+          />
           <div>
             <Text strong style={{ display: "block", marginBottom: 4 }}>
               Context Window Size
@@ -404,6 +461,56 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               last N user turns.
             </Text>
           </div>
+        </div>
+      )}
+
+      {value.classifier_type === "custom" && (
+        <div className="mt-4 space-y-3">
+          <div>
+            <Text strong style={{ display: "block", marginBottom: 4 }}>
+              Classifier Plugin
+            </Text>
+            <AntdSelect
+              value={value.classifier_plugin || undefined}
+              onChange={handleClassifierPluginChange}
+              placeholder="Select a classifier plugin registered in the proxy config"
+              showSearch
+              style={{ width: "100%" }}
+              options={pluginOptions}
+              status={classifierPluginMissing ? "error" : undefined}
+              aria-label="Classifier Plugin"
+            />
+            {classifierPluginMissing && (
+              <Text type="danger" style={{ fontSize: 12 }}>
+                A classifier plugin is required
+              </Text>
+            )}
+            {pluginsError && (
+              <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+                The registered plugin names could not be loaded from the proxy.
+              </Text>
+            )}
+          </div>
+          <div>
+            <Text strong style={{ display: "block", marginBottom: 4 }}>
+              Plugin Timeout (ms)
+            </Text>
+            <InputNumber
+              value={value.classifier_plugin_timeout_ms ?? DEFAULT_CLASSIFIER_PLUGIN_TIMEOUT_MS}
+              onChange={handleClassifierPluginTimeoutChange}
+              min={1}
+              style={{ width: "100%" }}
+              aria-label="Plugin Timeout (ms)"
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              How long the plugin has to classify before it fails and the fallback below takes over.
+            </Text>
+          </div>
+          <ClassifierFallbackPicker
+            fallback={value.classifier_fallback}
+            onChange={handleClassifierFallbackChange}
+            defaultModel={defaultModel}
+          />
         </div>
       )}
 

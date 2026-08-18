@@ -39,6 +39,7 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterCacheStats,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    ClassifierPluginsListResponse,
     RequestComplexityRouterConfig,
     ShadowEvalJobResponse,
     ShadowEvalResult,
@@ -367,6 +368,22 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         saved_spend=sum(row.saved_spend for row in rows),
         session_seconds=sum(row.session_seconds for row in rows),
     )
+
+
+@router.get(
+    "/auto_router/classifier_plugins",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ClassifierPluginsListResponse,
+)
+async def list_classifier_plugins(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ClassifierPluginsListResponse:
+    """Registered classifier plugin names, for the Admin UI's custom classifier picker."""
+    import litellm
+
+    _require_admin_viewer(user_api_key_dict, "list classifier plugins")
+    return ClassifierPluginsListResponse(classifier_plugins=tuple(sorted(litellm.classifier_plugin_registry)))
 
 
 @router.get(

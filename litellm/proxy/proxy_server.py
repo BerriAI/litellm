@@ -4089,6 +4089,9 @@ def resolve_classifier_plugin(
     sync `def classify` passes the runtime_checkable isinstance and would only fail on the
     first classified request, so reject it here where the error names the config key.
     """
+    registered: Final = litellm.classifier_plugin_registry.get(plugin_path)
+    if registered is not None:
+        return registered
     resolved: Final = get_instance_fn(value=plugin_path, config_file_path=config_file_path)
     if not isinstance(resolved, ClassifierPlugin) or not inspect.iscoroutinefunction(
         getattr(resolved, "classify", None)
@@ -5488,6 +5491,20 @@ class ProxyConfig:
 
             # Load vector stores from config
             litellm.vector_store_registry.load_vector_stores_from_config(vector_store_registry_config)
+
+        ## CLASSIFIER PLUGINS (complexity-router custom classifiers, picked by name in the Admin UI)
+        classifier_plugins_config: Final = config.get("classifier_plugins", None)
+        if classifier_plugins_config:
+            if not isinstance(classifier_plugins_config, dict):
+                raise TypeError("classifier_plugins must map plugin names to dotted paths")
+            for plugin_name, plugin_path in classifier_plugins_config.items():
+                if not isinstance(plugin_path, str):
+                    raise TypeError(f"classifier_plugins.{plugin_name} must be a dotted-path string")
+                litellm.classifier_plugin_registry[str(plugin_name)] = resolve_classifier_plugin(
+                    plugin_path=plugin_path,
+                    config_file_path=config_file_path,
+                    source_label=f"classifier_plugins.{plugin_name}",
+                )
 
         ## WORKER REGISTRY (Global Control Plane)
         worker_registry_config: Final = config.get("worker_registry", None)

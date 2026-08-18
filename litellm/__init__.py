@@ -358,6 +358,11 @@ blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
+# Complexity-router classifier plugins declared under the proxy config's top-level
+# `classifier_plugins` key, keyed by the name the Admin UI selects and saved models
+# reference. Populated at proxy startup; ComplexityRouterConfig resolves string
+# classifier_plugin values through it.
+classifier_plugin_registry: Dict[str, "ClassifierPlugin"] = {}  # mutable-ok: populated at proxy startup
 include_cost_in_streaming_usage: bool = False
 reasoning_auto_summary: bool = False
 ### PROMPTS ####
@@ -488,6 +493,8 @@ priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]
 # priority_reservation_settings is lazy-loaded via __getattr__
 # Only declare for type checking - at runtime __getattr__ handles it
 if TYPE_CHECKING:
+    from litellm.types.router import ClassifierPlugin
+
     priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
 

@@ -75,6 +75,8 @@ export interface BuildComplexityRouterConfigParams {
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierPlugin: string | undefined;
+  classifierPluginTimeoutMs: number | undefined;
   classifierContextWindowSize: number | undefined;
   classifierContextPerTurnChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
@@ -104,6 +106,8 @@ export interface ComplexityRouterConfigPayload {
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  classifier_plugin?: string;
+  classifier_plugin_timeout_ms?: number;
   classifier_context_window_size?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
@@ -210,6 +214,8 @@ export const buildComplexityRouterConfig = ({
   tierLabels,
   classifierType,
   classifierLlmConfig,
+  classifierPlugin,
+  classifierPluginTimeoutMs,
   classifierContextWindowSize,
   classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
@@ -245,7 +251,11 @@ export const buildComplexityRouterConfig = ({
     classifier_type: classifierType,
     ...(classifierType === "llm" &&
       classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-    ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
+    ...(classifierType === "custom" && classifierPlugin && { classifier_plugin: classifierPlugin }),
+    ...(classifierType === "custom" &&
+      classifierPluginTimeoutMs !== undefined && { classifier_plugin_timeout_ms: classifierPluginTimeoutMs }),
+    ...(classifierType !== "heuristic" &&
+      classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
     ...(classifierType === "llm" &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,

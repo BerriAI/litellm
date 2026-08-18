@@ -75,6 +75,8 @@ function describeCause(decision: RoutingDecision): string {
       return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers)`;
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
+    case "classifier_plugin":
+      return "Custom classifier plugin";
     case "literal_keyword_match":
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
     case "semantic_keyword_match":
@@ -94,9 +96,9 @@ function describeCause(decision: RoutingDecision): string {
     case "default_fallback":
       return "Default model, no route matched";
     case "classifier_fallback":
-      return "Fallback tier, LLM classifier failed";
+      return "Fallback tier, the classifier failed";
     case "default_model_fallback":
-      return "Default model, LLM classifier failed";
+      return "Default model, the classifier failed";
     default:
       return cause ?? "Unknown";
   }
@@ -145,11 +147,14 @@ export function RoutingDecisionCard({
     tier_boundaries: tierBoundaries,
   } = decision;
 
-  // On an override row the score did not decide the tier, so showing it against a
-  // boundary would claim something untrue. Keyed off the cause rather than a marker
+  // On an override row, or one a plugin decided, the score did not choose the tier, so showing
+  // it against a boundary would claim something untrue. Keyed off the cause rather than a marker
   // inside `signals`, which redaction can remove.
   const scoreExplanation =
-    score !== undefined && decision.cause !== "reasoning_override" && decision.cause !== "plan_mode"
+    score !== undefined &&
+    decision.cause !== "reasoning_override" &&
+    decision.cause !== "plan_mode" &&
+    decision.cause !== "classifier_plugin"
       ? describeScoreAgainstBoundaries(score, tierBoundaries, tierLabel !== undefined)
       : null;
 

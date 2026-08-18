@@ -341,6 +341,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
+    classifierPlugin: complexityRouterConfig.classifier_plugin,
+    classifierPluginTimeoutMs: complexityRouterConfig.classifier_plugin_timeout_ms,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
     classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
@@ -364,7 +366,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const submitRecommendedRouter = async (name: string) => {
-    const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
+    const { tiers, tierLabels, classifierType, classifierLlmConfig, classifierPlugin } = complexityRouterConfigParams;
 
     const missingTiersError = getMissingTiersError(tiers);
     if (missingTiersError) {
@@ -383,6 +385,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
       setShowValidationErrors(true);
       toast.fromError("Please select a classifier model, or switch back to Heuristic");
+      return;
+    }
+
+    if (classifierType === "custom" && !classifierPlugin) {
+      setShowValidationErrors(true);
+      toast.fromError("Please select a classifier plugin, or switch back to Heuristic");
       return;
     }
 

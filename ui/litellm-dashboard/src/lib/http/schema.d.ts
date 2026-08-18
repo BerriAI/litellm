@@ -807,6 +807,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/classifier_plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Classifier Plugins
+         * @description Registered classifier plugin names, for the Admin UI's custom classifier picker.
+         */
+        get: operations["list_classifier_plugins_auto_router_classifier_plugins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/shadow_eval": {
         parameters: {
             query?: never;
@@ -23593,6 +23613,17 @@ export interface components {
             timeout_ms: number;
         };
         /**
+         * ClassifierPluginsListResponse
+         * @description Names from the proxy config's classifier_plugins registry, for the custom classifier picker.
+         */
+        ClassifierPluginsListResponse: {
+            /**
+             * Classifier Plugins
+             * @description Registered classifier plugin names an auto-router's classifier_plugin may reference
+             */
+            classifier_plugins: string[];
+        };
+        /**
          * CloudZeroExportRequest
          * @description Request model for CloudZero export operations
          */
@@ -37802,6 +37833,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_classifier_plugins_auto_router_classifier_plugins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClassifierPluginsListResponse"];
                 };
             };
         };

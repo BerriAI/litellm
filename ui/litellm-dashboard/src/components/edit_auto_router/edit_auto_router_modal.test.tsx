@@ -10,6 +10,11 @@ vi.mock(
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
 
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useClassifierPlugins",
+  async () => await import("../../../tests/mocks/classifierPlugins"),
+);
+
 const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall } = vi.hoisted(() => ({
   modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
@@ -481,6 +486,93 @@ describe("EditAutoRouterModal deployment affinity", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().deployment_affinity).toBe(false);
+  });
+});
+
+describe("EditAutoRouterModal custom classifier plugin", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const STORED_PLUGIN_CONFIG = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o-mini"], COMPLEX: ["gpt-4o-mini"], REASONING: ["gpt-4o-mini"] },
+    classifier_type: "custom",
+    classifier_plugin: "tier-by-team",
+    classifier_plugin_timeout_ms: 1500,
+    classifier_fallback: "heuristic",
+  };
+
+  const renderPluginModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: STORED_PLUGIN_CONFIG },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  // Every one of these keys is rewritten from form state on save, so a missing hydration line would
+  // silently wipe the operator's plugin the first time they opened this modal for anything else.
+  it("preserves a stored plugin, its timeout, and its fallback through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderPluginModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("combobox", { name: "Classifier Plugin" })).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "Plugin Timeout (ms)" })).toHaveValue("1500");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    const config = savedConfig();
+    expect(config.classifier_type).toBe("custom");
+    expect(config.classifier_plugin).toBe("tier-by-team");
+    expect(config.classifier_plugin_timeout_ms).toBe(1500);
+    expect(config.classifier_fallback).toBe("heuristic");
+  });
+
+  it("persists a switch to another registered plugin", async () => {
+    const user = userEvent.setup();
+    renderPluginModal();
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Classifier Plugin" }));
+    await user.click(await screen.findByTitle("spend-aware"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classifier_plugin).toBe("spend-aware");
+  });
+
+  it("blocks a save that leaves the custom classifier with no plugin", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_PLUGIN_CONFIG, classifier_plugin: undefined },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalled());
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
 });
 

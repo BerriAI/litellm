@@ -4233,6 +4233,52 @@ class TestClassifierPluginConfig:
             )
 
 
+class _RegistryClassifier:
+    async def classify(self, context):
+        return "COMPLEX"
+
+
+class TestClassifierPluginRegistry:
+    """String classifier_plugin values resolve through litellm.classifier_plugin_registry."""
+
+    def test_registered_name_resolves_to_the_instance(self, monkeypatch):
+        instance = _RegistryClassifier()
+        monkeypatch.setitem(litellm.classifier_plugin_registry, "tier-by-team", instance)
+        config = ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini"}, classifier_type="custom", classifier_plugin="tier-by-team"
+        )
+        assert config.classifier_plugin is instance
+
+    def test_unknown_name_is_rejected_at_validation(self):
+        with pytest.raises(ValidationError, match="not a registered classifier plugin"):
+            ComplexityRouterConfig(
+                tiers={"SIMPLE": "gpt-4o-mini"}, classifier_type="custom", classifier_plugin="no-such-plugin"
+            )
+
+    def test_live_instance_passes_through_untouched(self):
+        instance = _RegistryClassifier()
+        config = ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini"}, classifier_type="custom", classifier_plugin=instance
+        )
+        assert config.classifier_plugin is instance
+
+    @pytest.mark.asyncio
+    async def test_registry_named_plugin_classifies_end_to_end(self, mock_router_instance, monkeypatch):
+        monkeypatch.setitem(litellm.classifier_plugin_registry, "tier-by-team", _RegistryClassifier())
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini", "COMPLEX": "claude-sonnet-4-20250514"},
+                "classifier_type": "custom",
+                "classifier_plugin": "tier-by-team",
+            },
+        )
+        outcome = await router.aclassify("hello")
+        assert outcome.cause == "classifier_plugin"
+        assert outcome.tier == ComplexityTier.COMPLEX
+
+
 class TestClassifierPlugin:
     """classifier_type='custom': an operator hook decides the tier."""
 

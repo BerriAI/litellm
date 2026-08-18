@@ -13,6 +13,11 @@ vi.mock(
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
 
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useClassifierPlugins",
+  async () => await import("../../../tests/mocks/classifierPlugins"),
+);
+
 const ANTHROPIC_PRESET = getPresetByKey("anthropic_family")!;
 const ANTHROPIC_TIERS = ANTHROPIC_PRESET.complexity_router_config.tiers;
 
@@ -283,6 +288,50 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: false,
     });
+  });
+
+  it("carries a selected classifier plugin and its timeout through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "plugin-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Custom classifier/ }));
+    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Classifier Plugin" }));
+    await user.click(await screen.findByTitle("tier-by-team"));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      classifier_type: "custom",
+      classifier_plugin: "tier-by-team",
+      classifier_plugin_timeout_ms: 3000,
+    });
+  });
+
+  // The backend rejects classifier_type "custom" with no classifier_plugin, so the form has to say
+  // what is missing rather than let the save come back as a raw 400.
+  it("blocks a submit that selects the custom classifier without a plugin", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "plugin-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Custom classifier/ }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() =>
+      expect(toast.fromError).toHaveBeenCalledWith("Please select a classifier plugin, or switch back to Heuristic"),
+    );
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
   it("carries session affinity turned on through to the create payload", async () => {

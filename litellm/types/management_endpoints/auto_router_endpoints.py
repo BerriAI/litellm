@@ -27,6 +27,14 @@ class RequestComplexityRouterConfig(ComplexityRouterConfig):
     )
 
 
+class ClassifierPluginsListResponse(BaseModel):
+    """Names from the proxy config's classifier_plugins registry, for the custom classifier picker."""
+
+    classifier_plugins: tuple[str, ...] = Field(
+        description="Registered classifier plugin names an auto-router's classifier_plugin may reference",
+    )
+
+
 class AutoRouterRoutingTestRequest(BaseModel):
     """A single prompt to classify against a complexity-router config that need not be saved yet."""
 

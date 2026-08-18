@@ -15,6 +15,7 @@ export type { DimensionWeights, TierBoundaries, TokenThresholds };
 const { Text } = Typography;
 
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
+export const DEFAULT_CLASSIFIER_PLUGIN_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
 export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
@@ -73,7 +74,7 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "llm";
+export type ClassifierType = "heuristic" | "llm" | "custom";
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -90,8 +91,8 @@ export type HeuristicScoringRole = "decides" | "fallback_only" | "never";
 
 /**
  * Whether the heuristic scorer runs on this router at all, which is what gates its knobs. An LLM
- * classifier still falls back to the scorer unless the fallback is the default model, so the gate cannot be
- * a plain classifier_type check.
+ * classifier or a classifier plugin still falls back to the scorer unless the fallback is the default
+ * model, so the gate cannot be a plain classifier_type check.
  */
 export const heuristicScoringRoleFor = (
   classifierType: ClassifierType,
@@ -115,6 +116,9 @@ export interface ComplexityRouterConfigValue {
   default_model?: string;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
+  /** A name from the proxy config's classifier_plugins registry. Required when classifier_type is "custom". */
+  classifier_plugin?: string;
+  classifier_plugin_timeout_ms?: number;
   classifier_context_window_size?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;

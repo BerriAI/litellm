@@ -106,6 +106,40 @@ describe("buildUpdatedComplexityRouterConfig", () => {
     expect(updatedConfig.custom_technical_keywords).toBeUndefined();
   });
 
+  it("writes the plugin and its timeout for a custom classifier", () => {
+    const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, {
+      tiers,
+      classifier_type: "custom" as const,
+      classifier_plugin: "tier-by-team",
+      classifier_plugin_timeout_ms: 1500,
+      classifier_fallback: "default_model" as const,
+    });
+
+    expect(updatedConfig).toMatchObject({
+      classifier_type: "custom",
+      classifier_plugin: "tier-by-team",
+      classifier_plugin_timeout_ms: 1500,
+      classifier_fallback: "default_model",
+    });
+    expect(updatedConfig.classifier_llm_config).toBeUndefined();
+  });
+
+  // Both keys are managed, so switching off custom has to remove them: the backend rejects a stored
+  // classifier_plugin sitting next to a non-custom classifier_type.
+  it("removes a stored plugin and its timeout when the classifier is no longer custom", () => {
+    const storedCustom = JSON.stringify({
+      ...storedConfigValue,
+      classifier_type: "custom",
+      classifier_plugin: "tier-by-team",
+      classifier_plugin_timeout_ms: 1500,
+    });
+
+    const updatedConfig = buildUpdatedComplexityRouterConfig(storedCustom, classifiedTierValue);
+
+    expect(updatedConfig.classifier_plugin).toBeUndefined();
+    expect(updatedConfig.classifier_plugin_timeout_ms).toBeUndefined();
+  });
+
   it("preserves a tier configured with more than one model as a pool", () => {
     const multiModelValue = {
       ...classifiedTierValue,

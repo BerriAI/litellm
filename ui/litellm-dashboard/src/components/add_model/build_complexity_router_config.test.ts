@@ -22,6 +22,8 @@ const baseParams: BuildComplexityRouterConfigParams = {
   tierLabels: undefined,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
+  classifierPlugin: undefined,
+  classifierPluginTimeoutMs: undefined,
   classifierContextWindowSize: undefined,
   classifierContextPerTurnChars: undefined,
   classifierContextIncludeAssistantTurns: undefined,
@@ -91,6 +93,86 @@ describe("buildComplexityRouterConfig", () => {
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
     });
     expect(config.classifier_llm_config).toBeUndefined();
+  });
+
+  it("includes the plugin and its timeout only when classifier_type is custom", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "custom",
+      classifierPlugin: "tier-by-team",
+      classifierPluginTimeoutMs: 1500,
+    });
+
+    expect(config.classifier_type).toBe("custom");
+    expect(config.classifier_plugin).toBe("tier-by-team");
+    expect(config.classifier_plugin_timeout_ms).toBe(1500);
+    expect(config.classifier_llm_config).toBeUndefined();
+  });
+
+  // The backend rejects classifier_plugin alongside a non-custom classifier_type, so a selection
+  // left on the form after the operator switched away must never reach the wire.
+  it("omits the plugin and its timeout when classifier_type is heuristic even if they linger in state", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierPlugin: "tier-by-team",
+      classifierPluginTimeoutMs: 1500,
+    });
+
+    expect(config.classifier_plugin).toBeUndefined();
+    expect(config.classifier_plugin_timeout_ms).toBeUndefined();
+  });
+
+  it("omits the plugin and its timeout when classifier_type is llm even if they linger in state", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierPlugin: "tier-by-team",
+      classifierPluginTimeoutMs: 1500,
+    });
+
+    expect(config.classifier_plugin).toBeUndefined();
+    expect(config.classifier_plugin_timeout_ms).toBeUndefined();
+  });
+
+  // The plugin's failure path is configurable exactly like the LLM classifier's, so the fallback
+  // gate is "not the heuristic" rather than "llm".
+  it("emits classifier_fallback for a custom classifier as well as an llm one", () => {
+    const custom = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "custom",
+      classifierPlugin: "tier-by-team",
+      classifierFallback: "default_model",
+    });
+    const llm = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierFallback: "default_model",
+    });
+
+    expect(custom.classifier_fallback).toBe("default_model");
+    expect(llm.classifier_fallback).toBe("default_model");
+  });
+
+  it("omits classifier_fallback for the heuristic, which has nothing to fall back from", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, classifierFallback: "default_model" });
+
+    expect(config.classifier_fallback).toBeUndefined();
+  });
+
+  // heuristicScoringRoleFor keys off the fallback, not the classifier type, so a plugin routing its
+  // failures to the default model must drop the scorer knobs the same way an LLM classifier does.
+  it("drops the scorer knobs on a custom classifier that never scores", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "custom",
+      classifierPlugin: "tier-by-team",
+      classifierFallback: "default_model",
+      tokenThresholds: { simple: 25, complex: 900 },
+    });
+
+    expect(config.token_thresholds).toBeUndefined();
   });
 
   it("includes classifier_context_window_size and classifier_context_per_turn_chars only when classifier_type is llm", () => {

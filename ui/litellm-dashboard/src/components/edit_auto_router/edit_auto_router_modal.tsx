@@ -70,6 +70,8 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tier_labels",
   "classifier_type",
   "classifier_llm_config",
+  "classifier_plugin",
+  "classifier_plugin_timeout_ms",
   "classifier_context_window_size",
   "classifier_context_per_turn_chars",
   "classifier_context_include_assistant_turns",
@@ -157,7 +159,14 @@ export const buildUpdatedComplexityRouterConfig = (
     ...(value.classifier_type === "llm" && value.classifier_llm_config
       ? { classifier_llm_config: normalizeClassifierLlmConfig(value.classifier_llm_config) }
       : {}),
-    ...(value.classifier_type === "llm" &&
+    ...(value.classifier_type === "custom" && value.classifier_plugin
+      ? { classifier_plugin: value.classifier_plugin }
+      : {}),
+    ...(value.classifier_type === "custom" &&
+      value.classifier_plugin_timeout_ms !== undefined && {
+        classifier_plugin_timeout_ms: value.classifier_plugin_timeout_ms,
+      }),
+    ...(value.classifier_type !== "heuristic" &&
       value.classifier_fallback !== undefined && { classifier_fallback: value.classifier_fallback }),
     ...(value.classifier_type === "llm" &&
       value.classifier_context_window_size !== undefined && {
@@ -348,6 +357,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,
+          classifier_plugin:
+            typeof parsedConfig.classifier_plugin === "string" ? parsedConfig.classifier_plugin : undefined,
+          classifier_plugin_timeout_ms:
+            typeof parsedConfig.classifier_plugin_timeout_ms === "number"
+              ? parsedConfig.classifier_plugin_timeout_ms
+              : undefined,
           classifier_context_window_size:
             typeof parsedConfig.classifier_context_window_size === "number"
               ? parsedConfig.classifier_context_window_size
@@ -435,7 +450,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
   const saveValues = async (values: EditAutoRouterFormValues) => {
     if (isComplexityRouterModel) {
-      const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
+      const { tiers, classifier_type, classifier_llm_config, classifier_plugin } = complexityRouterConfig;
       if (Object.values(tiers).every((models) => models.length === 0)) {
         setShowValidationErrors(true);
         toast.fromError("Please select at least one model for a complexity tier");
@@ -444,6 +459,11 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       if (classifier_type === "llm" && !classifier_llm_config?.model) {
         setShowValidationErrors(true);
         toast.fromError("Please select a classifier model, or switch back to Heuristic");
+        return;
+      }
+      if (classifier_type === "custom" && !classifier_plugin) {
+        setShowValidationErrors(true);
+        toast.fromError("Please select a classifier plugin, or switch back to Heuristic");
         return;
       }
       // Same guards the create form applies (add_auto_router_tab.tsx). The backend rejects a

@@ -85,6 +85,31 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("Score")).not.toBeInTheDocument();
   });
 
+  it("names the custom classifier plugin instead of rendering its raw cause string", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          router_model_name: "plugin-router",
+          router_type: "complexity",
+          routed_model: "claude-sonnet",
+          cause: "classifier_plugin",
+          tier: "COMPLEX",
+          signals: ["classifier-plugin:COMPLEX"],
+        }}
+      />,
+    );
+    expect(screen.getByText("Custom classifier plugin")).toBeInTheDocument();
+    expect(screen.queryByText("classifier_plugin")).not.toBeInTheDocument();
+  });
+
+  // The plugin chose the tier, so pairing a score with a boundary band would claim the heuristic did.
+  it("does not claim the score chose the tier on a plugin-decided row", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "classifier_plugin", score: 0.2 }} />);
+
+    expect(screen.getByText("0.20")).toBeInTheDocument();
+    expect(screen.queryByText(/SIMPLE|MEDIUM|COMPLEX|at or above/)).not.toBeInTheDocument();
+  });
+
   it("explains a route that fell back to the default model after the classifier failed", () => {
     // No tier is recorded on this path, so the card must not show a Tier row: nothing
     // about the request produced one, the classifier never answered.
@@ -99,7 +124,7 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Default model, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("Default model, the classifier failed")).toBeInTheDocument();
     expect(screen.queryByText("Tier")).not.toBeInTheDocument();
   });
 
@@ -116,7 +141,7 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Fallback tier, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("Fallback tier, the classifier failed")).toBeInTheDocument();
     expect(screen.getByText("SECURITY_REVIEW")).toBeInTheDocument();
   });
 
