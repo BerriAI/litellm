@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { InputSchema } from "@/components/mcp_tools/types";
 import {
   ToolArgumentField,
+  argumentsFormKey,
   buildToolCallArguments,
   hasNestedParamsSchema,
+  initialArgumentValues,
   toolArgumentFields,
   toolArgumentsResolver,
   validateToolArgument,
@@ -184,5 +186,149 @@ describe("hasNestedParamsSchema", () => {
 
   it("rejects a schema with no params property", () => {
     expect(hasNestedParamsSchema({ type: "object", properties: { q: { type: "string" } } })).toBe(false);
+  });
+});
+
+describe("initialArgumentValues", () => {
+  const seed = (schema: InputSchema): unknown[] => initialArgumentValues(toolArgumentFields(schema));
+
+  it("seeds each primitive type with its empty value when the schema declares no default", () => {
+    expect(
+      seed({
+        type: "object",
+        properties: {
+          message: { type: "string" },
+          attempts: { type: "integer" },
+          ratio: { type: "number" },
+          active: { type: "boolean" },
+        },
+      }),
+    ).toEqual(["", 0, 0, false]);
+  });
+
+  it("prefers a declared default over the empty value", () => {
+    expect(
+      seed({
+        type: "object",
+        properties: {
+          label: { type: "string", default: "seeded" },
+          ratio: { type: "number", default: 0.4 },
+          active: { type: "boolean", default: true },
+        },
+      }),
+    ).toEqual(["seeded", 0.4, true]);
+  });
+
+  it("seeds a false boolean default rather than falling back to the empty value", () => {
+    expect(seed({ type: "object", properties: { active: { type: "boolean", default: false } } })).toEqual([false]);
+  });
+
+  it("renders an object field as pretty JSON built from its nested property defaults", () => {
+    const [payload] = seed({
+      type: "object",
+      properties: {
+        payload: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            count: { type: "integer", default: 3 },
+          },
+        },
+      },
+    });
+
+    expect(payload).toBe(JSON.stringify({ id: "", count: 3 }, null, 2));
+  });
+
+  it("keeps keys a declared object default carries that the schema does not describe", () => {
+    const [payload] = seed({
+      type: "object",
+      properties: {
+        payload: {
+          type: "object",
+          properties: { id: { type: "string" } },
+          default: { id: "abc", extra: true },
+        },
+      },
+    });
+
+    expect(payload).toBe(JSON.stringify({ id: "abc", extra: true }, null, 2));
+  });
+
+  it("renders an array field as pretty JSON holding one sample item built from its item schema", () => {
+    const [tags] = seed({
+      type: "object",
+      properties: { tags: { type: "array", items: { type: "string" } } },
+    });
+
+    expect(tags).toBe(JSON.stringify([""], null, 2));
+  });
+
+  it("rebuilds each entry of a declared array default against the item schema", () => {
+    const [rows] = seed({
+      type: "object",
+      properties: {
+        rows: {
+          type: "array",
+          items: { type: "object", properties: { id: { type: "string" }, n: { type: "integer" } } },
+          default: [{ id: "a" }],
+        },
+      },
+    });
+
+    expect(rows).toBe(JSON.stringify([{ id: "a", n: 0 }], null, 2));
+  });
+
+  it("does not mutate the schema it seeds from", () => {
+    const schema: InputSchema = {
+      type: "object",
+      properties: {
+        payload: { type: "object", properties: { id: { type: "string" } }, default: { other: 1 } },
+      },
+    };
+    const before = JSON.stringify(schema);
+
+    seed(schema);
+
+    expect(JSON.stringify(schema)).toBe(before);
+  });
+
+  it("seeds positionally, so a dotted key is just another index", () => {
+    expect(
+      seed({
+        type: "object",
+        properties: { "filter.name": { type: "string", default: "acme" }, plain: { type: "string" } },
+      }),
+    ).toEqual(["acme", ""]);
+  });
+});
+
+describe("argumentsFormKey", () => {
+  it("changes when a property's type changes under the same property names", () => {
+    const before: InputSchema = { type: "object", properties: { value: { type: "string" } } };
+    const after: InputSchema = { type: "object", properties: { value: { type: "integer" } } };
+
+    expect(argumentsFormKey(after)).not.toBe(argumentsFormKey(before));
+  });
+
+  it("changes when a property's default changes", () => {
+    const before: InputSchema = { type: "object", properties: { value: { type: "string", default: "a" } } };
+    const after: InputSchema = { type: "object", properties: { value: { type: "string", default: "b" } } };
+
+    expect(argumentsFormKey(after)).not.toBe(argumentsFormKey(before));
+  });
+
+  it("changes when a property is added", () => {
+    const before: InputSchema = { type: "object", properties: { a: { type: "string" } } };
+    const after: InputSchema = { type: "object", properties: { a: { type: "string" }, b: { type: "string" } } };
+
+    expect(argumentsFormKey(after)).not.toBe(argumentsFormKey(before));
+  });
+
+  it("is stable across separately built but identical schemas", () => {
+    const one: InputSchema = { type: "object", properties: { a: { type: "string", default: "x" } } };
+    const two: InputSchema = { type: "object", properties: { a: { type: "string", default: "x" } } };
+
+    expect(argumentsFormKey(one)).toBe(argumentsFormKey(two));
   });
 });

@@ -119,3 +119,75 @@ export const hasNestedParamsSchema = (schema: InputSchema): boolean => {
   if (params === undefined) return false;
   return params.type === "object" && params.properties !== undefined;
 };
+
+function buildArrayItems(items: InputSchemaProperty | InputSchemaProperty[] | undefined): unknown[] {
+  if (!items) return [];
+  if (Array.isArray(items)) {
+    return items.map((item) => buildDefaultValue(item)).filter((value) => value !== undefined);
+  }
+  const itemDefault = buildDefaultValue(items);
+  return itemDefault === undefined ? [] : [itemDefault];
+}
+
+function buildObjectDefault(prop: InputSchemaProperty, effectiveDefault: unknown): Record<string, unknown> {
+  const base: Record<string, unknown> = isPlainObject(effectiveDefault) ? effectiveDefault : {};
+  if (!prop.properties) return { ...base };
+  return {
+    ...base,
+    ...Object.fromEntries(
+      Object.entries(prop.properties).map(([childKey, childProp]) => [
+        childKey,
+        buildDefaultValue(childProp, base[childKey]),
+      ]),
+    ),
+  };
+}
+
+function buildArrayDefault(prop: InputSchemaProperty, effectiveDefault: unknown): unknown {
+  if (Array.isArray(effectiveDefault)) {
+    const itemSchema = prop.items;
+    if (!itemSchema) return effectiveDefault;
+    if (effectiveDefault.length === 0) {
+      const sample = buildArrayItems(itemSchema);
+      return sample.length > 0 ? sample : effectiveDefault;
+    }
+    if (Array.isArray(itemSchema)) {
+      return effectiveDefault.map((value: unknown, index: number) =>
+        buildDefaultValue(itemSchema[index] ?? itemSchema[itemSchema.length - 1], value),
+      );
+    }
+    return effectiveDefault.map((value: unknown) => buildDefaultValue(itemSchema, value));
+  }
+  if (effectiveDefault !== undefined) return effectiveDefault;
+  return buildArrayItems(prop.items);
+}
+
+function buildDefaultValue(prop: InputSchemaProperty | undefined, overrideDefault?: unknown): unknown {
+  if (!prop) return undefined;
+  const effectiveDefault: unknown = overrideDefault !== undefined ? overrideDefault : prop.default;
+
+  if (prop.type === "object") return buildObjectDefault(prop, effectiveDefault);
+  if (prop.type === "array") return buildArrayDefault(prop, effectiveDefault);
+  if (effectiveDefault !== undefined) return effectiveDefault;
+
+  switch (prop.type) {
+    case "integer":
+    case "number":
+      return 0;
+    case "boolean":
+      return false;
+    default:
+      return "";
+  }
+}
+
+export const initialArgumentValues = (fields: readonly ToolArgumentField[]): unknown[] =>
+  fields.map(({ prop }) => {
+    const defaultValue = buildDefaultValue(prop);
+    if (isJsonField(prop)) {
+      return JSON.stringify(defaultValue ?? (prop.type === "array" ? [] : {}), null, 2);
+    }
+    return defaultValue;
+  });
+
+export const argumentsFormKey = (schema: InputSchema): string => JSON.stringify(schema);
