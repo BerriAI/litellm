@@ -27,6 +27,7 @@ from litellm.proxy.guardrails.usage_endpoints import (
     guardrails_usage_detail,
     guardrails_usage_logs,
     guardrails_usage_overview,
+    policies_usage_overview,
 )
 from litellm.types.guardrails import Guardrail, LitellmParams
 
@@ -356,3 +357,82 @@ async def test_logs_resolves_config_guardrail_logical_name():
         )
     where = prisma.db.litellm_spendlogguardrailindex.find_many.call_args.kwargs["where"]
     assert where["guardrail_id"] == {"in": ["yaml-uuid", "yaml-pii"]}
+
+
+# ---- date window cap (LIT-5762) ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_overview_rejects_range_over_max_days():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_overview(start_date="2020-01-01", end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+    assert "366" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_overview_accepts_range_at_exactly_max_days():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_overview(start_date="2025-04-26", end_date="2026-04-27", user_api_key_dict=ADMIN)
+    assert resp.totalRequests == 0
+
+
+@pytest.mark.asyncio
+async def test_overview_rejects_malformed_dates():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_overview(start_date="not-a-date", end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_overview_rejects_non_canonical_date_format():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_overview(start_date="20260420", end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+    assert "YYYY-MM-DD" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_detail_rejects_reversed_dates():
+    prisma = _prisma(find_unique=_db_row())
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_detail(guardrail_id="db-1", start_date=END, end_date=START, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_policies_overview_rejects_range_over_max_days():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await policies_usage_overview(start_date="2020-01-01", end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_detail_prev_trend_query_is_bounded():
+    """Regression: the trend query scanned every metrics row before start_date."""
+    prisma = _prisma(find_unique=_db_row())
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        await guardrails_usage_detail(guardrail_id="db-1", start_date=START, end_date=END, user_api_key_dict=ADMIN)
+    wheres = [c.kwargs["where"] for c in prisma.db.litellm_dailyguardrailmetrics.find_many.await_args_list]
+    prev_wheres = [w for w in wheres if "lt" in w.get("date", {})]
+    assert prev_wheres
+    assert all("gte" in w["date"] for w in prev_wheres)
