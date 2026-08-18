@@ -422,3 +422,23 @@ def test_emits_nothing_when_the_team_label_is_excluded():
     for metric_name in TEAM_RATE_LIMIT_METRICS:
         getattr(logger, metric_name).labels.assert_not_called()
         getattr(logger, metric_name).remove.assert_not_called()
+
+
+def test_excluded_labels_never_reach_team_gauge_labelnames():
+    """
+    `exclude_labels` is applied inside `get_labels_for_metric`, so the
+    labelnames a team gauge is constructed with never contain an excluded
+    label. The factory only wraps a metric when its labelnames still intersect
+    `exclude_labels`, so these gauges are always real prometheus_client
+    Gauges and always expose `collect` for alias cleanup.
+    """
+    with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
+        logger = PrometheusLogger()
+    logger.exclude_labels = frozenset({"model", "team_alias"})
+    logger.label_filters = {}
+    logger._cached_metric_labels = {}
+
+    for metric_name in TEAM_RATE_LIMIT_METRICS:
+        labelnames = logger.get_labels_for_metric(metric_name)
+        assert not frozenset(labelnames) & logger.exclude_labels
+        assert "team" in labelnames
