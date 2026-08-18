@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Modal, Form, Button as Button2, Select, Checkbox } from "antd";
-import { Text, TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
 import { parseErrorMessage } from "./shared/errorUtils";
@@ -280,7 +280,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               name="user_email"
               rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
             >
-              <TextInput />
+              <Input />
             </Form.Item>
             <Form.Item
               label="Proxy Base URL"
@@ -303,7 +303,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                 },
               ]}
             >
-              <TextInput placeholder="https://example.com" />
+              <Input placeholder="https://example.com" />
             </Form.Item>
 
             <Form.Item
@@ -334,7 +334,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                     name="group_claim"
                     rules={[{ required: true, message: "Please enter the group claim" }]}
                   >
-                    <TextInput />
+                    <Input />
                   </Form.Item>
                 ) : null;
               }}
@@ -360,19 +360,19 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                     </Form.Item>
 
                     <Form.Item label="Proxy Admin Teams" name="proxy_admin_teams">
-                      <TextInput />
+                      <Input />
                     </Form.Item>
 
                     <Form.Item label="Admin Viewer Teams" name="admin_viewer_teams">
-                      <TextInput />
+                      <Input />
                     </Form.Item>
 
                     <Form.Item label="Internal User Teams" name="internal_user_teams">
-                      <TextInput />
+                      <Input />
                     </Form.Item>
 
                     <Form.Item label="Internal Viewer Teams" name="internal_viewer_teams">
-                      <TextInput />
+                      <Input />
                     </Form.Item>
                   </>
                 ) : null;
@@ -443,10 +443,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         onCancel={handleInstructionsCancel}
       >
         <p>Follow these steps to complete the SSO setup:</p>
-        <Text className="mt-2">1. DO NOT Exit this TAB</Text>
-        <Text className="mt-2">2. Open a new tab, visit your proxy base url</Text>
-        <Text className="mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</Text>
-        <Text className="mt-2">4. If Step 3 is successful, you can close this tab</Text>
+        <p className="text-sm mt-2">1. DO NOT Exit this TAB</p>
+        <p className="text-sm mt-2">2. Open a new tab, visit your proxy base url</p>
+        <p className="text-sm mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</p>
+        <p className="text-sm mt-2">4. If Step 3 is successful, you can close this tab</p>
         <div style={{ textAlign: "right", marginTop: "10px" }}>
           <Button2 onClick={handleInstructionsOk}>Done</Button2>
         </div>

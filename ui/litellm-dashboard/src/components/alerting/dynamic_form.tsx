@@ -1,7 +1,10 @@
 import React from "react";
 import { Form, Input, InputNumber, Button as Button2 } from "antd";
-import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
-import { Button, Badge, Icon, Text, TableRow, TableCell, Switch } from "@tremor/react";
+import { CircleCheck, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { TableCell, TableRow } from "@/components/ui/table";
 interface AlertingSetting {
   field_name: string;
   field_description: string;
@@ -46,8 +49,8 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
     <Form form={form} onFinish={onFinish} labelAlign="left">
       {alertingSettings.map((value, index) => (
         <TableRow key={index}>
-          <TableCell align="center">
-            <Text>{value.field_name}</Text>
+          <TableCell className="text-center">
+            <p className="text-sm">{value.field_name}</p>
             <p
               style={{
                 fontSize: "0.65rem",
@@ -71,8 +74,9 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
                     />
                   ) : value.field_type === "Boolean" ? (
                     <Switch
+                      aria-label={value.field_name}
                       checked={value.field_value}
-                      onChange={(checked) => handleInputChange(value.field_name, checked)}
+                      onCheckedChange={(checked) => handleInputChange(value.field_name, checked)}
                     />
                   ) : (
                     <Input value={value.field_value} onChange={(e) => handleInputChange(value.field_name, e)} />
@@ -104,8 +108,9 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
                   />
                 ) : value.field_type === "Boolean" ? (
                   <Switch
+                    aria-label={value.field_name}
                     checked={value.field_value}
-                    onChange={(checked) => {
+                    onCheckedChange={(checked) => {
                       handleInputChange(value.field_name, checked);
                       form.setFieldsValue({ [value.field_name]: checked });
                     }}
@@ -118,19 +123,26 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
           )}
           <TableCell>
             {value.stored_in_db == true ? (
-              <Badge icon={CheckCircleIcon} className="text-white">
+              <Badge variant="secondary">
+                <CircleCheck />
                 In DB
               </Badge>
             ) : value.stored_in_db == false ? (
-              <Badge className="text-gray bg-white outline-solid">In Config</Badge>
+              <Badge variant="outline">In Config</Badge>
             ) : (
-              <Badge className="text-gray bg-white outline-solid">Not Set</Badge>
+              <Badge variant="outline">Not Set</Badge>
             )}
           </TableCell>
           <TableCell>
-            <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
-              Reset
-            </Icon>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Reset ${value.field_name}`}
+              onClick={() => handleResetField(value.field_name, index)}
+              className="text-red-500"
+            >
+              <Trash2 className="size-5" />
+            </Button>
           </TableCell>
         </TableRow>
       ))}

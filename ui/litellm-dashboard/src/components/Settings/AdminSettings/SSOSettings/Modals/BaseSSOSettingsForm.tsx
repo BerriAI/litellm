@@ -1,7 +1,7 @@
 "use client";
 
-import { TextInput } from "@tremor/react";
-import { Checkbox, Form, Input, Select } from "antd";
+import { Input } from "@/components/ui/input";
+import { Checkbox, Form, Input as AntdInput, Select } from "antd";
 import React from "react";
 import { ssoProviderLogoMap, ssoProviderDisplayNames } from "../constants";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -140,11 +140,11 @@ export const renderProviderFields = (provider: string) => {
     if (field.type === "checkbox") {
       control = <Checkbox />;
     } else if (field.type === "textarea") {
-      control = <Input.TextArea rows={4} placeholder={field.placeholder} />;
+      control = <AntdInput.TextArea rows={4} placeholder={field.placeholder} />;
     } else if (field.type === "password" || field.name.includes("client")) {
-      control = <Input.Password />;
+      control = <AntdInput.Password />;
     } else {
-      control = <TextInput placeholder={field.placeholder} />;
+      control = <Input placeholder={field.placeholder} />;
     }
     return (
       <Form.Item
@@ -204,7 +204,7 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
           name="user_email"
           rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
         >
-          <TextInput />
+          <Input />
         </Form.Item>
         <Form.Item
           label="Proxy Base URL"
@@ -227,7 +227,7 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
             },
           ]}
         >
-          <TextInput placeholder="https://example.com" />
+          <Input placeholder="https://example.com" />
         </Form.Item>
 
         <Form.Item
@@ -261,7 +261,7 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
                 name="group_claim"
                 rules={[{ required: true, message: "Please enter the group claim" }]}
               >
-                <TextInput />
+                <Input />
               </Form.Item>
             ) : null;
           }}
@@ -290,19 +290,19 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
                 </Form.Item>
 
                 <Form.Item label="Proxy Admin Teams" name="proxy_admin_teams">
-                  <TextInput />
+                  <Input />
                 </Form.Item>
 
                 <Form.Item label="Admin Viewer Teams" name="admin_viewer_teams">
-                  <TextInput />
+                  <Input />
                 </Form.Item>
 
                 <Form.Item label="Internal User Teams" name="internal_user_teams">
-                  <TextInput />
+                  <Input />
                 </Form.Item>
 
                 <Form.Item label="Internal Viewer Teams" name="internal_viewer_teams">
-                  <TextInput />
+                  <Input />
                 </Form.Item>
               </>
             ) : null;
@@ -340,7 +340,7 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
                 name="team_ids_jwt_field"
                 rules={[{ required: true, message: "Please enter the team IDs JWT field" }]}
               >
-                <TextInput />
+                <Input />
               </Form.Item>
             ) : null;
           }}

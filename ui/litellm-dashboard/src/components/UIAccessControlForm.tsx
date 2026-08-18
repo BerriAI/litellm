@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Form, Button as Button2, Select } from "antd";
-import { Text, TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import NotificationManager from "./molecules/notifications_manager";
 
@@ -90,9 +90,9 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
   return (
     <div style={{ padding: "16px" }}>
       <div style={{ marginBottom: "16px" }}>
-        <Text style={{ fontSize: "14px", color: "#6b7280" }}>
+        <p style={{ fontSize: "14px", color: "#6b7280" }}>
           Configure who can access the UI interface and how group information is extracted from JWT tokens.
-        </Text>
+        </p>
       </div>
 
       <Form form={form} onFinish={handleUIAccessSubmit} layout="vertical">
@@ -117,7 +117,7 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
                 name="restricted_sso_group"
                 rules={[{ required: true, message: "Please enter the restricted SSO group" }]}
               >
-                <TextInput placeholder="ui-access-group" />
+                <Input placeholder="ui-access-group" />
               </Form.Item>
             ) : null;
           }}
@@ -128,7 +128,7 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
           name="sso_group_jwt_field"
           tooltip="JWT field name that contains team/group information. Use dot notation to access nested fields."
         >
-          <TextInput placeholder="groups" />
+          <Input placeholder="groups" />
         </Form.Item>
 
         <div style={{ textAlign: "right", marginTop: "16px" }}>
