@@ -28,13 +28,11 @@ async def test_get_all_spend_logs_for_previous_response_id_decrypts_encrypted_id
     fake_prisma = MagicMock()
     fake_prisma.db.query_raw = AsyncMock(return_value=[])
 
-    with patch.object(
-        ResponsesSessionHandler, "_get_prisma_client", return_value=fake_prisma
-    ), patch(
-        "litellm.responses.utils.ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id",
-        return_value=original_response_id,
-    ):
-        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(encrypted_id)
+    await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        encrypted_id,
+        prisma_client=fake_prisma,
+        response_id_decoder=lambda _: original_response_id,
+    )
 
     assert fake_prisma.db.query_raw.call_args[0][1] == original_response_id
 
@@ -58,13 +56,11 @@ def test_get_prisma_client_imports_proxy_server():
 @pytest.mark.asyncio
 async def test_get_all_spend_logs_for_previous_response_id_returns_empty_without_prisma():
     """When no Prisma client is configured, the spend-log lookup returns []."""
-    with patch.object(
-        ResponsesSessionHandler, "_get_prisma_client", return_value=None
-    ), patch(
-        "litellm.responses.utils.ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id",
-        return_value="resp_abc123",
-    ):
-        result = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id("resp_abc123")
+    result = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        "resp_abc123",
+        prisma_client=None,
+        response_id_decoder=lambda _: "resp_abc123",
+    )
 
     assert result == []
 

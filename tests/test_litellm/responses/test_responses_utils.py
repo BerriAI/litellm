@@ -161,15 +161,10 @@ class TestResponsesAPIRequestUtils:
         )
         encrypted_id = f"resp_{'encrypted' * 20}"
 
-        with patch(
-            "litellm.responses.utils.ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id",
-            return_value=managed_id,
-        ):
-            result = (
-                ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-                    encrypted_id
-                )
-            )
+        result = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+            encrypted_id,
+            decrypt_previous_response_id=lambda _: managed_id,
+        )
 
         assert result == original_response_id
 

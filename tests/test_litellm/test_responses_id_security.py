@@ -332,6 +332,30 @@ class TestAsyncPreCallHook:
                 assert result["previous_response_id"] == "resp_original_123"
 
     @pytest.mark.asyncio
+    async def test_async_pre_call_hook_acompact_responses_with_previous_response_id(
+        self, responses_id_security, mock_user_api_key_dict, mock_cache
+    ):
+        """Test pre-call hook decrypts and checks previous_response_id for acompact_responses."""
+        data = {"previous_response_id": "resp_encrypted_value"}
+
+        with patch.object(
+            responses_id_security, "_is_encrypted_response_id", return_value=True
+        ):
+            with patch.object(
+                responses_id_security,
+                "_decrypt_response_id",
+                return_value=("resp_original_123", "test-user-123", "test-team-123"),
+            ):
+                result = await responses_id_security.async_pre_call_hook(
+                    user_api_key_dict=mock_user_api_key_dict,
+                    cache=mock_cache,
+                    data=data,
+                    call_type="acompact_responses",
+                )
+
+                assert result["previous_response_id"] == "resp_original_123"
+
+    @pytest.mark.asyncio
     async def test_async_pre_call_hook_aget_responses(
         self, responses_id_security, mock_user_api_key_dict, mock_cache
     ):

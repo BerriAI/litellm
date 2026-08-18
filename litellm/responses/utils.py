@@ -1,6 +1,6 @@
 import base64
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Final, Optional, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
@@ -576,6 +576,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def decode_previous_response_id_to_original_previous_response_id(
         previous_response_id: str,
+        decrypt_previous_response_id: Callable[[str], str] | None = None,
     ) -> str:
         """
         Decode the previous_response_id to the original previous_response_id
@@ -590,11 +591,14 @@ class ResponsesAPIRequestUtils:
         Returns:
             The original previous_response_id
         """
-        previous_response_id = ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id(
-            previous_response_id
+        decrypt_id: Final = (
+            decrypt_previous_response_id or ResponsesAPIRequestUtils._decrypt_proxy_encrypted_previous_response_id
         )
-        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
-        return decoded_response_id.get("response_id", previous_response_id)
+        decrypted_previous_response_id: Final = decrypt_id(previous_response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            decrypted_previous_response_id
+        )
+        return decoded_response_id.get("response_id", decrypted_previous_response_id)
 
     @staticmethod
     def _decrypt_proxy_encrypted_previous_response_id(
@@ -611,12 +615,15 @@ class ResponsesAPIRequestUtils:
         the original value is returned unchanged.
         """
         try:
+            security_hook: Any
             if responses_id_security is None:
                 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
 
-                responses_id_security = ResponsesIDSecurity()
-            if responses_id_security._is_encrypted_response_id(previous_response_id):
-                decrypted_id, _, _ = responses_id_security._decrypt_response_id(previous_response_id)
+                security_hook = ResponsesIDSecurity()
+            else:
+                security_hook = responses_id_security
+            if security_hook._is_encrypted_response_id(previous_response_id):
+                decrypted_id, _, _ = security_hook._decrypt_response_id(previous_response_id)
                 if decrypted_id:
                     return decrypted_id
         except Exception as e:  # noqa: BLE001
