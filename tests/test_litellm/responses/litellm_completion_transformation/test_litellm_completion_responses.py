@@ -532,6 +532,33 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         assert responses_api_response.status == "incomplete"
+        assert responses_api_response.incomplete_details is not None
+        assert responses_api_response.incomplete_details.reason == "content_filter"
+
+    def test_transform_chat_completion_response_incomplete_details_with_length(self):
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="length",
+                    index=0,
+                    message=Message(content="", role="assistant"),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="this is a test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.status == "incomplete"
+        assert responses_api_response.incomplete_details is not None
+        assert responses_api_response.incomplete_details.reason == "max_output_tokens"
 
     def test_transform_chat_completion_response_preserves_hidden_params(self):
         """Test that _hidden_params from chat completion response are preserved in responses API response"""

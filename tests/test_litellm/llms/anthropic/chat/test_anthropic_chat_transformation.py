@@ -2479,6 +2479,27 @@ def test_transform_request_respects_user_max_tokens():
     assert result["max_tokens"] == 1000
 
 
+def test_transform_request_uses_model_max_tokens_with_reasoning_effort():
+    config = AnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="claude-haiku-4-5",
+        drop_params=False,
+    )
+
+    result = config.transform_request(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert result["max_tokens"] == 64000
+
+
 def test_calculate_usage_completion_tokens_details_always_populated():
     """
     Test that completion_tokens_details is always populated in Usage object,

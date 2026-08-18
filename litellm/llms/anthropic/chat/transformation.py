@@ -1566,6 +1566,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self.update_optional_params_with_thinking_tokens(
             non_default_params=non_default_params, optional_params=optional_params
         )
+        if self.is_thinking_enabled(optional_params) and not self.is_max_tokens_in_request(non_default_params):
+            optional_params["max_tokens"] = (  # rebind-ok: provider request params are built in place
+                self.get_max_tokens_for_model(model)
+            )
 
         return optional_params
 
