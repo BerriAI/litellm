@@ -3119,47 +3119,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             responses_api_request=data,
         )
 
-    @classmethod
-    def _contains_responses_file_reference(cls, value: object) -> bool:
-        if isinstance(value, dict):
-            return value.get("type") == "input_file" or any(
-                cls._contains_responses_file_reference(child) for child in value.values()
-            )
-        if isinstance(value, list):
-            return any(cls._contains_responses_file_reference(child) for child in value)
-        return False
-
-    @classmethod
-    def _contains_unmeasurable_chat_media(cls, value: object) -> bool:
-        if isinstance(value, dict):
-            return value.get("type") in ("document", "file", "video_url") or any(
-                cls._contains_unmeasurable_chat_media(child) for child in value.values()
-            )
-        if isinstance(value, list):
-            return any(cls._contains_unmeasurable_chat_media(child) for child in value)
-        return False
-
-    @classmethod
-    def _contains_image_content(cls, value: object) -> bool:
-        if isinstance(value, dict):
-            media_type: Final = value.get("media_type") or value.get("mime_type")
-            return (
-                value.get("type") in ("image", "image_url", "input_image")
-                or (isinstance(media_type, str) and media_type.startswith("image/"))
-                or any(cls._contains_image_content(child) for child in value.values())
-            )
-        if isinstance(value, list):
-            return any(cls._contains_image_content(child) for child in value)
-        return False
-
-    @classmethod
-    def _requires_conservative_responses_input_reservation(cls, data: object, call_type: str | None) -> bool:
-        if not isinstance(data, dict):
-            return False
-        return call_type in RESPONSES_API_CALL_TYPES and (
-            data.get("previous_response_id") is not None or cls._contains_responses_file_reference(data.get("input"))
-        )
-
     @staticmethod
     def _count_pretokenized_embedding_input(value: object) -> int | None:
         if not isinstance(value, list):
@@ -3312,33 +3271,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if v is not None
         ]
         min_configured_otpm_limit: Final = min(configured_otpm_limits) if configured_otpm_limits else None
-        configured_itpm_limits: Final = [  # mutable-ok: min calculation materializes validated limits
-            int(v)
-            for d in io_token_descriptors
-            if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
-            for v in [  # mutable-ok: comprehension binds the optional descriptor value
-                (d.get("rate_limit") or {}).get(  # mutable-ok: optional descriptor fallback
-                    "tokens_per_unit"
-                )
-            ]
-            if v is not None
-        ]
-        min_configured_itpm_limit: Final = min(configured_itpm_limits) if configured_itpm_limits else None
-
         _, raw_estimated_output_tokens = self._estimate_input_and_output_tokens(
             data=data,
             min_configured_tpm_limit=min_configured_otpm_limit,
             call_type=call_type,
         )
-        raw_estimated_input_tokens: Final = (
-            min_configured_itpm_limit
-            if min_configured_itpm_limit is not None
-            and (
-                self._requires_conservative_responses_input_reservation(data, call_type)
-                or self._contains_unmeasurable_chat_media(data.get("messages"))
-                or self._contains_image_content(data)
-            )
-            else self._estimate_precise_input_tokens(data=data, model=requested_model, call_type=call_type)
+        raw_estimated_input_tokens: Final = self._estimate_precise_input_tokens(
+            data=data, model=requested_model, call_type=call_type
         )
         estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
         estimated_output_tokens: Final = (

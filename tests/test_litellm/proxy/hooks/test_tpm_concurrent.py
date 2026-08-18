@@ -2386,13 +2386,34 @@ async def test_itpm_rejects_large_audio_payload_that_would_pass_flat_estimate(
                     {
                         "role": "user",
                         "content": [
+                            {"type": "text", "text": "describe this"},
                             {
                                 "type": "image_url",
                                 "image_url": {
                                     "url": "https://example.com/high-resolution.png",
                                     "detail": "high",
                                 },
-                            }
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+        (
+            "acompletion",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "summarize this"},
+                            {
+                                "type": "file",
+                                "file": {
+                                    "filename": "document.pdf",
+                                    "file_data": "data:application/pdf;base64,dGVzdA==",
+                                },
+                            },
                         ],
                     }
                 ]
@@ -2405,29 +2426,43 @@ async def test_itpm_rejects_large_audio_payload_that_would_pass_flat_estimate(
                     {
                         "role": "user",
                         "content": [
+                            {"type": "input_text", "text": "describe this"},
                             {
                                 "type": "input_image",
                                 "image_url": "https://example.com/high-resolution.png",
                                 "detail": "high",
-                            }
+                            },
                         ],
                     }
                 ]
             },
         ),
+        (
+            "aresponses",
+            {"input": "continue", "previous_response_id": "resp-123"},
+        ),
     ],
 )
-async def test_image_content_reserves_full_project_itpm(
+async def test_multimodal_requests_reserve_measured_project_itpm_not_full_limit(
     rate_limiter,
     call_type,
     request_data,
 ):
+    """
+    Regression: image, file, and previous_response_id requests used to
+    reserve the project's whole ITPM limit up front. Because the atomic
+    check is ``current + increment > limit``, that made every such request
+    429 as soon as the window carried any usage at all and, while in
+    flight, blocked every other request for the same project + model. They
+    now reserve the token_counter estimate like everything else, so two
+    multimodal requests fit in the same window.
+    """
     handler, cache = rate_limiter
     model = "bedrock_mantle/claude-opus"
-    project_itpm_limit = 1_000
+    project_itpm_limit = 10_000
     user_api_key_dict = UserAPIKeyAuth(
-        api_key=hash_token("sk-high-resolution-image"),
-        project_id="project-high-resolution-image",
+        api_key=hash_token("sk-multimodal-measured"),
+        project_id="project-multimodal-measured",
         project_metadata={"model_itpm_limit": {model: project_itpm_limit}},
     )
 
@@ -2437,10 +2472,22 @@ async def test_image_content_reserves_full_project_itpm(
         data={"model": model, **request_data},
         call_type=call_type,
     )
+    first_stash = get_request_stash()
+    assert first_stash is not None
+    first_reservation = first_stash.itpm_reserved_tokens
+    assert 0 < first_reservation < project_itpm_limit // 2
 
-    stash = get_request_stash()
-    assert stash is not None
-    assert stash.itpm_reserved_tokens == project_itpm_limit
+    _request_stash.set(None)
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data={"model": model, **request_data},
+        call_type=call_type,
+    )
+    second_stash = get_request_stash()
+    assert second_stash is not None
+    assert second_stash is not first_stash
+    assert second_stash.itpm_reserved_tokens == first_reservation
 
 
 @pytest.mark.asyncio
@@ -3193,95 +3240,6 @@ def test_anthropic_messages_usage_reconciles_split_project_quota(rate_limiter):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "request_data",
-    [
-        {"input": "continue", "previous_response_id": "resp-123"},
-        {
-            "input": [
-                {
-                    "role": "user",
-                    "content": [{"type": "input_file", "file_id": "file-123"}],
-                }
-            ]
-        },
-    ],
-)
-async def test_unmeasurable_responses_input_reserves_full_project_itpm(
-    rate_limiter, request_data
-):
-    handler, cache = rate_limiter
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=hash_token("sk-unmeasurable-input"),
-        project_id="project-unmeasurable-input",
-        project_metadata={"model_itpm_limit": {"model": 100}},
-    )
-    data = {"model": "model", **request_data}
-
-    await handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=cache,
-        data=data,
-        call_type="aresponses",
-    )
-
-    stash = get_request_stash()
-    assert stash is not None
-    assert stash.itpm_reserved_tokens == 100
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "media_block",
-    [
-        {
-            "type": "document",
-            "source": {
-                "type": "base64",
-                "media_type": "application/pdf",
-                "data": "dGVzdA==",
-            },
-        },
-        {
-            "type": "file",
-            "file": {
-                "filename": "document.pdf",
-                "file_data": "data:application/pdf;base64,dGVzdA==",
-            },
-        },
-        {
-            "type": "video_url",
-            "video_url": {"url": "https://example.com/video.mp4"},
-        },
-    ],
-)
-async def test_unmeasurable_chat_media_reserves_full_project_itpm(
-    rate_limiter,
-    media_block,
-):
-    handler, cache = rate_limiter
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=hash_token("sk-unmeasurable-chat-media"),
-        project_id="project-unmeasurable-chat-media",
-        project_metadata={"model_itpm_limit": {"model": 100}},
-    )
-
-    await handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=cache,
-        data={
-            "model": "model",
-            "messages": [{"role": "user", "content": [media_block]}],
-        },
-        call_type="acompletion",
-    )
-
-    stash = get_request_stash()
-    assert stash is not None
-    assert stash.itpm_reserved_tokens == 100
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
     "call_type",
     ["agenerate_content", "agenerate_content_stream"],
 )
@@ -3469,18 +3427,7 @@ def test_split_quota_multimodal_guards_handle_non_mapping_inputs(rate_limiter):
     assert handler._estimate_audio_block_tokens(
         object()
     ) == handler._estimate_audio_block_tokens({})
-    assert handler._contains_unmeasurable_chat_media(object()) is False
-    assert handler._contains_image_content(object()) is False
-    assert handler._contains_image_content(
-        {"inline_data": {"mime_type": "image/png", "data": "dGVzdA=="}}
-    )
     assert handler._responses_input_to_chat_messages(object()) == ()
-    assert (
-        handler._requires_conservative_responses_input_reservation(
-            object(), "responses"
-        )
-        is False
-    )
     assert handler._estimate_precise_input_tokens(object(), model=None) == 0
 
 
