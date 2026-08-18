@@ -908,7 +908,10 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         await prisma_client.disconnect()
 
     if litellm.cache is not None:
-        await litellm.cache.disconnect()
+        try:
+            await litellm.cache.disconnect()
+        except Exception as e:
+            verbose_proxy_logger.debug("Error disconnecting litellm.cache: %s", e)
 
     await jwt_handler.close()
 
