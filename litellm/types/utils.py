@@ -196,6 +196,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token: Required[float | None]
     input_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     input_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
+    input_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_creation_input_token_cost: float | None
     cache_creation_input_token_cost_above_200k_tokens: float | None
     cache_creation_input_token_cost_above_272k_tokens: float | None
@@ -204,9 +205,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_1hr: float | None
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
+    cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost_above_200k_tokens: float | None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens: float | None
@@ -238,6 +241,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
+    output_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     regional_processing_uplift_multiplier_eu: (
         float | None
     )  # OpenAI EU data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
@@ -3023,6 +3027,11 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     provider's counter name (e.g. Bedrock's ``contentPolicyUnits``). Kept as a
     sibling of guardrail_response so spend-log prompt redaction never drops it."""
 
+    guardrail_cost: ReadOnly[float | None]
+    """USD cost of this guardrail invocation, priced from ``guardrail_usage`` by the
+    provider hook. Summed into the request's ``response_cost`` so it counts against
+    spend and budgets like token cost."""
+
 
 class EvalVerdict(TypedDict, total=False):
     criterion_name: str
@@ -3067,6 +3076,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     violation_categories: list[str] | None
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
+    guardrail_cost: ReadOnly[float | None]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3106,8 +3116,9 @@ class CostBreakdown(TypedDict, total=False):
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
     output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
     reasoning_cost: float  # Cost of reasoning tokens (subset of output_cost)
-    total_cost: float  # Total cost (input + output + tool usage)
+    total_cost: ReadOnly[float]  # Total cost (input + output + tool usage + guardrail)
     tool_usage_cost: float  # Cost of usage of built-in tools
+    guardrail_cost: ReadOnly[float]  # Cost of guardrail invocations billed by the guardrail provider
     additional_costs: dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
@@ -3294,6 +3305,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: float | None = None
     input_cost_per_token_priority: float | None = None
+    input_cost_per_token_ultrafast: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens: float | None = None
@@ -3301,9 +3313,11 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_creation_input_token_cost_flex: float | None = None
     cache_creation_input_token_cost_priority: float | None = None
+    cache_creation_input_token_cost_ultrafast: float | None = None
     cache_creation_input_audio_token_cost: float | None = None
     cache_read_input_token_cost_flex: float | None = None
     cache_read_input_token_cost_priority: float | None = None
+    cache_read_input_token_cost_ultrafast: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
@@ -3330,6 +3344,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_batches: float | None = None
     output_cost_per_token_flex: float | None = None
     output_cost_per_token_priority: float | None = None
+    output_cost_per_token_ultrafast: float | None = None
     output_cost_per_audio_token: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
@@ -4000,6 +4015,7 @@ class ServiceTier(Enum):
     FLEX = "flex"
     PRIORITY = "priority"
     FAST = "fast"
+    ULTRAFAST = "ultrafast"
 
 
 class DataResidency(Enum):

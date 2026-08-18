@@ -382,7 +382,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             Select a provider (or &quot;Global&quot; for all providers) and configure the margin. You can use
             percentage-based or fixed amount.
           </p>
-          <div className="space-y-6">
+          <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
             <AddMarginForm
               marginConfig={marginConfig}
               selectedProvider={selectedMarginProvider}
@@ -395,7 +395,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
               onFixedAmountChange={setFixedAmountValue}
               onAddProvider={handleAddMargin}
             />
-          </div>
+          </form>
         </div>
       </Modal>
     </div>
