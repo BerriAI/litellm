@@ -11649,6 +11649,127 @@ async def test_new_team_output_token_estimate_rejected_for_non_admin():
     assert "on a team" in str(exc.value.message)
 
 
+@pytest.mark.asyncio
+async def test_get_team_daily_activity_aggregated_scopes_and_flags(mock_db_client):
+    """The aggregated endpoint must apply the same non-admin key scoping as the
+    paginated one and request the per-team entity breakdown with the caller's
+    timezone, so the Team Usage UI gets every day in one response."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity_aggregated,
+    )
+
+    user_id = "test_user_123"
+    team_id = "test_team_456"
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    mock_user_info = LiteLLM_UserTable(
+        user_id=user_id,
+        teams=[team_id],
+        max_budget=1000.0,
+        spend=0.0,
+        user_email="test@example.com",
+        user_role="internal_user",
+    )
+
+    mock_team_member = Member(user_id=user_id, role="user")
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = team_id
+    mock_team.team_alias = "Test Team"
+    mock_team.members_with_roles = [mock_team_member]
+    mock_team.model_dump.return_value = {
+        "team_id": team_id,
+        "team_alias": "Test Team",
+        "members_with_roles": [{"user_id": user_id, "role": "user"}],
+    }
+
+    user_api_key_1 = MagicMock()
+    user_api_key_1.token = "user_key_1"
+
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[user_api_key_1]
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+    ) as mock_get_user_object:
+        mock_get_user_object.return_value = mock_user_info
+
+        with patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+            new_callable=AsyncMock,
+        ) as mock_aggregated:
+            mock_aggregated.return_value = MagicMock()
+
+            await get_team_daily_activity_aggregated(
+                team_ids=team_id,
+                start_date="2024-01-01",
+                end_date="2024-01-31",
+                model=None,
+                api_key=None,
+                exclude_team_ids=None,
+                timezone=480,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+            mock_aggregated.assert_called_once()
+            call_kwargs = mock_aggregated.call_args[1]
+            assert call_kwargs["api_key"] == ["user_key_1"]
+            assert call_kwargs["entity_id"] == [team_id]
+            assert call_kwargs["entity_metadata_field"] == {
+                team_id: {"team_alias": "Test Team"}
+            }
+            assert call_kwargs["include_entity_breakdown"] is True
+            assert call_kwargs["timezone_offset_minutes"] == 480
+            assert call_kwargs["table_name"] == "litellm_dailyteamspend"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "start_date,end_date,expected_error",
+    [
+        ("2020-01-01", "2026-12-31", "at most 400 days"),
+        ("0000-01-01", "9999-12-31", "valid YYYY-MM-DD"),
+        ("2024-06-01", "2024-01-01", "on or after"),
+        ("not-a-date", "2024-01-31", "valid YYYY-MM-DD"),
+        (None, "2024-01-31", "start_date and end_date"),
+    ],
+)
+async def test_get_team_daily_activity_aggregated_rejects_bad_ranges(
+    mock_db_client, start_date, end_date, expected_error
+):
+    """The aggregated endpoint has no pagination bounding its work, so an
+    unbounded or malformed range must 400 before any query runs."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity_aggregated,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity_aggregated",
+        new_callable=AsyncMock,
+    ) as mock_aggregated:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_team_daily_activity_aggregated(
+                team_ids=None,
+                start_date=start_date,
+                end_date=end_date,
+                model=None,
+                api_key=None,
+                exclude_team_ids=None,
+                timezone=None,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert expected_error in str(exc_info.value.detail)
+        mock_aggregated.assert_not_called()
+
+
 def _wire_new_team_prisma(mock_db_client):
     mock_db_client.jsonify_team_object = lambda db_data: db_data
     mock_db_client.get_data = AsyncMock(return_value=None)

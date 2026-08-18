@@ -10,7 +10,7 @@ import {
   StoreRequestInSpendLogsParams,
   useStoreRequestInSpendLogs,
 } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { ClockCircleOutlined } from "@ant-design/icons";
 import { Button, Card, Form, Input, InputNumber, Skeleton, Space, Switch, Typography } from "antd";
@@ -174,9 +174,8 @@ const LoggingSettings: React.FC = () => {
     const updateParams = buildUpdateParams(formValues);
     const submitUpdate = () =>
       mutate(updateParams, {
-        onSuccess: () => NotificationsManager.success("Spend logs settings updated successfully"),
-        onError: (error) =>
-          NotificationsManager.fromBackend("Failed to save spend logs settings: " + parseErrorMessage(error)),
+        onSuccess: () => toast.success("Spend logs settings updated successfully"),
+        onError: (error) => toast.fromError("Failed to save spend logs settings: " + parseErrorMessage(error)),
       });
 
     const fieldsToClear = omittedFieldNames(updateParams, isStored);
@@ -189,7 +188,7 @@ const LoggingSettings: React.FC = () => {
       if (failed.length > 0) {
         // Reporting an unqualified success here would tell the admin a setting
         // was reset to its default while the old value is still in force.
-        NotificationsManager.fromBackend(`Failed to clear saved value for: ${failed.join(", ")}`);
+        toast.fromError(`Failed to clear saved value for: ${failed.join(", ")}`);
         return;
       }
       submitUpdate();

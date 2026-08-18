@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
+import { toast } from "@/lib/toast";
 import { CircleHelp } from "lucide-react";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -40,7 +41,6 @@ import ComplexityRouterConfig, {
   DEFAULT_TIER_DISTANCE_PENALTY,
   heuristicScoringRole,
 } from "../add_model/ComplexityRouterConfig";
-import NotificationsManager from "../molecules/notifications_manager";
 import {
   Dialog,
   DialogContent,
@@ -421,7 +421,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       });
     } catch (error) {
       console.error("Error parsing auto router config:", error);
-      NotificationsManager.fromBackend("Error loading auto router configuration");
+      toast.fromError("Error loading auto router configuration");
     }
   };
 
@@ -430,12 +430,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
       if (Object.values(tiers).every((models) => models.length === 0)) {
         setShowValidationErrors(true);
-        NotificationsManager.fromBackend("Please select at least one model for a complexity tier");
+        toast.fromError("Please select at least one model for a complexity tier");
         return;
       }
       if (classifier_type === "llm" && !classifier_llm_config?.model) {
         setShowValidationErrors(true);
-        NotificationsManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+        toast.fromError("Please select a classifier model, or switch back to Heuristic");
         return;
       }
       // Same guards the create form applies (add_auto_router_tab.tsx). The backend rejects a
@@ -445,14 +445,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
       if (keywordRulesError) {
         setShowValidationErrors(true);
-        NotificationsManager.fromBackend(keywordRulesError);
+        toast.fromError(keywordRulesError);
         return;
       }
 
       const semanticError = getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
       if (semanticError) {
         setShowValidationErrors(true);
-        NotificationsManager.fromBackend(semanticError);
+        toast.fromError(semanticError);
         return;
       }
 
@@ -464,7 +464,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       const defaultModel = resolveComplexityDefaultModel(tiers, complexityRouterConfig.default_model);
       if (!defaultModel) {
         setShowValidationErrors(true);
-        NotificationsManager.fromBackend(
+        toast.fromError(
           "Add a model to the Simple or Medium tier, or pin a default model, so requests have somewhere to route.",
         );
         return;
@@ -500,7 +500,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         modelData.model_info.id,
       );
 
-      NotificationsManager.success("Auto router configuration updated successfully");
+      toast.success("Auto router configuration updated successfully");
       onSuccess({
         ...modelData,
         model_name: values.auto_router_name,
@@ -540,7 +540,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       model_info: updatedModelInfo,
     };
 
-    NotificationsManager.success("Auto router configuration updated successfully");
+    toast.success("Auto router configuration updated successfully");
     onSuccess(updatedModelData);
     onCancel();
   };
@@ -549,11 +549,11 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     try {
       setLoading(true);
       await form.handleSubmit(saveValues, () => {
-        NotificationsManager.fromBackend("Failed to update auto router configuration");
+        toast.fromError("Failed to update auto router configuration");
       })();
     } catch (error) {
       console.error("Error updating auto router:", error);
-      NotificationsManager.fromBackend("Failed to update auto router configuration");
+      toast.fromError("Failed to update auto router configuration");
     } finally {
       setLoading(false);
     }

@@ -42,7 +42,7 @@ import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   getAllPresets,
   getPresetByKey,
@@ -366,34 +366,34 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     const missingTiersError = getMissingTiersError(tiers);
     if (missingTiersError) {
       setShowValidationErrors(true);
-      NotificationManager.fromBackend(missingTiersError);
+      toast.fromError(missingTiersError);
       return;
     }
 
     const tierLabelsError = getTierLabelsError(tierLabels);
     if (tierLabelsError) {
       setShowValidationErrors(true);
-      NotificationManager.fromBackend(tierLabelsError);
+      toast.fromError(tierLabelsError);
       return;
     }
 
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
       setShowValidationErrors(true);
-      NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+      toast.fromError("Please select a classifier model, or switch back to Heuristic");
       return;
     }
 
     const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
     if (keywordRulesError) {
       setShowValidationErrors(true);
-      NotificationManager.fromBackend(keywordRulesError);
+      toast.fromError(keywordRulesError);
       return;
     }
 
     const semanticError = getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
     if (semanticError) {
       setShowValidationErrors(true);
-      NotificationManager.fromBackend(semanticError);
+      toast.fromError(semanticError);
       return;
     }
 
@@ -404,7 +404,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     const referencedModelsError = getReferencedModelsError(referencedModelsParams, groupsOnlyAvailability);
     if (referencedModelsError) {
       setShowValidationErrors(true);
-      NotificationManager.fromBackend(referencedModelsError);
+      toast.fromError(referencedModelsError);
       return;
     }
 
@@ -414,7 +414,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       : (["auto_router_name"] as const);
 
     if (!(await form.trigger(validatedFields))) {
-      NotificationManager.fromBackend("Please fill in all required fields");
+      toast.fromError("Please fill in all required fields");
       return;
     }
 
@@ -439,7 +439,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (!name) {
       setShowValidationErrors(true);
       void form.trigger("auto_router_name");
-      NotificationManager.fromBackend("Please enter an Auto Router Name");
+      toast.fromError("Please enter an Auto Router Name");
       return;
     }
 
@@ -456,7 +456,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     const targets = buildAutoRouterTestTargets(testTargetParams);
 
     if (targets.length === 0) {
-      NotificationManager.fromBackend("Please select at least one model for a complexity tier");
+      toast.fromError("Please select at least one model for a complexity tier");
       return;
     }
 

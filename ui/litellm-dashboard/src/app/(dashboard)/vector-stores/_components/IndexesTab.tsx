@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { indexesListCall } from "@/components/networking";
 import { VectorStore } from "@/components/vector_store_management/types";
 
@@ -55,7 +55,7 @@ const IndexesTab: React.FC<IndexesTabProps> = ({ accessToken, vectorStores, onVi
         setIndexes(response.data || []);
       } catch (error) {
         console.error("Error fetching indexes:", error);
-        NotificationsManager.fromBackend("Error fetching indexes: " + error);
+        toast.fromError("Error fetching indexes: " + error);
       } finally {
         setIsLoading(false);
       }

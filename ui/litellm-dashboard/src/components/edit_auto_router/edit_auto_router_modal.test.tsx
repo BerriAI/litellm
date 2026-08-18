@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import EditAutoRouterModal from "./edit_auto_router_modal";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
@@ -130,7 +130,7 @@ describe("EditAutoRouterModal keyword matching", () => {
     await screen.findByText(/Escalation Keywords/i);
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    await waitFor(() => expect(NotificationsManager.fromBackend).toHaveBeenCalled());
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalled());
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
 
@@ -731,9 +731,7 @@ describe("EditAutoRouterModal default model", () => {
 
     await user.click(await screen.findByRole("button", { name: /save changes/i }));
 
-    await waitFor(() =>
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringContaining("Simple or Medium tier")),
-    );
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(expect.stringContaining("Simple or Medium tier")));
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
 

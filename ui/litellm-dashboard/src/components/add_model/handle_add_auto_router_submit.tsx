@@ -1,5 +1,5 @@
 import { modelCreateCall } from "../networking";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import type { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
 
 export interface AddAutoRouterValues {
@@ -33,7 +33,7 @@ export const handleAddAutoRouterSubmit = async (
 
     await modelCreateCall(accessToken, autoRouterConfig);
 
-    NotificationManager.success(`Successfully created Auto Router: ${values.auto_router_name}`);
+    toast.success(`Successfully created Auto Router: ${values.auto_router_name}`);
 
     resetForm();
 
@@ -42,6 +42,6 @@ export const handleAddAutoRouterSubmit = async (
     }
   } catch (error) {
     console.error("Failed to add auto router:", error);
-    NotificationManager.fromBackend("Failed to add auto router: " + error);
+    toast.fromError("Failed to add auto router: " + error);
   }
 };

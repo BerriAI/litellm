@@ -2,7 +2,7 @@ import { renderWithProviders, screen, waitFor, within, fireEvent, testQueryClien
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
 import { testAutoRouterRouting } from "../networking";
@@ -69,10 +69,6 @@ vi.mock("./handle_add_auto_router_submit", () => ({
   handleAddAutoRouterSubmit: vi.fn(),
 }));
 
-vi.mock("../molecules/notifications_manager", () => ({
-  default: { fromBackend: vi.fn() },
-}));
-
 // Kept real by default so the "mandatory field" test still sees genuine tier validation; one
 // test overrides it to reach the submit path without driving four tier selects.
 vi.mock("./build_complexity_router_config", async (importOriginal) => {
@@ -137,7 +133,7 @@ describe("AddAutoRouterTab", () => {
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     expect(await screen.findByText("Auto router name is required")).toBeInTheDocument();
-    expect(NotificationManager.fromBackend).toHaveBeenCalledWith("Please enter an Auto Router Name");
+    expect(toast.fromError).toHaveBeenCalledWith("Please enter an Auto Router Name");
   });
 
   it("offers no team selector to a proxy admin, who may create an unscoped router", () => {
@@ -596,9 +592,7 @@ describe("AddAutoRouterTab", () => {
 
       fireEvent.submit(container.querySelector("form")!);
 
-      await waitFor(() =>
-        expect(NotificationManager.fromBackend).toHaveBeenCalledWith(expect.stringContaining("no longer available")),
-      );
+      await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(expect.stringContaining("no longer available")));
       expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
     });
   });
@@ -666,9 +660,7 @@ describe("AddAutoRouterTab", () => {
 
       fireEvent.submit(container.querySelector("form")!);
 
-      await waitFor(() =>
-        expect(NotificationManager.fromBackend).toHaveBeenCalledWith(expect.stringContaining(PINNED_MODEL)),
-      );
+      await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(expect.stringContaining(PINNED_MODEL)));
       expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
     });
   });
