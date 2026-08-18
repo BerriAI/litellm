@@ -11098,3 +11098,46 @@ async def test_moderations_reraises_proxy_exception_unwrapped():
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "metadata"
     mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+class TestEmbeddingsFailureHookRequestData:
+    @pytest.mark.asyncio
+    async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
+        """Request setup replaces the processor's data dict (adding the logging
+        object the failure hook needs to lift token usage from); the embeddings
+        exception handler must pass that replaced dict, not the raw request body
+        dict it was rebuilt from."""
+        from litellm.proxy._types import ProxyException
+
+        captured = {}
+        logging_obj_sentinel = MagicMock()
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_logging_obj": logging_obj_sentinel}
+            captured["processor_data"] = self.data
+            raise RuntimeError("provider timeout")
+
+        with (
+            patch.object(
+                proxy_server_module,
+                "_read_request_body",
+                new=AsyncMock(return_value={"model": "my-embed", "input": "hello"}),
+            ),
+            patch.object(
+                proxy_server_module.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=fake_process,
+            ),
+            patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock(return_value=None)
+            with pytest.raises(ProxyException):
+                await proxy_server_module.embeddings(
+                    request=MagicMock(),
+                    fastapi_response=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+        assert hook_request_data is captured["processor_data"]
+        assert hook_request_data["litellm_logging_obj"] is logging_obj_sentinel
