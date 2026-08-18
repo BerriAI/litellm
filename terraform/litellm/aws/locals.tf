@@ -33,6 +33,12 @@ locals {
   public_subnet_ids  = local.create_vpc ? aws_subnet.public[*].id : var.public_subnet_ids
   private_subnet_ids = local.create_vpc ? aws_subnet.private[*].id : var.private_subnet_ids
 
+  # Without a NAT gateway the tasks need a public IP of their own to reach
+  # GHCR, Secrets Manager, and the LLM providers. Ingress is unchanged either
+  # way: aws_security_group.tasks admits the ALB group and nothing else.
+  task_subnet_ids = var.tasks_in_public_subnets ? local.public_subnet_ids : local.private_subnet_ids
+  nat_enabled     = local.create_vpc && !var.tasks_in_public_subnets
+
   task_security_group_ids = concat([aws_security_group.tasks.id], var.additional_task_security_group_ids)
 
   # `byo_*` is the existing-store branch, `database_enabled` is either branch.

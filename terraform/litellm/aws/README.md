@@ -2,7 +2,7 @@
 
 Deploys the componentized LiteLLM proxy on AWS:
 
-- **VPC** with public + private subnets across the AZs you pass in, one NAT gateway (skipped when you pass an existing `vpc_id`)
+- **VPC** with public + private subnets across the AZs you pass in, one NAT gateway (skipped when you pass an existing `vpc_id`, or when `tasks_in_public_subnets = true`)
 - **Aurora Postgres** cluster — one writer instance + one reader instance, **IAM database authentication enabled** (skipped when `create_database = false`)
 - **ElastiCache Redis** (private, replication group with multi-AZ failover and at-rest + in-transit encryption) for caching + rate limiting (skipped when `create_redis = false`)
 - **S3 bucket** (private, versioned, SSE-S3) — exposed to gateway + backend as `S3_BUCKET_NAME` / `S3_REGION_NAME` for cache backend, request log archival, and `/v1/files` storage
@@ -39,6 +39,15 @@ vpc_id             = "vpc-0123456789abcdef0"
 public_subnet_ids  = ["subnet-aaa", "subnet-bbb"]
 private_subnet_ids = ["subnet-ccc", "subnet-ddd"]
 ```
+
+**Skipping the NAT gateway.** When the module owns the networking,
+`tasks_in_public_subnets = true` puts the ECS tasks in the public subnets with a
+public IP and creates no NAT gateway, which is about $33/month back. Ingress
+does not change: the tasks security group admits the ALB's group and nothing
+else, so all the public IP buys is egress for image pulls, Secrets Manager,
+CloudWatch Logs, and the LLM providers. It rules out a database, since the
+schema migration and the Aurora bootstrap both `ecs run-task` into the private
+subnets, and it is a single-user or dev trade rather than an HA one
 
 **Database and Redis.** `create_database` and `create_redis` default to `true`
 (today's behavior). Set one to `false` and pass a connection string to use
@@ -455,7 +464,7 @@ losing the contents.
 | `examples/default/` | Thin root: `aws` provider (with an optional `default_tags` slot for org-wide tags) + a call to the module. The one-command deploy path. |
 | `variables.tf`    | All input variables                                                   |
 | `locals.tf`       | Path-prefix lists for ALB routing (mirror of `helm/.../ingress.yaml`) |
-| `network.tf`      | VPC, subnets, IGW, NAT, route tables (all optional), security groups   |
+| `network.tf`      | VPC, subnets, IGW, NAT (also skipped by `tasks_in_public_subnets`), route tables (all optional), security groups |
 | `secrets.tf`      | Secrets Manager entries + random passwords                            |
 | `rds.tf`          | Aurora Postgres cluster + writer / reader instances                   |
 | `redis.tf`        | ElastiCache Redis                                                     |

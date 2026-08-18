@@ -78,8 +78,10 @@ variable "ui_password" {
 # Two modes:
 #
 #   1. Module-owned (default, `vpc_id = ""`): the stack creates a VPC, public
-#      and private subnets per AZ, an internet gateway, a NAT gateway, and
-#      the route tables wiring them together. `vpc_cidr` + `azs` drive it.
+#      and private subnets per AZ, an internet gateway, and the route tables
+#      wiring them together, plus a NAT gateway unless
+#      `tasks_in_public_subnets` moves the tasks into the public subnets.
+#      `vpc_cidr` + `azs` drive it.
 #   2. Bring-your-own (`vpc_id` set): the stack creates no networking and
 #      places the ALB in `public_subnet_ids` and every task, plus the Aurora
 #      and ElastiCache subnet groups, in `private_subnet_ids`. `vpc_cidr` and
@@ -88,7 +90,8 @@ variable "ui_password" {
 variable "vpc_id" {
   description = <<-EOT
     Existing VPC to deploy into. Leave empty ("") to have the module create
-    its own VPC, subnets, NAT gateway, and route tables. When set,
+    its own VPC, subnets, route tables, and, unless
+    `tasks_in_public_subnets` is set, a NAT gateway. When set,
     `public_subnet_ids` and `private_subnet_ids` are required and no
     networking is created: the private subnets must already have egress
     (NAT gateway or equivalent) so tasks can reach LLM providers, ECR/GHCR,
@@ -108,6 +111,21 @@ variable "private_subnet_ids" {
   description = "Existing private subnets for the ECS tasks, Aurora, and ElastiCache. Required when `vpc_id` is set, ignored otherwise."
   type        = list(string)
   default     = []
+}
+
+variable "tasks_in_public_subnets" {
+  description = <<-EOT
+    Run the ECS tasks in the public subnets with a public IP and create no NAT
+    gateway. The public IP buys egress only: the tasks security group admits
+    inbound from the ALB's security group and nothing else, so the proxy stays
+    reachable through the load balancer alone. This trades the NAT gateway's
+    ~$33/month for a task ENI that is directly addressable but firewalled,
+    which suits a single-user or dev stack rather than an HA one. Only applies
+    when the module creates the VPC, since a caller-supplied VPC brings its own
+    routing.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "additional_task_security_group_ids" {

@@ -314,9 +314,9 @@ resource "aws_ecs_service" "gateway" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = local.private_subnet_ids
+    subnets          = local.task_subnet_ids
     security_groups  = local.task_security_group_ids
-    assign_public_ip = false
+    assign_public_ip = var.tasks_in_public_subnets
   }
 
   load_balancer {
@@ -419,9 +419,9 @@ resource "aws_ecs_service" "backend" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = local.private_subnet_ids
+    subnets          = local.task_subnet_ids
     security_groups  = local.task_security_group_ids
-    assign_public_ip = false
+    assign_public_ip = var.tasks_in_public_subnets
   }
 
   load_balancer {
@@ -499,9 +499,9 @@ resource "aws_ecs_service" "ui" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = local.private_subnet_ids
+    subnets          = local.task_subnet_ids
     security_groups  = local.task_security_group_ids
-    assign_public_ip = false
+    assign_public_ip = var.tasks_in_public_subnets
   }
 
   load_balancer {

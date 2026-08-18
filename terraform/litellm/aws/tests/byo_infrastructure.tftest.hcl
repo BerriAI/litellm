@@ -53,6 +53,54 @@ run "module_owns_everything_by_default" {
   }
 }
 
+# The NAT-less shape: tasks move to the public subnets and pay for their own
+# egress with a public IP.
+run "tasks_in_public_subnets_replaces_the_nat_gateway" {
+  command = plan
+
+  # A module-created subnet's id is unknown until apply, so pin the public ones
+  # to a literal the subnet assertion below can name.
+  override_resource {
+    target          = aws_subnet.public
+    override_during = plan
+    values          = { id = "subnet-module-public" }
+  }
+
+  variables {
+    azs                     = ["us-east-1a", "us-east-1b"]
+    tasks_in_public_subnets = true
+    # The migration and bootstrap run-task calls are pinned to the private
+    # subnets, so a database is incompatible with this mode.
+    create_database = false
+  }
+
+  assert {
+    condition     = length(aws_nat_gateway.this) == 0 && length(aws_eip.nat) == 0
+    error_message = "tasks_in_public_subnets must drop both the NAT gateway and the elastic IP it holds."
+  }
+
+  assert {
+    condition = alltrue([
+      aws_ecs_service.gateway.network_configuration[0].assign_public_ip == true,
+      aws_ecs_service.gateway.network_configuration[0].subnets == toset(["subnet-module-public"]),
+    ])
+    error_message = "The gateway must land in the public subnets with a public IP, which is the only egress left once the NAT gateway is gone."
+  }
+}
+
+run "tasks_in_public_subnets_with_a_database_fails_at_plan" {
+  command = plan
+
+  variables {
+    azs                     = ["us-east-1a", "us-east-1b"]
+    tasks_in_public_subnets = true
+  }
+
+  expect_failures = [
+    aws_ecs_task_definition.migrations,
+  ]
+}
+
 run "existing_vpc_creates_no_networking" {
   command = plan
 
