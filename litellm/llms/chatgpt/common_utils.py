@@ -9,13 +9,14 @@ import os
 import platform
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.provider_affinity import get_caller_litellm_session_id, get_requested_session_id
@@ -407,22 +408,58 @@ def _prompt_cache_session_id(prompt_cache_key: object) -> str | None:
     )
 
 
-def get_chatgpt_session_id(litellm_params: object) -> str | None:
+def get_explicit_chatgpt_session_id(litellm_params: object) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
     return (
         get_caller_litellm_session_id(params)
         or get_requested_session_id(params)
         or _prompt_cache_session_id(params.get("prompt_cache_key"))
-        or next(
-            (
-                str(value)
-                for key in ("litellm_session_id", "litellm_trace_id", "litellm_call_id")
-                if (value := params.get(key))
-            ),
-            None,
-        )
+        or (str(params["litellm_session_id"]) if params.get("litellm_session_id") else None)
+    )
+
+
+def get_chatgpt_session_id(litellm_params: object) -> str | None:
+    explicit: Final = get_explicit_chatgpt_session_id(litellm_params)
+    if explicit:
+        return explicit
+    params: Final = _normalize_litellm_params(litellm_params)
+    return next(
+        (str(value) for key in ("litellm_trace_id", "litellm_call_id") if (value := params.get(key))),
+        None,
     )
 
 
 def ensure_chatgpt_session_id(litellm_params: object) -> str:
     return get_chatgpt_session_id(litellm_params) or str(uuid4())
+
+
+def should_derive_chatgpt_session_id(litellm_params: object) -> bool:
+    value: Final = _normalize_litellm_params(litellm_params).get("chatgpt_derive_session_id")
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return value is True
+
+
+_INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _first_input_item(value: object) -> object:
+    """The first element of a list-shaped ``input``; any other shape hashes whole."""
+    try:
+        items: Final = _INPUT_ITEMS.validate_python(value)
+    except ValidationError:
+        return value
+    return items[0] if items else value
+
+
+def derive_chatgpt_session_id(litellm_params: object, instructions: str | None, input: object) -> str:
+    params: Final = _normalize_litellm_params(litellm_params)
+    metadata: Final = _normalize_litellm_params(params.get("litellm_metadata") or params.get("metadata"))
+    tenant: Final = str(metadata.get("user_api_key_hash") or "")
+    first_item: Final = _first_input_item(input)
+    anchor: Final = json.dumps(
+        (tenant, instructions or "", first_item),
+        sort_keys=True,
+        default=str,
+    )
+    return f"litellm-derived-{sha256(anchor.encode('utf-8')).hexdigest()[:32]}"
