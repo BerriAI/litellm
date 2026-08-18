@@ -975,8 +975,8 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
                 )
             )
             if failing_index is not None:
-                configured_limit, tag_value, _key = atomic_checks[failing_index]
-                self._raise_over_limit(configured_limit, tag_value, model, current=values[0])
+                failing_limit, failing_tag_value, _ = atomic_checks[failing_index]
+                self._raise_over_limit(failing_limit, failing_tag_value, model, current=values[0])
 
             concurrency_reservations: Final = tuple(
                 (key, _partition_key(configured_limit.entry))
