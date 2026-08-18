@@ -10052,6 +10052,21 @@
         "output_cost_per_second": 0.0066027,
         "supports_tool_choice": true
     },
+    "bedrock/guardrails": {
+        "guardrail_cost_per_unit": {
+            "automatedReasoningPolicyUnits": 0.00017,
+            "contentPolicyImageUnits": 0.00075,
+            "contentPolicyUnits": 0.00015,
+            "contextualGroundingPolicyUnits": 0.0001,
+            "sensitiveInformationPolicyFreeUnits": 0.0,
+            "sensitiveInformationPolicyUnits": 0.0001,
+            "topicPolicyUnits": 0.00015,
+            "wordPolicyUnits": 0.0
+        },
+        "litellm_provider": "bedrock",
+        "mode": "guardrail",
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-instant-v1": {
         "input_cost_per_second": 0.01475,
         "litellm_provider": "bedrock",

@@ -130,7 +130,7 @@ describe("CostTrackingSettings submit paths", () => {
     expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledWith("OpenAI", "5");
   });
 
-  it("leaves Enter inert in the margin field while the button still submits", async () => {
+  it("requests the margin exactly once when Enter is pressed in the percentage field", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />);
     const header = screen.getByText("Fee/Price Margin").closest("button");
@@ -142,14 +142,7 @@ describe("CostTrackingSettings submit paths", () => {
     await user.click((await screen.findAllByRole("option"))[0]);
     await user.type(screen.getByLabelText(/Margin Percentage/i), "10{Enter}");
 
-    expect(stableMarginCallbacks.handleAddMargin).not.toHaveBeenCalled();
-
-    const submit = screen
-      .getAllByRole("button")
-      .filter((button) => (button.textContent || "").trim() === "Add Provider Margin")
-      .pop()!;
-    await user.click(submit);
-
-    await waitFor(() => expect(stableMarginCallbacks.handleAddMargin).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(stableMarginCallbacks.handleAddMargin).toHaveBeenCalled());
+    expect(stableMarginCallbacks.handleAddMargin).toHaveBeenCalledTimes(1);
   });
 });
