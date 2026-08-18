@@ -32,7 +32,17 @@ import {
   teamMemberDeleteCall,
   Member,
 } from "@/components/networking";
-import { Button as AntdButton, Modal, Select as AntdSelect, Form, Tooltip } from "antd";
+import { Button as AntdButton, Modal, Tooltip } from "antd";
+import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { rolesWithWriteAccess } from "@/utils/roles";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
@@ -64,6 +74,19 @@ interface TeamDisplayInfo {
   team_id: string;
   team_alias: string | null;
 }
+
+const ADD_TEAM_FIELD_ID = "add-team-team";
+const ADD_TEAM_ROLE_FIELD_ID = "add-team-role";
+
+interface TeamOption {
+  team_id: string;
+  team_alias: string;
+}
+
+const MEMBER_ROLE_OPTIONS = [
+  { value: "user", hint: "Can view team info, but not manage it" },
+  { value: "admin", hint: "Can create team keys, add members, and manage settings" },
+] as const;
 
 export default function UserInfoView({
   userId,
@@ -257,6 +280,8 @@ export default function UserInfoView({
   };
 
   const availableTeamsForAdd = allTeams.filter((t) => !teamDetails.some((td) => td.team_id === t.team_id));
+
+  const selectedTeamOption = availableTeamsForAdd.find((team) => team.team_id === selectedTeamId) ?? null;
 
   const handleResetPassword = async () => {
     if (!accessToken) {
@@ -690,53 +715,62 @@ export default function UserInfoView({
         width={500}
         maskClosable={!isAddingTeam}
       >
-        <Form layout="vertical" onFinish={handleAddTeamSubmit}>
-          <Form.Item label="Team" required>
-            <AntdSelect
-              showSearch
-              value={selectedTeamId || undefined}
-              onChange={setSelectedTeamId}
-              placeholder="Select a team"
-              filterOption={(input, option) => {
-                const team = availableTeamsForAdd.find((t) => t.team_id === option?.value);
-                if (!team) return false;
-                return team.team_alias.toLowerCase().includes(input.toLowerCase());
-              }}
-              loading={isLoadingTeams}
-            >
-              {availableTeamsForAdd.map((team) => (
-                <AntdSelect.Option key={team.team_id} value={team.team_id}>
-                  {team.team_alias}
-                </AntdSelect.Option>
-              ))}
-            </AntdSelect>
-          </Form.Item>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            handleAddTeamSubmit();
+          }}
+        >
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor={ADD_TEAM_FIELD_ID}>Team</FieldLabel>
+              <Combobox
+                items={availableTeamsForAdd}
+                value={selectedTeamOption}
+                onValueChange={(team: TeamOption | null) => setSelectedTeamId(team?.team_id ?? "")}
+                itemToStringLabel={(team: TeamOption) => team.team_alias}
+                isItemEqualToValue={(team: TeamOption, value: TeamOption) => team.team_id === value.team_id}
+              >
+                <ComboboxInput id={ADD_TEAM_FIELD_ID} placeholder="Select a team" className="w-full" />
+                <ComboboxContent>
+                  <ComboboxEmpty>No teams found</ComboboxEmpty>
+                  <ComboboxList>
+                    {(team: TeamOption) => (
+                      <ComboboxItem key={team.team_id} value={team} title={team.team_alias}>
+                        {team.team_alias}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+            </Field>
 
-          <Form.Item label="Member Role">
-            <AntdSelect value={selectedRole} onChange={setSelectedRole}>
-              <AntdSelect.Option value="user">
-                <Tooltip title="Can view team info, but not manage it">
-                  <span className="font-medium">user</span>
-                  <span className="ml-2 text-gray-500 text-sm">- Can view team info, but not manage it</span>
-                </Tooltip>
-              </AntdSelect.Option>
-              <AntdSelect.Option value="admin">
-                <Tooltip title="Can create team keys, add members, and manage settings">
-                  <span className="font-medium">admin</span>
-                  <span className="ml-2 text-gray-500 text-sm">
-                    - Can create team keys, add members, and manage settings
-                  </span>
-                </Tooltip>
-              </AntdSelect.Option>
-            </AntdSelect>
-          </Form.Item>
+            <Field>
+              <FieldLabel htmlFor={ADD_TEAM_ROLE_FIELD_ID}>Member Role</FieldLabel>
+              <Select value={selectedRole} onValueChange={(value) => value !== null && setSelectedRole(value)}>
+                <SelectTrigger id={ADD_TEAM_ROLE_FIELD_ID} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MEMBER_ROLE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value} title={option.value}>
+                      <Tooltip title={option.hint}>
+                        <span className="font-medium">{option.value}</span>
+                        <span className="ml-2 text-muted-foreground text-sm">- {option.hint}</span>
+                      </Tooltip>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </FieldGroup>
 
           <div className="text-right mt-4">
             <AntdButton type="primary" htmlType="submit" loading={isAddingTeam} disabled={!selectedTeamId}>
               {isAddingTeam ? "Adding..." : "Add to Team"}
             </AntdButton>
           </div>
-        </Form>
+        </form>
       </Modal>
     </div>
   );
