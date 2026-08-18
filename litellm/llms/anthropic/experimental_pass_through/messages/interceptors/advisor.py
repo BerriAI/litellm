@@ -376,17 +376,11 @@ def _inject_max_uses_error(
 
 
 def _resolve_advisor_router(advisor_model: str) -> "Router | None":
-    """Return the proxy router when it can resolve ``advisor_model``.
+    """Return the proxy router when it serves ``advisor_model`` directly or via a wildcard.
 
-    The advisor sub-call must honor the proxy's ``model_list`` (and its
-    fallbacks / credentials) exactly like a direct call to that model group
-    would. Without this, provider resolution falls back to the bare model
-    name, which for a ``claude-*`` advisor model means the public Anthropic
-    API, bypassing the configured deployment entirely.
-
-    Returns ``None`` for SDK callers (no proxy router) and for advisor models
-    the router doesn't know about, so those keep resolving through
-    ``litellm.anthropic_messages()`` provider inference.
+    Returns ``None`` for SDK callers (no proxy router) and for advisor models the router
+    doesn't know about, so those keep resolving through ``litellm.anthropic_messages()``
+    provider inference.
     """
     try:
         from litellm.proxy.proxy_server import llm_router
@@ -394,11 +388,7 @@ def _resolve_advisor_router(advisor_model: str) -> "Router | None":
         return None
     if llm_router is None:
         return None
-    if llm_router.get_model_list(model_name=advisor_model):
-        return llm_router
-    if llm_router.model_group_alias and advisor_model in llm_router.model_group_alias:
-        return llm_router
-    if llm_router.pattern_router.route(advisor_model) is not None:
+    if llm_router.is_recognized_model(advisor_model) or llm_router.pattern_router.route(advisor_model):
         return llm_router
     return None
 
