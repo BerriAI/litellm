@@ -367,3 +367,58 @@ async def test_aresponses_client_header_conflict_is_case_insensitive():
 
     assert [name for name in request_headers if name.lower() == "x-shared"] == ["x-shared"]
     assert request_headers["x-shared"] == "from-caller"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("openai/responses/gpt-5.6", None),
+        ("responses/gpt-5.6", "openai"),
+    ],
+)
+async def test_aresponses_strips_responses_routing_prefix_from_openai_model(model, custom_llm_provider):
+    """
+    `responses/` is LiteLLM routing sugar, never part of the provider model id.
+    Deployments configured as openai/responses/<model> reach this path directly via
+    /v1/responses and via the /v1/messages adapter (which passes responses/<model>
+    with custom_llm_provider="openai"), so both shapes must hit OpenAI as <model>.
+    """
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_prefix_test", "gpt-5.6"), 200)
+
+        await litellm.aresponses(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            input="ping",
+            api_key="sk-test",
+        )
+
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["url"].endswith("/responses")
+        assert mock_post.call_args.kwargs["json"]["model"] == "gpt-5.6"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_model():
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import _aresponses_websocket
+
+    with patch(
+        "litellm.responses.main.base_llm_http_handler.async_responses_websocket",
+        new_callable=AsyncMock,
+    ) as mock_ws:
+        await _aresponses_websocket(
+            model="openai/responses/gpt-5.6",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=MagicMock(),
+        )
+
+        mock_ws.assert_awaited_once()
+        assert mock_ws.call_args.kwargs["model"] == "gpt-5.6"
+        assert mock_ws.call_args.kwargs["custom_llm_provider"] == "openai"
