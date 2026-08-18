@@ -18,15 +18,21 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from litellm.integrations.prometheus import PrometheusLogger
+from prometheus_client import CollectorRegistry, Gauge
+
+from litellm.integrations.prometheus import PrometheusLogger, _ExcludedLabelMetric
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.types.integrations.prometheus import (
     DEFINED_PROMETHEUS_METRICS,
+    NoOpMetric,
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
 )
+
+TEAM_LABELS = {"team": "team-abc", "team_alias": "research", "model": "gpt-4o-mini"}
+ORIGINAL_LABELNAMES = ("team", "team_alias", "model")
 
 TEAM_RATE_LIMIT_METRICS = (
     "litellm_remaining_team_requests_for_model",
@@ -284,3 +290,73 @@ def test_limiter_publishes_team_headers_in_the_shape_the_gauges_read():
         "x-ratelimit-model_per_team-remaining-tokens": 900,
         "x-ratelimit-model_per_team-limit-tokens": 1000,
     }
+
+
+def _logger_with_real_gauge(metric_name: str, gauge: Gauge) -> PrometheusLogger:
+    logger = _logger_with_mock_team_gauges(labels_are_real=True)
+    setattr(logger, metric_name, gauge)
+    return logger
+
+
+def test_removes_a_real_prometheus_child_series_when_the_limit_disappears():
+    """
+    Mock gauges cannot prove the drop works, since prometheus_client owns the
+    child-series bookkeeping. This drives the real Gauge end to end.
+    """
+    registry = CollectorRegistry()
+    gauge = Gauge("litellm_team_rpm_limit", "doc", labelnames=list(ORIGINAL_LABELNAMES), registry=registry)
+    logger = _logger_with_real_gauge("litellm_team_rpm_limit", gauge)
+
+    _set_team_metrics(logger, _payload_with_headers({"x-ratelimit-model_per_team-limit-requests": 60}))
+    assert registry.get_sample_value("litellm_team_rpm_limit", TEAM_LABELS) == 60
+
+    _set_team_metrics(logger, _payload_with_headers({}))
+    assert registry.get_sample_value("litellm_team_rpm_limit", TEAM_LABELS) is None
+
+
+def test_removing_a_never_emitted_real_series_raises_nothing():
+    registry = CollectorRegistry()
+    gauge = Gauge("litellm_team_tpm_limit", "doc", labelnames=list(ORIGINAL_LABELNAMES), registry=registry)
+    logger = _logger_with_real_gauge("litellm_team_tpm_limit", gauge)
+
+    _set_team_metrics(logger, _payload_with_headers({}))
+
+    assert registry.get_sample_value("litellm_team_tpm_limit", TEAM_LABELS) is None
+
+
+def test_excluded_label_wrapper_sets_and_removes_using_the_kept_labels():
+    registry = CollectorRegistry()
+    real = Gauge("litellm_team_rpm_limit", "doc", labelnames=["team", "model"], registry=registry)
+    wrapper = _ExcludedLabelMetric(real, ORIGINAL_LABELNAMES, frozenset({"team_alias"}))
+    kept = {"team": "team-abc", "model": "gpt-4o-mini"}
+
+    wrapper.labels(**TEAM_LABELS).set(60)
+    assert registry.get_sample_value("litellm_team_rpm_limit", kept) == 60
+
+    wrapper.remove(*(TEAM_LABELS[name] for name in ORIGINAL_LABELNAMES))
+    assert registry.get_sample_value("litellm_team_rpm_limit", kept) is None
+
+
+def test_excluded_label_wrapper_cannot_remove_when_every_label_is_excluded():
+    """
+    With every label excluded the gauge collapses to a single unlabeled sample,
+    which has no child series for prometheus_client to remove. Such a metric
+    cannot represent per-team state at all, so there is no correct value to
+    drop it to; this pins the behaviour rather than papering over it.
+    """
+    registry = CollectorRegistry()
+    real = Gauge("litellm_team_rpm_limit", "doc", registry=registry)
+    wrapper = _ExcludedLabelMetric(real, ORIGINAL_LABELNAMES, frozenset(ORIGINAL_LABELNAMES))
+
+    wrapper.labels(**TEAM_LABELS).set(60)
+    assert registry.get_sample_value("litellm_team_rpm_limit", {}) == 60
+
+    wrapper.remove(*(TEAM_LABELS[name] for name in ORIGINAL_LABELNAMES))
+    assert registry.get_sample_value("litellm_team_rpm_limit", {}) == 60
+
+
+def test_noop_metric_remove_is_inert():
+    metric = NoOpMetric()
+
+    metric.labels(**TEAM_LABELS).set(60)
+    metric.remove(*TEAM_LABELS.values())

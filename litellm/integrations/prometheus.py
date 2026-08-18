@@ -128,6 +128,8 @@ class _LabeledGauge(Protocol):
 
     def set(self, value: float) -> None: ...
 
+    def remove(self, *labelvalues: str) -> None: ...
+
 
 _TEAM_RATE_LIMIT_GAUGE_SPECS: Final[
     tuple[
@@ -2129,11 +2131,8 @@ class PrometheusLogger(CustomLogger):
             gauge.labels(**labels).set(value)
             return
 
-        remove: Final = getattr(gauge, "remove", None)
-        if remove is None:
-            return
         try:
-            remove(*(labels[name] for name in self.get_labels_for_metric(metric_name)))
+            gauge.remove(*(labels[name] for name in self.get_labels_for_metric(metric_name)))
         except KeyError:
             # No child series for this labelset, which is the common case:
             # the team never had a limit for this model.
