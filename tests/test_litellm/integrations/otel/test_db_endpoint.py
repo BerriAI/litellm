@@ -7,12 +7,14 @@ remote and read-replica deployments, and pin the rule that no credential is ever
 exported.
 """
 
+import os
 from unittest.mock import patch
 
 import pytest
 
 from litellm.integrations.otel.model.db_endpoint import (
     DatabaseEndpoint,
+    _endpoint_for,
     db_span_attributes,
     parse_database_endpoint,
     postgres_endpoint,
@@ -25,18 +27,17 @@ REPLICA_DSN = "postgresql://reader:r3ad0nly@litellm-prod-ro.abc123.us-east-1.rds
 
 @pytest.fixture(autouse=True)
 def _clear_endpoint_cache():
-    postgres_endpoint.cache_clear()
+    _endpoint_for.cache_clear()
     yield
-    postgres_endpoint.cache_clear()
+    _endpoint_for.cache_clear()
 
 
 def _resolve(service, call_type=None, database_url=None, read_replica_url=None):
-    """Resolve attributes with the two DB env vars stubbed at their read site."""
-
-    def _secret(name, default_value=None):
-        return {"DATABASE_URL": database_url, "DATABASE_URL_READ_REPLICA": read_replica_url}.get(name)
-
-    with patch("litellm.integrations.otel.model.db_endpoint.get_secret_str", side_effect=_secret):
+    """Resolve attributes with the two DB env vars set, as the proxy sets them."""
+    env = {k: v for k, v in (("DATABASE_URL", database_url), ("DATABASE_URL_READ_REPLICA", read_replica_url)) if v}
+    with patch.dict(os.environ, env, clear=False):
+        for absent in {"DATABASE_URL", "DATABASE_URL_READ_REPLICA"} - set(env):
+            os.environ.pop(absent, None)
         return dict(db_span_attributes(service, call_type))
 
 
@@ -288,14 +289,25 @@ def test_no_credential_reaches_any_exported_attribute(dsn, secrets):
         assert secret not in exported
 
 
-def test_database_url_is_resolved_once_not_per_span():
-    """``get_secret_str`` can reach a configured secret manager, so resolving it
-    per DB span would put a blocking lookup on the request path."""
-    with patch(
-        "litellm.integrations.otel.model.db_endpoint.get_secret_str",
-        side_effect=lambda name, default_value=None: LOCAL_DSN if name == "DATABASE_URL" else None,
-    ) as resolver:
-        for _ in range(5):
-            attrs = db_span_attributes("postgres", "get_data")
-    assert attrs["server.address"] == "localhost"
-    assert resolver.call_count == 2
+def test_a_runtime_endpoint_change_is_reflected_on_the_next_span():
+    """The RDS IAM refresh, the reconnect path and the DB-backed
+    environment_variables overlay can all rewrite DATABASE_URL after startup, so
+    a value cached for the process lifetime would report a server the process no
+    longer talks to."""
+    first = _resolve("postgres", "get_data", database_url=LOCAL_DSN)
+    assert first["server.address"] == "localhost"
+    moved = _resolve("postgres", "get_data", database_url=REMOTE_DSN)
+    assert moved["server.address"] == "litellm-prod.abc123.us-east-1.rds.amazonaws.com"
+
+
+def test_a_replica_configured_after_the_first_span_suppresses_the_endpoint():
+    assert _resolve("postgres", "get_data", database_url=REMOTE_DSN)["server.address"]
+    later = _resolve("postgres", "get_data", database_url=REMOTE_DSN, read_replica_url=REPLICA_DSN)
+    assert "server.address" not in later
+
+
+def test_the_parse_is_memoized_per_url():
+    _endpoint_for.cache_clear()
+    for _ in range(5):
+        _resolve("postgres", "get_data", database_url=LOCAL_DSN)
+    assert _endpoint_for.cache_info().misses == 1

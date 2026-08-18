@@ -33,7 +33,7 @@ from litellm.integrations.opentelemetry import (
     OTELSemconvCategory,
     _normalize_team_metadata_keys,
 )
-from litellm.integrations.otel.model.db_endpoint import postgres_endpoint
+from litellm.integrations.otel.model.db_endpoint import _endpoint_for
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
@@ -6227,10 +6227,10 @@ class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
     REPLICA_DSN = "postgresql://reader:r3ad0nly@litellm-prod-ro.abc123.us-east-1.rds.amazonaws.com/litellm"
 
     def setUp(self):
-        postgres_endpoint.cache_clear()
+        _endpoint_for.cache_clear()
 
     def tearDown(self):
-        postgres_endpoint.cache_clear()
+        _endpoint_for.cache_clear()
 
     def _service_span(self, service, call_type, dsn, error=None, replica_dsn=None):
         exporter = InMemorySpanExporter()
@@ -6249,11 +6249,10 @@ class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
         )
         hook = otel.async_service_failure_hook if error else otel.async_service_success_hook
         kwargs = {"error": error} if error else {}
-        secrets = {"DATABASE_URL": dsn, "DATABASE_URL_READ_REPLICA": replica_dsn}
-        with patch(
-            "litellm.integrations.otel.model.db_endpoint.get_secret_str",
-            side_effect=lambda name, default_value=None: secrets.get(name),
-        ):
+        env = {k: v for k, v in (("DATABASE_URL", dsn), ("DATABASE_URL_READ_REPLICA", replica_dsn)) if v}
+        with patch.dict(os.environ, env, clear=False):
+            for absent in {"DATABASE_URL", "DATABASE_URL_READ_REPLICA"} - set(env):
+                os.environ.pop(absent, None)
             asyncio.run(
                 hook(
                     payload=payload,

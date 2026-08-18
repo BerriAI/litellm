@@ -11,6 +11,7 @@ can reach an exporter.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
@@ -20,8 +21,11 @@ from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
 from litellm.integrations.otel.model.semconv import DB, Server
 from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
-from litellm.secret_managers.main import get_secret_str
 
+_DATABASE_URL_ENV: Final = "DATABASE_URL"
+_READ_REPLICA_ENV: Final = "DATABASE_URL_READ_REPLICA"
+# Bounded because each RDS IAM token rotation produces a new URL string.
+_ENDPOINT_CACHE_SIZE: Final = 8
 _DEFAULT_POSTGRES_PORT: Final = 5432
 _DEFAULT_POSTGRES_SCHEMA: Final = "public"
 _POSTGRES_SCHEMES: Final = frozenset({"postgres", "postgresql"})
@@ -101,23 +105,34 @@ def _namespace(database: str, schema: str) -> str | None:
     return "|".join(part for part in (database, qualifier) if part) or None
 
 
-@lru_cache(maxsize=1)
-def postgres_endpoint() -> DatabaseEndpoint | None:
-    """The configured PostgreSQL endpoint, or ``None`` when it cannot be named.
+@lru_cache(maxsize=_ENDPOINT_CACHE_SIZE)
+def _endpoint_for(url: str) -> DatabaseEndpoint | None:
+    return parse_database_endpoint(url)
 
-    Resolved once: ``DATABASE_URL`` is deployment-static (an RDS IAM refresh
-    rotates only the token), and ``get_secret_str`` can reach a secret manager,
-    so this must not run per span. The empty default keeps a misconfigured
-    secret manager from raising into span emission. Tests that change the
-    environment call ``postgres_endpoint.cache_clear()``.
+
+def postgres_endpoint() -> DatabaseEndpoint | None:
+    """The PostgreSQL endpoint the process is currently connected to.
+
+    Read from ``os.environ`` on every span, deliberately, on both counts.
+
+    The environment is what Prisma itself connects with, so the span cannot
+    disagree with the connection; ``get_secret_str`` would consult a configured
+    secret manager first and could name a different server than the one serving
+    the query. And the value is not static: the RDS IAM refresh rebuilds the URL
+    from ``DATABASE_HOST``/``PORT``/``NAME``/``SCHEMA`` every rotation, the
+    reconnect path re-reads ``DATABASE_URL``, and the DB-backed
+    ``environment_variables`` config overlay can rewrite any of them after
+    startup, so a value cached for the process lifetime goes stale against a
+    connection that has genuinely moved. Only the parse is memoized, keyed on the
+    URL, which keeps the per-span cost to a dict lookup.
 
     A configured read replica yields ``None``: ``RoutingPrismaWrapper`` picks
     reader or writer per Prisma call, underneath the span, so naming the writer
     would attribute replica reads to the primary.
     """
-    if get_secret_str("DATABASE_URL_READ_REPLICA", default_value=""):
+    if os.environ.get(_READ_REPLICA_ENV):
         return None
-    return parse_database_endpoint(get_secret_str("DATABASE_URL", default_value=""))
+    return _endpoint_for(os.environ.get(_DATABASE_URL_ENV, ""))
 
 
 def db_span_attributes(service_name: str, call_type: str | None = None) -> Mapping[str, str | int]:
