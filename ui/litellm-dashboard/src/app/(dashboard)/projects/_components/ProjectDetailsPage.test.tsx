@@ -22,6 +22,12 @@ vi.mock("@/components/common_components/DefaultProxyAdminTag", () => ({
   default: ({ userId }: { userId: string }) => <span>{userId}</span>,
 }));
 
+vi.mock("./ProjectKeysSection", () => ({
+  ProjectKeysSection: ({ projectId }: { projectId: string }) => (
+    <div data-testid="project-keys-section">{projectId}</div>
+  ),
+}));
+
 const mockProject: ProjectResponse = {
   project_id: "proj-1",
   project_alias: "My Project",
@@ -60,10 +66,12 @@ describe("ProjectDetail", () => {
   });
 
   describe("when loading", () => {
-    it("should show a loading spinner", () => {
+    it("should show a busy indicator and neither the project nor the not-found state", () => {
       mockUseProjectDetails.mockReturnValue({ data: undefined, isLoading: true });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
-      expect(screen.getByRole("img", { hidden: true })).toBeInTheDocument();
+      expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument();
+      expect(screen.queryByText("Project not found")).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading")).not.toBeInTheDocument();
     });
   });
 
@@ -98,6 +106,11 @@ describe("ProjectDetail", () => {
       expect(screen.getByRole("heading", { name: "My Project" })).toBeInTheDocument();
     });
 
+    it("should render the project keys section for the project", () => {
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.getByTestId("project-keys-section")).toHaveTextContent("proj-1");
+    });
+
     it("should display 'Active' for a non-blocked project", () => {
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("Active")).toBeInTheDocument();
@@ -115,7 +128,7 @@ describe("ProjectDetail", () => {
     it("should call onBack when the back button is clicked", async () => {
       const user = userEvent.setup();
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
-      await user.click(screen.getByRole("button", { name: "" }));
+      await user.click(screen.getAllByRole("button")[0]);
       expect(onBack).toHaveBeenCalledOnce();
     });
 

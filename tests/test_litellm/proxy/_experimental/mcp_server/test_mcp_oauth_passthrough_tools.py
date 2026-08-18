@@ -50,6 +50,36 @@ def test_extract_upstream_auth_failure_returns_none_for_non_auth():
     assert _extract_upstream_auth_failure(RuntimeError("boom")) is None
 
 
+def _auth_status_error(status_code: int, www_authenticate: str) -> httpx.HTTPStatusError:
+    response = httpx.Response(
+        status_code=status_code,
+        headers={"www-authenticate": www_authenticate},
+        request=httpx.Request("GET", "https://upstream/mcp"),
+    )
+    return httpx.HTTPStatusError(str(status_code), request=response.request, response=response)
+
+
+def test_extract_upstream_auth_failure_finds_401_behind_cause_chain():
+    wrapper = RuntimeError("wrapped")
+    wrapper.__cause__ = _auth_status_error(401, "Bearer")
+    assert _extract_upstream_auth_failure(wrapper) == (401, "Bearer")
+
+
+def test_extract_upstream_auth_failure_finds_401_behind_context_chain():
+    wrapper = RuntimeError("wrapped")
+    wrapper.__context__ = _auth_status_error(401, "Bearer")
+    assert _extract_upstream_auth_failure(wrapper) == (401, "Bearer")
+
+
+def test_extract_upstream_auth_failure_prefers_causal_chain_over_context():
+    """A 403 raised incidentally while handling the real 401 (surviving only as ``__context__``)
+    must not shadow the 401 on the explicit ``raise ... from`` chain."""
+    wrapper = RuntimeError("wrapped")
+    wrapper.__cause__ = _auth_status_error(401, "Bearer realm=real")
+    wrapper.__context__ = _auth_status_error(403, "Bearer realm=incidental")
+    assert _extract_upstream_auth_failure(wrapper) == (401, "Bearer realm=real")
+
+
 @pytest.mark.asyncio
 async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     manager = MCPServerManager()
@@ -273,6 +303,7 @@ def _http_server(server_id: str, name: str, **kwargs) -> MCPServer:
     return MCPServer(
         server_id=server_id,
         name=name,
+        alias=name,
         url=f"https://{name}/mcp",
         transport=MCPTransport.http,
         **kwargs,
@@ -284,7 +315,8 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     """Regression: across the aggregate (/mcp), a delegate/passthrough server that raises
     MCPUpstreamAuthError must not empty every other server's tools. Re-raising it on the
     aggregate path (introduced with the passthrough feature) zeroed the whole list because the
-    fan-out gather propagated it."""
+    fan-out gather propagated it. The failed server now contributes an "auth_required" outcome
+    instead of vanishing, so it stays distinguishable from a healthy server with no tools."""
     from unittest.mock import patch
 
     from mcp.types import Tool as MCPTool
@@ -312,22 +344,24 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     ), patch.object(
         mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
-        tools = await mcp_server._get_tools_from_mcp_servers(
+        listing = await mcp_server._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
             mcp_auth_header=None,
             mcp_servers=None,
         )
 
-    assert [t.name for t in tools] == ["working_docs-read"]
+    assert [t.name for t in listing.tools] == ["working_docs-read"]
+    assert listing.outcomes["delegate_docs"].tag == "auth_required"
+    assert listing.outcomes["working_docs"].tag == "ok"
 
 
 @pytest.mark.asyncio
 async def test_single_server_route_also_absorbs_upstream_auth_error():
     """A single-server route (/<server>/mcp) absorbs an upstream-auth error just like the aggregate:
-    the failing server is omitted (empty list) rather than re-raised. Surfacing it to the client as a
-    401 + WWW-Authenticate challenge cannot be done from this list handler — the MCP session manager
-    serializes a raise into a JSON-RPC error, not an HTTP 401 — so re-auth surfacing is handled by a
-    request-scope preemptive check, tracked separately."""
+    the failing server contributes no tools and an "auth_required" outcome rather than re-raising.
+    Surfacing it to the client as a 401 + WWW-Authenticate challenge cannot be done from this list
+    handler — the MCP session manager serializes a raise into a JSON-RPC error, not an HTTP 401 — so
+    re-auth surfacing is handled by a request-scope preemptive check, tracked separately."""
     from unittest.mock import patch
 
     from litellm.proxy._experimental.mcp_server import server as mcp_server
@@ -351,12 +385,13 @@ async def test_single_server_route_also_absorbs_upstream_auth_error():
         ), patch.object(
             mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
         ):
-            tools = await mcp_server._get_tools_from_mcp_servers(
+            listing = await mcp_server._get_tools_from_mcp_servers(
                 user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
                 mcp_auth_header=None,
                 mcp_servers=["delegate_docs"],
             )
-        assert tools == []
+        assert listing.tools == []
+        assert listing.outcomes["delegate_docs"].tag == "auth_required"
     finally:
         _mcp_gateway_server_name.reset(token)
 
@@ -388,10 +423,11 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
         mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
         # Aggregate route: no explicit server filter, even though only one server is accessible.
-        tools = await mcp_server._get_tools_from_mcp_servers(
+        listing = await mcp_server._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
             mcp_auth_header=None,
             mcp_servers=None,
         )
 
-    assert tools == []
+    assert listing.tools == []
+    assert listing.outcomes["delegate_docs"].tag == "auth_required"

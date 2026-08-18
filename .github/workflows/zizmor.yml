@@ -4,7 +4,11 @@ on:
   push:
     branches: [main, litellm_internal_staging]
   pull_request:
-    branches: [main, litellm_internal_staging]
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

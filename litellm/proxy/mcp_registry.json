@@ -198,13 +198,9 @@
       "icon_url": "https://cdn.simpleicons.org/googledrive",
       "category": "Productivity",
       "registry_url": null,
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-gdrive"],
-      "env_vars": [
-        {"name": "GOOGLE_CLIENT_ID", "description": "Google OAuth Client ID", "secret": false},
-        {"name": "GOOGLE_CLIENT_SECRET", "description": "Google OAuth Client Secret", "secret": true}
-      ]
+      "transport": "http",
+      "url": "https://drivemcp.googleapis.com/mcp/v1",
+      "env_vars": []
     },
     {
       "name": "google_calendar",

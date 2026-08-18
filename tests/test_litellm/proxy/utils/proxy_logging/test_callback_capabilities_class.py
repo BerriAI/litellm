@@ -330,6 +330,13 @@ def test_get_combined_callback_list_matrix(proxy_logging):
     }
 
 
+def test_get_combined_callback_list_preserves_insertion_order(proxy_logging):
+    assert proxy_logging.get_combined_callback_list(
+        dynamic_success_callbacks=["prometheus", "langfuse", "datadog", "otel", "s3"],
+        global_callbacks=["langfuse", "gcs_bucket", "arize", "logfire"],
+    ) == ["prometheus", "langfuse", "datadog", "otel", "s3", "gcs_bucket", "arize", "logfire"]
+
+
 def test_get_combined_callback_list_unhashable_dynamic_raises(proxy_logging):
     with pytest.raises(TypeError):
         proxy_logging.get_combined_callback_list(

@@ -168,6 +168,13 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
         ),
     ),
     ModelEntry(
+        alias="claude-opus-5",
+        model="anthropic/claude-opus-5",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_XHIGH_MAX,
+    ),
+    ModelEntry(
         alias="claude-opus-4-8",
         model="anthropic/claude-opus-4-8",
         mode="adaptive",
@@ -212,12 +219,6 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         required_env=_AZURE_FOUNDRY_REQ,
         caps=_CAPS_XHIGH_MAX,
-        fail_reason=(
-            "claude-fable-5 has no deployment on the CI Microsoft Foundry "
-            "resource yet; Foundry returns DeploymentNotFound until someone "
-            "creates the fable-5 deployment, so this cell stays loud in CI. "
-            "Remove this fail_reason once the deployment exists."
-        ),
     ),
     ModelEntry(
         alias="azure-claude-opus-4-8",
@@ -225,12 +226,6 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         required_env=_AZURE_FOUNDRY_REQ,
         caps=_CAPS_XHIGH_MAX,
-        fail_reason=(
-            "claude-opus-4-8 has no deployment on the CI Microsoft Foundry "
-            "resource yet; Foundry returns DeploymentNotFound until someone "
-            "creates the opus-4-8 deployment, so this cell stays loud in CI. "
-            "Remove this fail_reason once the deployment exists."
-        ),
     ),
     ModelEntry(
         alias="azure-claude-opus-4-7",

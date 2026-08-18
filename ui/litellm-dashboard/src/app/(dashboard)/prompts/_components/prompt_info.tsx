@@ -29,7 +29,7 @@ import {
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
 
@@ -77,7 +77,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       }
       setSelectedVersion(response.prompt_spec.version || null);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to load prompt information");
+      toast.fromError("Failed to load prompt information");
       console.error("Error fetching prompt info:", error);
     } finally {
       setLoading(false);
@@ -156,12 +156,12 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     setIsDeleting(true);
     try {
       await deletePromptCall(accessToken, basePromptId);
-      NotificationsManager.success(`Prompt "${basePromptId}" deleted successfully`);
+      toast.success(`Prompt "${basePromptId}" deleted successfully`);
       onDelete?.();
       onClose();
     } catch (error) {
       console.error("Error deleting prompt:", error);
-      NotificationsManager.fromBackend("Failed to delete prompt");
+      toast.fromError("Failed to delete prompt");
     } finally {
       setIsDeleting(false);
       setShowDeleteConfirm(false);
@@ -184,7 +184,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       setPromptTemplate(response.raw_prompt_template);
       setRawApiResponse(response);
     } catch {
-      NotificationsManager.fromBackend(`Failed to load version v${versionNum}`);
+      toast.fromError(`Failed to load version v${versionNum}`);
     }
   };
 

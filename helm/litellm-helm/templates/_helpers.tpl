@@ -51,6 +51,53 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Enterprise billable-request metering. The client certificate identifies the
+deployment to LiteLLM's collector, so it is mounted read-only from an existing
+Secret rather than passed through the environment.
+*/}}
+{{- define "litellm.billingMetrics.certDir" -}}/etc/litellm/billing-mtls{{- end -}}
+{{- define "litellm.billingMetrics.caDir" -}}/etc/litellm/billing-mtls-ca{{- end -}}
+
+{{- define "litellm.billingMetricsEnv" -}}
+- name: LITELLM_BILLING_METRICS_ENDPOINT
+  value: {{ required "billingMetrics.endpoint is required when billingMetrics.enabled is true" .Values.billingMetrics.endpoint | quote }}
+- name: LITELLM_BILLING_METRICS_CLIENT_CERT
+  value: {{ printf "%s/tls.crt" (include "litellm.billingMetrics.certDir" .) | quote }}
+- name: LITELLM_BILLING_METRICS_CLIENT_KEY
+  value: {{ printf "%s/tls.key" (include "litellm.billingMetrics.certDir" .) | quote }}
+{{- if .Values.billingMetrics.caSecretName }}
+- name: LITELLM_BILLING_METRICS_CA_CERT
+  value: {{ printf "%s/ca.crt" (include "litellm.billingMetrics.caDir" .) | quote }}
+{{- end }}
+{{- with .Values.billingMetrics.exportIntervalMs }}
+- name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
+  value: {{ . | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.billingMetricsVolumes" -}}
+- name: billing-metrics-mtls
+  secret:
+    secretName: {{ required "billingMetrics.secretName is required when billingMetrics.enabled is true (an existing Secret with tls.crt and tls.key)" .Values.billingMetrics.secretName }}
+{{- if .Values.billingMetrics.caSecretName }}
+- name: billing-metrics-mtls-ca
+  secret:
+    secretName: {{ .Values.billingMetrics.caSecretName }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.billingMetricsVolumeMounts" -}}
+- name: billing-metrics-mtls
+  mountPath: {{ include "litellm.billingMetrics.certDir" . }}
+  readOnly: true
+{{- if .Values.billingMetrics.caSecretName }}
+- name: billing-metrics-mtls-ca
+  mountPath: {{ include "litellm.billingMetrics.caDir" . }}
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{/*
 Create the name of the service account to use
 */}}
 {{- define "litellm.serviceAccountName" -}}
@@ -97,5 +144,20 @@ Get redis service port
 {{ .Values.redis.sentinel.service.ports.sentinel }}
 {{- else -}}
 {{ .Values.redis.master.service.ports.redis }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Reject an unpinned image tag for the bundled PostgreSQL.
+A floating tag lets a chart upgrade start a newer PostgreSQL major against the
+existing PersistentVolumeClaim. The server then refuses to start on a data
+directory written by another major version, and the only way back is a dump
+taken before the change, which by that point no longer exists.
+*/}}
+{{- define "litellm.validateBundledPostgresImageTag" -}}
+{{- $tag := .Values.postgresql.image.tag | default "" | toString -}}
+{{- $digest := .Values.postgresql.image.digest | default "" | toString -}}
+{{- if and (eq $digest "") (or (eq $tag "") (eq $tag "latest")) -}}
+{{- fail (printf "postgresql.image.tag must be pinned to an explicit version when db.deployStandalone is true (got %q). An unpinned tag can start a different PostgreSQL major against the existing data directory, which makes the database unreadable and is not recoverable in place. Crossing a major version requires a dump and restore." $tag) -}}
 {{- end -}}
 {{- end -}}

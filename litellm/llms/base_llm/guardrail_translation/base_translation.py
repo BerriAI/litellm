@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import (
@@ -11,11 +12,31 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 
+@dataclass(slots=True)
+class StreamTransformSink:
+    """Out-parameter used by ``process_output_streaming_response`` to hand the
+    guardrailed streaming state back to the caller.
+
+    The streaming text-transform path must not mutate ``responses_so_far`` (it is
+    the raw accumulator the guardrail re-reads every round), so the guardrailed
+    accumulated text per choice (``mutated_text_per_choice``, keyed by
+    ``StreamingChoices.index``) and the per-choice trailing holdback the guardrail
+    requested (``holdback_per_choice``, from ``stream_holdback_chars``) are
+    reported here instead of in place. Only the OpenAI chat handler populates this
+    today; the hook passes a fresh sink per round and reads it afterwards. A
+    mutable dataclass is deliberate: it is a write-once output parameter for a
+    single call, not shared state.
+    """
+
+    mutated_text_per_choice: dict[int, str] = field(default_factory=dict)
+    holdback_per_choice: dict[int, int] = field(default_factory=dict)
+
+
 class BaseTranslation(ABC):
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
-        user_api_key_dict: Optional[Any],
-    ) -> Dict[str, Any]:
+        user_api_key_dict: Any | None,
+    ) -> dict[str, Any]:
         """
         Transform user_api_key_dict to a metadata dict with prefixed keys.
 
@@ -38,7 +59,7 @@ class BaseTranslation(ABC):
             return {}
 
         # Transform keys to be prefixed with 'user_api_key_'
-        transformed = {}
+        transformed: Final = {}
         for key, value in user_dict.items():
             # Skip None values and internal fields
             if value is None or key.startswith("_"):
@@ -64,7 +85,6 @@ class BaseTranslation(ABC):
 
         Note: user_api_key_dict metadata should be available in the data dict.
         """
-        pass
 
     @abstractmethod
     async def process_output_response(
@@ -73,7 +93,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process output response with guardrails.
@@ -84,20 +104,22 @@ class BaseTranslation(ABC):
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata (passed separately since response doesn't contain it)
         """
-        pass
 
     async def process_output_streaming_response(
         self,
-        responses_so_far: List[Any],
+        responses_so_far: list[Any],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
+        stream_transform_sink: StreamTransformSink | None = None,
     ) -> Any:
         """
         Process output streaming response with guardrails.
 
-        Optional to override in subclasses.
+        Optional to override in subclasses. ``stream_transform_sink`` is the
+        out-parameter used by handlers that support streaming text
+        transformations (see ``StreamTransformSink``); base handlers ignore it.
         """
         return responses_so_far
 
@@ -105,8 +127,8 @@ class BaseTranslation(ABC):
         self,
         exc: "ModifyResponseException",
         stream_started: bool = False,
-        responses_so_far: Optional[list[Any]] = None,
-    ) -> Optional[list[bytes]]:
+        responses_so_far: list[Any] | None = None,
+    ) -> list[bytes] | None:
         """
         Build the streaming chunks that deliver a guardrail block message and
         cleanly terminate the stream in this provider's wire format.
@@ -125,7 +147,7 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict) -> Optional[List["AllMessageValues"]]:
+    def get_structured_messages(self, data: dict) -> list["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 
@@ -135,7 +157,7 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def extract_request_tool_names(self, data: dict) -> List[str]:
+    def extract_request_tool_names(self, data: dict) -> list[str]:
         """
         Extract tool names from the request body for allowlist/policy checks.
         Override in tool-capable handlers; default returns [].

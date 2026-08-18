@@ -1,4 +1,4 @@
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getProxyBaseUrl, getPublicModelHubInfo, updateUsefulLinksCall } from "@/components/networking";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -11,18 +11,10 @@ vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const mockedGetPublicModelHubInfo = vi.mocked(getPublicModelHubInfo);
 const mockedUpdateUsefulLinksCall = vi.mocked(updateUsefulLinksCall);
 const mockedGetProxyBaseUrl = vi.mocked(getProxyBaseUrl);
-const mockedNotifications = vi.mocked(NotificationsManager);
+const mockedNotifications = vi.mocked(toast);
 
 describe("UsefulLinksManagement", () => {
   beforeEach(() => {
@@ -84,7 +76,7 @@ describe("UsefulLinksManagement", () => {
 
     render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
 
-    await waitFor(() => expect(screen.getByText("First Link")).toBeInTheDocument());
+    expect(await screen.findByText("First Link")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /rearrange order/i }));
 
@@ -123,7 +115,7 @@ describe("UsefulLinksManagement", () => {
 
     render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
 
-    await waitFor(() => expect(screen.getByText("Test Link")).toBeInTheDocument());
+    expect(await screen.findByText("Test Link")).toBeInTheDocument();
 
     // Click edit button
     const editButton = screen.getByTestId("edit-link-0-Test Link");
@@ -147,7 +139,7 @@ describe("UsefulLinksManagement", () => {
 
     render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
 
-    await waitFor(() => expect(screen.getByText("Test Link")).toBeInTheDocument());
+    expect(await screen.findByText("Test Link")).toBeInTheDocument();
 
     // Click edit button
     const editButton = screen.getByTestId("edit-link-0-Test Link");
@@ -183,7 +175,7 @@ describe("UsefulLinksManagement", () => {
 
     render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
 
-    await waitFor(() => expect(screen.getByText("Test Link")).toBeInTheDocument());
+    expect(await screen.findByText("Test Link")).toBeInTheDocument();
 
     // Click edit button
     const editButton = screen.getByTestId("edit-link-0-Test Link");
@@ -216,7 +208,7 @@ describe("UsefulLinksManagement", () => {
 
     render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
 
-    await waitFor(() => expect(screen.getByText("First Link")).toBeInTheDocument());
+    expect(await screen.findByText("First Link")).toBeInTheDocument();
 
     // Enter rearrange mode
     await user.click(screen.getByRole("button", { name: /rearrange order/i }));
@@ -235,7 +227,7 @@ describe("UsefulLinksManagement", () => {
     const user = userEvent.setup();
     render(<UsefulLinksManagement accessToken="token" userRole="Admin" />);
 
-    await waitFor(() => expect(screen.getByText("Link Management")).toBeInTheDocument());
+    expect(await screen.findByText("Link Management")).toBeInTheDocument();
 
     // Initially expanded
     expect(screen.getByText("Manage Existing Links")).toBeInTheDocument();

@@ -1,38 +1,191 @@
 import React, { useEffect, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Radio, Badge, Space } from "antd";
-import type { FormInstance } from "antd";
-import { ThunderboltOutlined, BranchesOutlined } from "@ant-design/icons";
-import { Text, TextInput } from "@tremor/react";
+import { useQuery } from "@tanstack/react-query";
+import { useWatch } from "react-hook-form";
+import { Card, Select as AntdSelect, Modal } from "antd";
+import { ChevronDown, ChevronRight, CircleHelp } from "lucide-react";
+import { z } from "zod/v4";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import { modelAvailableCall } from "../networking";
 import { all_admin_roles } from "@/utils/roles";
-import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
-import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import RouterConfigBuilder from "./RouterConfigBuilder";
-import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+import { type ModelWriteScope } from "@/utils/modelPermissions";
+import TeamDropdown from "../common_components/team_dropdown";
+import { type AddAutoRouterValues, handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
+import ComplexityRouterConfig, {
+  ComplexityRouterConfigValue,
+  ComplexityTiers,
+  DEFAULT_ADAPTIVE_WEIGHTS,
+  DEFAULT_SESSION_AFFINITY,
+  DEFAULT_DEPLOYMENT_AFFINITY,
+  DEFAULT_TIER_DISTANCE_PENALTY,
+} from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
+import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
-import { buildComplexityRouterConfig, getSemanticConfigError } from "./build_complexity_router_config";
-import NotificationManager from "../molecules/notifications_manager";
+import {
+  BuildComplexityRouterConfigParams,
+  buildComplexityRouterConfig,
+  getKeywordTierRulesError,
+  getMissingTiersError,
+  getSemanticConfigError,
+  getTierLabelsError,
+} from "./build_complexity_router_config";
+import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
+import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
+import AutoRouterConnectionTest from "./auto_router_connection_test";
+import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
+import { toast } from "@/lib/toast";
+import {
+  getAllPresets,
+  getPresetByKey,
+  getMissingModelsInPreset,
+  getReferencedModelsError,
+  buildEmptyPrefill,
+  buildPresetPrefill,
+  buildModelAvailability,
+  deploymentRefsFromModelInfo,
+  ModelAvailability,
+  PresetPrefill,
+  AutoRouterPreset,
+} from "@/lib/autorouter_presets";
 
 interface AddAutoRouterTabProps {
-  form: FormInstance;
   handleOk: () => void;
   accessToken: string;
   userRole: string;
+  userId?: string | null;
+  /**
+   * How this caller must scope what they create. A team admin has to name a team, because
+   * POST /model/new rejects an unscoped create from any non-proxy-admin; without the selector
+   * their submit is a guaranteed 403.
+   */
+  createScope?: ModelWriteScope;
 }
 
-type RouterType = "recommended" | "semantic";
+type PresetAvailability =
+  | { kind: "available"; viaDeployments: boolean }
+  | { kind: "loading" }
+  | { kind: "unverifiable" }
+  | { kind: "missing_models"; models: readonly string[] };
 
-const { Title } = Typography;
+// Every non-"available" state disables the option. Selection derives from this same function
+// (see presetAvailability below), so an option a caller can click is always one that can be applied.
+const presetDisabledHint = (availability: PresetAvailability): string | null => {
+  switch (availability.kind) {
+    case "available":
+      return null;
+    case "loading":
+      return "Checking model availability...";
+    case "unverifiable":
+      return "Cannot verify these models are available";
+    case "missing_models":
+      return `Missing: ${availability.models.join(", ")}`;
+  }
+};
 
-const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, accessToken, userRole }) => {
+// "loading"/"unverifiable" are transient system states, not a gap specific to this preset; only a
+// caller-specific missing-model reason gets the alarming red treatment.
+const isPresetHintAlarming = (availability: PresetAvailability): boolean => availability.kind === "missing_models";
+
+// getAllPresets() already returns a stable, module-level array (see autorouter_presets.ts), so
+// this is resolved once at import time rather than re-called from inside the component every render.
+const presets = getAllPresets();
+
+// A one-line summary of what's configured, shown when the detailed section is collapsed so a
+// caller can see the shape of the config without opening it.
+const tierConfigSummary = (tiers: ComplexityTiers): string => {
+  const parts = (
+    [
+      ["Simple", tiers.SIMPLE],
+      ["Medium", tiers.MEDIUM],
+      ["Complex", tiers.COMPLEX],
+      ["Reasoning", tiers.REASONING],
+    ] as const
+  )
+    .filter(([, models]) => models.length > 0)
+    .map(([label, models]) => `${label}: ${models.join(", ")}`);
+  return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
+};
+
+// Why the submit is unavailable, or null when it is available. The button reads this to disable
+// itself and to say what is missing, so the two can never give different answers. Checks the
+// config actually being built, not which preset (if any) it came from: a preset only ever
+// prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
+const getSubmitBlockedReason = (
+  config: ComplexityRouterConfigValue,
+  keywordTierRules: KeywordTierRule[],
+  referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
+  availability: ModelAvailability,
+): string | null =>
+  getMissingTiersError(config.tiers) ??
+  getTierLabelsError(config.tier_labels) ??
+  getKeywordTierRulesError(keywordTierRules) ??
+  getReferencedModelsError(referencedModelsParams, availability);
+
+const autoRouterSchema = (requiresTeamScope: boolean) =>
+  z.object({
+    auto_router_name: z.string().min(1, "Auto router name is required"),
+    team_id: requiresTeamScope ? z.string().min(1, "Please select a team to continue") : z.string(),
+    model_access_group: z.array(z.string()).optional(),
+  });
+
+type AddAutoRouterFormValues = z.infer<ReturnType<typeof autoRouterSchema>>;
+
+const EMPTY_FORM_VALUES: AddAutoRouterFormValues = {
+  auto_router_name: "",
+  team_id: "",
+  model_access_group: undefined,
+};
+
+const labelWithHint = (label: string, hint: string): React.ReactNode => (
+  <>
+    {label}
+    <Tooltip>
+      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  </>
+);
+
+const teamScopePayload = (requiresTeamScope: boolean, teamId: string): { team_id?: string } =>
+  requiresTeamScope ? { team_id: teamId } : {};
+
+const BlockedReasonTooltip: React.FC<{ reason: string | null; children: React.ReactElement }> = ({
+  reason,
+  children,
+}) =>
+  reason === null ? (
+    children
+  ) : (
+    <Tooltip>
+      <TooltipTrigger render={children} />
+      <TooltipContent>{reason}</TooltipContent>
+    </Tooltip>
+  );
+
+const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
+  handleOk,
+  accessToken,
+  userRole,
+  userId,
+  createScope = "unscoped-ok",
+}) => {
+  const requiresTeamScope = createScope === "team-required";
+  const form = useZodForm(autoRouterSchema(requiresTeamScope), { defaultValues: EMPTY_FORM_VALUES });
+  const watchedName = useWatch({ control: form.control, name: "auto_router_name" });
+  const watchedTeamId = useWatch({ control: form.control, name: "team_id" });
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
-  const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
-
-  const [routerType, setRouterType] = useState<RouterType>("recommended");
 
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
-    tiers: { SIMPLE: "", MEDIUM: "", COMPLEX: "", REASONING: "" },
+    tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
   });
 
@@ -41,9 +194,21 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [semanticMatchingEnabled, setSemanticMatchingEnabled] = useState<boolean>(false);
   const [embeddingModel, setEmbeddingModel] = useState<string | undefined>(undefined);
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
+  const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
+  const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
 
-  // Semantic router config (existing)
-  const [routerConfig, setRouterConfig] = useState<any>(null);
+  const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
+  // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
+  // (which expands it automatically, since there's nothing else to show them their config from). A
+  // preset re-collapses it after prefilling, offering the same "here's what got filled in, expand to
+  // change it" affordance. A caller can always toggle it manually at any point.
+  const [detailsExpanded, setDetailsExpanded] = useState<boolean>(false);
+
+  const [isRoutingTestVisible, setIsRoutingTestVisible] = useState<boolean>(false);
+  const [isTestModalVisible, setIsTestModalVisible] = useState<boolean>(false);
+  const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
+  const [connectionTestId, setConnectionTestId] = useState<number>(0);
+  const [testTargets, setTestTargets] = useState<AutoRouterTestTarget[]>([]);
 
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
@@ -53,325 +218,512 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
     fetchModelAccessGroups();
   }, [accessToken]);
 
-  useEffect(() => {
-    const loadModels = async () => {
-      try {
-        const uniqueModels = await fetchAvailableModels(accessToken);
-        setModelInfo(uniqueModels);
-      } catch (error) {
-        console.error("Error fetching model info for auto router:", error);
-      }
-    };
-    loadModels();
-  }, [accessToken]);
+  const {
+    data,
+    isLoading: groupsLoading,
+    isError: modelsError,
+    refetch: refetchModels,
+  } = useQuery({
+    queryKey: ["availableModels", "autoRouter", accessToken],
+    queryFn: () => fetchAvailableModels(accessToken),
+    enabled: Boolean(accessToken),
+  });
+  const { data: deployments, isLoading: deploymentsLoading } = useQuery({
+    queryKey: autoRouterListKey(userId ?? "", userRole),
+    queryFn: () => fetchAllModelDeployments(accessToken, userId ?? "", userRole),
+    enabled: Boolean(accessToken),
+  });
+  const modelsLoading = groupsLoading || deploymentsLoading;
+  const modelInfo = React.useMemo(() => data ?? [], [data]);
+  // react-query keeps the last successful list around when a later refetch fails, so isError alone
+  // can't tell "never loaded" apart from "loaded, then a background refetch errored" - only the
+  // former leaves us with nothing trustworthy to verify a preset's models against.
+  const modelsUnverifiable = modelsError && data === undefined;
 
   const isAdmin = all_admin_roles.includes(userRole);
 
-  const modelGroupOptions = Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
-    value: model_group,
-    label: model_group,
-  }));
+  const availability = React.useMemo(
+    () =>
+      buildModelAvailability(
+        modelInfo.map((m) => m.model_group),
+        deploymentRefsFromModelInfo(deployments ?? []),
+      ),
+    [modelInfo, deployments],
+  );
+  const groupsOnlyAvailability = React.useMemo(
+    () =>
+      buildModelAvailability(
+        modelInfo.map((m) => m.model_group),
+        [],
+      ),
+    [modelInfo],
+  );
 
-  const submitRecommendedRouter = (name: string) => {
-    const {
-      tiers,
-      classifier_type: classifierType,
-      classifier_llm_config: classifierLlmConfig,
-    } = complexityRouterConfig;
+  // A preset's models can only be trusted against a successfully loaded list. Selection and the
+  // greyed-out state derive from this one function, so a preset that cannot be selected can never
+  // have been applied: while loading we withhold selection rather than let a caller pick a preset
+  // whose models we cannot yet verify, and a failed fetch leaves every preset unverifiable. This
+  // makes the load-race (pick during loading, then discover a missing model) unrepresentable.
+  const presetAvailability = React.useCallback(
+    (preset: AutoRouterPreset): PresetAvailability => {
+      if (modelsLoading) return { kind: "loading" };
+      if (modelsUnverifiable) return { kind: "unverifiable" };
+      const missing = getMissingModelsInPreset(preset, availability);
+      if (missing.length > 0) return { kind: "missing_models", models: missing };
+      return {
+        kind: "available",
+        viaDeployments: getMissingModelsInPreset(preset, groupsOnlyAvailability).length > 0,
+      };
+    },
+    [modelsLoading, modelsUnverifiable, availability, groupsOnlyAvailability],
+  );
 
-    const filledTiers = Object.values(tiers).filter(Boolean);
-    if (filledTiers.length === 0) {
-      NotificationManager.fromBackend("Please select at least one model for a complexity tier");
+  const sortedPresetOptions = React.useMemo(
+    () =>
+      presets
+        .map((preset) => ({ preset, availability: presetAvailability(preset) }))
+        .sort((a, b) => Number(b.availability.kind === "available") - Number(a.availability.kind === "available")),
+    [presetAvailability],
+  );
+
+  const applyPrefill = (prefill: PresetPrefill) => {
+    setComplexityRouterConfig(prefill.complexityRouterConfig);
+    setCustomTechnicalKeywords(prefill.customTechnicalKeywords);
+    setKeywordTierRules(prefill.keywordTierRules);
+    setSemanticMatchingEnabled(prefill.semanticMatchingEnabled);
+    setEmbeddingModel(prefill.embeddingModel);
+    setMatchThreshold(prefill.matchThreshold);
+    setEscalationKeywords(prefill.escalationKeywords);
+  };
+
+  const handlePresetChange = (presetKey: string | undefined) => {
+    if (!presetKey || presetKey === "custom") {
+      setSelectedPreset(presetKey);
+      applyPrefill(buildEmptyPrefill());
+      setDetailsExpanded(true);
+      return;
+    }
+
+    const preset = getPresetByKey(presetKey);
+    // Refuse to apply a preset whose models are not verified available. The dropdown disables
+    // these options, so this is a guard against a stale click resolving after the list changed.
+    if (!preset) return;
+    const presetState = presetAvailability(preset);
+    if (presetState.kind !== "available") return;
+
+    setSelectedPreset(presetKey);
+    applyPrefill(buildPresetPrefill(preset.complexity_router_config, availability));
+    setDetailsExpanded(presetState.viaDeployments);
+  };
+
+  const referencedModelsParams = {
+    tiers: complexityRouterConfig.tiers,
+    classifierType: complexityRouterConfig.classifier_type,
+    classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
+    semanticMatchingEnabled,
+    embeddingModel,
+    defaultModel: complexityRouterConfig.default_model,
+  };
+
+  const submitBlockedReason = getSubmitBlockedReason(
+    complexityRouterConfig,
+    keywordTierRules,
+    referencedModelsParams,
+    groupsOnlyAvailability,
+  );
+
+  const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
+    tiers: complexityRouterConfig.tiers,
+    defaultModel: complexityRouterConfig.default_model,
+    tierLabels: complexityRouterConfig.tier_labels,
+    classifierType: complexityRouterConfig.classifier_type,
+    classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
+    classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
+    classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
+    classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
+    classifierFallback: complexityRouterConfig.classifier_fallback,
+    sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+    deploymentAffinity: complexityRouterConfig.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
+    customTechnicalKeywords,
+    keywordTierRules,
+    semanticMatchingEnabled,
+    embeddingModel,
+    matchThreshold,
+    escalationKeywords,
+    adaptive: complexityRouterConfig.adaptive ?? false,
+    adaptiveWeights: complexityRouterConfig.adaptive_weights ?? DEFAULT_ADAPTIVE_WEIGHTS,
+    tierDistancePenalty: complexityRouterConfig.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
+    adaptiveEligible: complexityRouterConfig.adaptive_eligible ?? "all",
+    returnRawModelName: complexityRouterConfig.return_raw_model_name ?? false,
+    tierBoundaries: complexityRouterConfig.tier_boundaries,
+    tokenThresholds: complexityRouterConfig.token_thresholds,
+    dimensionWeights: complexityRouterConfig.dimension_weights,
+  };
+
+  const submitRecommendedRouter = async (name: string) => {
+    const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
+
+    const missingTiersError = getMissingTiersError(tiers);
+    if (missingTiersError) {
+      setShowValidationErrors(true);
+      toast.fromError(missingTiersError);
+      return;
+    }
+
+    const tierLabelsError = getTierLabelsError(tierLabels);
+    if (tierLabelsError) {
+      setShowValidationErrors(true);
+      toast.fromError(tierLabelsError);
       return;
     }
 
     if (classifierType === "llm" && !classifierLlmConfig?.model) {
-      NotificationManager.fromBackend("Please select a classifier model, or switch back to Heuristic");
+      setShowValidationErrors(true);
+      toast.fromError("Please select a classifier model, or switch back to Heuristic");
+      return;
+    }
+
+    const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
+    if (keywordRulesError) {
+      setShowValidationErrors(true);
+      toast.fromError(keywordRulesError);
       return;
     }
 
     const semanticError = getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
     if (semanticError) {
-      NotificationManager.fromBackend(semanticError);
+      setShowValidationErrors(true);
+      toast.fromError(semanticError);
       return;
     }
 
-    const defaultModel = tiers.MEDIUM || tiers.SIMPLE || tiers.COMPLEX || tiers.REASONING;
+    // submitBlockedReason already disables the button for this, but the form's submit handler (wired to
+    // this same function) fires on Enter regardless of the button's disabled state - without this check,
+    // Enter in the name field could still create a router referencing a model that disappeared from
+    // availableModelSet after the tiers were filled in.
+    const referencedModelsError = getReferencedModelsError(referencedModelsParams, groupsOnlyAvailability);
+    if (referencedModelsError) {
+      setShowValidationErrors(true);
+      toast.fromError(referencedModelsError);
+      return;
+    }
 
-    form.setFieldsValue({
-      custom_llm_provider: "auto_router",
-      model: name,
-      api_key: "not_required_for_auto_router",
+    const defaultModel = resolveComplexityDefaultModel(tiers, complexityRouterConfig.default_model);
+    const validatedFields = requiresTeamScope
+      ? (["auto_router_name", "team_id"] as const)
+      : (["auto_router_name"] as const);
+
+    if (!(await form.trigger(validatedFields))) {
+      toast.fromError("Please fill in all required fields");
+      return;
+    }
+
+    // auto_router_default_model (-> litellm_params, read by the backend at init) and
+    // complexity_router_config.default_model (-> the pin marker read back on edit, see
+    // hydratePinnedDefaultModel in edit_auto_router_modal.tsx) must both come from the same
+    // `defaultModel`, or the two fields diverge and hydration's divergence check misfires.
+    const submitValues: AddAutoRouterValues = {
+      auto_router_name: name,
+      ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
       auto_router_default_model: defaultModel,
-    });
+      model_type: "complexity_router",
+      complexity_router_config: buildComplexityRouterConfig(complexityRouterConfigParams),
+      model_access_group: form.getValues("model_access_group"),
+    };
 
-    form
-      .validateFields(["auto_router_name"])
-      .then((values) => {
-        const complexityRouterConfigParams = {
-          tiers,
-          classifierType,
-          classifierLlmConfig,
-          customTechnicalKeywords,
-          keywordTierRules,
-          semanticMatchingEnabled,
-          embeddingModel,
-          matchThreshold,
-        };
-
-        const submitValues = {
-          ...values,
-          auto_router_name: name,
-          auto_router_default_model: defaultModel,
-          model_type: "complexity_router",
-          complexity_router_config: buildComplexityRouterConfig(complexityRouterConfigParams),
-          model_access_group: form.getFieldValue("model_access_group"),
-        };
-
-        handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
-      })
-      .catch((error) => {
-        console.error("Validation failed:", error);
-        NotificationManager.fromBackend("Please fill in all required fields");
-      });
+    handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
   };
 
-  const submitSemanticRouter = (name: string) => {
-    if (!form.getFieldValue("auto_router_default_model")) {
-      NotificationManager.fromBackend("Please select a Default Model");
-      return;
-    }
-
-    if (!routerConfig || !routerConfig.routes || routerConfig.routes.length === 0) {
-      NotificationManager.fromBackend("Please configure at least one route for the auto router");
-      return;
-    }
-
-    const invalidRoutes = routerConfig.routes.filter(
-      (route: any) => !route.name || !route.description || route.utterances.length === 0,
-    );
-    if (invalidRoutes.length > 0) {
-      NotificationManager.fromBackend(
-        "Please ensure all routes have a target model, description, and at least one utterance",
-      );
-      return;
-    }
-
-    form.setFieldsValue({
-      custom_llm_provider: "auto_router",
-      model: name,
-      api_key: "not_required_for_auto_router",
-    });
-
-    form
-      .validateFields()
-      .then((values) => {
-        const submitValues = {
-          ...values,
-          auto_router_name: name,
-          auto_router_config: routerConfig,
-          model_type: "semantic_router",
-        };
-        handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
-      })
-      .catch((error) => {
-        console.error("Validation failed:", error);
-        NotificationManager.fromBackend("Please fill in all required fields");
-      });
-  };
-
-  const handleAutoRouterSubmit = () => {
-    const name = form.getFieldValue("auto_router_name");
+  const handleAutoRouterSubmit = async () => {
+    const name = form.getValues("auto_router_name");
     if (!name) {
-      NotificationManager.fromBackend("Please enter an Auto Router Name");
+      setShowValidationErrors(true);
+      void form.trigger("auto_router_name");
+      toast.fromError("Please enter an Auto Router Name");
       return;
     }
 
-    if (routerType === "recommended") {
-      submitRecommendedRouter(name);
-    } else {
-      submitSemanticRouter(name);
+    await submitRecommendedRouter(name);
+  };
+
+  const handleTestConnection = () => {
+    const testTargetParams = {
+      tiers: complexityRouterConfig.tiers,
+      semanticMatchingEnabled,
+      embeddingModel,
+      defaultModel: resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model),
+    };
+    const targets = buildAutoRouterTestTargets(testTargetParams);
+
+    if (targets.length === 0) {
+      toast.fromError("Please select at least one model for a complexity tier");
+      return;
     }
+
+    setTestTargets(targets);
+    setConnectionTestId((id) => id + 1);
+    setIsTestingConnection(true);
+    setIsTestModalVisible(true);
   };
 
   return (
-    <>
-      <Title level={2}>Add Auto Router</Title>
-      <Text className="text-gray-600 mb-6">
-        Create an auto router that automatically selects the best model based on request complexity or semantic
-        matching. Use in place of a single default model.
-      </Text>
+    <TooltipProvider>
+      <Card>
+        <form onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
+          <FieldGroup>
+            <FormField
+              control={form.control}
+              name="auto_router_name"
+              label={labelWithHint("Auto Router Name", "Unique name for this auto router configuration")}
+            >
+              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />}
+            </FormField>
 
-      <Card className="mb-4">
-        <div className="mb-4">
-          <Text className="text-sm font-medium mb-2 block">Router Type</Text>
-          <Radio.Group value={routerType} onChange={(e) => setRouterType(e.target.value)} className="w-full">
-            <Space direction="vertical" className="w-full">
-              <Radio value="recommended" className="w-full">
-                <div className="flex items-center gap-2">
-                  <ThunderboltOutlined className="text-yellow-500" />
-                  <span className="font-medium">Auto-Router v2</span>
-                  <Badge
-                    count="Recommended"
-                    style={{ backgroundColor: "#52c41a", fontSize: "10px", padding: "0 6px" }}
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-2">Template</label>
+              <AntdSelect
+                value={selectedPreset}
+                onChange={handlePresetChange}
+                placeholder="Choose a template or select Custom to define your own"
+                className="w-full"
+                optionLabelProp="label"
+                data-testid="template-selector"
+              >
+                {sortedPresetOptions.map(({ preset, availability: presetState }) => {
+                  const disabledHint = presetDisabledHint(presetState);
+                  const isDisabled = disabledHint !== null;
+                  const hintClass = isPresetHintAlarming(presetState)
+                    ? "text-red-500 dark:text-red-400"
+                    : "text-muted-foreground";
+                  const matchedHint =
+                    presetState.kind === "available" && presetState.viaDeployments ? "Matches your deployments" : null;
+
+                  return (
+                    <AntdSelect.Option
+                      key={preset.key}
+                      value={preset.key}
+                      label={preset.label}
+                      disabled={isDisabled}
+                      title={disabledHint ?? preset.description}
+                    >
+                      <div>
+                        <div className="font-medium">{preset.label}</div>
+                        <div className="text-xs text-muted-foreground">{preset.description}</div>
+                        {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                        {matchedHint && (
+                          <div className="text-xs mt-1 text-green-600 dark:text-green-400">{matchedHint}</div>
+                        )}
+                      </div>
+                    </AntdSelect.Option>
+                  );
+                })}
+                <AntdSelect.Option value="custom" label="Custom Configuration">
+                  <div>
+                    <div className="font-medium">Custom Configuration</div>
+                    <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
+                  </div>
+                </AntdSelect.Option>
+              </AntdSelect>
+              {modelsUnverifiable && (
+                <div className="text-xs mt-1 text-red-500 dark:text-red-400">
+                  Could not load available models.{" "}
+                  <button type="button" className="underline" onClick={() => refetchModels()}>
+                    Retry
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {requiresTeamScope && (
+              <FormField
+                control={form.control}
+                name="team_id"
+                label={labelWithHint(
+                  "Select Team",
+                  "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
+                )}
+              >
+                {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
+              </FormField>
+            )}
+
+            <div className="border border-border rounded-lg">
+              <button
+                type="button"
+                onClick={() => setDetailsExpanded((expanded) => !expanded)}
+                className="w-full flex flex-col gap-1 px-4 py-3 text-left hover:bg-muted"
+                data-testid="detailed-configuration-toggle"
+              >
+                <span className="flex items-center gap-2 font-medium text-foreground">
+                  {detailsExpanded ? (
+                    <ChevronDown className="size-3 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="size-3 text-muted-foreground" />
+                  )}
+                  Detailed Configuration
+                </span>
+                {!detailsExpanded && (
+                  <span className="text-xs text-muted-foreground line-clamp-2">
+                    {tierConfigSummary(complexityRouterConfig.tiers)}
+                  </span>
+                )}
+              </button>
+              {detailsExpanded && (
+                <div className="px-4 pb-4">
+                  <ComplexityRouterConfig
+                    modelInfo={modelInfo}
+                    value={complexityRouterConfig}
+                    onChange={setComplexityRouterConfig}
+                    customTechnicalKeywords={customTechnicalKeywords}
+                    onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
+                    keywordTierRules={keywordTierRules}
+                    onKeywordTierRulesChange={setKeywordTierRules}
+                    semanticMatchingEnabled={semanticMatchingEnabled}
+                    onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
+                    embeddingModel={embeddingModel}
+                    onEmbeddingModelChange={setEmbeddingModel}
+                    matchThreshold={matchThreshold}
+                    onMatchThresholdChange={setMatchThreshold}
+                    escalationKeywords={escalationKeywords}
+                    onEscalationKeywordsChange={setEscalationKeywords}
+                    showValidationErrors={showValidationErrors}
                   />
                 </div>
-                <div className="text-xs text-gray-500 ml-6 mt-1">
-                  Routes by request complexity across four tiers, with optional keyword-to-tier overrides and semantic
-                  keyword matching. No training data needed.
-                </div>
-              </Radio>
-              <Radio value="semantic" className="w-full mt-2">
-                <div className="flex items-center gap-2">
-                  <BranchesOutlined className="text-blue-500" />
-                  <span className="font-medium">Semantic Router [to be deprecated]</span>
-                </div>
-                <div className="text-xs text-gray-500 ml-6 mt-1">
-                  Routes based on semantic similarity to example utterances. Requires an embedding model and example
-                  utterances.
-                </div>
-              </Radio>
-            </Space>
-          </Radio.Group>
-        </div>
-      </Card>
-
-      <Card>
-        <Form
-          form={form}
-          onFinish={handleAutoRouterSubmit}
-          labelCol={{ span: 10 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <Form.Item
-            rules={[{ required: true, message: "Auto router name is required" }]}
-            label="Auto Router Name"
-            name="auto_router_name"
-            tooltip="Unique name for this auto router configuration"
-            labelCol={{ span: 10 }}
-            labelAlign="left"
-          >
-            <TextInput placeholder="e.g., smart_router, auto_router_1" />
-          </Form.Item>
-
-          {routerType === "recommended" ? (
-            <div className="w-full mb-4">
-              <ComplexityRouterConfig
-                modelInfo={modelInfo}
-                value={complexityRouterConfig}
-                onChange={setComplexityRouterConfig}
-                customTechnicalKeywords={customTechnicalKeywords}
-                onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
-                keywordTierRules={keywordTierRules}
-                onKeywordTierRulesChange={setKeywordTierRules}
-                semanticMatchingEnabled={semanticMatchingEnabled}
-                onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
-                embeddingModel={embeddingModel}
-                onEmbeddingModelChange={setEmbeddingModel}
-                matchThreshold={matchThreshold}
-                onMatchThresholdChange={setMatchThreshold}
-              />
+              )}
             </div>
-          ) : (
-            <>
-              <div className="w-full mb-4">
-                <RouterConfigBuilder
-                  modelInfo={modelInfo}
-                  value={routerConfig}
-                  onChange={(config) => {
-                    setRouterConfig(config);
-                    form.setFieldValue("auto_router_config", config);
-                  }}
+
+            {isAdmin && (
+              <FormField
+                control={form.control}
+                name="model_access_group"
+                label={labelWithHint(
+                  "Model Access Group",
+                  "Use model access groups to control who can access this auto router",
+                )}
+              >
+                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                  <AccessGroupTagsCombobox
+                    id={id}
+                    value={value}
+                    onChange={onChange}
+                    options={modelAccessGroups}
+                    ariaInvalid={ariaInvalid}
+                    ariaDescribedBy={ariaDescribedBy}
+                  />
+                )}
+              </FormField>
+            )}
+
+            <div className="flex justify-between items-center">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <a
+                      href="https://github.com/BerriAI/litellm/issues"
+                      className="text-sm text-primary underline-offset-4 hover:underline"
+                    >
+                      Need Help?
+                    </a>
+                  }
                 />
+                <TooltipContent>Get help on our github</TooltipContent>
+              </Tooltip>
+              <div className="flex gap-2">
+                <BlockedReasonTooltip reason={submitBlockedReason}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    data-testid="auto-router-test-routing-btn"
+                    disabled={submitBlockedReason !== null}
+                    onClick={() => setIsRoutingTestVisible(true)}
+                  >
+                    Test Routing
+                  </Button>
+                </BlockedReasonTooltip>
+                <Button
+                  type="button"
+                  variant="outline"
+                  data-testid="auto-router-test-connect-btn"
+                  onClick={handleTestConnection}
+                  disabled={isTestingConnection}
+                >
+                  {isTestingConnection && <UiLoadingSpinner className="size-4" />}
+                  Test Connection
+                </Button>
+                <BlockedReasonTooltip reason={submitBlockedReason}>
+                  <Button
+                    type="button"
+                    disabled={submitBlockedReason !== null}
+                    onClick={() => {
+                      void handleAutoRouterSubmit();
+                    }}
+                  >
+                    Add Auto Router
+                  </Button>
+                </BlockedReasonTooltip>
               </div>
-
-              <Form.Item
-                rules={[{ required: true, message: "Default model is required" }]}
-                label="Default Model"
-                name="auto_router_default_model"
-                tooltip="Fallback model to use when auto routing logic cannot determine the best model"
-                labelCol={{ span: 10 }}
-                labelAlign="left"
-              >
-                <AntdSelect
-                  placeholder="Select a default model"
-                  options={modelGroupOptions}
-                  style={{ width: "100%" }}
-                  showSearch
-                />
-              </Form.Item>
-
-              <Form.Item
-                label="Embedding Model"
-                name="auto_router_embedding_model"
-                tooltip="Optional: embedding model to use for semantic routing decisions"
-                labelCol={{ span: 10 }}
-                labelAlign="left"
-              >
-                <AntdSelect
-                  placeholder="Select an embedding model (optional)"
-                  options={modelGroupOptions}
-                  style={{ width: "100%" }}
-                  showSearch
-                  allowClear
-                />
-              </Form.Item>
-            </>
-          )}
-
-          <div className="flex items-center my-4">
-            <div className="grow border-t border-gray-200"></div>
-            <span className="px-4 text-gray-500 text-sm">Additional Settings</span>
-            <div className="grow border-t border-gray-200"></div>
-          </div>
-
-          {/* Model Access Groups - Admin only */}
-          {isAdmin && (
-            <Form.Item
-              label="Model Access Group"
-              name="model_access_group"
-              className="mb-4"
-              tooltip="Use model access groups to control who can access this auto router"
-            >
-              <AntdSelect
-                mode="tags"
-                showSearch
-                placeholder="Select existing groups or type to create new ones"
-                optionFilterProp="children"
-                tokenSeparators={[","]}
-                options={modelAccessGroups.map((group) => ({
-                  value: group,
-                  label: group,
-                }))}
-                maxTagCount="responsive"
-                allowClear
-              />
-            </Form.Item>
-          )}
-
-          <div className="flex justify-between items-center mb-4">
-            <Tooltip title="Get help on our github">
-              <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
-            </Tooltip>
-            <div className="space-x-2">
-              {/* TODO: add back a Test Connection or JSON preview action here. Test Connection was removed
-                  because prepareModelAddRequest can't build a valid pre-save payload for an auto router
-                  (tiers are model-group references, not litellm_params); a JSON preview of the
-                  complexity_router_config would be a good alternative. */}
-              <Button
-                type="primary"
-                onClick={() => {
-                  handleAutoRouterSubmit();
-                }}
-              >
-                Add Auto Router
-              </Button>
             </div>
-          </div>
-        </Form>
+          </FieldGroup>
+        </form>
       </Card>
-    </>
+
+      <Modal
+        title="Test Routing"
+        open={isRoutingTestVisible}
+        destroyOnHidden
+        onCancel={() => setIsRoutingTestVisible(false)}
+        footer={[
+          <Button key="close" variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
+            Close
+          </Button>,
+        ]}
+        width={760}
+      >
+        {isRoutingTestVisible && (
+          <AutoRouterRoutingTest
+            accessToken={accessToken}
+            config={buildComplexityRouterConfig(complexityRouterConfigParams)}
+            defaultModel={resolveComplexityDefaultModel(
+              complexityRouterConfig.tiers,
+              complexityRouterConfig.default_model,
+            )}
+            routerName={watchedName}
+            teamId={requiresTeamScope ? watchedTeamId : undefined}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        title="Connection Test Results"
+        open={isTestModalVisible}
+        onCancel={() => {
+          setIsTestModalVisible(false);
+          setIsTestingConnection(false);
+        }}
+        footer={[
+          <Button
+            key="close"
+            variant="outline"
+            onClick={() => {
+              setIsTestModalVisible(false);
+              setIsTestingConnection(false);
+            }}
+          >
+            Close
+          </Button>,
+        ]}
+        width={700}
+      >
+        {isTestModalVisible && (
+          <AutoRouterConnectionTest
+            key={connectionTestId}
+            accessToken={accessToken}
+            targets={testTargets}
+            onTestComplete={() => setIsTestingConnection(false)}
+          />
+        )}
+      </Modal>
+    </TooltipProvider>
   );
 };
 

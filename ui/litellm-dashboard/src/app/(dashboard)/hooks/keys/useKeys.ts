@@ -1,4 +1,11 @@
-import { keepPreviousData, useQuery, UseQueryResult } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  UseQueryResult,
+  type InfiniteData,
+  type QueryKey,
+} from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
@@ -113,15 +120,36 @@ export const useKeys = (
   });
 };
 
+const infiniteKeyKeys = createQueryKeys("infiniteKeys");
+
+export const useInfiniteKeys = (pageSize: number, options: KeyListCallOptions = {}) => {
+  const { accessToken } = useAuthorized();
+
+  const infiniteKeyListOptions = {
+    queryKey: infiniteKeyKeys.list({ limit: pageSize, ...options }),
+    queryFn: async ({ pageParam }: { pageParam: number }) => {
+      if (!accessToken) throw new Error("Access token required");
+      return await keyListCall(accessToken, pageParam, pageSize, options);
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage: KeysResponse) =>
+      lastPage.current_page < lastPage.total_pages ? lastPage.current_page + 1 : undefined,
+    enabled: Boolean(accessToken),
+    staleTime: 30_000,
+  };
+
+  return useInfiniteQuery<KeysResponse, Error, InfiniteData<KeysResponse>, QueryKey, number>(infiniteKeyListOptions);
+};
+
 export const deletedKeyKeys = createQueryKeys("deletedKeys");
 export const useDeletedKeys = (
   page: number,
   pageSize: number,
   options: KeyListCallOptions = {},
-): UseQueryResult<KeysResponse> => {
+): UseQueryResult<DeletedKeysResponse> => {
   const { accessToken } = useAuthorized();
 
-  return useQuery<KeysResponse>({
+  return useQuery<DeletedKeysResponse>({
     queryKey: deletedKeyKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, { ...options, status: "deleted" }),
     enabled: Boolean(accessToken),

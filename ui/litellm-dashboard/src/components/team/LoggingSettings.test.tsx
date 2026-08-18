@@ -1,6 +1,5 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, fireEvent } from "../../../tests/test-utils";
 import LoggingSettings from "./LoggingSettings";
 
@@ -10,7 +9,6 @@ describe("LoggingSettings", () => {
   });
 
   it("passes a number to updateCallbackVar when user inputs a number in NumericalInput", async () => {
-    const user = userEvent.setup();
     const mockOnChange = vi.fn();
 
     // Create initial config with a callback that has number parameters (LangSmith has langsmith_sampling_rate)
@@ -109,6 +107,36 @@ describe("LoggingSettings", () => {
     expect(updatedConfig[0].callback_vars.langsmith_api_key).toBe("test-api-key");
     // The component preserves the original initial value since we're starting from initial state each time
     expect(updatedConfig[0].callback_vars.langsmith_sampling_rate).toBe("0.3"); // Preserves initial value
+  });
+
+  it("shows the bundled logo in the integration card header", () => {
+    const initialValue = [
+      {
+        callback_name: "langsmith",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    expect(screen.getByAltText("LangSmith logo")).toHaveAttribute("src", "/_next/static/media/langsmith.png");
+  });
+
+  it("shows a letter avatar in the card header for a callback without a bundled logo", () => {
+    const initialValue = [
+      {
+        callback_name: "custom_callback_api",
+        callback_type: "success",
+        callback_vars: {},
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    expect(screen.getByText("Custom Callback API Configuration")).toBeInTheDocument();
+    expect(screen.queryByAltText("Custom Callback API logo")).not.toBeInTheDocument();
+    expect(screen.getByText("C")).toBeInTheDocument();
   });
 
   it("correctly handles numerical input with decimal values", () => {

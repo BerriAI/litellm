@@ -378,8 +378,12 @@ async def test_adaptive_router_flusher_loop_flushes_each_router(monkeypatch):
     fake_ar.queue.flush_state_to_db = AsyncMock()
     fake_ar.queue.flush_session_to_db = AsyncMock()
 
+    from litellm.types.router import TaggedPreRoutingStrategy
+
     fake_router = MagicMock()
-    fake_router.adaptive_routers = {"alpha": fake_ar}
+    fake_router.adaptive_routers = {
+        "alpha": [TaggedPreRoutingStrategy(tags=(), strategy=fake_ar)]
+    }
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())

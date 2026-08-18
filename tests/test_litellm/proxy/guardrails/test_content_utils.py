@@ -524,3 +524,42 @@ def test_apply_redacted_messages_back_skips_input_when_not_string():
     data = {"input": [{"type": "text", "text": "leak"}]}
     apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
     assert data["input"] == [{"type": "text", "text": "leak"}]
+
+
+# -------------------------------------------------------------------
+# LIT-4302: custom_tool_call_output walking
+# -------------------------------------------------------------------
+
+def test_iter_message_text_walks_custom_tool_call_output():
+    """custom_tool_call_output items should yield their output text."""
+    data = {
+        "input": [
+            {"type": "custom_tool_call_output", "output": "tool-secret"},
+        ]
+    }
+    from litellm.proxy.guardrails._content_utils import iter_message_text
+    texts = list(iter_message_text(data))
+    assert "tool-secret" in texts
+
+
+def test_walk_user_text_redacts_custom_tool_call_output():
+    """walk_user_text should rewrite text inside custom_tool_call_output."""
+    data = {
+        "input": [
+            {"type": "custom_tool_call_output", "output": "PII-data"},
+        ]
+    }
+    count = walk_user_text(data, lambda t: t.replace("PII-data", "[MASKED]"))
+    assert count >= 1
+    assert data["input"][0]["output"] == "[MASKED]"
+
+
+def test_build_inspection_messages_custom_tool_call_output():
+    """build_inspection_messages should include custom_tool_call_output text."""
+    data = {
+        "input": [
+            {"type": "custom_tool_call_output", "output": "custom-tool-leak"},
+        ]
+    }
+    msgs = build_inspection_messages(data)
+    assert any("custom-tool-leak" in m["content"] for m in msgs)

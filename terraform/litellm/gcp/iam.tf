@@ -79,3 +79,29 @@ resource "google_secret_manager_secret_iam_member" "otel_headers" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.runtime.email}"
 }
+
+# Billing-metrics mTLS accessors — only created when request metering is
+# enabled and the matching PEM was supplied.
+resource "google_secret_manager_secret_iam_member" "billing_metrics_client_cert" {
+  count = local.billing_metrics_client_cert_enabled ? 1 : 0
+
+  secret_id = google_secret_manager_secret.billing_metrics_client_cert[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "billing_metrics_client_key" {
+  count = local.billing_metrics_client_key_enabled ? 1 : 0
+
+  secret_id = google_secret_manager_secret.billing_metrics_client_key[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "billing_metrics_ca_cert" {
+  count = local.billing_metrics_ca_cert_enabled ? 1 : 0
+
+  secret_id = google_secret_manager_secret.billing_metrics_ca_cert[0].id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}

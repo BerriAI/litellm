@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import Any, Union
+from typing import Any, Final
 
 from fastapi import Request
 from pydantic import BaseModel, Field
 
 from litellm._logging import verbose_proxy_logger
 
-TrustedProxyNetwork = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+TrustedProxyNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
 class NetworkContext(BaseModel):
@@ -40,7 +40,7 @@ def normalize_cidr_ranges(configured_ranges: Any, *, setting_name: str = "truste
 def parse_trusted_proxy_ranges(
     configured_ranges: Any, *, setting_name: str = "trusted_proxy_cidrs"
 ) -> list[TrustedProxyNetwork]:
-    networks: list[TrustedProxyNetwork] = []
+    networks: Final[list[TrustedProxyNetwork]] = []
     for cidr in normalize_cidr_ranges(configured_ranges, setting_name=setting_name):
         try:
             networks.append(ipaddress.ip_network(cidr, strict=False))
@@ -53,7 +53,7 @@ def ip_in_networks(client_ip: str | None, networks: list[TrustedProxyNetwork]) -
     if not client_ip or not networks:
         return False
     try:
-        addr = ipaddress.ip_address(client_ip.strip())
+        addr: Final = ipaddress.ip_address(client_ip.strip())
     except ValueError:
         return False
     return any(addr in network for network in networks)
@@ -72,12 +72,12 @@ def resolve_client_ip(request: Request, config: TrustedProxyConfig) -> tuple[str
     peer is itself a configured trusted proxy. Walks the header right-to-left and
     returns the first hop that is not a trusted proxy, so a forged left-most entry
     cannot spoof the client."""
-    peer = request.client.host if request.client else None
-    networks = parse_trusted_proxy_ranges(config.trusted_proxy_cidrs)
+    peer: Final = request.client.host if request.client else None
+    networks: Final = parse_trusted_proxy_ranges(config.trusted_proxy_cidrs)
     if not config.use_forwarded_for or not ip_in_networks(peer, networks):
         return peer, False
-    forwarded = request.headers.get("x-forwarded-for", "")
-    hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+    forwarded: Final = request.headers.get("x-forwarded-for", "")
+    hops: Final = [h.strip() for h in forwarded.split(",") if h.strip()]
     for hop in reversed(hops):
         if _is_valid_ip(hop) and not ip_in_networks(hop, networks):
             return hop, True

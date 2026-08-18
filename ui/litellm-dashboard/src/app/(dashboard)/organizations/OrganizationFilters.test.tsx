@@ -7,8 +7,6 @@ describe("OrganizationFilters", () => {
   const defaultFilters: FilterState = {
     org_id: "",
     org_alias: "",
-    sort_by: "",
-    sort_order: "asc",
   };
 
   it("should render", () => {
@@ -108,7 +106,7 @@ describe("OrganizationFilters", () => {
       org_alias: "test org",
     };
 
-    render(
+    const { container } = render(
       <OrganizationFilters
         filters={filtersWithActive}
         showFilters={false}
@@ -118,8 +116,7 @@ describe("OrganizationFilters", () => {
       />,
     );
 
-    const filtersButton = screen.getByRole("button", { name: /^filters$/i });
-    const badgeWrapper = filtersButton.closest(".ant-badge");
-    expect(badgeWrapper).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^filters$/i })).toBeInTheDocument();
+    expect(container.querySelector("sup")).toBeInTheDocument();
   });
 });

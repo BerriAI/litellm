@@ -8,6 +8,10 @@ export type CacheSection = "connection" | "cluster" | "sentinel" | "semantic" | 
 
 export type CacheFieldRule = NonNullable<FormItemProps["rules"]>[number];
 
+// Marker the backend returns for a configured credential and maps back to the
+// stored secret on save, so the plaintext never round-trips through the form.
+export const REDACTED_VALUE = "***REDACTED***";
+
 export interface CacheField {
   readonly name: string;
   readonly label: string;
@@ -17,6 +21,9 @@ export interface CacheField {
   readonly redisType: RedisType | null;
   readonly defaultValue?: string | number | boolean;
   readonly rules?: CacheFieldRule[];
+  // Credential field: never prefilled into the form, and dropped from the save
+  // payload when left untouched so the redacted marker is never persisted.
+  readonly secret?: boolean;
 }
 
 export const REDIS_TYPES: readonly RedisType[] = ["node", "cluster", "sentinel", "semantic"];
@@ -93,6 +100,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     helpText:
       "Full Redis/Valkey connection URL (e.g. redis://:password@host:6379/1). When set, it takes precedence over Host, Port, Password, and Database Index.",
     redisType: null,
+    secret: true,
   },
   {
     name: "host",
@@ -128,6 +136,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "connection",
     helpText: "Redis server password",
     redisType: null,
+    secret: true,
   },
   {
     name: "username",
@@ -170,6 +179,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "sentinel",
     helpText: "Password for Redis Sentinel authentication",
     redisType: "sentinel",
+    secret: true,
   },
   {
     name: "similarity_threshold",

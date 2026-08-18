@@ -53,7 +53,72 @@ describe("GuardrailTestPanel", () => {
 
     // Verify onSubmit was called with the correct text
     await waitFor(() => {
-      expect(mockOnSubmit).toHaveBeenCalledWith("Test input text");
+      expect(mockOnSubmit).toHaveBeenCalledWith("Test input text", null);
     });
+  });
+
+  it("should submit parsed metadata when a JSON object is provided", async () => {
+    /**
+     * Tests that a JSON object typed into the Metadata field is parsed and
+     * passed to onSubmit so it reaches the apply_guardrail request body.
+     */
+    const user = userEvent.setup();
+
+    render(
+      <GuardrailTestPanel
+        guardrailNames={mockGuardrailNames}
+        onSubmit={mockOnSubmit}
+        isLoading={false}
+        results={null}
+        errors={null}
+        onClose={mockOnClose}
+      />,
+    );
+
+    const textarea = screen.getByPlaceholderText("Enter text to test with guardrails...");
+    await user.type(textarea, "Test input text");
+
+    const metadataField = screen.getByPlaceholderText('{"forbidden_topics": ["tax", "finance"]}');
+    await user.click(metadataField);
+    await user.paste('{"forbidden_topics": ["tax"]}');
+
+    await user.click(screen.getByRole("button", { name: /Test 2 guardrails/ }));
+
+    await waitFor(() => {
+      expect(mockOnSubmit).toHaveBeenCalledWith("Test input text", { forbidden_topics: ["tax"] });
+    });
+  });
+
+  it("should block submission and show an error for invalid metadata JSON", async () => {
+    /**
+     * Tests that invalid JSON in the Metadata field prevents submission
+     * instead of silently sending a request without metadata.
+     */
+    const user = userEvent.setup();
+
+    render(
+      <GuardrailTestPanel
+        guardrailNames={mockGuardrailNames}
+        onSubmit={mockOnSubmit}
+        isLoading={false}
+        results={null}
+        errors={null}
+        onClose={mockOnClose}
+      />,
+    );
+
+    const textarea = screen.getByPlaceholderText("Enter text to test with guardrails...");
+    await user.type(textarea, "Test input text");
+
+    const metadataField = screen.getByPlaceholderText('{"forbidden_topics": ["tax", "finance"]}');
+    await user.click(metadataField);
+    await user.paste("{not json");
+
+    await user.click(screen.getByRole("button", { name: /Test 2 guardrails/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Invalid JSON")).toBeInTheDocument();
+    });
+    expect(mockOnSubmit).not.toHaveBeenCalled();
   });
 });

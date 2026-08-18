@@ -1,29 +1,10 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import AddMarginForm from "./add_margin_form";
 import { MarginConfig } from "./types";
-
-vi.mock("@/components/provider_info_helpers", () => ({
-  Providers: {
-    OpenAI: "OpenAI",
-    Anthropic: "Anthropic",
-  },
-  provider_map: {
-    OpenAI: "openai",
-    Anthropic: "anthropic",
-  },
-  providerLogoMap: {
-    OpenAI: "https://example.com/openai.png",
-    Anthropic: "https://example.com/anthropic.png",
-  },
-}));
-
-vi.mock("./provider_display_helpers", () => ({
-  handleImageError: vi.fn(),
-}));
 
 const DEFAULT_PROPS = {
   marginConfig: {} as MarginConfig,
@@ -86,7 +67,7 @@ describe("AddMarginForm", () => {
 
   it("should enable the submit button when provider and percentage value are both provided", () => {
     renderWithProviders(<AddMarginForm {...DEFAULT_PROPS} selectedProvider="OpenAI" percentageValue="10" />);
-    expect(screen.getByRole("button", { name: /add provider margin/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /add provider margin/i })).toBeEnabled();
   });
 
   it("should disable the submit button in fixed mode when no fixed amount is provided", () => {
@@ -100,7 +81,7 @@ describe("AddMarginForm", () => {
     renderWithProviders(
       <AddMarginForm {...DEFAULT_PROPS} selectedProvider="OpenAI" marginType="fixed" fixedAmountValue="0.001" />,
     );
-    expect(screen.getByRole("button", { name: /add provider margin/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /add provider margin/i })).toBeEnabled();
   });
 
   it("should call onAddProvider when the enabled submit button is clicked", async () => {
@@ -121,5 +102,17 @@ describe("AddMarginForm", () => {
 
     await user.click(screen.getByText("Fixed Amount"));
     expect(onMarginTypeChange).toHaveBeenCalledWith("fixed");
+  });
+
+  it("should call onProviderChange with the provider key when a provider is picked", async () => {
+    const onProviderChange = vi.fn();
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderWithProviders(<AddMarginForm {...DEFAULT_PROPS} onProviderChange={onProviderChange} />);
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByText("Anthropic"));
+
+    expect(onProviderChange.mock.calls).toHaveLength(1);
+    expect(onProviderChange.mock.calls[0]?.[0]).toBe("Anthropic");
   });
 });

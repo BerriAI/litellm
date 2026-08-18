@@ -1,11 +1,7 @@
-import React, { useMemo, useState, type UIEvent } from "react";
-import { Select, Typography } from "antd";
-import { LoadingOutlined } from "@ant-design/icons";
-import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import React, { useMemo, useState } from "react";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "../key_team_helpers/key_list";
-
-const { Text } = Typography;
 
 interface TeamDropdownProps {
   value?: string;
@@ -16,10 +12,8 @@ interface TeamDropdownProps {
   /** Filter teams by organization. */
   organizationId?: string | null;
   pageSize?: number;
+  id?: string;
 }
-
-const SCROLL_THRESHOLD = 0.8;
-const DEBOUNCE_MS = 300;
 
 const TeamDropdown: React.FC<TeamDropdownProps> = ({
   value,
@@ -28,15 +22,13 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   disabled,
   organizationId,
   pageSize = 20,
+  id,
 }) => {
-  const [searchInput, setSearchInput] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
-    wait: DEBOUNCE_MS,
-  });
+  const [search, setSearch] = useState("");
 
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
     pageSize,
-    debouncedSearch || undefined,
+    search || undefined,
     organizationId,
   );
 
@@ -54,59 +46,35 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
     return result;
   }, [data]);
 
-  const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
-    const target = e.currentTarget;
-    const scrollRatio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
-    if (scrollRatio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
-      fetchNextPage();
-    }
-  };
-
-  const handleSearch = (val: string) => {
-    setSearchInput(val);
-    setDebouncedSearch(val);
-  };
-
-  const handleChange = (teamId: string | undefined) => {
-    onChange?.(teamId ?? "");
+  const handleChange = (teamId: string) => {
+    onChange?.(teamId);
     if (onTeamSelect) {
-      const team = teamId ? teams.find((t) => t.team_id === teamId) ?? null : null;
-      onTeamSelect(team);
+      onTeamSelect(teamId ? teams.find((t) => t.team_id === teamId) ?? null : null);
     }
   };
 
   return (
-    <Select
-      showSearch
-      placeholder="Search or select a team"
-      value={value || undefined}
-      onChange={handleChange}
-      disabled={disabled}
-      allowClear
-      filterOption={false}
-      onSearch={handleSearch}
-      searchValue={searchInput}
-      onPopupScroll={handlePopupScroll}
-      loading={isLoading}
-      notFoundContent={isLoading ? <LoadingOutlined spin /> : "No teams found"}
-      data-testid="team-dropdown"
-      popupRender={(menu) => (
-        <>
-          {menu}
-          {isFetchingNextPage && (
-            <div style={{ textAlign: "center", padding: 8 }}>
-              <LoadingOutlined spin />
-            </div>
-          )}
-        </>
-      )}
-    >
-      {teams.map((team) => (
-        <Select.Option key={team.team_id} value={team.team_id}>
-          <span className="font-medium">{team.team_alias}</span> <Text type="secondary">({team.team_id})</Text>
-        </Select.Option>
-      ))}
-    </Select>
+    <div data-testid="team-dropdown">
+      <PaginatedSearchSelect
+        options={teams.map((team) => ({
+          label: team.team_alias || team.team_id,
+          value: team.team_id,
+          sublabel: team.team_id,
+        }))}
+        value={value || undefined}
+        onValueChange={handleChange}
+        onSearchChange={setSearch}
+        onLoadMore={fetchNextPage}
+        hasNextPage={hasNextPage}
+        isLoading={isLoading}
+        isFetchingNextPage={isFetchingNextPage}
+        placeholder="Search or select a team"
+        emptyText="No teams found"
+        loadingText="Loading teams…"
+        disabled={disabled}
+        inputId={id}
+      />
+    </div>
   );
 };
 

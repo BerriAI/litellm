@@ -1,59 +1,59 @@
+"use client";
+
+import { OnChangeFn, PaginationState } from "@tanstack/react-table";
+import { KeyRound } from "lucide-react";
+import { useMemo } from "react";
+
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
-import { Empty, Table, Tooltip } from "antd";
-import type { ColumnsType } from "antd/es/table";
-import type { SpinProps } from "antd";
-import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
-import { DateCell } from "@/components/shared/table_cells";
+import { DataTable } from "@/components/shared/DataTable";
+
+import { getProjectKeysTableColumns } from "./ProjectKeysTableColumns";
 
 interface ProjectKeysTableProps {
   keys: KeyResponse[];
-  loading?: boolean | SpinProps;
+  totalCount: number;
+  isLoading: boolean;
+  pagination: PaginationState;
+  onPaginationChange: OnChangeFn<PaginationState>;
 }
 
-const columns: ColumnsType<KeyResponse> = [
-  {
-    title: "Key Name",
-    dataIndex: "key_alias",
-    key: "key_alias",
-    render: (alias: string | null) => alias || "—",
-  },
-  {
-    title: "Owner",
-    key: "owner",
-    render: (_: unknown, record: KeyResponse) => {
-      const email = record.user?.user_email ?? record.user_id ?? null;
-      if (!email) return "—";
-      return (
-        <Tooltip title={email}>
-          <DefaultProxyAdminTag userId={email} />
-        </Tooltip>
-      );
-    },
-  },
-  {
-    title: "Created",
-    dataIndex: "created_at",
-    key: "created_at",
-    render: (date: string) => <DateCell value={date} precision="date" />,
-  },
-  {
-    title: "Last Active",
-    dataIndex: "last_active",
-    key: "last_active",
-    render: (date: string | null) => <DateCell value={date} precision="date" fallback="Never" />,
-  },
-];
+const PAGE_SIZE_OPTIONS = [5, 10, 25];
 
-export function ProjectKeysTable({ keys, loading }: ProjectKeysTableProps) {
+function EmptyState() {
   return (
-    <Table
+    <div className="flex flex-col items-center gap-1 py-6">
+      <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
+        <KeyRound className="size-5 text-muted-foreground" />
+      </div>
+      <div className="text-sm font-medium text-foreground">No keys found</div>
+      <div className="text-sm text-muted-foreground">Keys created in this project will show up here.</div>
+    </div>
+  );
+}
+
+export function ProjectKeysTable({
+  keys,
+  totalCount,
+  isLoading,
+  pagination,
+  onPaginationChange,
+}: ProjectKeysTableProps) {
+  const columns = useMemo(() => getProjectKeysTableColumns(), []);
+
+  return (
+    <DataTable
+      data={keys}
       columns={columns}
-      dataSource={keys}
-      rowKey="token"
-      loading={loading}
-      pagination={false}
-      size="small"
-      locale={{ emptyText: <Empty description="No keys found" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+      getRowId={(key, index) => key.token || String(index)}
+      paginationMode="server"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
+      rowCount={totalCount}
+      pageSizeOptions={PAGE_SIZE_OPTIONS}
+      isLoading={isLoading}
+      loadingMessage="Loading keys…"
+      noDataMessage={<EmptyState />}
+      size="compact"
     />
   );
 }
