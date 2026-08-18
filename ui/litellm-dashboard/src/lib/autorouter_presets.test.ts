@@ -20,7 +20,7 @@ const groupsOnly = (models: Iterable<string>) => buildModelAvailability(models, 
 describe("autorouter_presets", () => {
   it("loads exactly the bundled presets", () => {
     const presets = getAllPresets();
-    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Lite", "OpenAI Family"]);
+    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Ultra Lite"]);
     // Every preset carries all four fields the UI relies on; a JSON typo dropping one fails here.
     for (const p of presets) {
       expect(p).toMatchObject({ key: expect.any(String), label: expect.any(String), description: expect.any(String) });
@@ -72,6 +72,18 @@ describe("autorouter_presets", () => {
     expect(config.classifier_context_per_turn_chars).toBeUndefined();
     expect(getRequiredModelsInPreset(lite)).toEqual(
       new Set(["deepseek-v4-flash", "muse-spark-1.2", "kimi-k3", "claude-opus-5"]),
+    );
+  });
+
+  it("pins the ultra_lite preset to the heuristic scorer with no classifier call", () => {
+    const ultraLite = getPresetByKey("ultra_lite")!;
+    const config = ultraLite.complexity_router_config;
+    expect(config.classifier_type).toBe("heuristic");
+    expect(config.classifier_llm_config).toBeUndefined();
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_fallback).toBeUndefined();
+    expect(getRequiredModelsInPreset(ultraLite)).toEqual(
+      new Set(["deepseek-v4-flash", "minimax-m3", "deepseek-v4-pro", "kimi-k3"]),
     );
   });
 

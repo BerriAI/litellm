@@ -52,5 +52,21 @@
       "session_affinity": false,
       "deployment_affinity": true
     }
+  },
+  "ultra_lite": {
+    "label": "Ultra Lite",
+    "description": "Cost-optimized routing across providers with no classifier call: DeepSeek V4 Flash for simple queries, MiniMax M3 for medium, DeepSeek V4 Pro for complex, Kimi K3 for reasoning-heavy requests. The heuristic scorer assigns tiers locally, so routing adds no per-request classification spend or latency.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["deepseek-v4-flash"],
+        "MEDIUM": ["minimax-m3"],
+        "COMPLEX": ["deepseek-v4-pro"],
+        "REASONING": ["kimi-k3"]
+      },
+      "classifier_type": "heuristic",
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false,
+      "deployment_affinity": true
+    }
   }
 }
