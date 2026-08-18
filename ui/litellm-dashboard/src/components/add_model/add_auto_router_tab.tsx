@@ -303,6 +303,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tierDistancePenalty: complexityRouterConfig.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
     adaptiveEligible: complexityRouterConfig.adaptive_eligible ?? "all",
     returnRawModelName: complexityRouterConfig.return_raw_model_name ?? false,
+    tierBoundaries: complexityRouterConfig.tier_boundaries,
+    tokenThresholds: complexityRouterConfig.token_thresholds,
+    dimensionWeights: complexityRouterConfig.dimension_weights,
   };
 
   const submitRecommendedRouter = (name: string) => {

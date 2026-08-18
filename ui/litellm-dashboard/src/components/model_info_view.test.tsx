@@ -6,6 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 import NotificationsManager from "./molecules/notifications_manager";
 import * as networking from "./networking";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../tests/mocks/complexityScorerDefaults"),
+);
 
 vi.mock("../../utils/dataUtils", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),

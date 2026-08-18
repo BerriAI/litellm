@@ -8,6 +8,9 @@ import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
+import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+
+export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
 const { Text } = Typography;
 
@@ -83,6 +86,24 @@ export interface AdaptiveRouterWeights {
 
 export const DEFAULT_ADAPTIVE_WEIGHTS: AdaptiveRouterWeights = { quality: 0.3, cost: 0.7 };
 
+export type HeuristicScoringRole = "decides" | "fallback_only" | "never";
+
+/**
+ * Whether the heuristic scorer runs on this router at all, which is what gates its knobs. An LLM
+ * classifier still falls back to the scorer unless the fallback is the default model, so the gate cannot be
+ * a plain classifier_type check.
+ */
+export const heuristicScoringRoleFor = (
+  classifierType: ClassifierType,
+  classifierFallback: ClassifierFallback | undefined,
+): HeuristicScoringRole => {
+  if (classifierType === "heuristic") return "decides";
+  return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
+};
+
+export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
+  heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+
 export type AdaptiveEligible = "all" | "classified_tier";
 
 export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
@@ -105,6 +126,13 @@ export interface ComplexityRouterConfigValue {
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  /**
+   * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
+   * payload so the router tracks the backend defaults rather than freezing today's numbers.
+   */
+  tier_boundaries?: TierBoundaries;
+  token_thresholds?: TokenThresholds;
+  dimension_weights?: DimensionWeights;
 }
 
 interface ComplexityRouterConfigProps {

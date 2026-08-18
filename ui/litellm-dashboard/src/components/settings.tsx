@@ -296,6 +296,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     daily_reports: "Weekly/Monthly Spend Reports",
     outage_alerts: "Outage Alerts",
     region_outage_alerts: "Region Outage Alerts",
+    model_deprecation_warnings: "Model Deprecation Warnings",
   };
 
   useEffect(() => {

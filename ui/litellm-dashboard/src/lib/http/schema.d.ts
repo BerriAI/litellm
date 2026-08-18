@@ -8036,6 +8036,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/info": {
         parameters: {
             query?: never;
@@ -11342,6 +11384,26 @@ export interface paths {
          *     fields are automatically appended to the agent's credential_fields.
          */
         get: operations["get_agent_fields_public_agents_fields_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/complexity_router/scorer_defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Complexity Scorer Defaults
+         * @description Return the complexity router's shipped heuristic scorer defaults, for the dashboard to prefill with.
+         */
+        get: operations["get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -17656,6 +17718,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_v1_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/model/info": {
         parameters: {
             query?: never;
@@ -21522,7 +21626,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -23586,6 +23690,27 @@ export interface components {
              * @description Timezone for date handling
              */
             timezone?: string | null;
+        };
+        /**
+         * ComplexityScorerDefaults
+         * @description The complexity router's shipped heuristic scorer defaults.
+         *
+         *     The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so
+         *     a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+         */
+        ComplexityScorerDefaults: {
+            /** Dimension Weights */
+            dimension_weights: {
+                [key: string]: number;
+            };
+            /** Tier Boundaries */
+            tier_boundaries: {
+                [key: string]: number;
+            };
+            /** Token Thresholds */
+            token_thresholds: {
+                [key: string]: number;
+            };
         };
         /**
          * ComplexityTier
@@ -26108,8 +26233,11 @@ export interface components {
              * @description Keywords/phrases that trigger this rule (lexical or semantic match)
              */
             keywords: string[];
-            /** @description Tier to route to when this rule matches */
-            tier: components["schemas"]["ComplexityTier"];
+            /**
+             * Tier
+             * @description Tier to route to when this rule matches: a built-in tier name, or with tier_definitions set, one of the defined tier names
+             */
+            tier: string;
         };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
@@ -29081,6 +29209,70 @@ export interface components {
                 [key: string]: string | string[];
             };
         };
+        /** ModelDeprecationInfo */
+        ModelDeprecationInfo: {
+            /**
+             * Days Until Deprecation
+             * @description Days remaining until the deprecation date. Negative if the model is already deprecated.
+             */
+            days_until_deprecation: number;
+            /**
+             * Deprecation Date
+             * Format: date
+             * @description The date (UTC) when the model becomes deprecated.
+             */
+            deprecation_date: string;
+            /**
+             * Litellm Model
+             * @description The underlying litellm model string the deprecation date is sourced from.
+             */
+            litellm_model?: string | null;
+            /**
+             * Litellm Provider
+             * @description The provider this model belongs to.
+             */
+            litellm_provider?: string | null;
+            /**
+             * Model Name
+             * @description The public name of the model on the proxy (model_group).
+             */
+            model_name: string;
+            /**
+             * Status
+             * @description 'deprecated' if the date has passed, 'imminent' if it falls within warn_within_days, 'upcoming' otherwise.
+             * @enum {string}
+             */
+            status: "upcoming" | "imminent" | "deprecated";
+        };
+        /** ModelDeprecationResponse */
+        ModelDeprecationResponse: {
+            /**
+             * Checked At
+             * Format: date-time
+             * @description UTC timestamp when the deprecation snapshot was generated.
+             */
+            checked_at: string;
+            /**
+             * Deprecated
+             * @description Models whose deprecation date has already passed.
+             */
+            deprecated?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Imminent
+             * @description Models whose deprecation date is within warn_within_days from today and require immediate migration planning.
+             */
+            imminent?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Upcoming
+             * @description Models with a future deprecation date outside the warn window.
+             */
+            upcoming?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Warn Within Days
+             * @description The window (in days) used to bucket 'imminent' models.
+             */
+            warn_within_days: number;
+        };
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
@@ -32051,6 +32243,11 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Prompt
+             * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
+             */
+            classification_prompt?: string | null;
+            /**
              * Classifier Context Include Assistant Turns
              * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
              * @default false
@@ -32123,6 +32320,11 @@ export interface components {
              */
             escalation_keywords?: string[] | null;
             /**
+             * Fallback Tier
+             * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
+             */
+            fallback_tier?: string | null;
+            /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
              */
@@ -32189,6 +32391,11 @@ export interface components {
             tier_boundaries?: {
                 [key: string]: number;
             };
+            /**
+             * Tier Definitions
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             */
+            tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
              * Tier Distance Penalty
              * @description Score penalty per tier-step away from the classified tier when adaptive=True
@@ -33112,7 +33319,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -33940,6 +34147,22 @@ export interface components {
             litellm_params: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * TierDefinition
+         * @description An operator-defined tier: the name the LLM classifier must return and its rubric description.
+         */
+        TierDefinition: {
+            /**
+             * Description
+             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which inherits the built-in criteria when omitted
+             */
+            description?: string | null;
+            /**
+             * Name
+             * @description Tier name; becomes a value the LLM classifier can return and a key of `tiers`
+             */
+            name: string;
         };
         /**
          * TokenCountDetailsResponse
@@ -46820,6 +47043,37 @@ export interface operations {
             };
         };
     };
+    model_deprecations_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     model_info_v1_model_info_get: {
         parameters: {
             query?: {
@@ -50556,6 +50810,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentCreateInfo"][];
+                };
+            };
+        };
+    };
+    get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplexityScorerDefaults"];
                 };
             };
         };
@@ -58637,6 +58911,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    model_deprecations_v1_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
