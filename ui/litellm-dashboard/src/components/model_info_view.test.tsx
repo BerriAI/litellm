@@ -391,13 +391,15 @@ describe("ModelInfoView", () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
     await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.clear(screen.getByPlaceholderText("Enter input cost"));
-    await user.type(screen.getByPlaceholderText("Enter input cost"), "5");
+    const costInput = screen.getByPlaceholderText("Enter input cost") as HTMLInputElement;
+    await user.clear(costInput);
+    await user.type(costInput, "5");
 
     await user.click(screen.getByRole("tab", { name: /raw json/i }));
     await user.click(screen.getByRole("tab", { name: /overview/i }));
 
-    expect(Number((screen.getByPlaceholderText("Enter input cost") as HTMLInputElement).value)).toBe(5);
+    expect(screen.getByPlaceholderText("Enter input cost")).toBe(costInput);
+    expect(Number(costInput.value)).toBe(5);
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
