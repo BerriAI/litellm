@@ -296,7 +296,7 @@ class TestHostedVLLMEmbeddingTransformation:
             {"truncate": "END", "input_type": "query"},
         ],
     )
-    def test_provider_params_are_sent_at_the_top_level_of_the_request(self, provider_params):
+    def test_provider_params_are_sent_at_the_top_level_of_the_request(self, provider_params: dict[str, object]) -> None:
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         client = HTTPHandler()
