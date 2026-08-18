@@ -2,7 +2,7 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { convertPromptFileToJson, createPromptCall } from "@/components/networking";
 
 import AddPromptForm from "./add_prompt_form";
@@ -12,14 +12,14 @@ vi.mock("@/components/networking", () => ({
   createPromptCall: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
+vi.mock("@/lib/toast", () => ({
+  toast: { success: vi.fn(), fromError: vi.fn() },
 }));
 
 const mockConvert = vi.mocked(convertPromptFileToJson);
 const mockCreate = vi.mocked(createPromptCall);
-const mockFromBackend = vi.mocked(NotificationsManager.fromBackend);
-const mockSuccess = vi.mocked(NotificationsManager.success);
+const mockFromBackend = vi.mocked(toast.fromError);
+const mockSuccess = vi.mocked(toast.success);
 
 const PROMPT_ID_PLACEHOLDER = "Enter unique prompt ID (e.g., my_prompt_id)";
 

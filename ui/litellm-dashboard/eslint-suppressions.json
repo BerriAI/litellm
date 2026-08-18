@@ -2492,16 +2492,6 @@
       "count": 1
     }
   },
-  "src/components/molecules/message_manager.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/molecules/notifications_manager.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
   "src/components/navbar.tsx": {
     "local/filename-pascal-case": {
       "count": 1

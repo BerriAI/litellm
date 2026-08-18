@@ -13,10 +13,6 @@ vi.mock("@/components/networking", () => ({
   modelPatchUpdateCall: (...args: unknown[]) => mockModelPatchUpdateCall(...args),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 vi.mock("@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal", () => ({
   default: function ModelSettingsModalMock({ isVisible }: { isVisible: boolean }) {
     return isVisible ? <div data-testid="model-settings-modal" /> : null;

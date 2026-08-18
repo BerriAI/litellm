@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { registerAuthHeaderNameGetter, registerAuthTokenGetter, registerBaseUrlGetter } from "@/lib/http/runtime";
+import { toast } from "@/lib/toast";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import type { MCPServer } from "./types";
 
@@ -11,10 +12,6 @@ const fetchSpy = vi.hoisted(() => {
   vi.stubGlobal("fetch", spy);
   return spy;
 });
-
-vi.mock("@/components/molecules/message_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
 
 const SERVER = { server_id: "srv-1", alias: "Linear", server_name: "Linear" } as MCPServer;
 
@@ -57,16 +54,13 @@ describe("ByokCredentialModal", () => {
     fetchSpy.mockResolvedValue(
       jsonResponse({ detail: { error: "This MCP server does not support BYOK credentials" } }, 400),
     );
-    const MessageManager = (await import("@/components/molecules/message_manager")).default;
     const onSuccess = vi.fn();
     const user = userEvent.setup();
     render(<ByokCredentialModal server={SERVER} open onClose={() => {}} onSuccess={onSuccess} />);
 
     await fillAndSubmit(user);
 
-    await waitFor(() =>
-      expect(MessageManager.error).toHaveBeenCalledWith("This MCP server does not support BYOK credentials"),
-    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("This MCP server does not support BYOK credentials"));
     expect(onSuccess).not.toHaveBeenCalled();
   });
 });

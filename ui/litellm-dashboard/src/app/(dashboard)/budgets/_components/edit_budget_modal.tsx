@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { applyBudgetPrecision } from "./budgetPrecision";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -58,18 +58,18 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
 
   const handleUpdate = async (formValues: EditBudgetFormValues) => {
     try {
-      NotificationsManager.info("Making API Call");
+      toast.info("Making API Call");
       await updateBudget.mutateAsync(
         applyBudgetPrecision(
           optionalSettingsOpen ? formValues : { ...formValues, max_budget: undefined, budget_duration: undefined },
         ),
       );
-      NotificationsManager.success("Budget Updated");
+      toast.success("Budget Updated");
       form.reset();
       setIsModalVisible(false);
     } catch (error) {
       console.error("Error updating the budget:", error);
-      NotificationsManager.fromBackend(`Error updating the budget: ${error}`);
+      toast.fromError(`Error updating the budget: ${error}`);
     }
   };
 
