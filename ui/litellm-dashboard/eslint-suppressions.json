@@ -1848,7 +1848,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 4
+      "count": 3
     }
   },
   "src/components/add_model/ClassificationMethodConfig.tsx": {
@@ -1899,7 +1899,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 4
+      "count": 3
     },
     "prefer-const": {
       "count": 2
@@ -1934,7 +1934,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
@@ -1963,7 +1963,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/components/add_model/model_connection_test.tsx": {
@@ -1984,10 +1984,10 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 5
+      "count": 3
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/immutability": {
       "count": 3
@@ -2372,7 +2372,7 @@
   },
   "src/components/model_add/CredentialModal.tsx": {
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/components/model_add/reuse_credentials.tsx": {
