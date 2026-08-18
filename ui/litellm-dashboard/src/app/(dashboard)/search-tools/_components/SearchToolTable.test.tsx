@@ -42,6 +42,27 @@ describe("SearchToolTable", () => {
     expect(screen.getByText("DB")).toBeInTheDocument();
   });
 
+  it("should show the provider logo next to the provider name", () => {
+    renderWithProviders(<SearchToolTable {...defaultProps} />);
+    expect(screen.getByRole("img", { name: "Perplexity AI logo" })).toHaveAttribute(
+      "src",
+      expect.stringContaining("perplexity.png"),
+    );
+  });
+
+  it("should fall back to a letter avatar for a provider with no bundled logo", () => {
+    const tool = makeSearchTool({ litellm_params: { search_provider: "searxng" } });
+    renderWithProviders(
+      <SearchToolTable
+        {...defaultProps}
+        searchTools={[tool]}
+        availableProviders={[{ provider_name: "searxng", ui_friendly_name: "SearXNG" }]}
+      />,
+    );
+    expect(screen.queryByRole("img", { name: /logo/ })).not.toBeInTheDocument();
+    expect(screen.getByText("SearXNG")).toBeInTheDocument();
+  });
+
   it("should call onView when the search tool ID is clicked", async () => {
     const user = userEvent.setup();
     renderWithProviders(<SearchToolTable {...defaultProps} />);

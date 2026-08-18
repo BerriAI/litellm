@@ -3,6 +3,7 @@ import { ArrowLeft, Check, Copy } from "lucide-react";
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { SearchProviderLabel } from "./SearchProviderLabel";
 import { SearchToolTester } from "./SearchToolTester";
 import { AvailableSearchProvider, SearchTool } from "./types";
 
@@ -77,9 +78,12 @@ export const SearchToolView: React.FC<SearchToolViewProps> = ({
         <Card>
           <CardContent>
             <p className="text-sm text-muted-foreground">Provider</p>
-            <p className="mt-2 text-lg font-semibold text-foreground">
-              {getProviderDisplayName(searchTool.litellm_params.search_provider)}
-            </p>
+            <SearchProviderLabel
+              className="mt-2 text-lg font-semibold text-foreground"
+              logoClassName="w-6 h-6 object-contain"
+              providerName={searchTool.litellm_params.search_provider}
+              displayName={getProviderDisplayName(searchTool.litellm_params.search_provider)}
+            />
           </CardContent>
         </Card>
 
