@@ -1,5 +1,5 @@
+import { ChevronRight } from "lucide-react";
 import React from "react";
-import { Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { Modal } from "antd";
 import { z } from "zod/v4";
 import { useCreateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
@@ -8,6 +8,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -35,7 +36,8 @@ interface BudgetModalProps {
   setIsModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
 }
 const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVisible }) => {
-  const form = useZodForm(budgetSchema, { shouldUnregister: true, defaultValues: { budget_id: "" } });
+  const [optionalSettingsOpen, setOptionalSettingsOpen] = React.useState(false);
+  const form = useZodForm(budgetSchema, { defaultValues: { budget_id: "" } });
   const createBudget = useCreateBudget();
 
   const handleOk = () => {
@@ -51,7 +53,11 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
   const handleCreate = async (formValues: BudgetFormValues) => {
     try {
       NotificationsManager.info("Making API Call");
-      await createBudget.mutateAsync(applyBudgetPrecision(formValues));
+      await createBudget.mutateAsync(
+        applyBudgetPrecision(
+          optionalSettingsOpen ? formValues : { ...formValues, max_budget: undefined, budget_duration: undefined },
+        ),
+      );
       NotificationsManager.success("Budget Created");
       form.reset();
       setIsModalVisible(false);
@@ -115,11 +121,12 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
             )}
           </FormField>
 
-          <Accordion className="mt-20 mb-8">
-            <AccordionHeader>
+          <Collapsible open={optionalSettingsOpen} onOpenChange={setOptionalSettingsOpen} className="mt-20 mb-8">
+            <CollapsibleTrigger className="group flex w-full items-center justify-between py-2 text-left">
               <b>Optional Settings</b>
-            </AccordionHeader>
-            <AccordionBody>
+              <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
+            </CollapsibleTrigger>
+            <CollapsibleContent>
               <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
                 {({ ref, value, onChange, ...field }) => (
                   <Input
@@ -148,8 +155,8 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
                   </Select>
                 )}
               </FormField>
-            </AccordionBody>
-          </Accordion>
+            </CollapsibleContent>
+          </Collapsible>
         </FieldGroup>
 
         <div style={{ textAlign: "right", marginTop: "10px" }}>

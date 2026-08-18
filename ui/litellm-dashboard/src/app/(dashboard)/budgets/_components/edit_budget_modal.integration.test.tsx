@@ -89,4 +89,24 @@ describe("EditBudgetModal", () => {
 
     expect(updateMock.mock.calls[0][0]).toEqual(expected);
   });
+
+  it("keeps a typed Optional Setting when the section is collapsed and reopened, as antd's store did", async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await openOptionalSettings(user);
+    const maxBudget = screen.getByLabelText("Max Budget (USD)");
+    await user.clear(maxBudget);
+    await user.type(maxBudget, "99.25");
+
+    await user.click(screen.getByText("Optional Settings"));
+    await user.click(screen.getByText("Optional Settings"));
+
+    expect(await screen.findByLabelText("Max Budget (USD)")).toHaveValue(99.25);
+
+    await save(user);
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(updateMock.mock.calls[0][0]).toMatchObject({ max_budget: 99.25 });
+  });
 });

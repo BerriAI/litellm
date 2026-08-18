@@ -117,4 +117,23 @@ describe("BudgetModal", () => {
     await waitFor(() => expect(screen.getByLabelText("Budget ID")).toHaveAttribute("aria-invalid", "true"));
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  it("keeps a typed Optional Setting when the section is collapsed and reopened, as antd's store did", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.type(screen.getByLabelText("Budget ID"), "probe-budget");
+
+    await openOptionalSettings(user);
+    await user.type(screen.getByLabelText("Max Budget (USD)"), "42.5");
+
+    await user.click(screen.getByText("Optional Settings"));
+    await user.click(screen.getByText("Optional Settings"));
+
+    expect(await screen.findByLabelText("Max Budget (USD)")).toHaveValue(42.5);
+
+    await create(user);
+
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    expect(createMock.mock.calls[0][0]).toMatchObject({ budget_id: "probe-budget", max_budget: 42.5 });
+  });
 });
