@@ -1062,8 +1062,16 @@ Model Info:
     def _deprecation_alerts_enabled(self) -> bool:
         return self.alerting is not None and AlertType.model_deprecation_warnings in self.alert_types
 
-    async def send_model_deprecation_alert(self, llm_router: Router | None = None) -> bool:
-        """Alert on the router's deprecated and imminent models, True when one was sent"""
+    async def send_model_deprecation_alert(
+        self,
+        llm_router: Router | None = None,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> bool:
+        """Alert on the router's deprecated and imminent models, True when one was sent
+
+        The daily lock is claimed only once there is something to say, so an empty pass never blocks a
+        later real one, and a sent alert is stamped in the shared cache for a day so sibling pods stop asking
+        """
         if not self._deprecation_alerts_enabled():
             return False
 
@@ -1075,6 +1083,8 @@ Model Info:
         snapshot: Final = collect_model_deprecations(llm_router=llm_router)
         message: Final = format_deprecation_alert_message(snapshot)
         if message is None:
+            return False
+        if not await self._claimed_deprecation_alert_window(pod_lock_manager):
             return False
 
         level: Final[Literal["Low", "Medium", "High"]] = "High" if snapshot.deprecated else "Medium"
@@ -1088,6 +1098,11 @@ Model Info:
                 "imminent_count": len(snapshot.imminent),
                 "upcoming_count": len(snapshot.upcoming),
             },
+        )
+        await self.internal_usage_cache.async_set_cache(
+            key=SlackAlertingCacheKeys.deprecation_alert_sent_key.value,
+            value=time.time(),
+            ttl=DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
         )
         return True
 
@@ -1103,22 +1118,36 @@ Model Info:
             )
         ) is not False
 
+    async def _deprecation_alert_sent_within_a_day(self) -> bool:
+        return (
+            await self.internal_usage_cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_alert_sent_key.value)
+        ) is not None
+
+    async def _run_deprecation_alert_pass(
+        self, llm_router: Router | None, pod_lock_manager: "PodLockManager | None"
+    ) -> bool:
+        if llm_router is None or not self._deprecation_alerts_enabled():
+            return False
+        if await self._deprecation_alert_sent_within_a_day():
+            return False
+        return await self.send_model_deprecation_alert(llm_router=llm_router, pod_lock_manager=pod_lock_manager)
+
     async def run_scheduled_deprecation_check(
         self,
         get_llm_router: Callable[[], Router | None] = _proxy_llm_router,
         pod_lock_manager: "PodLockManager | None" = None,
     ) -> None:
-        """Alert once the router is loaded and the alert is on, then daily, re-reading both each pass"""
+        """Poll every pass for a loaded router, the alert being on, and no alert in the last day, then alert
+
+        A pass that could not alert (no router yet, alert type off, a sibling pod holds the daily lock, or a
+        redis blip at claim time) is retried on the next poll instead of costing a day
+        """
         while True:
-            if (llm_router := get_llm_router()) is None or not self._deprecation_alerts_enabled():
-                await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
-                continue
             try:
-                if await self._claimed_deprecation_alert_window(pod_lock_manager):
-                    await self.send_model_deprecation_alert(llm_router=llm_router)
-            except Exception as e:  # noqa: BLE001  # a failed alert must not kill the daily loop
+                await self._run_deprecation_alert_pass(get_llm_router(), pod_lock_manager)
+            except Exception as e:  # noqa: BLE001  # a failed alert must not kill the loop
                 verbose_proxy_logger.exception("Error in model deprecation alert loop: %s", e)
-            await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)
+            await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
 
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """
