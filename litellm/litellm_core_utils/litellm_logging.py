@@ -64,6 +64,10 @@ from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+    cost_breakdown_with_guardrail,
+    guardrail_information_cost,
+)
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -5650,12 +5654,14 @@ def get_standard_logging_object_payload(
             base_model = metadata.get("deployment")
         custom_pricing: Final = use_custom_pricing_for_model(litellm_params=litellm_params)
         raw_response_cost: Final = kwargs.get("response_cost")
-        response_cost: Final[float] = raw_response_cost or 0.0
+        llm_response_cost: Final[float] = raw_response_cost or 0.0
+        guardrail_cost: Final = guardrail_information_cost(metadata.get("standard_logging_guardrail_information"))
+        response_cost: Final[float] = llm_response_cost + guardrail_cost
 
         # clean up litellm hidden params
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
         if clean_hidden_params["response_cost"] is None and raw_response_cost is not None:
-            clean_hidden_params["response_cost"] = response_cost
+            clean_hidden_params["response_cost"] = llm_response_cost
 
         model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,
@@ -5735,7 +5741,7 @@ def get_standard_logging_object_payload(
             metadata=clean_metadata,
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
-            cost_breakdown=logging_obj.cost_breakdown,
+            cost_breakdown=cost_breakdown_with_guardrail(logging_obj.cost_breakdown, guardrail_cost),
             total_tokens=usage_dict.get("total_tokens", 0),
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),

@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -184,9 +185,14 @@ class _ProxyDBLogger(CustomLogger):
         # recovered cost onto request_data (the usage rides along in
         # ``combined_usage_object`` for the token columns), so attribute the
         # real partial spend to this failure row instead of zero.
-        recovered_response_cost = 0.0
-        if isinstance(request_data.get("combined_usage_object"), litellm.Usage):
-            recovered_response_cost = max(float(request_data.get("response_cost") or 0.0), 0.0)
+        recovered_stream_cost: Final = (
+            max(float(request_data.get("response_cost") or 0.0), 0.0)
+            if isinstance(request_data.get("combined_usage_object"), litellm.Usage)
+            else 0.0
+        )
+        recovered_response_cost: Final = recovered_stream_cost + guardrail_information_cost(
+            existing_metadata.get("standard_logging_guardrail_information")
+        )
 
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
