@@ -32271,6 +32271,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "openrouter/anthropic/claude-opus-5": {
+        "prompt_cache_min_tokens": 512,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_read_input_token_cost": 5e-07,
