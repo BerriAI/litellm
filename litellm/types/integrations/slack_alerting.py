@@ -121,6 +121,7 @@ class SlackAlertingCacheKeys(Enum):
     failed_requests_key = "failed_requests_daily_metrics"
     latency_key = "latency_daily_metrics"
     report_sent_key = "daily_metrics_report_sent"
+    deprecation_alert_sent_key = "model_deprecation_alert_sent"
 
 
 class AlertType(str, Enum):
