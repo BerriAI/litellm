@@ -34,10 +34,6 @@ vi.mock("@/components/CodeBlock", () => ({
   default: ({ code }: { code: string }) => <pre data-testid="code-block">{code}</pre>,
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const StatefulPanel = ({ label }: { label: string }) => {
   const [draft, setDraft] = useState("");
   return <input aria-label={label} value={draft} onChange={(event) => setDraft(event.target.value)} />;

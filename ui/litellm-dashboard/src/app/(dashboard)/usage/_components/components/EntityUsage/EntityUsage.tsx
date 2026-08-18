@@ -32,6 +32,7 @@ import {
   customerDailyActivityCall,
   organizationDailyActivityCall,
   tagDailyActivityCall,
+  teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
   userDailyActivityCall,
 } from "@/components/networking";
@@ -85,6 +86,7 @@ interface EntityUsageProps {
   entityList: EntityList[] | null;
   premiumUser: boolean;
   dateValue: DateRangePickerValue;
+  isOrgAdmin?: boolean;
 }
 
 const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
@@ -94,6 +96,12 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
   customer: customerDailyActivityCall,
   agent: agentDailyActivityCall,
   user: userDailyActivityCall,
+};
+
+// Single-shot endpoints returning the whole range in one response; entity types
+// without one fall back to page-draining the paginated endpoint.
+const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, (...args: any[]) => Promise<any>>> = {
+  team: teamDailyActivityAggregatedCall,
 };
 
 const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
@@ -108,6 +116,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityList,
   userRole,
   dateValue,
+  isOrgAdmin = false,
 }) => {
   const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -126,8 +135,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   }, [entityType, selectedTags]);
 
   const fetchFn = ENTITY_FETCH_FNS[entityType];
+  const aggregatedFetchFn = ENTITY_AGGREGATED_FETCH_FNS[entityType];
   const entityCapability = ENTITY_CAPABILITIES[entityType];
-  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability);
+  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability, isOrgAdmin);
   const showAgentBreakdown = entityType === "team" && hasCapability(userRole, "viewAgentUsage");
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
@@ -142,6 +152,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     fetchFn,
     args: [accessToken, startTime, endTime, entityFilterArg],
     enabled,
+    aggregatedFetchFn,
   });
 
   const spendData = spendDataRaw as unknown as EntitySpendData;

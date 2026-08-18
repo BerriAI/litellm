@@ -14,17 +14,6 @@ vi.mock("./networking", () => ({
   alertingSettingsCall: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("./molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    clear: vi.fn(),
-  },
-}));
-
 vi.mock("./alerting/alerting_settings", () => ({
   __esModule: true,
   default: () => <div>Mock Alerting Settings</div>,

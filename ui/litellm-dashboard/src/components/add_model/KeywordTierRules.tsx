@@ -3,6 +3,7 @@ import { Button, Card, Empty, Select as AntdSelect, Tooltip, Typography } from "
 import React from "react";
 
 import { emptyKeywordTierRuleIndexes } from "./complexity_router_keywords";
+import { tierOptions } from "./complexity_router_tiers";
 
 const { Text } = Typography;
 
@@ -19,20 +20,6 @@ interface KeywordTierRulesProps {
   onChange: (rules: KeywordTierRule[]) => void;
   tierLabels?: Partial<Record<ComplexityTier, string>>;
 }
-
-const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
-  SIMPLE: "Simple",
-  MEDIUM: "Medium",
-  COMPLEX: "Complex",
-  REASONING: "Reasoning",
-};
-
-const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
-
-export const tierOptions = (
-  tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
-): { value: ComplexityTier; label: string }[] =>
-  TIER_ORDER.map((tier) => ({ value: tier, label: tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier] }));
 
 // A row exists only because the caller asked for it, so it reports its own gap straight away
 // rather than waiting for a submit; the submit button is disabled while one is outstanding, so

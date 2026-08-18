@@ -3754,6 +3754,14 @@ if MCP_AVAILABLE:
                 # preemptive challenge and let downstream authorization
                 # return 403.
                 continue
+            if server is not None and server.auth_type == MCPAuth.oauth2 and server.oauth2_flow == "client_credentials":
+                # Stamped M2M: the challenge decision below never reads discovered
+                # metadata, so deferred-discovery failures must not 503 this loop.
+                # Unstamped rows stay on the discover-first path because filling
+                # authorization_url/token_url can change their inferred flow.
+                continue
+            if server is not None:
+                server = await global_mcp_server_manager.ensure_oauth_metadata_discovered(server)
             if server and server.auth_type == MCPAuth.oauth2:
                 # The challenge decision is per oauth2 sub-mode, not per header:
                 # gateway-managed modes (M2M and interactive authorization_code)

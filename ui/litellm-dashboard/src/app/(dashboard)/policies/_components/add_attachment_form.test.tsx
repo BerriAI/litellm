@@ -9,10 +9,6 @@ import { Policy } from "@/components/policies/types";
 
 vi.mock("@/components/networking");
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn(), error: vi.fn(), info: vi.fn() },
-}));
-
 vi.mock("./impact_preview_alert", () => ({
   default: ({ impactResult }: { impactResult: any }) =>
     React.createElement("div", { "data-testid": "impact-preview" }, `${impactResult.affected_keys_count} keys`),

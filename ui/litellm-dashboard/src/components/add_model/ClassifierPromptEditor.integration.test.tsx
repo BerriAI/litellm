@@ -3,6 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import { ClassificationRubric } from "./ComplexityRouterConfig";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ accessToken: "sk-test" }),

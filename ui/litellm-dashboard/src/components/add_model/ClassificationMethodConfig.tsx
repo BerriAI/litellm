@@ -2,6 +2,8 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Select as AntdSelect, Card, InputNumber, Radio, Space, Switch, Tooltip, Typography } from "antd";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
+import HeuristicScoringConfig from "./HeuristicScoringConfig";
+import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassifierFallback,
   ClassifierType,
@@ -45,6 +47,62 @@ const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
   return value.classifier_fallback === "default_model"
     ? CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK
     : CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK;
+};
+
+/**
+ * The three boundaries this card states, as displayed strings, or null until the proxy's shipped defaults
+ * have arrived. Kept out of the component so the card cannot state a range the router stopped using, and
+ * so the derivation does not add branches to an already dense render.
+ */
+const boundaryRanges = (
+  shipped: Record<string, number> | undefined,
+  overrides: Record<string, number> | undefined,
+): { simpleMedium: string; mediumComplex: string; complexReasoning: string } | null => {
+  const effective: Record<string, number> = { ...shipped, ...overrides };
+  const [low, mid, high] = [effective.simple_medium, effective.medium_complex, effective.complex_reasoning];
+  if (low === undefined || mid === undefined || high === undefined) return null;
+  return { simpleMedium: low.toFixed(2), mediumComplex: mid.toFixed(2), complexReasoning: high.toFixed(2) };
+};
+
+const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => {
+  // The shipped boundaries come from the proxy, so this card cannot state ranges the router stopped using.
+  const { data: scorerDefaults, isError } = useComplexityScorerDefaults();
+  const ranges = boundaryRanges(scorerDefaults?.tier_boundaries, value.tier_boundaries);
+
+  return (
+    <Card className="bg-gray-50 mt-4">
+      <Text strong style={{ display: "block", marginBottom: 8 }}>
+        How Classification Works
+      </Text>
+      <Text type="secondary" style={{ fontSize: 13 }}>
+        {scoringExplanation(value)}
+      </Text>
+      {ranges && (
+        <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
+          <li>
+            <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; {ranges.simpleMedium}
+          </li>
+          <li>
+            <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>: Score {ranges.simpleMedium} -{" "}
+            {ranges.mediumComplex}
+          </li>
+          <li>
+            <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>: Score {ranges.mediumComplex} -{" "}
+            {ranges.complexReasoning}
+          </li>
+          <li>
+            <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; {ranges.complexReasoning}{" "}
+            (or 2+ reasoning markers)
+          </li>
+        </ul>
+      )}
+      {!ranges && isError && (
+        <Text type="secondary" style={{ fontSize: 13, display: "block", marginTop: 8 }}>
+          The tier score ranges could not be loaded from the proxy.
+        </Text>
+      )}
+    </Card>
+  );
 };
 
 interface ClassificationMethodConfigProps {
@@ -375,29 +433,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
-      <Card className="bg-gray-50 mt-4">
-        <Text strong style={{ display: "block", marginBottom: 8 }}>
-          How Classification Works
-        </Text>
-        <Text type="secondary" style={{ fontSize: 13 }}>
-          {scoringExplanation(value)}
-        </Text>
-        <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
-          <li>
-            <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; 0.15
-          </li>
-          <li>
-            <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>: Score 0.15 - 0.35
-          </li>
-          <li>
-            <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>: Score 0.35 - 0.60
-          </li>
-          <li>
-            <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; 0.60 (or 2+ reasoning
-            markers)
-          </li>
-        </ul>
-      </Card>
+      <HeuristicScoringConfig value={value} onChange={onChange} />
+
+      <HowClassificationWorks value={value} />
     </>
   );
 };

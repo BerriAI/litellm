@@ -287,6 +287,7 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
+    TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
@@ -451,6 +452,7 @@ class LiteLLMRoutes(enum.Enum):
 
     mapped_pass_through_routes = [
         "/bedrock",
+        "/comprehendmedical",
         "/vertex-ai",
         "/vertex_ai",
         "/cohere",
@@ -611,6 +613,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
+        KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -645,6 +648,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_update",
             "/team/permissions_bulk_update",
             "/team/daily/activity",
+            "/team/daily/activity/aggregated",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
             # model
@@ -800,12 +804,16 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
+        "/team/daily/activity/aggregated",
         "/team/{team_id}/members/me",
         "/model/new",
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        # Endpoint restricts results to organizations the caller is ORG_ADMIN
+        # of; a caller who administers none gets an empty result set.
+        "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
@@ -862,6 +870,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/available_roles",
             "/user/daily/activity",
             "/team/daily/activity",
+            "/team/daily/activity/aggregated",
             "/tag/daily/activity",
             "/tag/list",
             "/audit",
@@ -1987,6 +1996,18 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
             callback_vars[key] = str(value)
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
         return values
+
+
+class TeamCallbackDeleteResponseData(LiteLLMPydanticObjectBase):
+    team_id: str
+    success_callbacks: tuple[str, ...]
+    failure_callbacks: tuple[str, ...]
+
+
+class TeamCallbackDeleteResponse(LiteLLMPydanticObjectBase):
+    status: Literal["success"]
+    message: str
+    data: TeamCallbackDeleteResponseData
 
 
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):

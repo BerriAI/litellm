@@ -14,7 +14,7 @@ import AddPluginForm from "./add_plugin_form";
 import PluginTable from "./PluginTable";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Plugin, ListPluginsResponse } from "@/components/claude_code_plugins/types";
 
 interface ClaudeCodePluginsPanelProps {
@@ -66,11 +66,11 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
     setIsDeleting(true);
     try {
       await deleteClaudeCodePlugin(accessToken, pluginToDelete.name);
-      NotificationsManager.success(`Skill "${pluginToDelete.displayName}" deleted successfully`);
+      toast.success(`Skill "${pluginToDelete.displayName}" deleted successfully`);
       fetchPlugins();
     } catch (error) {
       console.error("Error deleting skill:", error);
-      NotificationsManager.error("Failed to delete skill");
+      toast.error("Failed to delete skill");
     } finally {
       setIsDeleting(false);
       setPluginToDelete(null);

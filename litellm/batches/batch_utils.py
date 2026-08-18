@@ -59,6 +59,7 @@ async def _handle_completed_batch(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: str | None = None,
     litellm_params: dict | None = None,
+    model_info: ModelInfo | None = None,
 ) -> BatchCostUsageResult:
     """Fetch a completed batch's output file and aggregate its cost, usage, and
     models in a single pass over the JSONL lines, so the parsed file content is
@@ -69,6 +70,9 @@ async def _handle_completed_batch(
         custom_llm_provider: The LLM provider
         model_name: Optional model name
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
+        model_info: Optional deployment-level model info with custom pricing,
+            threaded through so a deployment's configured rates win over the
+            global cost map.
     """
     # A completed batch whose request lines all failed has no output file - the
     # results are written to a separate error_file_id and output_file_id is None.
@@ -105,6 +109,7 @@ async def _handle_completed_batch(
             entries=_iter_batch_input_entries(file_content),
             custom_llm_provider=custom_llm_provider,
             model_name=model_name,
+            model_info=model_info,
         )
     )
 

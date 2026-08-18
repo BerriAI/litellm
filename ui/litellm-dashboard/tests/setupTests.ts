@@ -88,17 +88,15 @@ const ensureTestLocalStorage = () => {
 
 ensureTestLocalStorage();
 
-// Global mock for NotificationManager to prevent React rendering issues in tests
-// This avoids "window is not defined" errors when notifications try to render
-// after test environment is torn down
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
+// Global mock so every test can assert on toast calls; toast.test.ts opts back in with vi.unmock
+vi.mock("@/lib/toast", () => ({
+  toast: {
     success: vi.fn(),
-    fromBackend: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
     info: vi.fn(),
-    clear: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    fromError: vi.fn(),
+    dismiss: vi.fn(),
   },
 }));
 
@@ -214,6 +212,15 @@ if (typeof window !== "undefined") {
 
   if (!document.getAnimations) {
     document.getAnimations = () => [];
+  }
+
+  // Base UI's ScrollAreaViewport calls viewport.getAnimations() from a timer, which jsdom
+  // does not implement, so the TypeError surfaces as an unhandled error and fails the run.
+  // BASE_UI_ANIMATIONS_DISABLED keeps useAnimationsFinished on the synchronous path it
+  // already took while getAnimations was missing, so popup unmount timing is unchanged.
+  (globalThis as { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true;
+  if (!Element.prototype.getAnimations) {
+    Element.prototype.getAnimations = () => [];
   }
 
   // Stub URL.revokeObjectURL so vi.spyOn can intercept it in tests

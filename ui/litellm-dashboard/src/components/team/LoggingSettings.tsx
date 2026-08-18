@@ -2,13 +2,50 @@
 import React from "react";
 import { Select, Tooltip, Divider } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, Card, TextInput } from "@tremor/react";
-import { PlusIcon, TrashIcon, CogIcon, BanIcon } from "@heroicons/react/outline";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { CogIcon, BanIcon } from "@heroicons/react/outline";
+import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import NumericalInput from "../shared/numerical_input";
 
 const { Option } = Select;
+
+const CallbackVarInput: React.FC<{
+  sensitive: boolean;
+  placeholder: string;
+  value: string;
+  onValueChange: (value: string) => void;
+}> = ({ sensitive, placeholder, value, onValueChange }) => {
+  const [revealed, setRevealed] = React.useState(false);
+
+  if (!sensitive) {
+    return <Input placeholder={placeholder} value={value} onChange={(e) => onValueChange(e.target.value)} />;
+  }
+
+  return (
+    <InputGroup>
+      <InputGroupInput
+        type={revealed ? "text" : "password"}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onValueChange(e.target.value)}
+      />
+      <InputGroupAddon align="inline-end">
+        <InputGroupButton
+          size="icon-xs"
+          onClick={() => setRevealed(!revealed)}
+          aria-label={revealed ? "Hide password" : "Show password"}
+        >
+          {revealed ? <EyeOff /> : <Eye />}
+        </InputGroupButton>
+      </InputGroupAddon>
+    </InputGroup>
+  );
+};
 
 interface LoggingConfig {
   callback_name: string;
@@ -138,11 +175,11 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                   onChange={(e: any) => updateCallbackVar(configIndex, paramName, e.target.value)}
                 />
               ) : (
-                <TextInput
-                  type={paramType === "password" ? "password" : "text"}
+                <CallbackVarInput
+                  sensitive={paramType === "password"}
                   placeholder={`os.environ/${paramName.toUpperCase()}`}
                   value={config.callback_vars[paramName] || ""}
-                  onChange={(e) => updateCallbackVar(configIndex, paramName, e.target.value)}
+                  onValueChange={(newValue) => updateCallbackVar(configIndex, paramName, newValue)}
                 />
               )}
             </div>
@@ -212,11 +249,11 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
         <Button
           variant="secondary"
           onClick={addLoggingConfig}
-          icon={PlusIcon}
           size="sm"
           className="hover:border-blue-400 hover:text-blue-500"
           type="button"
         >
+          <Plus />
           Add Integration
         </Button>
       </div>
@@ -230,9 +267,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           return (
             <Card
               key={index}
-              className="border border-gray-200 shadow-xs hover:shadow-md transition-shadow duration-200"
-              decoration="top"
-              decorationColor="blue"
+              className="block p-6 border border-gray-200 shadow-xs hover:shadow-md transition-shadow duration-200"
             >
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center space-x-2">
@@ -246,14 +281,13 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                   <span className="text-sm font-medium">{callbackDisplayName || "New Integration"} Configuration</span>
                 </div>
                 <Button
-                  variant="light"
+                  variant="ghost"
                   onClick={() => removeLoggingConfig(index)}
-                  icon={TrashIcon}
-                  size="xs"
-                  color="red"
-                  className="hover:bg-red-50"
+                  size="sm"
+                  className="text-red-500 hover:bg-red-50 hover:text-red-500"
                   type="button"
                 >
+                  <Trash2 />
                   Remove
                 </Button>
               </div>

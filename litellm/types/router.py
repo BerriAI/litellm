@@ -351,6 +351,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     milvus_text_field: str | None = None
     milvus_db_name: str | None = None
     milvus_partition_names: list[str] | None = None
+    valkey_host: str | None = None
+    valkey_port: int | None = None
+    valkey_password: str | None = None
+    valkey_ssl: bool | None = None
+    valkey_text_field: str | None = None
+    valkey_embedding_field: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -954,6 +960,21 @@ class RoutingPlugin(Protocol):
     """Interface a custom routing plugin must implement to run in `Router(plugins=[...])`."""
 
     async def run(self, context: RoutingContext) -> RoutingContext: ...
+
+
+@runtime_checkable
+class ClassifierPlugin(Protocol):
+    """Interface a custom classifier must implement to run as the complexity router's classifier_type='custom'.
+
+    `classify` returns the name of the tier the request belongs to (a built-in tier value or label,
+    or a tier_definitions name), or None to decline and let classifier_fallback decide.
+
+    The context's `candidate_models` is an informational snapshot of every tier's models, unlike
+    the narrowing surface RoutingPlugin filters: the returned tier decides the pool, so mutating
+    the list is a no-op.
+    """
+
+    async def classify(self, context: RoutingContext) -> str | None: ...
 
 
 class RequestType(str, enum.Enum):

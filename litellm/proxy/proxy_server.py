@@ -305,6 +305,8 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _should_return_raw_model_name,
     create_response,
+    open_sse_before_first_byte,
+    ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
@@ -328,6 +330,7 @@ from litellm.proxy.common_utils.load_config_utils import (
     get_config_file_contents_from_gcs,
     get_file_contents_from_s3,
 )
+from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
@@ -650,8 +653,13 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
+from litellm.types.proxy.model_deprecation import (
+    DEFAULT_DEPRECATION_WARN_DAYS,
+    ModelDeprecationResponse,
+)
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
+    ClassifierPlugin,
     DeploymentTypedDict,
     RouterGeneralSettings,
     RoutingPlugin,
@@ -4029,17 +4037,70 @@ def resolve_complexity_router_plugins(
 ) -> None:
     """
     Resolves `complexity_router_config["plugins"]` dotted-path strings to live
-    instances in place, via `resolve_routing_plugins`.
+    instances in place, via `resolve_routing_plugins`, and
+    `complexity_router_config["classifier_plugin"]` via `resolve_classifier_plugin`.
     """
     plugin_paths: Final = complexity_router_config.get("plugins")
-    if not isinstance(plugin_paths, list):
-        return
+    if isinstance(plugin_paths, list):
+        complexity_router_config["plugins"] = resolve_routing_plugins(
+            plugin_paths=plugin_paths,
+            config_file_path=config_file_path,
+            source_label=f"complexity_router_config.plugins on model {model_name!r}",
+        )
 
-    complexity_router_config["plugins"] = resolve_routing_plugins(
-        plugin_paths=plugin_paths,
-        config_file_path=config_file_path,
-        source_label=f"complexity_router_config.plugins on model {model_name!r}",
-    )
+    classifier_plugin_path: Final = complexity_router_config.get("classifier_plugin")
+    if isinstance(classifier_plugin_path, str):
+        resolved_classifier: Final = resolve_classifier_plugin(
+            plugin_path=classifier_plugin_path,
+            config_file_path=config_file_path,
+            source_label=f"complexity_router_config.classifier_plugin on model {model_name!r}",
+        )
+        complexity_router_config["classifier_plugin"] = resolved_classifier  # rebind-ok: out-param, resolved in place
+
+
+def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
+    """
+    Stamps `model_info.id` from the raw litellm_params before plugin resolution swaps
+    dotted-path strings for live instances. `_delete_deployment` re-reads the raw config
+    and re-hashes these params to decide which ids the config wants served; an id the
+    Router derived from the resolved params would never match that hash, so the reconcile
+    would evict every plugin-bearing deployment one sync after startup.
+    """
+    litellm_params: Final = model.get("litellm_params")
+    if not isinstance(litellm_params, dict) or not isinstance(litellm_params.get("complexity_router_config"), dict):
+        return
+    model_info = model.get("model_info")
+    if not isinstance(model_info, dict):
+        model_info = {}  # mutable-ok: fresh model_info stamped onto the raw yaml model dict
+        model["model_info"] = model_info  # rebind-ok: out-param, stamped in place
+    if model_info.get("id") is None:
+        model_info["id"] = litellm.Router.generate_model_id(
+            model_group=model.get("model_name", ""),
+            litellm_params=litellm_params,
+        )
+
+
+def resolve_classifier_plugin(
+    plugin_path: str,
+    config_file_path: str | None,
+    source_label: str,
+) -> ClassifierPlugin:
+    """
+    Resolves a classifier-plugin dotted path to a live `ClassifierPlugin` instance, with the
+    same load-time interface check `resolve_routing_plugins` applies to routing plugins: a
+    sync `def classify` passes the runtime_checkable isinstance and would only fail on the
+    first classified request, so reject it here where the error names the config key.
+    """
+    resolved: Final = get_instance_fn(value=plugin_path, config_file_path=config_file_path)
+    if not isinstance(resolved, ClassifierPlugin) or not inspect.iscoroutinefunction(
+        getattr(resolved, "classify", None)
+    ):
+        raise ValueError(
+            f"{source_label} entry {plugin_path!r} resolved to {resolved!r}, which does not "
+            "implement the ClassifierPlugin interface (an async `classify(context)` method). Fix "
+            "the referenced module before starting the proxy."
+        )
+    return resolved
 
 
 def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
@@ -5261,6 +5322,7 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
+                pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
                     resolve_complexity_router_plugins(
@@ -5658,7 +5720,7 @@ class ProxyConfig:
                 model_id = model.get("model_info", {}).get("id", None)
                 if model_id is None:
                     ## else - generate stable id's ##
-                    model_id = llm_router._generate_model_id(
+                    model_id = llm_router.generate_model_id(
                         model_group=model["model_name"],
                         litellm_params=model["litellm_params"],
                     )
@@ -11540,19 +11602,40 @@ async def run_thread(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.arun_thread(thread_id=thread_id, **data)
+        router: Final = llm_router
 
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
-            return await create_response(
-                generator=async_assistants_data_generator(
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,
-                    request_data=data,
-                ),
-                media_type="text/event-stream",
-                headers={},  # Added empty headers dict, original call missed this argument
-                request=request,
+
+            async def produce_run_stream() -> StreamingResponse | JSONResponse:
+                run_stream: Final = await router.arun_thread(thread_id=thread_id, **data)
+                return await create_response(
+                    generator=async_assistants_data_generator(
+                        user_api_key_dict=user_api_key_dict,
+                        response=run_stream,
+                        request_data=data,
+                    ),
+                    media_type="text/event-stream",
+                    headers={},  # Added empty headers dict, original call missed this argument
+                    request=request,
+                )
+
+            async def audit_late_failure(exc: Exception) -> HTTPException | None:
+                # Once a keepalive is on the wire this can no longer raise, so the
+                # handler's own `except` never runs its post_call_failure_hook.
+                return await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict, original_exception=exc, request_data=data
+                )
+
+            # The upstream withholds its first event for the whole time-to-first-token
+            # and `create_response` buffers that first chunk before it can build a
+            # response, so the run writes zero bytes until the model answers.
+            return await open_sse_before_first_byte(
+                produce_run_stream(),
+                ping_interval_seconds=ttft_keepalive_interval(data, router),
+                on_late_failure=audit_late_failure,
             )
+
+        response: Final = await router.arun_thread(thread_id=thread_id, **data)
 
         ### ALERTING ###
         asyncio.create_task(
@@ -13925,6 +14008,48 @@ async def model_info_v1(
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
+
+
+@router.get(
+    "/model/deprecations",
+    tags=("model management",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ModelDeprecationResponse,
+)
+@router.get(
+    "/v1/model/deprecations",
+    tags=("model management",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ModelDeprecationResponse,
+)
+async def model_deprecations(
+    warn_within_days: int = DEFAULT_DEPRECATION_WARN_DAYS,
+) -> ModelDeprecationResponse:
+    """List models with known deprecation/sunset dates, bucketed by urgency.
+
+    Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+    (and any per-deployment `model_info.deprecation_date` overrides) for the
+    models configured on this proxy.
+
+    Parameters:
+        warn_within_days: Window (in days) used to bucket "imminent" models,
+            30 by default.
+
+    Returns:
+        A payload with three lists of `ModelDeprecationInfo` entries:
+
+        - `deprecated`: deprecation date is in the past, so these requests may
+          fail at any time.
+        - `imminent`: deprecation date is within `warn_within_days` from today.
+        - `upcoming`: deprecation date is further out.
+
+    Example:
+    ```shell
+    curl -X GET 'http://localhost:4000/model/deprecations' \\
+        -H 'Authorization: Bearer sk-1234'
+    ```
+    """
+    return collect_model_deprecations(llm_router=llm_router, warn_within_days=warn_within_days)
 
 
 def _get_model_group_info(

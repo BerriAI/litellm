@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 // eslint-disable-next-line no-restricted-imports -- exercising KeyLifecycleSettings requires hosting it in a real antd Form (the component it's built on)
 import { Form } from "antd";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import KeyLifecycleSettings from "./KeyLifecycleSettings";
@@ -22,16 +22,17 @@ const Harness: React.FC<HarnessProps> = ({ isCreateMode = true, onFinish = () =>
 
   return (
     <Form form={form} onFinish={onFinish}>
-      <KeyLifecycleSettings
-        form={form}
-        autoRotationEnabled={autoRotationEnabled}
-        onAutoRotationChange={setAutoRotationEnabled}
-        rotationInterval={rotationInterval}
-        onRotationIntervalChange={setRotationInterval}
-        isCreateMode={isCreateMode}
-        neverExpire={neverExpire}
-        onNeverExpireChange={setNeverExpire}
-      />
+      <Form.Item name="duration" initialValue="" noStyle>
+        <KeyLifecycleSettings
+          autoRotationEnabled={autoRotationEnabled}
+          onAutoRotationChange={setAutoRotationEnabled}
+          rotationInterval={rotationInterval}
+          onRotationIntervalChange={setRotationInterval}
+          isCreateMode={isCreateMode}
+          neverExpire={neverExpire}
+          onNeverExpireChange={setNeverExpire}
+        />
+      </Form.Item>
       <button type="submit">submit</button>
       <button type="button" onClick={() => form.resetFields()}>
         reset
@@ -56,6 +57,12 @@ describe("KeyLifecycleSettings", () => {
     expect(screen.getByText("Key Expiry Settings")).toBeInTheDocument();
     expect(screen.getByText("Auto-Rotation Settings")).toBeInTheDocument();
     expect(getDurationInput()).toBeInTheDocument();
+  });
+
+  it("gives the duration input and the Never Expire checkbox their own labels", () => {
+    renderWithProviders(<Harness isCreateMode={false} />);
+    expect(screen.getByLabelText("Expire Key")).toBe(getDurationInput(false));
+    expect(screen.getByRole("checkbox", { name: "Never Expire" })).toBeInTheDocument();
   });
 
   it("uses the create-mode placeholder in create mode", () => {
@@ -194,7 +201,7 @@ describe("KeyLifecycleSettings", () => {
     });
 
     it("hides the custom input and propagates the value when switching back to a predefined interval", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));

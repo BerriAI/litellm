@@ -1,6 +1,6 @@
 "use client";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { Eraser, FileText, Plus, Trash2 } from "lucide-react";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
@@ -482,7 +482,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       return;
     }
     if (!effectiveApiKey) {
-      NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
+      toast.fromError("Please provide a Virtual Key or select Current UI Session");
       return;
     }
     const targetComparisons = comparisons;
@@ -491,7 +491,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     }
     // Validate selection based on endpoint type
     if (targetComparisons.some((comparison) => !hasValidSelection(comparison, selectedEndpoint))) {
-      NotificationsManager.fromBackend(endpointConfig.validationMessage);
+      toast.fromError(endpointConfig.validationMessage);
       return;
     }
 
@@ -628,7 +628,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         .catch((error) => {
           const errorMessage = error instanceof Error ? error.message : String(error);
           console.error("CompareUI: failed to fetch response", error);
-          NotificationsManager.fromBackend(errorMessage);
+          toast.fromError(errorMessage);
           setComparisons((prev) =>
             prev.map((comparison) => {
               if (comparison.id !== prepared.id) {

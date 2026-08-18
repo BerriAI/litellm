@@ -5,7 +5,7 @@ import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import {
   fetchMCPAccessGroups,
@@ -51,15 +51,6 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
   useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    info: vi.fn(),
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
@@ -918,7 +909,7 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
 
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
+      expect(toast.fromError).toHaveBeenCalledWith(
         "Error creating the team: Cost center CC-9999 is not recognized. Contact the FinOps team.",
       );
     });
@@ -1113,5 +1104,122 @@ describe("Teams - policies field is gated on the viewPolicies capability", () =>
 
     expect(getPoliciesList).not.toHaveBeenCalled();
     expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+  });
+});
+
+describe("Teams - which fields reach the create payload depends on the open sections", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(getPoliciesList).mockResolvedValue({ policies: [] });
+    vi.mocked(getDefaultTeamSettings).mockResolvedValue({ values: {} });
+    vi.mocked(teamCreateCall).mockResolvedValue({ team_id: "new-team-1" });
+    mockUseOrganizations.mockReturnValue({ data: null });
+  });
+
+  const openCreateModal = async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    act(() => {
+      fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+  };
+
+  const submit = async () => {
+    const buttons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalled();
+    });
+    return vi.mocked(teamCreateCall).mock.calls[0][1] as Record<string, unknown>;
+  };
+
+  const toggleAdditionalSettings = () => fireEvent.click(screen.getByText("Additional Settings"));
+
+  it("sends only the always-visible fields when every section is left closed", async () => {
+    await openCreateModal();
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Closed Sections Team" } });
+
+    const payload = await submit();
+
+    expect(Object.keys(payload).sort()).toEqual([
+      "budget_duration",
+      "max_budget",
+      "metadata",
+      "models",
+      "organization_id",
+      "rpm_limit",
+      "team_alias",
+      "tpm_limit",
+    ]);
+    expect(payload.team_alias).toBe("Closed Sections Team");
+  });
+
+  it("adds the Additional Settings fields to the payload once that section is opened", async () => {
+    await openCreateModal();
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Open Section Team" } });
+
+    toggleAdditionalSettings();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Team ID")).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("Team ID"), { target: { value: "tid-open" } });
+    fireEvent.change(screen.getByLabelText("Team Member Budget (USD)"), { target: { value: "12.5" } });
+
+    const payload = await submit();
+
+    expect(payload.team_id).toBe("tid-open");
+    expect(payload.team_member_budget).toBe(12.5);
+    expect(Object.keys(payload)).toEqual(
+      expect.arrayContaining(["access_group_ids", "guardrails", "secret_manager_settings", "team_member_key_duration"]),
+    );
+  });
+
+  it("drops a value typed in Additional Settings when that section is closed again before saving", async () => {
+    await openCreateModal();
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Reclosed Team" } });
+
+    toggleAdditionalSettings();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Team ID")).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("Team ID"), { target: { value: "tid-dropped" } });
+    toggleAdditionalSettings();
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Team ID")).not.toBeInTheDocument();
+    });
+
+    const payload = await submit();
+
+    expect(payload).not.toHaveProperty("team_id");
+  });
+
+  it("restores and sends the typed value when Additional Settings is reopened before saving", async () => {
+    await openCreateModal();
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Reopened Team" } });
+
+    toggleAdditionalSettings();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Team ID")).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("Team ID"), { target: { value: "tid-kept" } });
+    toggleAdditionalSettings();
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Team ID")).not.toBeInTheDocument();
+    });
+    toggleAdditionalSettings();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Team ID")).toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText("Team ID")).toHaveValue("tid-kept");
+    const payload = await submit();
+
+    expect(payload.team_id).toBe("tid-kept");
   });
 });

@@ -161,6 +161,23 @@ describe("ProviderSpecificFields", () => {
     expect(orgInput).toBeInTheDocument();
   });
 
+  it("should let the user reveal a secret field", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    const apiKeyInput = await screen.findByLabelText("OpenAI API Key");
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+
+    fireEvent.click(screen.getByLabelText("eye-invisible"));
+    expect(await screen.findByLabelText("OpenAI API Key")).toHaveAttribute("type", "text");
+  });
+
   it("should render the provider specific fields for vLLM", async () => {
     const queryClient = createQueryClient();
     render(

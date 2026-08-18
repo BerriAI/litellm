@@ -3,8 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import EditAutoRouterModal from "./edit_auto_router_modal";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
 const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall } = vi.hoisted(() => ({
   modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
@@ -126,7 +130,7 @@ describe("EditAutoRouterModal keyword matching", () => {
     await screen.findByText(/Escalation Keywords/i);
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    await waitFor(() => expect(NotificationsManager.fromBackend).toHaveBeenCalled());
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalled());
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
 
@@ -727,9 +731,7 @@ describe("EditAutoRouterModal default model", () => {
 
     await user.click(await screen.findByRole("button", { name: /save changes/i }));
 
-    await waitFor(() =>
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringContaining("Simple or Medium tier")),
-    );
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(expect.stringContaining("Simple or Medium tier")));
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
 
@@ -744,5 +746,62 @@ describe("EditAutoRouterModal default model", () => {
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedDefaultModel()).toBe(STORED_CONFIG.tiers.MEDIUM[0]);
     expect(savedConfig()).not.toHaveProperty("default_model");
+  });
+});
+
+describe("EditAutoRouterModal plan-mode minimum tier", () => {
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  const renderWithStoredTier = (plan_mode_min_tier?: string) =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: {
+            ...MODEL_DATA.litellm_params,
+            complexity_router_config: { ...STORED_CONFIG, ...(plan_mode_min_tier && { plan_mode_min_tier }) },
+          },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  const openPlanModePanel = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByText("Advanced: Plan-Mode Override"));
+  };
+
+  it("shows a stored tier as an enabled override, so the saved value is not a hidden one", async () => {
+    const user = userEvent.setup();
+    renderWithStoredTier("MEDIUM");
+    await openPlanModePanel(user);
+    expect(await screen.findByRole("switch", { name: "Route plan-mode requests to a minimum tier" })).toBeChecked();
+  });
+
+  it("preserves a stored tier through an untouched open-and-save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredTier("MEDIUM");
+
+    await user.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).toMatchObject({ plan_mode_min_tier: "MEDIUM" });
+  });
+
+  it("turning the override off removes the stored tier from the saved config", async () => {
+    const user = userEvent.setup();
+    renderWithStoredTier("MEDIUM");
+    await openPlanModePanel(user);
+    await user.click(await screen.findByRole("switch", { name: "Route plan-mode requests to a minimum tier" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("plan_mode_min_tier");
   });
 });

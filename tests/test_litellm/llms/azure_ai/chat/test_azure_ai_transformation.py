@@ -266,3 +266,125 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
         assert "copilot_mcp_server_name" not in tool
     assert result["tools"][0]["type"] == "function"
     assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+def _find_key_anywhere(obj, key: str) -> bool:
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        return any(_find_key_anywhere(v, key) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_find_key_anywhere(item, key) for item in obj)
+    return False
+
+
+def test_azure_ai_strips_non_openai_spec_message_fields():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/33961.
+
+    Azure AI Foundry backends set additionalProperties=false, so any message
+    field outside the OpenAI chat-completions schema causes a 400 "Extra inputs
+    are not permitted". Anthropic-format clients (e.g. Claude Code) echo prior
+    assistant turns back as history carrying thinking_blocks, a nested thought
+    signature at tool_calls[].function.provider_specific_fields, and Anthropic
+    cache_control annotations. transform_request must strip all of these before
+    the request reaches the upstream.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "The user wants me to read a file.",
+                    "signature": "",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "provider_specific_fields": {"thought_signature": "sig-top"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "sig-nested"},
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "go ahead"},
+    ]
+
+    request = config.transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    transformed_messages = request["messages"]
+
+    assert not _find_key_anywhere(transformed_messages, "thinking_blocks")
+    assert not _find_key_anywhere(transformed_messages, "provider_specific_fields")
+    assert not _find_key_anywhere(transformed_messages, "cache_control")
+
+    assistant_message = transformed_messages[1]
+    assert assistant_message["content"] == "I can help."
+    assert assistant_message["tool_calls"][0]["function"]["name"] == "read_file"
+
+
+def test_azure_ai_stripping_does_not_mutate_caller_messages():
+    """
+    The stripping must not touch the caller's messages. LiteLLM reuses the same
+    message objects when falling back to another provider, so stripping in place
+    would hand the fallback a conversation history with its thinking blocks and
+    provider metadata already destroyed.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Reading the file.", "signature": "sig"}
+            ],
+            "provider_specific_fields": {"thought_signature": "sig-top"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "sig-nested"},
+                    },
+                }
+            ],
+        },
+    ]
+
+    request = config.transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert not _find_key_anywhere(request["messages"], "thinking_blocks")
+
+    original_assistant = messages[1]
+    assert original_assistant["thinking_blocks"][0]["thinking"] == "Reading the file."
+    assert original_assistant["provider_specific_fields"] == {"thought_signature": "sig-top"}
+    assert original_assistant["tool_calls"][0]["function"]["provider_specific_fields"] == {
+        "thought_signature": "sig-nested"
+    }

@@ -6,7 +6,7 @@ import * as React from "react";
 import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import type { Organization } from "@/components/networking";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -63,14 +63,12 @@ export const OrgSettingsForm = ({
   const mutation = useMutation({
     mutationFn: (body: OrgPatchBody) => patchOrganization(organizationId, body),
     onSuccess: () => {
-      NotificationsManager.success("Organization settings updated successfully");
+      toast.success("Organization settings updated successfully");
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
       onSaved();
     },
     onError: (error: unknown) =>
-      NotificationsManager.fromBackend(
-        error instanceof Error ? error.message : "Failed to update organization settings",
-      ),
+      toast.fromError(error instanceof Error ? error.message : "Failed to update organization settings"),
   });
 
   const onSubmit = form.handleSubmit((values) => {

@@ -492,6 +492,7 @@ def test_strip_callback_config_drops_credential_bearing_slots():
             }
         ],
         "callback_settings": {"callback_vars": {"langfuse_secret_key": "litellm_enc::other"}},
+        "secret_manager_settings": {"vault_token": "vt-secret"},
         "priority": "high",
         "guardrails": ["presidio"],
         "langsmith_provisioning": {"api_key_id": "prov-1"},
@@ -501,6 +502,7 @@ def test_strip_callback_config_drops_credential_bearing_slots():
 
     assert "logging" not in stripped
     assert "callback_settings" not in stripped
+    assert "secret_manager_settings" not in stripped
     assert stripped["priority"] == "high"
     assert stripped["guardrails"] == ["presidio"]
     assert stripped["langsmith_provisioning"] == {"api_key_id": "prov-1"}

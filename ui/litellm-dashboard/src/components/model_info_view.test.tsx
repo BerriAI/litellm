@@ -4,21 +4,15 @@ import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../tests/mocks/complexityScorerDefaults"),
+);
 
 vi.mock("../../utils/dataUtils", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 vi.mock("./networking", () => ({
@@ -52,7 +46,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
   usePtuCostAttributionEnabled: () => mockUsePtuCostAttributionEnabled(),
 }));
 
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 const mockModelInfoV1Call = vi.mocked(networking.modelInfoV1Call);
 const mockCredentialGetCall = vi.mocked(networking.credentialGetCall);
 const mockCredentialListCall = vi.mocked(networking.credentialListCall);
@@ -255,7 +249,7 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockTestConnectionRequest).toHaveBeenCalled();
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Connection test successful!");
+      expect(mockToast.success).toHaveBeenCalledWith("Connection test successful!");
     });
   });
 
@@ -300,7 +294,7 @@ describe("ModelInfoView", () => {
     await user.click(testButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.error).toHaveBeenCalled();
+      expect(mockToast.error).toHaveBeenCalled();
     });
   });
 
@@ -380,6 +374,28 @@ describe("ModelInfoView", () => {
       expect(screen.getByRole("tab", { name: /overview/i })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name: /raw json/i })).toBeInTheDocument();
     });
+  });
+
+  it("keeps the edit form and its touched fields alive across a tab switch", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    const costInput = screen.getByPlaceholderText("Enter input cost") as HTMLInputElement;
+    await user.clear(costInput);
+    await user.type(costInput, "5");
+
+    await user.click(screen.getByRole("tab", { name: /raw json/i }));
+    await user.click(screen.getByRole("tab", { name: /overview/i }));
+
+    expect(screen.getByPlaceholderText("Enter input cost")).toBe(costInput);
+    expect(Number(costInput.value)).toBe(5);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+    expect(mockModelPatchUpdateCall.mock.calls[0][1].litellm_params.input_cost_per_token).toBeCloseTo(5 / 1_000_000);
   });
 
   it("should display model information in overview tab", async () => {
@@ -518,7 +534,7 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockModelPatchUpdateCall).toHaveBeenCalled();
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Model settings updated successfully");
+      expect(mockToast.success).toHaveBeenCalledWith("Model settings updated successfully");
       expect(mockOnModelUpdate).toHaveBeenCalled();
     });
   });
@@ -1049,7 +1065,7 @@ describe("ModelInfoView", () => {
     await userEvent.click(testConnectionButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.warning).toHaveBeenCalledWith(
+      expect(mockToast.warning).toHaveBeenCalledWith(
         "No complexity tiers are configured yet, so there is nothing to test.",
       );
     });

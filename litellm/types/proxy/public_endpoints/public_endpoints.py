@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -68,3 +69,15 @@ class SupportedEndpoint(BaseModel):
 
 class SupportedEndpointsResponse(BaseModel):
     endpoints: list[SupportedEndpoint]
+
+
+class ComplexityScorerDefaults(BaseModel):
+    """The complexity router's shipped heuristic scorer defaults.
+
+    The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so
+    a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+    """
+
+    tier_boundaries: Mapping[str, float]
+    token_thresholds: Mapping[str, int]
+    dimension_weights: Mapping[str, float]
