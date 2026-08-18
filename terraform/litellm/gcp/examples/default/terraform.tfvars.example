@@ -1,0 +1,101 @@
+project_id = "my-gcp-project"
+region     = "us-central1"
+
+# Resource naming: every GCP resource the stack creates is named
+# `${tenant}-litellm-${env}` (or that plus a per-resource suffix). E.g.
+# tenant="acme" + env="stage" → Cloud Run service `acme-litellm-stage-gateway`,
+# Cloud SQL instance `acme-litellm-stage`, etc.
+tenant = "acme"
+env    = "stage"
+
+# Tenant-supplied secrets. Prefer TF_VAR_litellm_master_key /
+# TF_VAR_litellm_license / TF_VAR_ui_password env vars so the values don't
+# end up in a committed tfvars file. All three are optional — when
+# omitted the stack auto-generates a master key, runs without a license,
+# and falls back to LITELLM_MASTER_KEY for UI login.
+# litellm_master_key = "sk-..."
+# litellm_license    = "lic-..."
+# ui_password        = "..."
+
+# TLS: provide DNS names already pointing at the LB IP for a Google-managed
+# cert. Without one, plan fails unless allow_plaintext_lb = true is set
+# explicitly (trial/dev only).
+# lb_domains         = ["proxy.example.com"]
+# allow_plaintext_lb = true
+
+# Storage and database retention. Defaults are safe — destroy preserves
+# data. Flip these only for ephemeral / CI stacks.
+# cloudsql_deletion_protection = true   # default: refuse destroy on the DB
+# gcs_force_destroy            = false  # default: refuse destroy on a non-empty bucket
+
+# Images. Cloud Run rejects ghcr.io, so a real deploy must point
+# image_registry at an Artifact Registry remote repo (see README "Image
+# pulls"); image_tag is applied to all four litellm-* images. Per-component
+# *_image overrides are NOT exposed here — set them directly on the
+# `module "litellm"` block in main.tf (see ../../variables.tf) if you need
+# to mix-and-match versions.
+# image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
+# image_tag      = "v1.86.0-dev"
+
+# ---------- proxy_config (mirrors helm gateway.config.proxy_config) ----------
+# proxy_config = {
+#   model_list = [
+#     {
+#       model_name = "gpt-4o"
+#       litellm_params = {
+#         model   = "openai/gpt-4o"
+#         api_key = "os.environ/OPENAI_API_KEY"
+#       }
+#     },
+#   ]
+#   general_settings = {
+#     master_key   = "os.environ/LITELLM_MASTER_KEY"
+#     database_url = "os.environ/DATABASE_URL"
+#
+#     # Optional. The module already exports REDIS_HOST / REDIS_PORT / REDIS_SSL
+#     # (plus REDIS_SSL_CA_CERTS) from the Memorystore instance it provisions, and
+#     # the proxy falls back to those for cross-pod rate limits, spend tracking
+#     # and the pod lock manager. Set this block only to coordinate through a
+#     # Redis the module does not manage; it overrides the REDIS_* env fallback.
+#     # Cluster mode takes `startup_nodes` and sentinel takes `sentinel_nodes`
+#     # plus `service_name`
+#     # coordination_redis = {
+#     #   host     = "os.environ/COORDINATION_REDIS_HOST"
+#     #   port     = "os.environ/COORDINATION_REDIS_PORT"
+#     #   password = "os.environ/COORDINATION_REDIS_PASSWORD"
+#     #   ssl      = true
+#     # }
+#   }
+# }
+
+# ---------- Extra env / secrets ----------
+# Plain-text env vars (non-sensitive). Land directly in the Cloud Run service spec.
+# gateway_extra_env = {
+#   LANGFUSE_HOST = "https://us.cloud.langfuse.com"
+# }
+
+# Backend env vars commonly tuned in prod: SSO redirect, docs branding,
+# UI admin username. UI_PASSWORD is its own first-class var (see top).
+# backend_extra_env = {
+#   AUTO_REDIRECT_UI_LOGIN_TO_SSO = "true"
+#   DOCS_TITLE                    = "Acme LiteLLM"
+#   UI_USERNAME                   = "admin"
+# }
+
+# Provider API keys — Secret Manager resource IDs (NOT secret values). The
+# Cloud Run SA auto-gains roles/secretmanager.secretAccessor on every
+# secret listed here. Same shape works for backend_extra_secrets.
+# gateway_extra_secrets = {
+#   OPENAI_API_KEY    = "projects/my-gcp-project/secrets/openai-api-key"
+#   ANTHROPIC_API_KEY = "projects/my-gcp-project/secrets/anthropic-api-key"
+# }
+
+# ---------- OpenTelemetry v2 ----------
+# OTel is gated on otel_endpoint: empty (default) and nothing is added to
+# the container env; set it and both gateway and backend gain
+# LITELLM_OTEL_V2=true plus the OTEL_* block (with OTEL_SERVICE_NAME
+# stamped per component). These knobs aren't surfaced as wrapper vars in
+# this example; set them directly on the `module "litellm"` block in
+# main.tf (otel_endpoint, otel_exporter, otel_environment_name,
+# otel_capture_message_content, otel_headers_secret). Full docs in
+# ../../variables.tf.

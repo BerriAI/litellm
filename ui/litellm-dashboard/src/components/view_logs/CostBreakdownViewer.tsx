@@ -1,5 +1,6 @@
-import React from "react";
-import { Collapse } from "antd";
+import React, { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export interface CostBreakdown {
@@ -49,15 +50,14 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   cacheReadTokens,
   cacheCreationTokens,
 }) => {
+  const [open, setOpen] = useState(false);
   const isCached = cacheHit?.toLowerCase() === "true";
   const hasTokenCounts = promptTokens !== undefined || completionTokens !== undefined;
 
   const hasCostBreakdown = costBreakdown?.input_cost !== undefined || costBreakdown?.output_cost !== undefined;
   const hasAdditionalCosts =
     costBreakdown?.additional_costs &&
-    Object.entries(costBreakdown.additional_costs).some(
-      ([, value]) => value != null && value !== 0
-    );
+    Object.entries(costBreakdown.additional_costs).some(([, value]) => value != null && value !== 0);
   const hasMeaningfulData =
     hasCostBreakdown ||
     hasTokenCounts ||
@@ -88,38 +88,42 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   const inputCost = isCached ? 0 : costBreakdown?.input_cost;
   const outputCost = isCached ? 0 : costBreakdown?.output_cost;
   const originalCost = isCached ? 0 : costBreakdown?.original_cost;
-  const totalCost = isCached ? 0 : (costBreakdown?.total_cost ?? totalSpend);
+  const totalCost = isCached ? 0 : costBreakdown?.total_cost ?? totalSpend;
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Collapse
-        expandIconPosition="start"
-        items={[
-          {
-            key: "1",
-            label: (
-              <div className="flex items-center justify-between w-full">
-                <h3 className="text-lg font-medium text-gray-900">Cost Breakdown</h3>
-                <div className="flex items-center space-x-2 mr-4">
-                  <span className="text-sm text-gray-500">Total:</span>
-                  <span className="text-sm font-semibold text-gray-900">
-                    {formatCost(totalSpend)}
-                    {isCached && " (Cached)"}
-                  </span>
-                </div>
-              </div>
-            ),
-            children: (
-              <div className="p-6 space-y-4">
+    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-3 text-left">
+          {open ? (
+            <ChevronDown className="size-3.5 shrink-0 text-gray-500" />
+          ) : (
+            <ChevronRight className="size-3.5 shrink-0 text-gray-500" />
+          )}
+          <div className="flex items-center justify-between w-full">
+            <h3 className="text-lg font-medium text-gray-900">Cost Breakdown</h3>
+            <div className="flex items-center space-x-2 mr-4">
+              <span className="text-sm text-gray-500">Total:</span>
+              <span className="text-sm font-semibold text-gray-900">
+                {formatCost(totalSpend)}
+                {isCached && " (Cached)"}
+              </span>
+            </div>
+          </div>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="p-6 space-y-4">
             {/* Step 1: Base Token Costs */}
             <div className="space-y-2 max-w-2xl">
               {(() => {
                 const hasCacheBreakdown =
-                  costBreakdown?.cache_read_cost !== undefined ||
-                  costBreakdown?.cache_creation_cost !== undefined;
+                  costBreakdown?.cache_read_cost !== undefined || costBreakdown?.cache_creation_cost !== undefined;
                 if (hasCacheBreakdown) {
                   // Separate line items: Input / Cache Read / Cache Write
-                  const rawCost = isCached ? 0 : (inputCost ?? 0) - (costBreakdown?.cache_read_cost ?? 0) - (costBreakdown?.cache_creation_cost ?? 0);
+                  const rawCost = isCached
+                    ? 0
+                    : (inputCost ?? 0) -
+                      (costBreakdown?.cache_read_cost ?? 0) -
+                      (costBreakdown?.cache_creation_cost ?? 0);
                   return (
                     <>
                       <div className="flex text-sm">
@@ -127,28 +131,34 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                         <span className="text-gray-900">
                           {formatCost(rawCost)}
                           {rawInputTokens !== undefined && rawInputTokens !== null && (
-                            <span className="text-gray-500 font-normal ml-1">({rawInputTokens.toLocaleString()} tokens)</span>
+                            <span className="text-gray-500 font-normal ml-1">
+                              ({rawInputTokens.toLocaleString()} tokens)
+                            </span>
                           )}
                         </span>
                       </div>
                       {(costBreakdown?.cache_read_cost ?? 0) > 0 && (
                         <div className="flex text-sm">
-                          <span className="text-gray-600 font-medium w-1/3">Cache Read Cost:</span>
+                          <span className="text-gray-600 font-medium w-1/3">Prompt Cache Read Cost:</span>
                           <span className="text-gray-900">
                             {formatCost(isCached ? 0 : costBreakdown?.cache_read_cost)}
                             {(cacheReadTokens ?? 0) > 0 && (
-                              <span className="text-gray-500 font-normal ml-1">({(cacheReadTokens ?? 0).toLocaleString()} tokens)</span>
+                              <span className="text-gray-500 font-normal ml-1">
+                                ({(cacheReadTokens ?? 0).toLocaleString()} tokens)
+                              </span>
                             )}
                           </span>
                         </div>
                       )}
                       {(costBreakdown?.cache_creation_cost ?? 0) > 0 && (
                         <div className="flex text-sm">
-                          <span className="text-gray-600 font-medium w-1/3">Cache Write Cost:</span>
+                          <span className="text-gray-600 font-medium w-1/3">Prompt Cache Write Cost:</span>
                           <span className="text-gray-900">
                             {formatCost(isCached ? 0 : costBreakdown?.cache_creation_cost)}
                             {(cacheCreationTokens ?? 0) > 0 && (
-                              <span className="text-gray-500 font-normal ml-1">({(cacheCreationTokens ?? 0).toLocaleString()} tokens)</span>
+                              <span className="text-gray-500 font-normal ml-1">
+                                ({(cacheCreationTokens ?? 0).toLocaleString()} tokens)
+                              </span>
                             )}
                           </span>
                         </div>
@@ -216,7 +226,9 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                   <div className="space-y-2">
                     {costBreakdown.discount_percent !== undefined && costBreakdown.discount_percent !== 0 && (
                       <div className="flex text-sm text-gray-600">
-                        <span className="font-medium w-1/3">Discount ({formatPercent(costBreakdown.discount_percent)}):</span>
+                        <span className="font-medium w-1/3">
+                          Discount ({formatPercent(costBreakdown.discount_percent)}):
+                        </span>
                         <span className="text-gray-900">-{formatCost(costBreakdown.discount_amount)}</span>
                       </div>
                     )}
@@ -234,8 +246,15 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                   <div className="space-y-2">
                     {costBreakdown.margin_percent !== undefined && costBreakdown.margin_percent !== 0 && (
                       <div className="flex text-sm text-gray-600">
-                        <span className="font-medium w-1/3">Margin ({formatPercent(costBreakdown.margin_percent)}):</span>
-                        <span className="text-gray-900">+{formatCost((costBreakdown.margin_total_amount || 0) - (costBreakdown.margin_fixed_amount || 0))}</span>
+                        <span className="font-medium w-1/3">
+                          Margin ({formatPercent(costBreakdown.margin_percent)}):
+                        </span>
+                        <span className="text-gray-900">
+                          +
+                          {formatCost(
+                            (costBreakdown.margin_total_amount || 0) - (costBreakdown.margin_fixed_amount || 0),
+                          )}
+                        </span>
                       </div>
                     )}
                     {costBreakdown.margin_fixed_amount !== undefined && costBreakdown.margin_fixed_amount !== 0 && (
@@ -260,10 +279,8 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
               </div>
             </div>
           </div>
-            ),
-          },
-        ]}
-      />
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 };

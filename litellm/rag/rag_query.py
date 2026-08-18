@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponse
@@ -12,35 +12,31 @@ class RAGQuery:
     CONTENT_PREFIX_STRING = "Context:\n\n"
 
     @staticmethod
-    def extract_query_from_messages(messages: List[AllMessageValues]) -> Optional[str]:
+    def extract_query_from_messages(messages: list[AllMessageValues]) -> str | None:
         """
         Extract the query from the last user message.
         """
         if not messages or len(messages) == 0:
             return None
 
-        last_message = messages[-1]
+        last_message: Final = messages[-1]
         if not isinstance(last_message, dict) or "content" not in last_message:
             return None
 
-        content = last_message["content"]
+        content: Final = last_message["content"]
 
         if isinstance(content, str):
             return content
         elif isinstance(content, list) and len(content) > 0:
             # Handle list of content items, extract text from first text item
             for item in content:
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "text"
-                    and "text" in item
-                ):
+                if isinstance(item, dict) and item.get("type") == "text" and "text" in item:
                     return item["text"]
 
         return None
 
     @staticmethod
-    def build_context_message(context_chunks: List[Any]) -> ChatCompletionUserMessage:
+    def build_context_message(context_chunks: list[Any]) -> ChatCompletionUserMessage:
         """
         Process search results and build a context message.
         """
@@ -48,12 +44,10 @@ class RAGQuery:
 
         for chunk in context_chunks:
             if isinstance(chunk, dict):
-                result_content: Optional[List[VectorStoreResultContent]] = chunk.get(
-                    "content"
-                )
+                result_content: list[VectorStoreResultContent] | None = chunk.get("content")
                 if result_content:
                     for content_item in result_content:
-                        content_text: Optional[str] = content_item.get("text")
+                        content_text: str | None = content_item.get("text")
                         if content_text:
                             context_content += content_text + "\n\n"
                 elif "text" in chunk:  # Fallback for simple dict with text
@@ -70,7 +64,7 @@ class RAGQuery:
     def add_search_results_to_response(
         response: ModelResponse,
         search_results: VectorStoreSearchResponse,
-        rerank_results: Optional[Any] = None,
+        rerank_results: Any | None = None,
     ) -> ModelResponse:
         """
         Add search results to the response choices.
@@ -80,9 +74,7 @@ class RAGQuery:
                 message = getattr(choice, "message", None)
                 if message is not None:
                     # Get existing provider_specific_fields or create new dict
-                    provider_fields = (
-                        getattr(message, "provider_specific_fields", None) or {}
-                    )
+                    provider_fields = getattr(message, "provider_specific_fields", None) or {}
 
                     # Add search results
                     provider_fields["search_results"] = search_results
@@ -96,9 +88,9 @@ class RAGQuery:
     @staticmethod
     def extract_documents_from_search(
         search_response: Any,
-    ) -> List[Union[str, Dict[str, Any]]]:
+    ) -> list[str | dict[str, Any]]:
         """Extract text documents from vector store search response."""
-        documents: List[Union[str, Dict[str, Any]]] = []
+        documents: Final[list[str | dict[str, Any]]] = []
         for result in search_response.get("data", []):
             content_list = result.get("content", [])
             for content in content_list:
@@ -107,12 +99,10 @@ class RAGQuery:
         return documents
 
     @staticmethod
-    def get_top_chunks_from_rerank(
-        search_response: Any, rerank_response: Any
-    ) -> List[Any]:
+    def get_top_chunks_from_rerank(search_response: Any, rerank_response: Any) -> list[Any]:
         """Get the original search results corresponding to the top reranked results."""
-        top_chunks = []
-        original_results = search_response.get("data", [])
+        top_chunks: Final = []
+        original_results: Final = search_response.get("data", [])
         for result in rerank_response.get("results", []):
             index = result.get("index")
             if index is not None and index < len(original_results):

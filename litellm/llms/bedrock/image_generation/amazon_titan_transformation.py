@@ -3,17 +3,17 @@ Transformation logic for Amazon Titan Image Generation.
 """
 
 import types
-from typing import List, Optional
+from typing import Final
 
 from openai.types.image import Image
 
-from litellm.utils import get_model_info
 from litellm.types.llms.bedrock import (
     AmazonNovaCanvasImageGenerationConfig,
     AmazonTitanImageGenerationRequestBody,
     AmazonTitanTextToImageParams,
 )
 from litellm.types.utils import ImageResponse
+from litellm.utils import get_model_info
 
 
 class AmazonTitanImageGenerationConfig:
@@ -21,21 +21,21 @@ class AmazonTitanImageGenerationConfig:
     Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=stability.stable-diffusion-xl-v0
     """
 
-    cfg_scale: Optional[int] = None
-    seed: Optional[float] = None
-    steps: Optional[List[str]] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
+    cfg_scale: int | None = None
+    seed: float | None = None
+    steps: list[str] | None = None
+    width: int | None = None
+    height: int | None = None
 
     def __init__(
         self,
-        cfg_scale: Optional[int] = None,
-        seed: Optional[float] = None,
-        steps: Optional[List[str]] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
+        cfg_scale: int | None = None,
+        seed: float | None = None,
+        steps: list[str] | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -59,7 +59,7 @@ class AmazonTitanImageGenerationConfig:
         }
 
     @classmethod
-    def _is_titan_model(cls, model: Optional[str] = None) -> bool:
+    def _is_titan_model(cls, model: str | None = None) -> bool:
         """
         Returns True if the model is a Titan model
 
@@ -71,7 +71,7 @@ class AmazonTitanImageGenerationConfig:
         return False
 
     @classmethod
-    def get_supported_openai_params(cls, model: Optional[str] = None) -> List:
+    def get_supported_openai_params(cls, model: str | None = None) -> list:
         return ["size", "n", "quality"]
 
     @classmethod
@@ -80,9 +80,9 @@ class AmazonTitanImageGenerationConfig:
         non_default_params: dict,
         optional_params: dict,
     ):
-        from typing import Any, Dict
+        from typing import Any
 
-        image_generation_config: Dict[str, Any] = {}
+        image_generation_config: Final[dict[str, Any]] = {}
         for k, v in non_default_params.items():
             if k == "size" and v is not None:
                 width, height = v.split("x")
@@ -90,9 +90,7 @@ class AmazonTitanImageGenerationConfig:
                 image_generation_config["height"] = int(height)
             elif k == "n" and v is not None:
                 image_generation_config["numberOfImages"] = v
-            elif (
-                k == "quality" and v is not None
-            ):  # 'auto', 'hd', 'standard', 'high', 'medium', 'low'
+            elif k == "quality" and v is not None:  # 'auto', 'hd', 'standard', 'high', 'medium', 'low'
                 if v in ("hd", "premium", "high"):
                     image_generation_config["quality"] = "premium"
                 elif v in ("standard", "medium", "low"):
@@ -108,34 +106,30 @@ class AmazonTitanImageGenerationConfig:
         text: str,
         optional_params: dict,
     ) -> AmazonTitanImageGenerationRequestBody:
-        from typing import Any, Dict
+        from typing import Any
 
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
-        negative_text = optional_params.pop("negativeText", None)
-        text_to_image_params: Dict[str, Any] = {"text": text}
+        negative_text: Final = optional_params.pop("negativeText", None)
+        text_to_image_params: Final[dict[str, Any]] = {"text": text}
         if negative_text:
             text_to_image_params["negativeText"] = negative_text
-        task_type = optional_params.pop("taskType", "TEXT_IMAGE")
-        user_specified_image_generation_config = optional_params.pop(
-            "imageGenerationConfig", {}
-        )
+        task_type: Final = optional_params.pop("taskType", "TEXT_IMAGE")
+        user_specified_image_generation_config: Final = optional_params.pop("imageGenerationConfig", {})
         image_generation_config = {
             **image_generation_config,
             **user_specified_image_generation_config,
         }
         return AmazonTitanImageGenerationRequestBody(
             taskType=task_type,
-            textToImageParams=AmazonTitanTextToImageParams(**text_to_image_params),  # type: ignore
-            imageGenerationConfig=AmazonNovaCanvasImageGenerationConfig(
-                **image_generation_config
-            ),
+            textToImageParams=AmazonTitanTextToImageParams(**text_to_image_params),
+            imageGenerationConfig=AmazonNovaCanvasImageGenerationConfig(**image_generation_config),
         )
 
     @classmethod
     def transform_response_dict_to_openai_response(
         cls, model_response: ImageResponse, response_dict: dict
     ) -> ImageResponse:
-        image_list: List[Image] = []
+        image_list: Final[list[Image]] = []
         for image in response_dict["images"]:
             _image = Image(b64_json=image)
             image_list.append(_image)
@@ -149,12 +143,12 @@ class AmazonTitanImageGenerationConfig:
         cls,
         model: str,
         image_response: ImageResponse,
-        size: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        size: str | None = None,
+        optional_params: dict | None = None,
     ) -> float:
-        model_info = get_model_info(model=model)
-        output_cost_per_image = model_info.get("output_cost_per_image") or 0.0
+        model_info: Final = get_model_info(model=model)
+        output_cost_per_image: Final = model_info.get("output_cost_per_image") or 0.0
         if not image_response.data:
             return 0.0
-        num_images = len(image_response.data)
+        num_images: Final = len(image_response.data)
         return output_cost_per_image * num_images

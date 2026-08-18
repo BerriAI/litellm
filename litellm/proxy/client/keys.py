@@ -1,12 +1,15 @@
-from typing import Any, Dict, List, Optional, Union
+import builtins
+from typing import Any, Final
 
 import requests
+
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 from .exceptions import UnauthorizedError
 
 
 class KeysManagementClient:
-    def __init__(self, base_url: str, api_key: Optional[str] = None):
+    def __init__(self, base_url: str, api_key: str | None = None):
         """
         Initialize the KeysManagementClient.
 
@@ -17,31 +20,31 @@ class KeysManagementClient:
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """
         Get the headers for API requests, including authorization if api_key is set.
 
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
     def list(
         self,
-        page: Optional[int] = None,
-        size: Optional[int] = None,
-        user_id: Optional[str] = None,
-        team_id: Optional[str] = None,
-        organization_id: Optional[str] = None,
-        key_hash: Optional[str] = None,
-        key_alias: Optional[str] = None,
-        return_full_object: Optional[bool] = None,
-        include_team_keys: Optional[bool] = None,
+        page: int | None = None,
+        size: int | None = None,
+        user_id: str | None = None,
+        team_id: str | None = None,
+        organization_id: str | None = None,
+        key_hash: str | None = None,
+        key_alias: str | None = None,
+        return_full_object: bool | None = None,
+        include_team_keys: bool | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         List all API keys with optional filtering and pagination.
 
@@ -66,8 +69,8 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/list"
-        params: Dict[str, Any] = {}
+        url: Final = f"{self._base_url}/key/list"
+        params: Final[dict[str, Any]] = {}
 
         # Add optional query parameters
         if page is not None:
@@ -89,16 +92,14 @@ class KeysManagementClient:
         if include_team_keys is not None:
             params["include_team_keys"] = str(include_team_keys).lower()
 
-        request = requests.Request(
-            "GET", url, headers=self._get_headers(), params=params
-        )
+        request: Final = requests.Request("GET", url, headers=self._get_headers(), params=params)
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -108,17 +109,17 @@ class KeysManagementClient:
 
     def generate(
         self,
-        models: Optional[List[str]] = None,
-        aliases: Optional[Dict[str, str]] = None,
-        spend: Optional[float] = None,
-        duration: Optional[str] = None,
-        key_alias: Optional[str] = None,
-        team_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        budget_id: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None,
+        models: builtins.list[str] | None = None,
+        aliases: dict[str, str] | None = None,
+        spend: float | None = None,
+        duration: str | None = None,
+        key_alias: str | None = None,
+        team_id: str | None = None,
+        user_id: str | None = None,
+        budget_id: str | None = None,
+        config: dict[str, Any] | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Generate an API key based on the provided data.
 
@@ -144,9 +145,9 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/generate"
+        url: Final = f"{self._base_url}/key/generate"
 
-        data: Dict[str, Any] = {}
+        data: Final[dict[str, Any]] = {}
         if models is not None:
             data["models"] = models
         if aliases is not None:
@@ -166,14 +167,14 @@ class KeysManagementClient:
         if config is not None:
             data["config"] = config
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -183,10 +184,10 @@ class KeysManagementClient:
 
     def delete(
         self,
-        keys: Optional[List[str]] = None,
-        key_aliases: Optional[List[str]] = None,
+        keys: builtins.list[str] | None = None,
+        key_aliases: builtins.list[str] | None = None,
         return_request: bool = False,
-    ) -> Union[Dict[str, Any], requests.Request]:
+    ) -> dict[str, Any] | requests.Request:
         """
         Delete existing keys
 
@@ -203,21 +204,21 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/delete"
+        url: Final = f"{self._base_url}/key/delete"
 
-        data = {
+        data: Final = {
             "keys": keys,
             "key_aliases": key_aliases,
         }
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -228,14 +229,14 @@ class KeysManagementClient:
     def update(
         self,
         key: str,
-        models: Optional[List[str]] = None,
-        aliases: Optional[Dict[str, str]] = None,
-        spend: Optional[float] = None,
-        duration: Optional[str] = None,
-        key_alias: Optional[str] = None,
-        team_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-    ) -> Union[Dict[str, Any], requests.Request]:
+        models: builtins.list[str] | None = None,
+        aliases: dict[str, str] | None = None,
+        spend: float | None = None,
+        duration: str | None = None,
+        key_alias: str | None = None,
+        team_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, Any] | requests.Request:
         """
         Update an existing API key's parameters.
 
@@ -256,9 +257,9 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/update"
+        url: Final = f"{self._base_url}/key/update"
 
-        data: Dict[str, Any] = {"key": key}
+        data: Final[dict[str, Any]] = {"key": key}
 
         if key_alias is not None:
             data["key_alias"] = key_alias
@@ -274,20 +275,18 @@ class KeysManagementClient:
             data["duration"] = duration
         if aliases is not None:
             data["aliases"] = aliases
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
-        session = requests.Session()
-        response_text: Optional[str] = None
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        session: Final = requests.Session()
+        response_text: str | None = None
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response_text = response.text
             response.raise_for_status()
             return response.json()
         except Exception:
             raise Exception(f"Error updating key: {response_text}")
 
-    def info(
-        self, key: str, return_request: bool = False
-    ) -> Union[Dict[str, Any], requests.Request]:
+    def info(self, key: str, return_request: bool = False) -> dict[str, Any] | requests.Request:
         """
         Get information about API keys.
 
@@ -302,18 +301,19 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/info?key={key}"
-        request = requests.Request("GET", url, headers=self._get_headers())
+        url: Final = f"{self._base_url}/key/info?key={key}"
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
+            redacted_message: Final = redact_string(str(e))
             if e.response.status_code == 401:
-                raise UnauthorizedError(e)
-            raise
+                raise UnauthorizedError(e) from None
+            raise requests.exceptions.HTTPError(redacted_message, response=e.response) from None

@@ -1,5 +1,5 @@
 import React from "react";
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 
 interface ExportSummaryProps {
   dateRange: DateRangePickerValue;
@@ -16,4 +16,3 @@ const ExportSummary: React.FC<ExportSummaryProps> = ({ dateRange, selectedFilter
 };
 
 export default ExportSummary;
-

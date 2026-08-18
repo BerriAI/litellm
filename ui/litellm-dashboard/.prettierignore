@@ -9,3 +9,5 @@ build
 .next-static
 *.min.js
 coverage/
+eslint-suppressions.json
+src/lib/http/schema.d.ts

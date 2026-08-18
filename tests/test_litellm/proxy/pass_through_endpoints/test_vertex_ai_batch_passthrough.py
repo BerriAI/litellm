@@ -84,7 +84,7 @@ class TestVertexAIBatchPassthroughHandler:
                             "input_file_id": "file-123",
                             "output_file_id": "file-456",
                             "error_file_id": None,
-                            "completion_window": "24hrs",
+                            "completion_window": "24h",
                         }
                         mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
                             "123456789"
@@ -258,6 +258,7 @@ class TestVertexAIBatchPassthroughHandler:
                     batch_object=batch_object,
                     model_object_id=model_object_id,
                     logging_obj=mock_logging_obj,
+                    is_batch_create=True,
                     user_api_key_dict={"user_id": "test-user"},
                 )
 
@@ -307,6 +308,7 @@ class TestVertexAIBatchPassthroughHandler:
                 batch_object={"id": "b1", "object": "batch", "status": "validating"},
                 model_object_id="b1",
                 logging_obj=mock_logging_obj,
+                is_batch_create=True,
                 **kwargs,
             )
 
@@ -314,6 +316,151 @@ class TestVertexAIBatchPassthroughHandler:
             call_kwargs = mock_managed_files_hook.store_unified_object_id.call_args[1]
             assert call_kwargs["user_api_key_dict"].user_id == expected_user_id
             assert call_kwargs["user_api_key_dict"].team_id == expected_team_id
+
+    def _store_with_metadata(self, mock_logging_obj, mock_managed_files_hook, metadata):
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
+            ),
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+            VertexPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object={"id": "b1", "object": "batch", "status": "validating"},
+                model_object_id="b1",
+                logging_obj=mock_logging_obj,
+                is_batch_create=True,
+                litellm_params={"metadata": metadata},
+            )
+        mock_managed_files_hook.store_unified_object_id.assert_called_once()
+        return mock_managed_files_hook.store_unified_object_id.call_args[1]
+
+    def test_persisted_tags_are_db_safe(self, mock_logging_obj, mock_managed_files_hook):
+        """Regression for PostgreSQL 22P05, asserted for Vertex too so moving the
+        sanitation somewhere that only covers Anthropic fails loudly."""
+        call_kwargs = self._store_with_metadata(
+            mock_logging_obj,
+            mock_managed_files_hook,
+            {"user_api_key": "hashed-key-a", "tags": ["clean", "bad\x00tag"]},
+        )
+
+        assert call_kwargs["request_tags"] == ("clean", "badtag")
+
+    def test_create_persists_key_hash_and_tags(
+        self, mock_logging_obj, mock_managed_files_hook
+    ):
+        """Regression (spend loss): the batch create must persist the creating key's hashed
+        token and its tags so CheckBatchCost can attribute the batch-cost spend row. Before
+        this fix the stored api_key was always "" and the row was dropped as unattributed."""
+        call_kwargs = self._store_with_metadata(
+            mock_logging_obj,
+            mock_managed_files_hook,
+            {
+                "user_api_key": "hashed-key-a",
+                "user_api_key_user_id": "alice",
+                "user_api_key_team_id": "team-alpha",
+                "user_api_key_auth_metadata": {"tags": ["env:prod", 7, "team:ml"]},
+            },
+        )
+
+        assert call_kwargs["user_api_key_dict"].api_key == "hashed-key-a"
+        # non-string tags are dropped so downstream tag budgets cannot be bypassed
+        assert call_kwargs["request_tags"] == ("env:prod", "team:ml")
+        assert call_kwargs["persist_attribution"] is True
+
+    @pytest.mark.parametrize(
+        "metadata, expected",
+        [
+            # a request that sent its own tags (x-litellm-tags header or body metadata)
+            ({"tags": ["req:a", "req:b"]}, ("req:a", "req:b")),
+            # request tags win over the key's own tags
+            (
+                {"tags": ["req:a"], "user_api_key_auth_metadata": {"tags": ["key:b"]}},
+                ("req:a",),
+            ),
+            # no request tags: fall back to the tags the key itself carries
+            ({"user_api_key_auth_metadata": {"tags": ["key:b"]}}, ("key:b",)),
+            # neither: no tags on the spend row
+            ({}, None),
+        ],
+    )
+    def test_request_tags_precedence(
+        self, mock_logging_obj, mock_managed_files_hook, metadata, expected
+    ):
+        """Request tags take precedence over the key's tags, and the key's tags are the
+        fallback because a tagged key does not put its tags in the top-level metadata."""
+        call_kwargs = self._store_with_metadata(
+            mock_logging_obj,
+            mock_managed_files_hook,
+            {"user_api_key": "hashed-key-a", **metadata},
+        )
+
+        assert call_kwargs["request_tags"] == expected
+
+    @pytest.mark.parametrize(
+        "url_route, expected",
+        [
+            ("/v1/projects/p/locations/us-central1/batchPredictionJobs", True),
+            ("/v1/projects/p/locations/us-central1/batchPredictionJobs/", True),
+            ("/v1/projects/p/locations/us-central1/batchPredictionJobs?alt=json", True),
+            ("/v1/projects/p/locations/us-central1/batchPredictionJobs/123456", False),
+            ("/v1/projects/p/locations/us-central1/batchPredictionJobs/123456?alt=json", False),
+        ],
+    )
+    def test_batch_is_registered_from_the_create_route_only(
+        self, mock_logging_obj, url_route, expected
+    ):
+        """Only a POST to the collection route is the create, and only the create claims
+        attribution. Every id-scoped route is a poll or retrieve, which still reports the
+        batch so its status and file object stay in sync, but carries is_batch_create=False
+        so it neither claims the batch nor creates a row it would then own."""
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "name": "projects/p/locations/us-central1/batchPredictionJobs/123456",
+            "model": "publishers/google/models/gemini-2.5-flash",
+        }
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler._store_batch_managed_object"
+            ) as mock_store,
+            patch(
+                "litellm.llms.vertex_ai.batches.transformation.VertexAIBatchTransformation"
+            ) as mock_transformation,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.VertexPassthroughLoggingHandler.get_actual_model_id_from_router",
+                return_value="gemini-2.5-flash",
+            ),
+        ):
+            mock_transformation.transform_vertex_ai_batch_response_to_openai_batch_response.return_value = {
+                "id": "123456",
+                "object": "batch",
+                "status": "validating",
+                "created_at": 1704067200,
+                "input_file_id": "gs://bucket/in.jsonl",
+                "completion_window": "24h",
+            }
+            mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = "123456"
+
+            VertexPassthroughLoggingHandler.batch_prediction_jobs_handler(
+                httpx_response=response,
+                logging_obj=mock_logging_obj,
+                url_route=url_route,
+                result="",
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                cache_hit=False,
+            )
+
+        # every route reports the batch; only the create claims it
+        mock_store.assert_called_once()
+        assert mock_store.call_args[1]["unified_object_id"]
+        assert mock_store.call_args[1]["is_batch_create"] is expected
 
     def test_batch_cost_calculation_integration(self):
         """Single Vertex AI response → non-zero cost with correct token counts."""
@@ -451,7 +598,7 @@ class TestVertexAIBatchPassthroughHandler:
                         "input_file_id": "file-123",
                         "output_file_id": "file-456",
                         "error_file_id": None,
-                        "completion_window": "24hrs",
+                        "completion_window": "24h",
                     }
                     mock_transformation._get_batch_id_from_vertex_ai_batch_response.return_value = (
                         "123456789"
@@ -590,22 +737,20 @@ class TestVertexAIBatchCostCalculation:
         assert usage.completion_tokens == 0
         assert usage.total_tokens == 0
 
-    def test_openai_shaped_output_records_nonzero_cost_and_usage(self):
+    @pytest.mark.asyncio
+    async def test_openai_shaped_output_records_nonzero_cost_and_usage(self):
         """
         Regression test for the bug where Vertex batch cost/usage was always 0.
 
         After PR #25627 (transform_file_content_response), the GCS predictions.jsonl
         is rewritten into OpenAI batch shape before the cost-tracking path sees it.
-        With disable_vertex_batch_output_transformation=False (default), the content
-        is OpenAI-shaped, so _batch_cost_calculator must fall through to the generic
-        path rather than calling calculate_vertex_ai_batch_cost_and_usage (which only
-        reads raw usageMetadata fields).
+        With disable_vertex_batch_output_transformation=False (default), the cost
+        dispatch must fall through to the generic aggregation path rather than
+        calling calculate_vertex_ai_batch_cost_and_usage (which only reads raw
+        usageMetadata fields).
         """
         import litellm
-        from litellm.batches.batch_utils import (
-            _batch_cost_calculator,
-            _get_batch_job_total_usage_from_file_content,
-        )
+        from litellm.batches.batch_utils import calculate_batch_cost_and_usage
 
         openai_shaped_responses = [
             {
@@ -668,12 +813,7 @@ class TestVertexAIBatchCostCalculation:
         try:
             litellm.disable_vertex_batch_output_transformation = False
 
-            cost = _batch_cost_calculator(
-                file_content_dictionary=openai_shaped_responses,
-                custom_llm_provider="vertex_ai",
-                model_name="gemini-2.0-flash-001",
-            )
-            usage = _get_batch_job_total_usage_from_file_content(
+            cost, usage, _ = await calculate_batch_cost_and_usage(
                 file_content_dictionary=openai_shaped_responses,
                 custom_llm_provider="vertex_ai",
                 model_name="gemini-2.0-flash-001",
@@ -694,16 +834,14 @@ class TestVertexAIBatchCostCalculation:
             cost > 0
         ), f"expected non-zero cost for completed Vertex batch, got {cost}"
 
-    def test_raw_vertex_output_still_works_when_transformation_disabled(self):
+    @pytest.mark.asyncio
+    async def test_raw_vertex_output_still_works_when_transformation_disabled(self):
         """
         When disable_vertex_batch_output_transformation=True the GCS file is returned
         as raw Vertex predictions.jsonl; the specialized reader must be used.
         """
         import litellm
-        from litellm.batches.batch_utils import (
-            _batch_cost_calculator,
-            _get_batch_job_total_usage_from_file_content,
-        )
+        from litellm.batches.batch_utils import calculate_batch_cost_and_usage
 
         raw_vertex_responses = [
             {
@@ -727,12 +865,7 @@ class TestVertexAIBatchCostCalculation:
         try:
             litellm.disable_vertex_batch_output_transformation = True
 
-            cost = _batch_cost_calculator(
-                file_content_dictionary=raw_vertex_responses,
-                custom_llm_provider="vertex_ai",
-                model_name="gemini-2.0-flash-001",
-            )
-            usage = _get_batch_job_total_usage_from_file_content(
+            cost, usage, _ = await calculate_batch_cost_and_usage(
                 file_content_dictionary=raw_vertex_responses,
                 custom_llm_provider="vertex_ai",
                 model_name="gemini-2.0-flash-001",

@@ -20,6 +20,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_tool_invoke,
     convert_url_to_base64,
     create_anthropic_image_param,
+    get_tool_calls_from_response,
+    has_tool_with_name,
     llama_2_chat_pt,
     prompt_factory,
 )
@@ -605,8 +607,33 @@ def test_no_messages_yields_user_text():
     assert contents == expected_output
 
 
-def test_convert_url():
-    convert_url_to_base64("https://picsum.photos/id/237/200/300")
+def test_convert_url(monkeypatch):
+    import base64
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    from litellm.litellm_core_utils.prompt_templates.image_handling import (
+        in_memory_cache,
+    )
+
+    url = "https://picsum.photos/id/237/200/300"
+    image_bytes = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+
+    mock_client = MagicMock()
+    mock_client.get.return_value = httpx.Response(
+        200, content=image_bytes, headers={"Content-Type": "image/png"}
+    )
+
+    monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+    monkeypatch.setattr(litellm, "module_level_client", mock_client, raising=False)
+    in_memory_cache.flush_cache()
+
+    result = convert_url_to_base64(url)
+
+    expected = "data:image/png;base64," + base64.b64encode(image_bytes).decode("utf-8")
+    assert result == expected
+    mock_client.get.assert_called_once()
 
 
 def test_azure_tool_call_invoke_helper():
@@ -2360,3 +2387,100 @@ def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
     # Verify signatures preserved in correct positions
     assert content[0]["signature"] == "sig_1"
     assert content[3]["signature"] == "sig_2"
+
+
+def test_get_tool_calls_from_response_chat_completions():
+    response = MagicMock()
+    response.output = None
+    response.content = None
+    tool_call = MagicMock()
+    tool_call.id = "call_abc"
+    tool_call.function.name = "my_tool"
+    tool_call.function.arguments = '{"x": 1}'
+    response.choices = [MagicMock(message=MagicMock(tool_calls=[tool_call]))]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "call_abc", "name": "my_tool", "arguments": {"x": 1}}]
+
+
+def test_get_tool_calls_from_response_responses_api():
+    response = MagicMock()
+    response.choices = None
+    response.content = None
+    response.output = [
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "my_tool",
+            "arguments": '{"x": 2}',
+        }
+    ]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "call_1", "name": "my_tool", "arguments": {"x": 2}}]
+
+
+def test_get_tool_calls_from_response_anthropic_messages():
+    response = MagicMock()
+    response.choices = None
+    response.output = None
+    response.content = [
+        {"type": "tool_use", "id": "toolu_1", "name": "my_tool", "input": {"x": 3}},
+    ]
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "toolu_1", "name": "my_tool", "arguments": {"x": 3}}]
+
+
+def test_get_tool_calls_from_response_anthropic_messages_plain_dict():
+    # AnthropicMessagesResponse is a TypedDict -- real responses are plain
+    # dicts at runtime, not objects with attribute access. A MagicMock-only
+    # test would pass even if the extractor used bare getattr() and silently
+    # returned nothing for a real response.
+    response = {
+        "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "my_tool", "input": {"x": 3}},
+        ]
+    }
+
+    result = get_tool_calls_from_response(response)
+
+    assert result == [{"id": "toolu_1", "name": "my_tool", "arguments": {"x": 3}}]
+
+
+def test_get_tool_calls_from_response_no_tool_calls():
+    response = MagicMock()
+    response.choices = None
+    response.output = None
+    response.content = None
+
+    assert get_tool_calls_from_response(response) == []
+
+
+def test_has_tool_with_name_openai_function_shape():
+    tools = [{"type": "function", "function": {"name": "my_tool"}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_anthropic_custom_shape():
+    tools = [{"type": "custom", "name": "my_tool", "input_schema": {}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_anthropic_shape_without_type_field():
+    # Anthropic's documented client tool format is just name + input_schema;
+    # "type" isn't required at all (type: "custom" is only one possible value).
+    tools = [{"name": "my_tool", "input_schema": {}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
+def test_has_tool_with_name_not_a_list():
+    assert not has_tool_with_name(None, "my_tool")
+    assert not has_tool_with_name("not a list", "my_tool")

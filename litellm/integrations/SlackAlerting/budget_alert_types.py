@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Literal
+from typing import Final, Literal
 
-from litellm.proxy._types import CallInfo
+from litellm.proxy._types import CallInfo, Litellm_EntityType
 
 
 class BaseBudgetAlertType(ABC):
@@ -10,12 +10,10 @@ class BaseBudgetAlertType(ABC):
     @abstractmethod
     def get_event_message(self) -> str:
         """Return the event message for this alert type"""
-        pass
 
     @abstractmethod
     def get_id(self, user_info: CallInfo) -> str:
         """Return the ID to use for caching/tracking this alert"""
-        pass
 
 
 class ProxyBudgetAlert(BaseBudgetAlertType):
@@ -31,6 +29,8 @@ class SoftBudgetAlert(BaseBudgetAlertType):
         return "Soft Budget Crossed: "
 
     def get_id(self, user_info: CallInfo) -> str:
+        if user_info.event_group == Litellm_EntityType.TEAM:
+            return user_info.team_id or "default_id"
         return user_info.token or "default_id"
 
 
@@ -97,7 +97,7 @@ def get_budget_alert_type(
 ) -> BaseBudgetAlertType:
     """Factory function to get the appropriate budget alert type class"""
 
-    alert_types = {
+    alert_types: Final = {
         "proxy_budget": ProxyBudgetAlert(),
         "soft_budget": SoftBudgetAlert(),
         "user_budget": UserBudgetAlert(),

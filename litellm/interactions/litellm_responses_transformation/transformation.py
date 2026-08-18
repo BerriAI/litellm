@@ -2,11 +2,15 @@
 Transformation utilities for bridging Interactions API to Responses API.
 
 This module handles transforming between:
-- Interactions API format (Google's format with Turn[], system_instruction, etc.)
+- Interactions API format (Google's format with Step[]/Turn[], system_instruction, etc.)
 - Responses API format (OpenAI's format with input[], instructions, etc.)
 """
 
-from typing import Any, Dict, List, Optional, cast
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Any, Final, cast
+
+from pydantic import BaseModel
 
 from litellm.types.interactions import (
     InteractionInput,
@@ -19,6 +23,8 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 
+_STEP_TYPE_ROLES: Final = MappingProxyType({"user_input": "user", "model_output": "assistant"})
+
 
 class LiteLLMResponsesInteractionsConfig:
     """Configuration class for transforming between Interactions API and Responses API."""
@@ -26,10 +32,10 @@ class LiteLLMResponsesInteractionsConfig:
     @staticmethod
     def transform_interactions_request_to_responses_request(
         model: str,
-        input: Optional[InteractionInput],
+        input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Transform an Interactions API request to a Responses API request.
 
@@ -39,16 +45,14 @@ class LiteLLMResponsesInteractionsConfig:
         - tools -> tools (similar format)
         - generation_config -> temperature, top_p, etc.
         """
-        responses_request: Dict[str, Any] = {
+        responses_request: Final[dict[str, Any]] = {
             "model": model,
         }
 
         # Transform input
         if input is not None:
             responses_request["input"] = (
-                LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
-                    input
-                )
+                LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(input)
             )
 
         # Transform system_instruction -> instructions
@@ -60,7 +64,7 @@ class LiteLLMResponsesInteractionsConfig:
             responses_request["tools"] = optional_params["tools"]
 
         # Transform generation_config to temperature, top_p, etc.
-        generation_config = optional_params.get("generation_config")
+        generation_config: Final = optional_params.get("generation_config")
         if generation_config:
             if isinstance(generation_config, dict):
                 if "temperature" in generation_config:
@@ -71,12 +75,10 @@ class LiteLLMResponsesInteractionsConfig:
                     # Responses API doesn't have top_k, skip it
                     pass
                 if "max_output_tokens" in generation_config:
-                    responses_request["max_output_tokens"] = generation_config[
-                        "max_output_tokens"
-                    ]
+                    responses_request["max_output_tokens"] = generation_config["max_output_tokens"]
 
         # Pass through other optional params that match
-        passthrough_params = ["stream", "store", "metadata", "user"]
+        passthrough_params: Final = ["stream", "store", "metadata", "user"]
         for param in passthrough_params:
             if param in optional_params and optional_params[param] is not None:
                 responses_request[param] = optional_params[param]
@@ -95,127 +97,99 @@ class LiteLLMResponsesInteractionsConfig:
 
         Interactions API input can be:
         - string: "Hello"
-        - Turn[]: [{"role": "user", "content": [...]}]
-        - Content object
+        - Step[]: [{"type": "user_input", "content": [...]}, {"type": "model_output", "content": [...]}]
+        - Turn[] (legacy): [{"role": "user", "content": [...]}]
+        - Content | Content[]: one user message worth of content parts
 
         Responses API input is:
         - string: "Hello"
-        - Message[]: [{"role": "user", "content": [...]}]
+        - Message[]: [{"role": "user", "content": [{"type": "input_text", ...}]}]
         """
         if isinstance(input, str):
-            # ResponseInputParam accepts str
             return cast(ResponseInputParam, input)
 
         if isinstance(input, list):
-            # Turn[] format - convert to Responses API Message[] format
-            messages = []
-            for turn in input:
-                if isinstance(turn, dict):
-                    role = turn.get("role", "user")
-                    content = turn.get("content", [])
+            transformed: Final = (
+                [
+                    LiteLLMResponsesInteractionsConfig._transform_history_item(item)
+                    for item in input
+                    if LiteLLMResponsesInteractionsConfig._is_history_item(item)
+                ]
+                if any(LiteLLMResponsesInteractionsConfig._is_history_item(item) for item in input)
+                else [
+                    {
+                        "role": "user",
+                        "content": LiteLLMResponsesInteractionsConfig._transform_content_array(input, "user"),
+                    }
+                ]
+            )
+            return cast(ResponseInputParam, transformed)
 
-                    # Transform content array
-                    transformed_content = (
-                        LiteLLMResponsesInteractionsConfig._transform_content_array(
-                            content
-                        )
-                    )
-
-                    messages.append(
-                        {
-                            "role": role,
-                            "content": transformed_content,
-                        }
-                    )
-                elif isinstance(turn, Turn):
-                    # Pydantic model
-                    role = turn.role if hasattr(turn, "role") else "user"
-                    content = turn.content if hasattr(turn, "content") else []
-
-                    # Ensure content is a list for _transform_content_array
-                    # Cast to List[Any] to handle various content types
-                    if isinstance(content, list):
-                        content_list: List[Any] = list(content)
-                    elif content is not None:
-                        content_list = [content]
-                    else:
-                        content_list = []
-
-                    transformed_content = (
-                        LiteLLMResponsesInteractionsConfig._transform_content_array(
-                            content_list
-                        )
-                    )
-
-                    messages.append(
-                        {
-                            "role": role,
-                            "content": transformed_content,
-                        }
-                    )
-
-            return cast(ResponseInputParam, messages)
-
-        # Single content object - wrap in message
         if isinstance(input, dict):
+            raw_content: Final = input.get("content")
+            content_items: Final = raw_content if isinstance(raw_content, list) else [input]
             return cast(
                 ResponseInputParam,
                 [
                     {
                         "role": "user",
-                        "content": LiteLLMResponsesInteractionsConfig._transform_content_array(
-                            input.get("content", [])
-                            if isinstance(input.get("content"), list)
-                            else [input]
-                        ),
+                        "content": LiteLLMResponsesInteractionsConfig._transform_content_array(content_items, "user"),
                     }
                 ],
             )
 
-        # Fallback: convert to string
         return cast(ResponseInputParam, str(input))
 
     @staticmethod
-    def _transform_content_array(content: List[Any]) -> List[Dict[str, Any]]:
-        """Transform Interactions API content array to Responses API format."""
-        if not isinstance(content, list):
-            # Single content item - wrap in array
-            content = [content]
+    def _is_history_item(item: object) -> bool:
+        if isinstance(item, Turn):
+            return True
+        return isinstance(item, dict) and ("role" in item or item.get("type") in _STEP_TYPE_ROLES)
 
-        transformed: List[Dict[str, Any]] = []
-        for item in content:
-            if isinstance(item, dict):
-                # Already in dict format, pass through
-                transformed.append(item)
-            elif isinstance(item, str):
-                # Plain string - wrap in text format
-                transformed.append({"type": "text", "text": item})
-            else:
-                # Pydantic model or other - convert to dict
-                if hasattr(item, "model_dump"):
-                    dumped = item.model_dump()
-                    if isinstance(dumped, dict):
-                        transformed.append(dumped)
-                    else:
-                        # Fallback: wrap in text format
-                        transformed.append({"type": "text", "text": str(dumped)})
-                elif hasattr(item, "dict"):
-                    dumped = item.dict()
-                    if isinstance(dumped, dict):
-                        transformed.append(dumped)
-                    else:
-                        # Fallback: wrap in text format
-                        transformed.append({"type": "text", "text": str(dumped)})
-                else:
-                    # Fallback: wrap in text format
-                    transformed.append({"type": "text", "text": str(item)})
+    @staticmethod
+    def _transform_history_item(item: object) -> Mapping[str, object]:
+        raw: Final = item.model_dump(exclude_none=True) if isinstance(item, Turn) else item
+        fields: Final = raw if isinstance(raw, Mapping) else {}
+        role: Final = LiteLLMResponsesInteractionsConfig._responses_role(fields)
+        raw_content: Final = fields.get("content")
+        content_items: Final = (
+            raw_content if isinstance(raw_content, list) else [] if raw_content is None else [raw_content]
+        )
+        return {
+            "role": role,
+            "content": LiteLLMResponsesInteractionsConfig._transform_content_array(content_items, role),
+        }
 
-        return transformed
+    @staticmethod
+    def _responses_role(item: Mapping[str, object]) -> str:
+        step_role: Final = _STEP_TYPE_ROLES.get(str(item.get("type", "")))
+        if step_role is not None:
+            return step_role
+        raw_role: Final = str(item.get("role") or "user")
+        return "assistant" if raw_role == "model" else raw_role
+
+    @staticmethod
+    def _transform_content_array(content: Sequence[object], role: str) -> Sequence[Mapping[str, object]]:
+        """Transform Interactions API content parts to Responses API parts for the given role."""
+        return [LiteLLMResponsesInteractionsConfig._transform_content_item(item, role) for item in content]
+
+    @staticmethod
+    def _transform_content_item(item: object, role: str) -> Mapping[str, object]:
+        text_type: Final = "output_text" if role == "assistant" else "input_text"
+        if isinstance(item, str):
+            return {"type": text_type, "text": item}
+        if isinstance(item, Mapping):
+            if item.get("type") == "text":
+                return {"type": text_type, "text": str(item.get("text", ""))}
+            return item
+        if isinstance(item, BaseModel):
+            return LiteLLMResponsesInteractionsConfig._transform_content_item(item.model_dump(exclude_none=True), role)
+        return {"type": text_type, "text": str(item)}
 
     @staticmethod
     def transform_responses_response_to_interactions_response(
         responses_response: ResponsesAPIResponse,
-        model: Optional[str] = None,
+        model: str | None = None,
     ) -> InteractionsAPIResponse:
         """
         Transform a Responses API response to an Interactions API response.
@@ -227,15 +201,15 @@ class LiteLLMResponsesInteractionsConfig:
         - Extract usage
         """
         # Extract text from outputs and build both `outputs` (legacy) and `steps` (new schema).
-        outputs: List[Dict[str, Any]] = []
-        steps: List[Dict[str, Any]] = []
+        outputs: Final[list[dict[str, Any]]] = []
+        steps: Final[list[dict[str, Any]]] = []
         if hasattr(responses_response, "output") and responses_response.output:
             for output_item in responses_response.output:
                 # Use getattr with None default to safely access content
                 content = getattr(output_item, "content", None)
                 if content is not None:
                     content_items = content if isinstance(content, list) else [content]
-                    model_output_contents: List[Dict[str, Any]] = []
+                    model_output_contents: list[dict[str, Any]] = []
                     for content_item in content_items:
                         # Check if content_item has text attribute
                         text = getattr(content_item, "text", None)
@@ -244,10 +218,7 @@ class LiteLLMResponsesInteractionsConfig:
                             # of `outputs` / `steps` don't leak into the other.
                             outputs.append({"type": "text", "text": text})
                             model_output_contents.append({"type": "text", "text": text})
-                        elif (
-                            isinstance(content_item, dict)
-                            and content_item.get("type") == "text"
-                        ):
+                        elif isinstance(content_item, dict) and content_item.get("type") == "text":
                             outputs.append({**content_item})
                             model_output_contents.append({**content_item})
                     if model_output_contents:
@@ -259,7 +230,7 @@ class LiteLLMResponsesInteractionsConfig:
                         )
 
         # Convert created_at to ISO string
-        created_at = getattr(responses_response, "created_at", None)
+        created_at: Final = getattr(responses_response, "created_at", None)
         if isinstance(created_at, int):
             from datetime import datetime
 
@@ -270,7 +241,7 @@ class LiteLLMResponsesInteractionsConfig:
             created = None
 
         # Map status
-        status = getattr(responses_response, "status", "completed")
+        status: Final = getattr(responses_response, "status", "completed")
         if status == "completed":
             interactions_status = "completed"
         elif status == "in_progress":
@@ -280,7 +251,7 @@ class LiteLLMResponsesInteractionsConfig:
 
         # Build interactions response — populate both `outputs` (legacy schema) and
         # `steps` (new schema) so callers work regardless of which schema they expect.
-        interactions_response_dict: Dict[str, Any] = {
+        interactions_response_dict: Final[dict[str, Any]] = {
             "id": getattr(responses_response, "id", ""),
             "object": "interaction",
             "status": interactions_status,
@@ -293,15 +264,12 @@ class LiteLLMResponsesInteractionsConfig:
         # Add usage if available
         # Map Responses API usage (input_tokens, output_tokens) to Interactions API spec format
         # (total_input_tokens, total_output_tokens)
-        usage = getattr(responses_response, "usage", None)
+        usage: Final = getattr(responses_response, "usage", None)
         if usage:
             interactions_response_dict["usage"] = {
                 "total_input_tokens": getattr(usage, "input_tokens", 0),
                 "total_output_tokens": getattr(usage, "output_tokens", 0),
             }
-
-        # Add role
-        interactions_response_dict["role"] = "model"
 
         # Add updated (same as created for now)
         interactions_response_dict["updated"] = created

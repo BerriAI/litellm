@@ -1,0 +1,55 @@
+extend = "ruff.toml"
+
+[lint]
+preview = true
+select = ["ANN", "ASYNC230", "B004", "B006", "B008", "B009", "B010", "B018", "B019", "B021", "B026", "B033", "BLE", "C401", "C404", "C405", "C408", "C414", "C419", "C901", "D419", "DTZ001", "DTZ003", "DTZ005", "DTZ006", "DTZ007", "DTZ011", "EXE001", "EXE002", "F401", "FURB136", "FURB168", "FURB188", "I001", "LOG015", "N999", "PERF102", "PERF401", "PERF402", "PERF403", "PIE790", "PIE800", "PIE804", "PIE810", "PLC0206", "PLC0208", "PLC0414", "PLR0124", "PLR0206", "PLR0402", "PLR1704", "PLR1711", "PLR1714", "PLR1730", "PLR2044", "PLW0127", "PLW0133", "PLW0602", "PLW0603", "PLW1508", "PLW1510", "PYI030", "PYI036", "PYI041", "PYI064", "RET501", "RET504", "RUF010", "RUF012", "RUF015", "RUF019", "RUF022", "RUF023", "RUF046", "RUF051", "RUF059", "RUF100", "S110", "S112", "SIM101", "SIM102", "SIM103", "SIM113", "SIM114", "SIM115", "SIM117", "SIM118", "SIM201", "SIM210", "SIM211", "SIM222", "SIM401", "TC004", "TC005", "TID251", "TRY002", "TRY004", "TRY201", "TRY203", "TRY300", "UP006", "UP007", "UP008", "UP012", "UP018", "UP024", "UP028", "UP031", "UP032", "UP034", "UP035", "UP036", "UP037", "UP045"]
+extend-select = []
+# Overrides the inherited list: rules this gate enforces itself must NOT be external here,
+# so this config's RUF100 flags their stale `# noqa` directives. What remains external is
+# only what other tooling enforces: every base ruff.toml rule this select list doesn't
+# re-enable (all of the default E/F families plus T20/PGH004/RUF008/RUF009, minus the
+# strict-selected F401 and RUF100; F4 is split out so stale F401 noqas stay detectable),
+# plus upstream litellm's ruff config.
+external = [
+    "T20", "PGH004", "RUF008", "RUF009", "E4", "E7", "E9",
+    "F402", "F404", "F406", "F407", "F5", "F6", "F7", "F8", "F9",
+    "PLC0415", "E402", "BLE001", "ARG002", "S102", "S324", "S606", "D401", "F403", "F405",
+]
+
+[lint.per-file-ignores]
+# ANN401 (explicit `Any` disallowed) has no per-line/function-level ignore mechanism
+# in ruff, only file-level. These two files each have a handful of parameters that
+# are genuinely heterogeneous with no fitting concrete type: a response object that
+# varies across every LLM call type (completion/embedding/transcription/etc. each
+# return a different shape), and *args/**kwargs forwarded verbatim with no fixed
+# shape. Tried the closest existing union (CostResponseTypes) first; basedpyright
+# caught a real mismatch, confirming Any is correct here, not a shortcut.
+"litellm/litellm_core_utils/litellm_logging.py" = ["ANN401"]
+"litellm/utils.py" = ["ANN401"]
+
+[lint.mccabe]
+max-complexity = 15
+
+[lint.pylint]
+max-args = 5
+
+[lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Use a concrete type. Frozen slots=True dataclass (preferred) / NamedTuple / ReadOnly TypedDict for payloads."
+"typing_extensions.Any".msg = "Same as typing.Any."
+"typing.List".msg = "tuple[X, ...] for state, Sequence[X] for params."
+"typing.Dict".msg = "Frozen dataclass / NamedTuple / ReadOnly TypedDict; if truly dynamic, use MappingProxyType."
+"typing.Set".msg = "frozenset[X] or AbstractSet[X]."
+"typing.MutableSequence".msg = "Sequence[X]."
+"typing.MutableMapping".msg = "See typing.Dict."
+# Unchecked casts: cast() lies to the type checker with no runtime guarantee.
+# Validate into a concrete frozen type at the boundary (pydantic) instead.
+# Per-call-site coverage lives in check_type_discipline.py (LIT006); this freezes
+# new cast imports. Suppress (with a reason) via `# noqa: TID251  # <reason>`.
+"typing.cast".msg = "No unchecked casts: validate into a frozen dataclass/NamedTuple/ReadOnly TypedDict at the boundary (pydantic)."
+"typing_extensions.cast".msg = "Same as typing.cast."
+# Unverified narrowing predicates: the checker never validates the guard body, so a
+# wrong guard silently corrupts types. Banned outright (there are none today).
+"typing.TypeGuard".msg = "Unverified narrowing. Parse into a concrete type, or use isinstance for a runtime-checked narrowing."
+"typing_extensions.TypeGuard".msg = "Same as typing.TypeGuard."
+"typing.TypeIs".msg = "Unverified narrowing (the body is trusted). Parse into a concrete type instead."
+"typing_extensions.TypeIs".msg = "Same as typing.TypeIs."

@@ -74,6 +74,150 @@ def test_redacted_thinking_content_block_delta():
     assert "thinking_blocks" in model_response.choices[0].delta.provider_specific_fields
 
 
+def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 1. "},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 2."},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig-final"},
+        },
+    ]
+
+    parsed_chunks = [
+        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
+    ]
+    reasoning_content = "".join(
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
+        for chunk in parsed_chunks
+    )
+    thinking_blocks = tuple(
+        block
+        for chunk in parsed_chunks
+        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+    )
+    expected_delta_blocks = (
+        {"type": "thinking", "thinking": "Step 1. "},
+        {"type": "thinking", "thinking": "Step 2."},
+    )
+    expected_thinking_block = {
+        "type": "thinking",
+        "thinking": "Step 1. Step 2.",
+        "signature": "sig-final",
+    }
+
+    assert reasoning_content == "Step 1. Step 2."
+    assert thinking_blocks == (*expected_delta_blocks, expected_thinking_block)
+    assert parsed_chunks[1].choices[0].delta.provider_specific_fields == {
+        "thinking_blocks": [expected_delta_blocks[0]]
+    }
+    assert parsed_chunks[-1].choices[0].delta.provider_specific_fields == {
+        "thinking_blocks": [expected_thinking_block]
+    }
+
+
+def test_streaming_unsigned_thinking_deltas_keep_reasoning_content():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 1. "},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 2."},
+        },
+        {"type": "content_block_stop", "index": 0},
+    ]
+
+    parsed_chunks = [
+        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
+    ]
+    reasoning_content = "".join(
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
+        for chunk in parsed_chunks
+    )
+    thinking_blocks = tuple(
+        block
+        for chunk in parsed_chunks
+        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+    )
+
+    assert reasoning_content == "Step 1. Step 2."
+    assert thinking_blocks == (
+        {"type": "thinking", "thinking": "Step 1. "},
+        {"type": "thinking", "thinking": "Step 2."},
+    )
+
+
+def test_streaming_truncated_thinking_deltas_keep_reasoning_content():
+    model_response_iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 1. "},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Step 2."},
+        },
+    ]
+
+    parsed_chunks = [
+        model_response_iterator.chunk_parser(chunk=chunk) for chunk in chunks
+    ]
+    reasoning_content = "".join(
+        getattr(chunk.choices[0].delta, "reasoning_content", None) or ""
+        for chunk in parsed_chunks
+    )
+    thinking_blocks = tuple(
+        block
+        for chunk in parsed_chunks
+        for block in (getattr(chunk.choices[0].delta, "thinking_blocks", None) or [])
+    )
+
+    assert reasoning_content == "Step 1. Step 2."
+    assert thinking_blocks == (
+        {"type": "thinking", "thinking": "Step 1. "},
+        {"type": "thinking", "thinking": "Step 2."},
+    )
+
+
 def test_handle_json_mode_chunk_response_format_tool():
     model_response_iterator = ModelResponseIterator(
         streaming_response=MagicMock(), sync_stream=True, json_mode=True

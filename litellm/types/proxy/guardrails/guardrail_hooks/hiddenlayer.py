@@ -1,7 +1,5 @@
 import enum
 
-from typing import Optional
-
 from pydantic import Field
 
 from .base import GuardrailConfigModel
@@ -17,24 +15,22 @@ class HiddenlayerMessages(str, enum.Enum):
 
 
 class HiddenlayerGuardrailConfigModel(GuardrailConfigModel):
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description="The URL of the Hiddenlayer server. If not provided, the `HIDDENLAYER_API_BASE` environment variable is checked or https://api.hiddenlayer.ai is used.",
     )
 
-    api_id: Optional[str] = Field(
+    api_id: str | None = Field(
         default=None,
         description="The Hiddenlayer API Id for the Hiddenlayer API. If not provided, the `HIDDENLAYER_CLIENT_ID` environment variable is checked or https://api.hiddenlayer.ai is used.",
     )
 
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description="The Hiddenlayer Secret Key for the Hiddenlayer API.. If not provided, the `HIDDENLAYER_CLIENT_SECRET` environment variable is checked.",
     )
 
-    version: Optional[int] = Field(
-        default=2, description="Hiddenlayer guardrail version to use."
-    )
+    version: int | None = Field(default=2, description="Hiddenlayer guardrail version to use.")
 
     @staticmethod
     def ui_friendly_name() -> str:

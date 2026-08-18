@@ -9,19 +9,13 @@ vi.mock("antd", async (importOriginal) => {
     ...actual,
     Select: Object.assign(
       ({ value, onChange, children }: any) => (
-        <select
-          data-testid="strategy-select"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
+        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
           {children}
         </select>
       ),
       {
-        Option: ({ value, children }: any) => (
-          <option value={value}>{children}</option>
-        ),
-      }
+        Option: ({ value, children }: any) => <option value={value}>{children}</option>,
+      },
     ),
   };
 });
@@ -32,12 +26,8 @@ vi.mock("@/components/networking", () => ({
   setCallbacksCall: vi.fn(),
 }));
 
-import {
-  getCallbacksCall,
-  getRouterSettingsCall,
-  setCallbacksCall,
-} from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "@/components/networking";
+import { toast } from "@/lib/toast";
 
 const mockCallbacksResponse = {
   router_settings: {
@@ -86,9 +76,7 @@ describe("RouterSettings", () => {
   });
 
   it("should render nothing when accessToken is null", () => {
-    const { container } = renderWithProviders(
-      <RouterSettings {...defaultProps} accessToken={null} />
-    );
+    const { container } = renderWithProviders(<RouterSettings {...defaultProps} accessToken={null} />);
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -108,9 +96,7 @@ describe("RouterSettings", () => {
   });
 
   it("should not fetch data when any required prop is missing", () => {
-    renderWithProviders(
-      <RouterSettings {...defaultProps} userRole={null} />
-    );
+    renderWithProviders(<RouterSettings {...defaultProps} userRole={null} />);
     expect(getCallbacksCall).not.toHaveBeenCalled();
   });
 
@@ -144,7 +130,31 @@ describe("RouterSettings", () => {
         router_settings: expect.objectContaining({
           routing_strategy: "simple-shuffle",
         }),
-      })
+      }),
+    );
+  });
+
+  it("should send the edited input value, not the loaded one, on Save Changes", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+
+    const numRetries = await screen.findByRole("textbox", { name: /num_retries/i });
+    await user.clear(numRetries);
+    await user.type(numRetries, "42");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          router_settings: expect.objectContaining({ num_retries: 42 }),
+        }),
+      ),
     );
   });
 
@@ -158,8 +168,47 @@ describe("RouterSettings", () => {
     });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    expect(NotificationsManager.success).toHaveBeenCalledWith(
-      "router settings updated successfully"
+    expect(toast.success).toHaveBeenCalledWith("router settings updated successfully");
+  });
+
+  it("should not render or save routing_groups (owned by the Routing Groups tab)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        routing_strategy: "simple-shuffle",
+        num_retries: 3,
+        routing_groups: [{ group_name: "g1", models: ["gpt-4"], routing_strategy: "simple-shuffle" }],
+      },
+    });
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+    expect(document.querySelector('input[name="routing_groups"]')).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith("test-token", {
+        router_settings: expect.not.objectContaining({ routing_groups: expect.anything() }),
+      }),
     );
+  });
+
+  it("should surface an error and not claim success when saving fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(setCallbacksCall).mockRejectedValue(new Error("422 Unprocessable Entity"));
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(toast.fromError).toHaveBeenCalled();
+    });
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

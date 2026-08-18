@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -129,6 +130,7 @@ class TestPassthroughPostCallGuardrails:
         mock_proxy_logging.post_call_success_hook = AsyncMock(
             return_value=_GEMINI_RESPONSE
         )
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
 
         with _common_patches(mock_proxy_logging, mock_response):
             await pass_through_request(
@@ -154,6 +156,7 @@ class TestPassthroughPostCallGuardrails:
         mock_proxy_logging = MagicMock()
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
 
         with _common_patches(mock_proxy_logging, mock_response):
             result = await pass_through_request(
@@ -216,6 +219,53 @@ class TestPassthroughPostCallGuardrails:
         assert body["error"]["guardrail_name"] == "rubrik"
         assert body["error"]["model"] == "gemini-2.0-flash"
 
+    @patch(_COLLECT, return_value=["rubrik"])
+    async def test_deny_forwards_guardrail_logging_info_to_failure_hook(
+        self,
+        mock_collect,
+    ):
+        """A post-call guardrail deny (non-ModifyResponseException) records its
+        standard_logging_guardrail_information on the hook_data dict; the failure
+        handler must forward that info to post_call_failure_hook so downstream
+        loggers (e.g. the otel guardrail span) still see it. Regression for the
+        block path dropping it."""
+        mock_response = _make_httpx_response(_GEMINI_RESPONSE)
+
+        def _block(*, data, user_api_key_dict, response):
+            metadata = data.setdefault("metadata", {})
+            metadata.setdefault("standard_logging_guardrail_information", []).append(
+                {"guardrail_name": "rubrik", "guardrail_status": "guardrail_intervened"}
+            )
+            raise HTTPException(status_code=400, detail={"error": "blocked"})
+
+        captured = {}
+
+        async def _capture_failure(**kwargs):
+            captured.update(kwargs)
+
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=_block)
+        mock_proxy_logging.post_call_failure_hook = AsyncMock(
+            side_effect=_capture_failure
+        )
+
+        with _common_patches(mock_proxy_logging, mock_response):
+            with pytest.raises(Exception):
+                await pass_through_request(
+                    request=_make_mock_request(),
+                    target="https://example.com/v1/generateContent",
+                    custom_headers={"Content-Type": "application/json"},
+                    user_api_key_dict=_make_user_api_key_dict(),
+                    stream=False,
+                )
+
+        mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+        entries = captured["request_data"]["metadata"][
+            "standard_logging_guardrail_information"
+        ]
+        assert any(e.get("guardrail_name") == "rubrik" for e in entries)
+
 
 @pytest.mark.asyncio
 class TestUnifiedGuardrailCallTypeResolution:
@@ -244,19 +294,22 @@ class TestUnifiedGuardrailCallTypeResolution:
 
         response_body = {"candidates": [{"content": {"parts": [{"text": "hello"}]}}]}
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail.load_guardrail_translation_mappings"
-        ) as mock_load:
-            mock_handler_instance = AsyncMock()
-            mock_handler_instance.process_output_response = AsyncMock(
-                return_value=response_body
-            )
-            mock_handler_class = MagicMock(return_value=mock_handler_instance)
+        mock_handler_instance = AsyncMock()
+        mock_handler_instance.process_output_response = AsyncMock(
+            return_value=response_body
+        )
+        mock_handler_class = MagicMock(return_value=mock_handler_instance)
 
-            from litellm.types.utils import CallTypes
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
+            unified_guardrail as unified_guardrail_module,
+        )
+        from litellm.types.utils import CallTypes
 
-            mock_load.return_value = {CallTypes.pass_through: mock_handler_class}
-
+        with patch.object(
+            unified_guardrail_module,
+            "endpoint_guardrail_translation_mappings",
+            {CallTypes.pass_through: mock_handler_class},
+        ):
             result = await unified.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=user_api_key_dict,

@@ -19,6 +19,7 @@ import websockets.exceptions  # registers websockets.exceptions on the websocket
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import litellm
 from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
 # ---------------------------------------------------------------------------
@@ -79,6 +80,128 @@ def test_session_configuration_request_model_format():
     parsed = json.loads(raw)
     assert parsed["setup"]["model"] == (
         "projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-001"
+    )
+
+
+def test_vertex_requires_session_configuration_feature_flag(monkeypatch):
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    # Default remains backwards-compatible (auto setup on connect)
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    assert cfg.requires_session_configuration() is True
+
+    # Opt-in deferred setup for tool-injection flow
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    assert cfg.requires_session_configuration() is False
+
+
+def test_vertex_session_update_defaults_to_audio_modality():
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "instructions": "You are a helpful assistant.",
+            # No modalities provided on purpose
+        },
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        session_configuration_request=None,
+    )
+    assert len(messages) == 1
+    setup_payload = json.loads(messages[0])["setup"]
+    assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+_NATIVE_AUDIO_MODEL = "gemini-live-2.5-flash-preview-native-audio-09-2025"
+
+
+@pytest.fixture(autouse=False)
+def patch_native_audio_cost_map_entry(monkeypatch):
+    """Inject gemini_native_audio into the cost map for the test model.
+
+    litellm.model_cost is fetched from main branch at import time, so in CI
+    the field may not exist yet. Patch it locally so these unit tests remain
+    self-contained and don't depend on the remote cost map state.
+    """
+    entry = dict(litellm.model_cost.get(_NATIVE_AUDIO_MODEL, {}))
+    entry["gemini_native_audio"] = True
+    monkeypatch.setitem(litellm.model_cost, _NATIVE_AUDIO_MODEL, entry)
+
+
+def test_vertex_audio_only_live_model_coerces_text_modality_to_audio(
+    patch_native_audio_cost_map_entry,
+):
+    """Regression: TEXT-only responseModalities causes 1007 on native-audio Live models."""
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "modalities": ["text"],
+            "instructions": "You are a terse assistant.",
+        },
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_vertex_session_update_normalizes_ga_remapped_fields(
+    patch_native_audio_cost_map_entry,
+):
+    """GA-format clients send ``output_modalities`` and nested
+    ``audio.input.transcription`` / ``audio.input.turn_detection``. These must
+    be normalised back to the flat beta keys before ``map_openai_params``
+    runs so client preferences aren't silently dropped.
+    """
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "instructions": "Be concise.",
+            "output_modalities": ["text"],
+            "audio": {
+                "input": {
+                    "transcription": {},
+                    "turn_detection": {"silence_duration_ms": 1500},
+                },
+            },
+        },
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+    assert len(messages) == 1
+    setup_payload = json.loads(messages[0])["setup"]
+
+    assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
+    assert setup_payload["inputAudioTranscription"] == {}
+    assert (
+        setup_payload["realtimeInputConfig"]["automaticActivityDetection"][
+            "silenceDurationMs"
+        ]
+        == 1500
     )
 
 
@@ -198,8 +321,8 @@ async def test_vertex_realtime_text_in_text_out():
     assert session_created_msgs, "Expected session.created to be sent to client"
 
     # At least one text delta should have been forwarded
-    text_delta_msgs = [m for m in sent_to_client if '"response.text.delta"' in m]
-    assert text_delta_msgs, "Expected response.text.delta to be sent to client"
+    text_delta_msgs = [m for m in sent_to_client if '"response.output_text.delta"' in m]
+    assert text_delta_msgs, "Expected response.output_text.delta to be sent to client"
 
     # Verify the delta contains the model's text
     delta_obj = json.loads(text_delta_msgs[0])
@@ -208,3 +331,137 @@ async def test_vertex_realtime_text_in_text_out():
     # response.done should have been forwarded
     done_msgs = [m for m in sent_to_client if '"response.done"' in m]
     assert done_msgs, "Expected response.done to be sent to client"
+
+
+def test_vertex_warns_when_dropping_guardrail_turn_detection_update(caplog):
+    """A subsequent session.update carrying the guardrail's
+    ``create_response: False`` cannot be forwarded as a follow-up setup on
+    Vertex AI (1007). Surface a warning so operators know the auto-response
+    suppression is being silently dropped."""
+    import logging
+
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    session_update = {
+        "type": "session.update",
+        "session": {"turn_detection": {"create_response": False}},
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result = cfg.transform_realtime_request(
+            json.dumps(session_update),
+            "gemini-live-2.5-flash-preview-native-audio-09-2025",
+            session_configuration_request=json.dumps({"setup": {"model": "x"}}),
+        )
+
+    assert result == []
+    assert any(
+        "Vertex AI Realtime" in record.message
+        and "create_response=False" in record.message
+        for record in caplog.records
+    )
+
+
+def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog):
+    """A subsequent session.update without ``create_response: False`` is a
+    routine drop and should stay at debug level (no warning)."""
+    import logging
+
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    session_update = {
+        "type": "session.update",
+        "session": {"instructions": "Be concise."},
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        cfg.transform_realtime_request(
+            json.dumps(session_update),
+            "gemini-live-2.5-flash-preview-native-audio-09-2025",
+            session_configuration_request=json.dumps({"setup": {"model": "x"}}),
+        )
+
+    assert not any(
+        "Vertex AI Realtime" in record.message and "session.update" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_does_not_forward_client_query_params_to_vertex_backend(
+    monkeypatch,
+):
+    """Regression: forwarding client ?model=/?intent= to the Vertex Live WSS URL causes 1007 errors.
+
+    Exercises ``async_realtime`` end-to-end so that re-adding ``_append_query_params``
+    (the reverted bug) would push ``model=``/``intent=`` onto the backend URL and fail here.
+    """
+    import websockets
+
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    captured: dict = {}
+
+    def fake_connect(url, *args, **kwargs):
+        captured["url"] = url
+        raise RuntimeError("stop before establishing the backend connection")
+
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+
+    try:
+        await BaseLLMHTTPHandler().async_realtime(
+            model="gemini-live-2.5-flash-preview-native-audio-09-2025",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            provider_config=cfg,
+            headers={},
+            query_params={
+                "model": "gemini-live-2.5-flash-preview-native-audio-09-2025",
+                "intent": "chat",
+            },
+        )
+    except (RuntimeError, Exception):
+        pass
+
+    assert "url" in captured, "websockets.connect was never called"
+    assert "?" not in captured["url"]
+    assert "model=" not in captured["url"]
+    assert "intent=" not in captured["url"]
+
+
+def test_vertex_function_call_output_omits_id():
+    """Regression: Vertex Live rejects ``id`` on toolResponse.functionResponses (1007)."""
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    cfg._tool_call_id_to_name["call_abc123"] = "terminate_call"
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": "call_abc123",
+                    "output": '{"status": "ok"}',
+                },
+            }
+        ),
+        "gemini-live-2.5-flash-preview-native-audio-09-2025",
+        session_configuration_request="existing",
+    )
+
+    assert len(messages) == 1
+    payload = json.loads(messages[0])
+    function_response = payload["toolResponse"]["functionResponses"][0]
+    assert "id" not in function_response
+    assert function_response["name"] == "terminate_call"
+    assert function_response["response"] == {"status": "ok"}

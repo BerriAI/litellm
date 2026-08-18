@@ -1,5 +1,5 @@
 import enum
-from typing import Dict, List, Literal, Optional
+from typing import Literal
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -17,8 +17,8 @@ class KeyManagementSystem(enum.Enum):
 
 
 class KeyManagementSettings(LiteLLMPydanticObjectBase):
-    hosted_keys: Optional[List] = None
-    store_virtual_keys: Optional[bool] = False
+    hosted_keys: list | None = None
+    store_virtual_keys: bool | None = False
     """
     If True, virtual keys created by litellm will be stored in the secret manager
     """
@@ -32,43 +32,52 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
     Access mode for the secret manager, when write_only will only use for writing secrets
     """
 
-    primary_secret_name: Optional[str] = None
+    primary_secret_name: str | None = None
     """
     If set, will read secrets from this primary secret in the secret manager
 
     eg. on AWS you can store multiple secret values as K/V pairs in a single secret
     """
 
-    description: Optional[str] = None
+    description: str | None = None
     """Optional description attached when creating secrets (visible in AWS console)."""
 
-    tags: Optional[Dict[str, str]] = None
+    tags: dict[str, str] | None = None
     """Optional tags to attach when creating secrets (e.g. {"Environment": "Prod", "Owner": "AI-Platform"})."""
 
-    custom_secret_manager: Optional[str] = None
+    custom_secret_manager: str | None = None
     """
     Path to custom secret manager class (e.g. "my_secret_manager.InMemorySecretManager")
     Required when key_management_system is "custom"
     """
 
     # AWS IAM Role Assumption Settings (for AWS Secret Manager)
-    aws_region_name: Optional[str] = None
+    aws_region_name: str | None = None
     """AWS region for Secret Manager operations (e.g., 'us-east-1')"""
 
-    aws_role_name: Optional[str] = None
+    aws_role_name: str | None = None
     """ARN of IAM role to assume for Secret Manager access (e.g., 'arn:aws:iam::123456789012:role/MyRole')"""
 
-    aws_session_name: Optional[str] = None
+    aws_session_name: str | None = None
     """Session name for the assumed role session (optional, auto-generated if not provided)"""
 
-    aws_external_id: Optional[str] = None
+    aws_external_id: str | None = None
     """External ID for role assumption (required for cross-account access)"""
 
-    aws_profile_name: Optional[str] = None
+    aws_profile_name: str | None = None
     """AWS profile name to use from ~/.aws/credentials"""
 
-    aws_web_identity_token: Optional[str] = None
+    aws_web_identity_token: str | None = None
     """Web identity token for OIDC/IRSA authentication"""
 
-    aws_sts_endpoint: Optional[str] = None
+    aws_sts_endpoint: str | None = None
     """Custom STS endpoint URL (useful for VPC endpoints or testing)"""
+
+    replica_regions: list[str] | None = None
+    """
+    Optional list of additional AWS regions to replicate secrets to after CreateSecret.
+    Uses the AWS Secrets Manager ReplicateSecretToRegions API. Replication is
+    best-effort — failure to replicate does not fail key creation.
+    Example: ["us-west-2", "eu-west-1"]
+    Only applies when key_management_system is "aws_secret_manager".
+    """

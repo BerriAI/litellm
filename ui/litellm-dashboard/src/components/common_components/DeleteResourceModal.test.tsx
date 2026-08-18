@@ -70,9 +70,7 @@ describe("DeleteResourceModal", () => {
       { label: "ID", value: undefined },
       { label: "Status", value: "Active" },
     ];
-    renderWithProviders(
-      <DeleteResourceModal {...defaultProps} resourceInformation={resourceInformation} />,
-    );
+    renderWithProviders(<DeleteResourceModal {...defaultProps} resourceInformation={resourceInformation} />);
     expect(screen.getAllByText("-")).toHaveLength(2);
     expect(screen.getByText("Active")).toBeInTheDocument();
   });
@@ -120,14 +118,12 @@ describe("DeleteResourceModal", () => {
     const input = screen.getByPlaceholderText("DELETE");
     await user.type(input, "DELETE");
     const deleteButton = screen.getByRole("button", { name: /delete/i });
-    expect(deleteButton).not.toBeDisabled();
+    expect(deleteButton).toBeEnabled();
   });
 
   it("should reset requiredConfirmation input when modal opens", async () => {
     const user = userEvent.setup();
-    const { rerender } = renderWithProviders(
-      <DeleteResourceModal {...defaultProps} requiredConfirmation="DELETE" />,
-    );
+    const { rerender } = renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="DELETE" />);
     const input = screen.getByPlaceholderText("DELETE");
     await user.type(input, "DELETE");
     expect(input).toHaveValue("DELETE");
@@ -163,11 +159,23 @@ describe("DeleteResourceModal", () => {
     expect(cancelButton).toBeDisabled();
   });
 
+  it("should call onCancel when escape is pressed and no deletion is in flight", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<DeleteResourceModal {...defaultProps} />);
+    await user.keyboard("{Escape}");
+    expect(mockOnCancel).toHaveBeenCalled();
+  });
+
+  it("should ignore escape while confirmLoading is true so the modal cannot close mid-deletion", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<DeleteResourceModal {...defaultProps} confirmLoading={true} />);
+    await user.keyboard("{Escape}");
+    expect(mockOnCancel).not.toHaveBeenCalled();
+  });
+
   it("should disable delete button when confirmLoading is true even if requiredConfirmation matches", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <DeleteResourceModal {...defaultProps} confirmLoading={true} requiredConfirmation="DELETE" />,
-    );
+    renderWithProviders(<DeleteResourceModal {...defaultProps} confirmLoading={true} requiredConfirmation="DELETE" />);
     const input = screen.getByPlaceholderText("DELETE");
     await user.type(input, "DELETE");
     const deleteButton = screen.getByText("Deleting...").closest("button");

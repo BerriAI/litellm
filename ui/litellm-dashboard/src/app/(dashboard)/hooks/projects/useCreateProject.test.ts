@@ -103,9 +103,7 @@ describe("useCreateProject", () => {
     const { result } = renderHook(() => useCreateProject(), {
       wrapper: makeWrapper(queryClient),
     });
-    await expect(result.current.mutateAsync({ team_id: "team-1" })).rejects.toThrow(
-      "Access token is required"
-    );
+    await expect(result.current.mutateAsync({ team_id: "team-1" })).rejects.toThrow("Access token is required");
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });

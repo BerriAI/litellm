@@ -1,0 +1,615 @@
+.bg-slate-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-slate-500) 10%, transparent);
+}
+
+.bg-slate-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-slate-500) 20%, transparent);
+}
+
+.bg-slate-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-slate-500) 40%, transparent);
+}
+
+.hover\:bg-slate-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-slate-500) 20%, transparent);
+}
+
+.group:hover .bg-slate-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-slate-500) 30%, transparent);
+}
+
+.ring-slate-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-slate-500) 20%, transparent);
+}
+
+.ring-slate-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-slate-300) 40%, transparent);
+}
+
+.bg-gray-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-gray-500) 10%, transparent);
+}
+
+.bg-gray-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-gray-500) 20%, transparent);
+}
+
+.bg-gray-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-gray-500) 40%, transparent);
+}
+
+.hover\:bg-gray-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-gray-500) 20%, transparent);
+}
+
+.group:hover .bg-gray-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-gray-500) 30%, transparent);
+}
+
+.ring-gray-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-gray-500) 20%, transparent);
+}
+
+.ring-gray-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-gray-300) 40%, transparent);
+}
+
+.bg-zinc-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-zinc-500) 10%, transparent);
+}
+
+.bg-zinc-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-zinc-500) 20%, transparent);
+}
+
+.bg-zinc-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-zinc-500) 40%, transparent);
+}
+
+.hover\:bg-zinc-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-zinc-500) 20%, transparent);
+}
+
+.group:hover .bg-zinc-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-zinc-500) 30%, transparent);
+}
+
+.ring-zinc-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-zinc-500) 20%, transparent);
+}
+
+.ring-zinc-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-zinc-300) 40%, transparent);
+}
+
+.bg-neutral-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-neutral-500) 10%, transparent);
+}
+
+.bg-neutral-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-neutral-500) 20%, transparent);
+}
+
+.bg-neutral-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-neutral-500) 40%, transparent);
+}
+
+.hover\:bg-neutral-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-neutral-500) 20%, transparent);
+}
+
+.group:hover .bg-neutral-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-neutral-500) 30%, transparent);
+}
+
+.ring-neutral-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-neutral-500) 20%, transparent);
+}
+
+.ring-neutral-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-neutral-300) 40%, transparent);
+}
+
+.bg-stone-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-stone-500) 10%, transparent);
+}
+
+.bg-stone-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-stone-500) 20%, transparent);
+}
+
+.bg-stone-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-stone-500) 40%, transparent);
+}
+
+.hover\:bg-stone-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-stone-500) 20%, transparent);
+}
+
+.group:hover .bg-stone-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-stone-500) 30%, transparent);
+}
+
+.ring-stone-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-stone-500) 20%, transparent);
+}
+
+.ring-stone-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-stone-300) 40%, transparent);
+}
+
+.bg-red-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-red-500) 10%, transparent);
+}
+
+.bg-red-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-red-500) 20%, transparent);
+}
+
+.bg-red-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-red-500) 40%, transparent);
+}
+
+.hover\:bg-red-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-red-500) 20%, transparent);
+}
+
+.group:hover .bg-red-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-red-500) 30%, transparent);
+}
+
+.ring-red-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-red-500) 20%, transparent);
+}
+
+.ring-red-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-red-300) 40%, transparent);
+}
+
+.bg-orange-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-orange-500) 10%, transparent);
+}
+
+.bg-orange-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-orange-500) 20%, transparent);
+}
+
+.bg-orange-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-orange-500) 40%, transparent);
+}
+
+.hover\:bg-orange-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-orange-500) 20%, transparent);
+}
+
+.group:hover .bg-orange-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-orange-500) 30%, transparent);
+}
+
+.ring-orange-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-orange-500) 20%, transparent);
+}
+
+.ring-orange-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-orange-300) 40%, transparent);
+}
+
+.bg-amber-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-amber-500) 10%, transparent);
+}
+
+.bg-amber-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-amber-500) 20%, transparent);
+}
+
+.bg-amber-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-amber-500) 40%, transparent);
+}
+
+.hover\:bg-amber-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-amber-500) 20%, transparent);
+}
+
+.group:hover .bg-amber-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-amber-500) 30%, transparent);
+}
+
+.ring-amber-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-amber-500) 20%, transparent);
+}
+
+.ring-amber-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-amber-300) 40%, transparent);
+}
+
+.bg-yellow-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-yellow-500) 10%, transparent);
+}
+
+.bg-yellow-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-yellow-500) 20%, transparent);
+}
+
+.bg-yellow-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-yellow-500) 40%, transparent);
+}
+
+.hover\:bg-yellow-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-yellow-500) 20%, transparent);
+}
+
+.group:hover .bg-yellow-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-yellow-500) 30%, transparent);
+}
+
+.ring-yellow-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-yellow-500) 20%, transparent);
+}
+
+.ring-yellow-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-yellow-300) 40%, transparent);
+}
+
+.bg-lime-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-lime-500) 10%, transparent);
+}
+
+.bg-lime-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-lime-500) 20%, transparent);
+}
+
+.bg-lime-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-lime-500) 40%, transparent);
+}
+
+.hover\:bg-lime-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-lime-500) 20%, transparent);
+}
+
+.group:hover .bg-lime-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-lime-500) 30%, transparent);
+}
+
+.ring-lime-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-lime-500) 20%, transparent);
+}
+
+.ring-lime-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-lime-300) 40%, transparent);
+}
+
+.bg-green-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-green-500) 10%, transparent);
+}
+
+.bg-green-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-green-500) 20%, transparent);
+}
+
+.bg-green-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-green-500) 40%, transparent);
+}
+
+.hover\:bg-green-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-green-500) 20%, transparent);
+}
+
+.group:hover .bg-green-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-green-500) 30%, transparent);
+}
+
+.ring-green-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-green-500) 20%, transparent);
+}
+
+.ring-green-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-green-300) 40%, transparent);
+}
+
+.bg-emerald-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-emerald-500) 10%, transparent);
+}
+
+.bg-emerald-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-emerald-500) 20%, transparent);
+}
+
+.bg-emerald-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-emerald-500) 40%, transparent);
+}
+
+.hover\:bg-emerald-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-emerald-500) 20%, transparent);
+}
+
+.group:hover .bg-emerald-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-emerald-500) 30%, transparent);
+}
+
+.ring-emerald-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-emerald-500) 20%, transparent);
+}
+
+.ring-emerald-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-emerald-300) 40%, transparent);
+}
+
+.bg-teal-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-teal-500) 10%, transparent);
+}
+
+.bg-teal-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-teal-500) 20%, transparent);
+}
+
+.bg-teal-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-teal-500) 40%, transparent);
+}
+
+.hover\:bg-teal-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-teal-500) 20%, transparent);
+}
+
+.group:hover .bg-teal-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-teal-500) 30%, transparent);
+}
+
+.ring-teal-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-teal-500) 20%, transparent);
+}
+
+.ring-teal-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-teal-300) 40%, transparent);
+}
+
+.bg-cyan-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-cyan-500) 10%, transparent);
+}
+
+.bg-cyan-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-cyan-500) 20%, transparent);
+}
+
+.bg-cyan-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-cyan-500) 40%, transparent);
+}
+
+.hover\:bg-cyan-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-cyan-500) 20%, transparent);
+}
+
+.group:hover .bg-cyan-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-cyan-500) 30%, transparent);
+}
+
+.ring-cyan-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-cyan-500) 20%, transparent);
+}
+
+.ring-cyan-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-cyan-300) 40%, transparent);
+}
+
+.bg-sky-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-sky-500) 10%, transparent);
+}
+
+.bg-sky-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-sky-500) 20%, transparent);
+}
+
+.bg-sky-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-sky-500) 40%, transparent);
+}
+
+.hover\:bg-sky-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-sky-500) 20%, transparent);
+}
+
+.group:hover .bg-sky-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-sky-500) 30%, transparent);
+}
+
+.ring-sky-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-sky-500) 20%, transparent);
+}
+
+.ring-sky-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-sky-300) 40%, transparent);
+}
+
+.bg-blue-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-blue-500) 10%, transparent);
+}
+
+.bg-blue-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-blue-500) 20%, transparent);
+}
+
+.bg-blue-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-blue-500) 40%, transparent);
+}
+
+.hover\:bg-blue-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-blue-500) 20%, transparent);
+}
+
+.group:hover .bg-blue-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-blue-500) 30%, transparent);
+}
+
+.ring-blue-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-blue-500) 20%, transparent);
+}
+
+.ring-blue-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-blue-300) 40%, transparent);
+}
+
+.bg-indigo-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-indigo-500) 10%, transparent);
+}
+
+.bg-indigo-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-indigo-500) 20%, transparent);
+}
+
+.bg-indigo-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-indigo-500) 40%, transparent);
+}
+
+.hover\:bg-indigo-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-indigo-500) 20%, transparent);
+}
+
+.group:hover .bg-indigo-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-indigo-500) 30%, transparent);
+}
+
+.ring-indigo-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-indigo-500) 20%, transparent);
+}
+
+.ring-indigo-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-indigo-300) 40%, transparent);
+}
+
+.bg-violet-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-violet-500) 10%, transparent);
+}
+
+.bg-violet-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-violet-500) 20%, transparent);
+}
+
+.bg-violet-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-violet-500) 40%, transparent);
+}
+
+.hover\:bg-violet-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-violet-500) 20%, transparent);
+}
+
+.group:hover .bg-violet-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-violet-500) 30%, transparent);
+}
+
+.ring-violet-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-violet-500) 20%, transparent);
+}
+
+.ring-violet-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-violet-300) 40%, transparent);
+}
+
+.bg-purple-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-purple-500) 10%, transparent);
+}
+
+.bg-purple-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-purple-500) 20%, transparent);
+}
+
+.bg-purple-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-purple-500) 40%, transparent);
+}
+
+.hover\:bg-purple-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-purple-500) 20%, transparent);
+}
+
+.group:hover .bg-purple-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-purple-500) 30%, transparent);
+}
+
+.ring-purple-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-purple-500) 20%, transparent);
+}
+
+.ring-purple-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-purple-300) 40%, transparent);
+}
+
+.bg-fuchsia-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-fuchsia-500) 10%, transparent);
+}
+
+.bg-fuchsia-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-fuchsia-500) 20%, transparent);
+}
+
+.bg-fuchsia-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-fuchsia-500) 40%, transparent);
+}
+
+.hover\:bg-fuchsia-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-fuchsia-500) 20%, transparent);
+}
+
+.group:hover .bg-fuchsia-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-fuchsia-500) 30%, transparent);
+}
+
+.ring-fuchsia-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-fuchsia-500) 20%, transparent);
+}
+
+.ring-fuchsia-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-fuchsia-300) 40%, transparent);
+}
+
+.bg-pink-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-pink-500) 10%, transparent);
+}
+
+.bg-pink-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-pink-500) 20%, transparent);
+}
+
+.bg-pink-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-pink-500) 40%, transparent);
+}
+
+.hover\:bg-pink-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-pink-500) 20%, transparent);
+}
+
+.group:hover .bg-pink-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-pink-500) 30%, transparent);
+}
+
+.ring-pink-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-pink-500) 20%, transparent);
+}
+
+.ring-pink-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-pink-300) 40%, transparent);
+}
+
+.bg-rose-500.bg-opacity-10 {
+  background-color: color-mix(in oklab, var(--color-rose-500) 10%, transparent);
+}
+
+.bg-rose-500.bg-opacity-20 {
+  background-color: color-mix(in oklab, var(--color-rose-500) 20%, transparent);
+}
+
+.bg-rose-500.bg-opacity-40 {
+  background-color: color-mix(in oklab, var(--color-rose-500) 40%, transparent);
+}
+
+.hover\:bg-rose-500.hover\:bg-opacity-20:hover {
+  background-color: color-mix(in oklab, var(--color-rose-500) 20%, transparent);
+}
+
+.group:hover .bg-rose-500.group-hover\:bg-opacity-30 {
+  background-color: color-mix(in oklab, var(--color-rose-500) 30%, transparent);
+}
+
+.ring-rose-500.ring-opacity-20 {
+  --tw-ring-color: color-mix(in oklab, var(--color-rose-500) 20%, transparent);
+}
+
+.ring-rose-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-rose-300) 40%, transparent);
+}

@@ -131,6 +131,7 @@ def test_default_api_base():
     from litellm.litellm_core_utils.get_llm_provider_logic import (
         _get_openai_compatible_provider_info,
     )
+    from litellm.types.utils import LlmProviders
 
     # Patch environment variable to remove API base if it's set
     with patch.dict(os.environ, {}, clear=True):
@@ -150,13 +151,13 @@ def test_default_api_base():
             if api_base is None:
                 continue
 
-            for other_provider in litellm.provider_list:
-                if other_provider != provider and provider != "{}_chat".format(
+            for other_provider in LlmProviders:
+                if other_provider.value != provider and provider != "{}_chat".format(
                     other_provider.value
                 ):
-                    if provider == "codestral" and other_provider == "mistral":
+                    if provider == "codestral" and other_provider.value == "mistral":
                         continue
-                    elif provider == "github" and other_provider == "azure":
+                    elif provider == "github" and other_provider.value == "azure":
                         continue
                     assert other_provider.value not in api_base.replace("/openai", "")
 
@@ -478,3 +479,95 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     assert key == arg_api_key  # Should use the argument key
     assert base == arg_api_base  # Should use the argument base
 
+
+# -------- Tests for the anthropic-claude fallback generalization rule ---------
+
+
+@pytest.fixture
+def shipped_generalizations():
+    """Install the rules shipped in the bundled backup, then restore.
+
+    The remote-fetched cost map pinned to ``main`` may not yet carry the rule
+    added on this branch, so these tests install the rule the branch actually
+    ships rather than depending on whatever the live URL returns.
+    """
+    from litellm.litellm_core_utils.fallback_generalizations import (
+        get_fallback_generalization_rules,
+        set_fallback_generalizations,
+    )
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    previous = list(get_fallback_generalization_rules())
+    backup = GetModelCostMap.load_local_model_cost_map()
+    rules = backup.get("fallback_generalizations", {}).get("rules", [])
+    set_fallback_generalizations(rules)
+    try:
+        yield rules
+    finally:
+        set_fallback_generalizations(previous)
+
+
+class TestClaudeModelPatternMatching:
+    """
+    The ``anthropic-claude-ids`` fallback generalization routing rule routes future
+    Claude models to the Anthropic provider without requiring a
+    model_prices_and_context_window.json entry. These tests exercise the rule
+    end-to-end through ``get_llm_provider`` and ``match_routing_generalization``.
+    """
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-9",
+            "claude-opus-5-1",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5-0",
+            "claude-haiku-4-5",
+            "claude-haiku-5-0",
+            "claude-opus-5-1-20270101",
+            "claude-sonnet-4-7-20260601",
+            "claude-haiku-4-6-20251201",
+            # A tier segment we don't know about today still routes: the regex
+            # accepts any [a-z]+ tier rather than a hard-coded opus|sonnet|haiku
+            # list, so a future tier is covered without a code change.
+            "claude-mini-4-5",
+            "claude-neptune-6-0",
+        ],
+    )
+    def test_unknown_claude_routes_to_anthropic(self, model, shipped_generalizations):
+        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        assert custom_llm_provider == "anthropic"
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gpt-4",
+            "mistral-large",
+            "llama-3",
+            # Wrong order (variant before name)
+            "claude-4-opus",
+            # Missing version numbers
+            "claude-opus",
+            # Old format (claude-3-opus instead of claude-opus-3)
+            "claude-3-opus-20240229",
+        ],
+    )
+    def test_non_matching_models_do_not_match_rule(
+        self, model, shipped_generalizations
+    ):
+        from litellm.litellm_core_utils.fallback_generalizations import (
+            match_routing_generalization,
+        )
+
+        assert match_routing_generalization(model) is None
+
+    def test_routing_comes_from_the_rule_not_python(self, shipped_generalizations):
+        """With the rule cleared, an unknown claude must no longer route to
+        anthropic; this guards against re-introducing a hard-coded Python regex."""
+        from litellm.litellm_core_utils.fallback_generalizations import (
+            set_fallback_generalizations,
+        )
+
+        set_fallback_generalizations([])
+        with pytest.raises(Exception):
+            litellm.get_llm_provider(model="claude-opus-4-9")

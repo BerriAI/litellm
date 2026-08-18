@@ -7,12 +7,16 @@ Model format: bedrock/openai/<model-id>
 Example: bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.request_metadata import (
+    bedrock_request_metadata_headers,
+    merge_bedrock_invoke_headers,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.passthrough.utils import CommonUtils
 from litellm.types.llms.openai import AllMessageValues
@@ -45,7 +49,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         BaseAWSLLM.__init__(self, **kwargs)
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "bedrock"
 
     def _get_openai_model_id(self, model: str) -> str:
@@ -56,23 +60,21 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         Returns: <model-id>
         """
         # Remove bedrock/ prefix if present
-        if model.startswith("bedrock/"):
-            model = model[8:]
+        model = model.removeprefix("bedrock/")
 
         # Remove openai/ prefix
-        if model.startswith("openai/"):
-            model = model[7:]
+        model = model.removeprefix("openai/")
 
         return model
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the Bedrock invoke endpoint.
@@ -82,14 +84,10 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         model_id = self._get_openai_model_id(model)
 
         # Get AWS region
-        aws_region_name = self._get_aws_region_name(
-            optional_params=optional_params, model=model
-        )
+        aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
 
         # Get runtime endpoint
-        aws_bedrock_runtime_endpoint = optional_params.get(
-            "aws_bedrock_runtime_endpoint", None
-        )
+        aws_bedrock_runtime_endpoint: Final = optional_params.get("aws_bedrock_runtime_endpoint", None)
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
@@ -101,9 +99,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
 
         # Build the invoke URL
         if stream:
-            endpoint_url = (
-                f"{endpoint_url}/model/{model_id}/invoke-with-response-stream"
-            )
+            endpoint_url = f"{endpoint_url}/model/{model_id}/invoke-with-response-stream"
         else:
             endpoint_url = f"{endpoint_url}/model/{model_id}/invoke"
 
@@ -115,11 +111,11 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
         """
         Sign the request using AWS Signature Version 4.
         """
@@ -138,7 +134,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -153,11 +149,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         optional_params.pop("stream", None)
 
         # Remove AWS-specific params that shouldn't be in the request body
-        inference_params = {
-            k: v
-            for k, v in optional_params.items()
-            if k not in self.aws_authentication_params
-        }
+        inference_params: Final = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
 
         # Use parent class transform_request for OpenAI format
         return super().transform_request(
@@ -172,21 +164,22 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate the environment and return headers.
 
-        For Bedrock, we don't need Bearer token auth since we use AWS SigV4.
+        For Bedrock, we don't need Bearer token auth since we use AWS SigV4. This path signs the
+        same ``/model/{id}/invoke`` endpoint as ``AmazonInvokeConfig``, so it owns the request
+        metadata header on the same terms rather than letting a caller supply it.
         """
-        return headers
+        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+        return merge_bedrock_invoke_headers(headers, (), metadata_headers, owned_names)
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BedrockError:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BedrockError:
         """Return the appropriate error class for Bedrock."""
         return BedrockError(status_code=status_code, message=error_message)

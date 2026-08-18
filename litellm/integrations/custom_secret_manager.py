@@ -37,7 +37,7 @@ Usage:
 """
 
 from abc import abstractmethod
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -87,7 +87,7 @@ class CustomSecretManager(BaseSecretManager):
 
     def __init__(
         self,
-        secret_manager_name: Optional[str] = None,
+        secret_manager_name: str | None = None,
         **kwargs,
     ):
         """
@@ -106,9 +106,9 @@ class CustomSecretManager(BaseSecretManager):
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Optional[str]:
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
         """
         Asynchronously read a secret from your custom secret manager.
 
@@ -123,15 +123,14 @@ class CustomSecretManager(BaseSecretManager):
         Raises:
             Exception: If there's an error reading the secret
         """
-        pass
 
     @abstractmethod
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-    ) -> Optional[str]:
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
         """
         Synchronously read a secret from your custom secret manager.
 
@@ -146,17 +145,16 @@ class CustomSecretManager(BaseSecretManager):
         Raises:
             Exception: If there's an error reading the secret
         """
-        pass
 
     async def async_write_secret(
         self,
         secret_name: str,
         secret_value: str,
-        description: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        tags: Optional[Union[dict, list]] = None,
-    ) -> Dict[str, Any]:
+        description: str | None = None,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        tags: dict | list | None = None,
+    ) -> dict[str, Any]:
         """
         Asynchronously write a secret to your custom secret manager.
 
@@ -185,9 +183,9 @@ class CustomSecretManager(BaseSecretManager):
     async def async_delete_secret(
         self,
         secret_name: str,
-        recovery_window_in_days: Optional[int] = 7,
-        optional_params: Optional[dict] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        recovery_window_in_days: int | None = 7,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> dict:
         """
         Asynchronously delete a secret from your custom secret manager.
@@ -224,14 +222,10 @@ class CustomSecretManager(BaseSecretManager):
         Raises:
             ValueError: If required configuration is missing
         """
-        verbose_logger.debug(
-            "No environment validation configured for custom secret manager"
-        )
+        verbose_logger.debug("No environment validation configured for custom secret manager")
         return True
 
-    async def async_health_check(
-        self, timeout: Optional[Union[float, httpx.Timeout]] = None
-    ) -> bool:
+    async def async_health_check(self, timeout: float | httpx.Timeout | None = None) -> bool:
         """
         Perform a health check on your secret manager.
 
@@ -243,9 +237,7 @@ class CustomSecretManager(BaseSecretManager):
         Returns:
             True if the secret manager is healthy, False otherwise
         """
-        verbose_logger.debug(
-            f"Health check not implemented for {self.secret_manager_name}"
-        )
+        verbose_logger.debug("Health check not implemented for %s", self.secret_manager_name)
         return True
 
     def __repr__(self) -> str:

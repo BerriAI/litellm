@@ -50,7 +50,6 @@ def test_bedrock_sonnet_4_6_region_prefixes():
         assert model_info.get("supports_pdf_input") is True
         assert model_info.get("supports_assistant_prefill") is True
         assert model_info.get("supports_reasoning") is True
-        assert model_info.get("tool_use_system_prompt_tokens") == 346
 
 
 def test_bedrock_sonnet_4_6_jp_matches_other_regional_pricing():

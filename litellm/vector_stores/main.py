@@ -5,8 +5,9 @@ LiteLLM SDK Functions for Creating and Searching Vector Stores
 import asyncio
 import builtins
 import contextvars
+from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Optional, Union
+from typing import Final
 
 import httpx
 
@@ -35,7 +36,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 
 
 def mock_vector_store_search_response(
-    mock_results: Optional[List[VectorStoreSearchResult]] = None,
+    mock_results: list[VectorStoreSearchResult] | None = None,
 ):
     """Mock response for vector store search"""
     if mock_results is None:
@@ -59,7 +60,7 @@ def mock_vector_store_search_response(
 
 
 def mock_vector_store_create_response(
-    mock_response: Optional[VectorStoreCreateResponse] = None,
+    mock_response: VectorStoreCreateResponse | None = None,
 ):
     """Mock response for vector store create"""
     if mock_response is None:
@@ -88,34 +89,34 @@ def mock_vector_store_create_response(
 
 @client
 async def acreate(
-    name: Optional[str] = None,
-    file_ids: Optional[List[str]] = None,
-    expires_after: Optional[Dict] = None,
-    chunking_strategy: Optional[Dict] = None,
-    metadata: Optional[Dict[str, str]] = None,
+    name: str | None = None,
+    file_ids: list[str] | None = None,
+    expires_after: dict | None = None,
+    chunking_strategy: dict | None = None,
+    metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreCreateResponse:
     """
     Async: Create a vector store.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acreate"] = True
 
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             custom_llm_provider = "openai"  # Default to OpenAI for vector stores
 
-        func = partial(
+        func: Final = partial(
             create,
             name=name,
             file_ids=file_ids,
@@ -130,9 +131,9 @@ async def acreate(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -152,21 +153,21 @@ async def acreate(
 
 @client
 def create(
-    name: Optional[str] = None,
-    file_ids: Optional[List[str]] = None,
-    expires_after: Optional[Dict] = None,
-    chunking_strategy: Optional[Dict] = None,
-    metadata: Optional[Dict[str, str]] = None,
+    name: str | None = None,
+    file_ids: list[str] | None = None,
+    expires_after: dict | None = None,
+    chunking_strategy: dict | None = None,
+    metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Create a vector store.
 
@@ -180,19 +181,17 @@ def create(
     Returns:
         VectorStoreCreateResponse containing the created vector store details.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("acreate", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("acreate", False) is True
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         ## MOCK RESPONSE LOGIC
-        if litellm_params.mock_response and isinstance(
-            litellm_params.mock_response, dict
-        ):
+        if litellm_params.mock_response and isinstance(litellm_params.mock_response, dict):
             return mock_vector_store_create_response(
                 mock_response=VectorStoreCreateResponse(**litellm_params.mock_response)
             )
@@ -212,25 +211,19 @@ def create(
             custom_llm_provider = custom_llm_provider
 
         # get provider config - using vector store custom logger for now
-        vector_store_provider_config = (
-            ProviderConfigManager.get_provider_vector_stores_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-                api_type=api_type,
-            )
+        vector_store_provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
+            api_type=api_type,
         )
 
         if vector_store_provider_config is None:
-            raise ValueError(
-                f"Vector store create is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store create is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
 
         # Get VectorStoreCreateOptionalRequestParams with only valid parameters
-        vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams = (
-            VectorStoreRequestUtils.get_requested_vector_store_create_optional_param(
-                local_vars
-            )
+        vector_store_create_optional_params: Final[VectorStoreCreateOptionalRequestParams] = (
+            VectorStoreRequestUtils.get_requested_vector_store_create_optional_param(local_vars)
         )
 
         # Pre Call logging
@@ -247,7 +240,7 @@ def create(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_create_handler(
+        response: Final = base_llm_http_handler.vector_store_create_handler(
             vector_store_create_optional_params=vector_store_create_optional_params,
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,
@@ -274,35 +267,35 @@ def create(
 @client
 async def asearch(
     vector_store_id: str,
-    query: Union[str, List[str]],
-    filters: Optional[Dict] = None,
-    max_num_results: Optional[int] = None,
-    ranking_options: Optional[Dict] = None,
-    rewrite_query: Optional[bool] = None,
+    query: str | list[str],
+    filters: dict | None = None,
+    max_num_results: int | None = None,
+    ranking_options: dict | None = None,
+    rewrite_query: bool | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreSearchResponse:
     """
     Async: Search a vector store for relevant chunks based on a query and file attributes filter.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
 
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["asearch"] = True
 
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             custom_llm_provider = "openai"  # Default to OpenAI for vector stores
 
-        func = partial(
+        func: Final = partial(
             search,
             vector_store_id=vector_store_id,
             query=query,
@@ -318,9 +311,9 @@ async def asearch(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -341,21 +334,21 @@ async def asearch(
 @client
 def search(
     vector_store_id: str,
-    query: Union[str, List[str]],
-    filters: Optional[Dict] = None,
-    max_num_results: Optional[int] = None,
-    ranking_options: Optional[Dict] = None,
-    rewrite_query: Optional[bool] = None,
+    query: str | list[str],
+    filters: dict | None = None,
+    max_num_results: int | None = None,
+    ranking_options: dict | None = None,
+    rewrite_query: bool | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreSearchResponse, Coroutine[Any, Any, VectorStoreSearchResponse]]:
+) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
     """
     Search a vector store for relevant chunks based on a query and file attributes filter.
 
@@ -370,34 +363,28 @@ def search(
     Returns:
         VectorStoreSearchResponse containing the search results.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("asearch", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("asearch", False) is True
 
         # pull credentials from registry if available
         if litellm.vector_store_registry is not None and vector_store_id is not None:
             try:
-                registry_credentials = (
-                    litellm.vector_store_registry.get_credentials_for_vector_store(
-                        vector_store_id
-                    )
-                )
+                registry_credentials = litellm.vector_store_registry.get_credentials_for_vector_store(vector_store_id)
                 kwargs.update(registry_credentials)
             except Exception:
                 pass
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
+        litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
 
         ## MOCK RESPONSE LOGIC
-        if litellm_params.mock_response and isinstance(
-            litellm_params.mock_response, (str, builtins.list)
-        ):
+        if litellm_params.mock_response and isinstance(litellm_params.mock_response, (str, builtins.list)):
             mock_results = None
             if isinstance(litellm_params.mock_response, builtins.list):
-                mock_results = litellm_params.mock_response  # type: ignore[assignment]
+                mock_results = litellm_params.mock_response
             return mock_vector_store_search_response(mock_results=mock_results)
 
         # Default to OpenAI for vector stores
@@ -415,22 +402,18 @@ def search(
             custom_llm_provider = custom_llm_provider
 
         # get provider config - using vector store custom logger for now
-        vector_store_provider_config = (
-            ProviderConfigManager.get_provider_vector_stores_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-                api_type=api_type,
-            )
+        vector_store_provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
+            api_type=api_type,
         )
 
         if vector_store_provider_config is None:
-            raise ValueError(
-                f"Vector store search is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store search is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
 
         # Get VectorStoreSearchOptionalRequestParams with only valid parameters
-        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams = (
+        vector_store_search_optional_params: Final[VectorStoreSearchOptionalRequestParams] = (
             VectorStoreRequestUtils.get_requested_vector_store_search_optional_param(
                 local_vars,
                 vector_store_provider_config=vector_store_provider_config,
@@ -454,7 +437,7 @@ def search(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_search_handler(
+        response: Final = base_llm_http_handler.vector_store_search_handler(
             vector_store_id=vector_store_id,
             query=query,
             vector_store_search_optional_params=vector_store_search_optional_params,
@@ -483,25 +466,25 @@ def search(
 @client
 async def aretrieve(
     vector_store_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreCreateResponse:
     """
     Async: Retrieve a vector store.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aretrieve"] = True
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
 
-        func = partial(
+        func: Final = partial(
             retrieve,
             vector_store_id=vector_store_id,
             extra_headers=extra_headers,
@@ -512,9 +495,9 @@ async def aretrieve(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -535,13 +518,13 @@ async def aretrieve(
 @client
 def retrieve(
     vector_store_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Retrieve a vector store.
 
@@ -551,13 +534,13 @@ def retrieve(
     Returns:
         VectorStoreCreateResponse containing the vector store details.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("aretrieve", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("aretrieve", False) is True
 
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
@@ -572,17 +555,13 @@ def retrieve(
             api_type = None
             custom_llm_provider = custom_llm_provider
 
-        vector_store_provider_config = (
-            ProviderConfigManager.get_provider_vector_stores_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-                api_type=api_type,
-            )
+        vector_store_provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
+            api_type=api_type,
         )
 
         if vector_store_provider_config is None:
-            raise ValueError(
-                f"Vector store retrieve is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store retrieve is not supported for {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -592,7 +571,7 @@ def retrieve(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_retrieve_handler(
+        response: Final = base_llm_http_handler.vector_store_retrieve_handler(
             vector_store_id=vector_store_id,
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,
@@ -618,29 +597,29 @@ def retrieve(
 
 @client
 async def alist(
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    limit: Optional[int] = 20,
-    order: Optional[str] = "desc",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    after: str | None = None,
+    before: str | None = None,
+    limit: int | None = 20,
+    order: str | None = "desc",
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object]:
     """
     Async: List vector stores.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["alist"] = True
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
 
-        func = partial(
+        func: Final = partial(
             list,
             after=after,
             before=before,
@@ -654,12 +633,12 @@ async def alist(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
-            response = await init_response
+            response: Mapping[str, object] = await init_response
         else:
             response = init_response
 
@@ -676,15 +655,15 @@ async def alist(
 
 @client
 def list(
-    after: Optional[str] = None,
-    before: Optional[str] = None,
-    limit: Optional[int] = 20,
-    order: Optional[str] = "desc",
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    after: str | None = None,
+    before: str | None = None,
+    limit: int | None = 20,
+    order: str | None = "desc",
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ):
     """
@@ -699,13 +678,13 @@ def list(
     Returns:
         List of vector stores.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("alist", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("alist", False) is True
 
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
@@ -720,17 +699,13 @@ def list(
             api_type = None
             custom_llm_provider = custom_llm_provider
 
-        vector_store_provider_config = (
-            ProviderConfigManager.get_provider_vector_stores_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-                api_type=api_type,
-            )
+        vector_store_provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
+            api_type=api_type,
         )
 
         if vector_store_provider_config is None:
-            raise ValueError(
-                f"Vector store list is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store list is not supported for {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -745,7 +720,7 @@ def list(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_list_handler(
+        response: Final = base_llm_http_handler.vector_store_list_handler(
             after=after,
             before=before,
             limit=limit,
@@ -775,28 +750,28 @@ def list(
 @client
 async def aupdate(
     vector_store_id: str,
-    name: Optional[str] = None,
-    expires_after: Optional[Dict] = None,
-    metadata: Optional[Dict[str, str]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    name: str | None = None,
+    expires_after: dict | None = None,
+    metadata: dict[str, str] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> VectorStoreCreateResponse:
     """
     Async: Update a vector store.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aupdate"] = True
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
 
-        func = partial(
+        func: Final = partial(
             update,
             vector_store_id=vector_store_id,
             name=name,
@@ -810,9 +785,9 @@ async def aupdate(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -833,16 +808,16 @@ async def aupdate(
 @client
 def update(
     vector_store_id: str,
-    name: Optional[str] = None,
-    expires_after: Optional[Dict] = None,
-    metadata: Optional[Dict[str, str]] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    name: str | None = None,
+    expires_after: dict | None = None,
+    metadata: dict[str, str] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[VectorStoreCreateResponse, Coroutine[Any, Any, VectorStoreCreateResponse]]:
+) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Update a vector store.
 
@@ -855,13 +830,13 @@ def update(
     Returns:
         VectorStoreCreateResponse containing the updated vector store details.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("aupdate", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("aupdate", False) is True
 
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
@@ -876,24 +851,18 @@ def update(
             api_type = None
             custom_llm_provider = custom_llm_provider
 
-        vector_store_provider_config = (
-            ProviderConfigManager.get_provider_vector_stores_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-                api_type=api_type,
-            )
+        vector_store_provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
+            api_type=api_type,
         )
 
         if vector_store_provider_config is None:
-            raise ValueError(
-                f"Vector store update is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store update is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
 
-        vector_store_update_optional_params: VectorStoreCreateOptionalRequestParams = (
-            VectorStoreRequestUtils.get_requested_vector_store_create_optional_param(
-                local_vars
-            )
+        vector_store_update_optional_params: Final[VectorStoreCreateOptionalRequestParams] = (
+            VectorStoreRequestUtils.get_requested_vector_store_create_optional_param(local_vars)
         )
 
         litellm_logging_obj.update_from_kwargs(
@@ -908,7 +877,7 @@ def update(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_update_handler(
+        response: Final = base_llm_http_handler.vector_store_update_handler(
             vector_store_id=vector_store_id,
             vector_store_update_optional_params=vector_store_update_optional_params,
             vector_store_provider_config=vector_store_provider_config,
@@ -936,25 +905,25 @@ def update(
 @client
 async def adelete(
     vector_store_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object]:
     """
     Async: Delete a vector store.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["adelete"] = True
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
 
-        func = partial(
+        func: Final = partial(
             delete,
             vector_store_id=vector_store_id,
             extra_headers=extra_headers,
@@ -965,12 +934,12 @@ async def adelete(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
-            response = await init_response
+            response: Mapping[str, object] = await init_response
         else:
             response = init_response
 
@@ -988,11 +957,11 @@ async def adelete(
 @client
 def delete(
     vector_store_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ):
     """
@@ -1004,13 +973,13 @@ def delete(
     Returns:
         Deletion confirmation response.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("adelete", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("adelete", False) is True
 
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         if custom_llm_provider is None:
             custom_llm_provider = "openai"
@@ -1025,17 +994,13 @@ def delete(
             api_type = None
             custom_llm_provider = custom_llm_provider
 
-        vector_store_provider_config = (
-            ProviderConfigManager.get_provider_vector_stores_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-                api_type=api_type,
-            )
+        vector_store_provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
+            api_type=api_type,
         )
 
         if vector_store_provider_config is None:
-            raise ValueError(
-                f"Vector store delete is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store delete is not supported for {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -1045,7 +1010,7 @@ def delete(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.vector_store_delete_handler(
+        response: Final = base_llm_http_handler.vector_store_delete_handler(
             vector_store_id=vector_store_id,
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,

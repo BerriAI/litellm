@@ -2,7 +2,7 @@
 OpenAI-like chat completion transformation
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -23,13 +23,11 @@ else:
 class OpenAILikeChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")  # type: ignore
-        dynamic_api_key = (
-            api_key or get_secret_str("OPENAI_LIKE_API_KEY") or ""
-        )  # vllm does not require an api key
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")
+        dynamic_api_key = api_key or get_secret_str("OPENAI_LIKE_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
 
     @staticmethod
@@ -50,7 +48,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if not json_mode:
             return message
 
-        _tool_calls = message.get("tool_calls")
+        _tool_calls: Final = message.get("tool_calls")
 
         if _tool_calls is None or len(_tool_calls) != 1:
             return message
@@ -69,7 +67,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         This method is future-proof and sanitizes any key ending in '_tokens'.
         """
         if "usage" in response_json and isinstance(response_json.get("usage"), dict):
-            usage = response_json["usage"]
+            usage: Final = response_json["usage"]
             # Iterate through all keys in the usage dictionary
             for key, value in usage.items():
                 # Sanitize if the key ends with '_tokens' and its value is None
@@ -85,14 +83,14 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         stream: bool,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        api_key: Optional[str],
-        data: Union[dict, str],
-        messages: List,
+        api_key: str | None,
+        data: dict | str,
+        messages: list,
         print_verbose,
         encoding,
-        json_mode: Optional[bool],
-        custom_llm_provider: Optional[str],
-        base_model: Optional[str],
+        json_mode: bool | None,
+        custom_llm_provider: str | None,
+        base_model: str | None,
     ) -> ModelResponse:
         response_json = response.json()
         logging_obj.post_call(
@@ -107,19 +105,15 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
         if json_mode:
             for choice in response_json["choices"]:
-                message = (
-                    OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
-                        choice.get("message"), json_mode
-                    )
+                message = OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
+                    choice.get("message"), json_mode
                 )
                 choice["message"] = message
 
-        returned_response = ModelResponse(**response_json)
+        returned_response: Final = ModelResponse(**response_json)
 
         if custom_llm_provider is not None:
-            returned_response.model = (
-                custom_llm_provider + "/" + (returned_response.model or "")
-            )
+            returned_response.model = custom_llm_provider + "/" + (returned_response.model or "")
 
         if base_model is not None:
             returned_response._hidden_params["model"] = base_model
@@ -132,12 +126,12 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         return OpenAILikeChatConfig._transform_response(
             model=model,
@@ -164,13 +158,8 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        mapped_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
-        if (
-            "max_completion_tokens" in non_default_params
-            and replace_max_completion_tokens_with_max_tokens
-        ):
+        mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
             mapped_params["max_tokens"] = non_default_params[
                 "max_completion_tokens"
             ]  # most openai-compatible providers support 'max_tokens' not 'max_completion_tokens'

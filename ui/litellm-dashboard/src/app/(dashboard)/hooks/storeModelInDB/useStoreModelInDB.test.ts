@@ -54,7 +54,7 @@ describe("useStoreModelInDB", () => {
           field_value: true,
           config_type: "general_settings",
         }),
-      })
+      }),
     );
   });
 
@@ -80,15 +80,12 @@ describe("useStoreModelInDB", () => {
           field_value: false,
           config_type: "general_settings",
         }),
-      })
+      }),
     );
   });
 
   it("should throw error when access token is missing", async () => {
-    vi.spyOn(
-      await import("../useAuthorized"),
-      "default"
-    ).mockReturnValue({
+    vi.spyOn(await import("../useAuthorized"), "default").mockReturnValue({
       accessToken: null,
       userRole: null,
       userId: null,

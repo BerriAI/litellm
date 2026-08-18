@@ -102,6 +102,30 @@ class TestStripClientPricingOverrides:
         assert data["metadata"] == {"user_session": "keep-me"}
         assert data["litellm_metadata"] == {}
 
+    def test_metadata_guardrail_information_dropped(self):
+        # Client-seeded guardrail entries would otherwise be summed into
+        # response_cost and spend, letting a caller forge (even negative)
+        # guardrail cost against their own budget.
+        data = {
+            "model": "gpt-4",
+            "metadata": {
+                "user_session": "keep-me",
+                "standard_logging_guardrail_information": [
+                    {
+                        "guardrail_name": "forged",
+                        "guardrail_status": "success",
+                        "guardrail_cost": -0.005,
+                    }
+                ],
+            },
+            "litellm_metadata": {
+                "standard_logging_guardrail_information": [{"guardrail_cost": 5.0}],
+            },
+        }
+        _strip_client_pricing_overrides(data)
+        assert data["metadata"] == {"user_session": "keep-me"}
+        assert data["litellm_metadata"] == {}
+
     def test_non_pricing_fields_untouched(self):
         data = {
             "model": "gpt-4",
@@ -129,6 +153,7 @@ class TestStripClientPricingOverrides:
 
     def test_metadata_field_set_contains_model_info(self):
         assert "model_info" in _CLIENT_PRICING_METADATA_FIELDS
+        assert "standard_logging_guardrail_information" in _CLIENT_PRICING_METADATA_FIELDS
 
     def test_strip_emits_debug_log_listing_dropped_fields(self, caplog):
         # Operators need a paper trail so they can diagnose why a previously
@@ -186,6 +211,34 @@ async def test_add_litellm_data_to_request_strips_root_pricing_fields():
 
     assert "input_cost_per_token" not in updated
     assert "output_cost_per_token" not in updated
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_client_disconnect_metadata():
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "client_disconnected": True,
+            "error_information": {
+                "error_code": "499",
+                "error_message": "Client disconnected the request",
+                "error_class": "ClientDisconnected",
+            },
+        },
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock(),
+        user_api_key_dict=_user_api_key_auth(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "client_disconnected" not in updated.get("metadata", {})
+    assert "error_information" not in updated.get("metadata", {})
 
 
 @pytest.mark.asyncio

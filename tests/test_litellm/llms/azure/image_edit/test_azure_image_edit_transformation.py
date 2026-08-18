@@ -1,5 +1,7 @@
+import urllib.parse
 from unittest.mock import patch
 
+import litellm
 from litellm.llms.azure.image_edit.transformation import AzureImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -138,3 +140,96 @@ def test_azure_finalize_image_edit_strips_model_after_openai_transform():
     assert data_out.get("prompt") == prompt
     assert data_out.get("n") == 1
     assert len(files) >= 1
+
+
+# ---------------------------------------------------------------------------
+# api_version fallback chain
+#
+# Pin the resolution order used by ``AzureImageEditConfig.get_complete_url``:
+#   litellm_params["api_version"]
+#     > litellm.api_version (module-global)
+#     > AZURE_API_VERSION env var
+#     > litellm.AZURE_DEFAULT_API_VERSION
+#
+# Before this fallback chain existed, image edit only read ``litellm_params``
+# and produced an unversioned URL when callers set api_version via the global
+# or the env var (Azure then 404s with "Resource not found"). The chat path
+# in ``litellm/llms/azure/common_utils.py`` already had this fallback.
+# ---------------------------------------------------------------------------
+
+
+_FALLBACK_API_BASE = "https://x.openai.azure.com"
+_FALLBACK_MODEL = "gpt-image-1"
+
+
+def _query_params(url: str) -> dict:
+    return dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+
+
+def test_api_version_uses_litellm_params_first(monkeypatch):
+    monkeypatch.setattr(litellm, "api_version", "from-global", raising=False)
+    monkeypatch.setenv("AZURE_API_VERSION", "from-env")
+
+    url = AzureImageEditConfig().get_complete_url(
+        model=_FALLBACK_MODEL,
+        api_base=_FALLBACK_API_BASE,
+        litellm_params={"api_version": "from-params"},
+    )
+
+    assert _query_params(url) == {"api-version": "from-params"}
+
+
+def test_api_version_falls_back_to_litellm_global(monkeypatch):
+    monkeypatch.setattr(litellm, "api_version", "from-global", raising=False)
+    monkeypatch.setenv("AZURE_API_VERSION", "from-env")
+
+    url = AzureImageEditConfig().get_complete_url(
+        model=_FALLBACK_MODEL,
+        api_base=_FALLBACK_API_BASE,
+        litellm_params={},
+    )
+
+    assert _query_params(url) == {"api-version": "from-global"}
+
+
+def test_api_version_falls_back_to_env_var(monkeypatch):
+    monkeypatch.setattr(litellm, "api_version", None, raising=False)
+    monkeypatch.setenv("AZURE_API_VERSION", "from-env")
+
+    url = AzureImageEditConfig().get_complete_url(
+        model=_FALLBACK_MODEL,
+        api_base=_FALLBACK_API_BASE,
+        litellm_params={},
+    )
+
+    assert _query_params(url) == {"api-version": "from-env"}
+
+
+def test_api_version_falls_back_to_azure_default(monkeypatch):
+    monkeypatch.setattr(litellm, "api_version", None, raising=False)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+
+    url = AzureImageEditConfig().get_complete_url(
+        model=_FALLBACK_MODEL,
+        api_base=_FALLBACK_API_BASE,
+        litellm_params={},
+    )
+
+    assert _query_params(url) == {"api-version": litellm.AZURE_DEFAULT_API_VERSION}
+
+
+def test_api_version_in_api_base_query_is_preserved(monkeypatch):
+    """``api_base`` already carrying ``?api-version=...`` must not be overridden."""
+    monkeypatch.setattr(litellm, "api_version", None, raising=False)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+
+    url = AzureImageEditConfig().get_complete_url(
+        model=_FALLBACK_MODEL,
+        api_base=(
+            f"{_FALLBACK_API_BASE}/openai/deployments/{_FALLBACK_MODEL}"
+            "/images/edits?api-version=2024-05-01-preview"
+        ),
+        litellm_params={"api_version": "would-be-overridden"},
+    )
+
+    assert _query_params(url) == {"api-version": "2024-05-01-preview"}

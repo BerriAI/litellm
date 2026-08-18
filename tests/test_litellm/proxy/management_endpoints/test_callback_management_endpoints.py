@@ -257,3 +257,12 @@ class TestCallbackManagementEndpoints:
         assert (
             has_detailed_params
         ), "Expected at least one callback to have detailed parameter configuration"
+
+        galileo_config = next(
+            (config for config in response_data if config.get("id") == "galileo"),
+            None,
+        )
+        assert galileo_config is not None
+        assert galileo_config["displayName"] == "Galileo"
+        assert "GALILEO_API_KEY" in galileo_config["dynamic_params"]
+        assert "GALILEO_PROJECT_ID" in galileo_config["dynamic_params"]

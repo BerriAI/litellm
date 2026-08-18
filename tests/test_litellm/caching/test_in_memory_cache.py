@@ -2,7 +2,9 @@ import asyncio
 import json
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -16,6 +18,36 @@ sys.path.insert(
 from unittest.mock import AsyncMock
 
 from litellm.caching.in_memory_cache import InMemoryCache
+
+
+class _SlowInt(int):
+    def __add__(self, value: int) -> "_SlowInt":
+        time.sleep(0.05)
+        return _SlowInt(int(self) + value)
+
+
+def test_increment_cache_is_atomic_under_thread_concurrency():
+    cache = InMemoryCache()
+    seed = 1000
+    cache.set_cache("counter", _SlowInt(seed))
+    thread_count = 8
+    barrier = threading.Barrier(thread_count)
+
+    def increment(_: int) -> float:
+        barrier.wait()
+        return cache.increment_cache("counter", 1)
+
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        tuple(executor.map(increment, range(thread_count)))
+
+    assert cache.get_cache("counter") == seed + thread_count
+
+
+async def test_async_increment_delegates_to_locked_sync_path():
+    cache = InMemoryCache()
+    assert await cache.async_increment("counter", 2) == 2
+    assert await cache.async_increment("counter", 3) == 5
+    assert cache.get_cache("counter") == 5
 
 
 def test_in_memory_openai_obj_cache():

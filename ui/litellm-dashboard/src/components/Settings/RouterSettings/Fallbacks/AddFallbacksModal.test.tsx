@@ -18,7 +18,9 @@ describe("AddFallbacksModal", () => {
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("Configure Model Fallbacks")).toBeInTheDocument();
-    expect(screen.getByText("Manage multiple fallback chains for different models (up to 5 groups at a time)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Manage multiple fallback chains for different models (up to 5 groups at a time)"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Test Content")).toBeInTheDocument();
   });
 

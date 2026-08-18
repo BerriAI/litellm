@@ -1,4 +1,8 @@
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
+
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_last_user_message,
+)
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -9,7 +13,7 @@ class OpenAIGuardrailBase:
     Base class for OpenAI guardrails.
     """
 
-    def get_user_prompt(self, messages: List["AllMessageValues"]) -> Optional[str]:
+    def get_user_prompt(self, messages: list["AllMessageValues"]) -> str | None:
         """
         Get the last consecutive block of messages from the user.
 
@@ -21,32 +25,4 @@ class OpenAIGuardrailBase:
         ]
         get_user_prompt(messages) -> "What is the weather in Tokyo?"
         """
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            convert_content_list_to_str,
-        )
-
-        if not messages:
-            return None
-
-        # Iterate from the end to find the last consecutive block of user messages
-        user_messages = []
-        for message in reversed(messages):
-            if message.get("role") == "user":
-                user_messages.append(message)
-            else:
-                # Stop when we hit a non-user message
-                break
-
-        if not user_messages:
-            return None
-
-        # Reverse to get the messages in chronological order
-        user_messages.reverse()
-
-        user_prompt = ""
-        for message in user_messages:
-            text_content = convert_content_list_to_str(message)
-            user_prompt += text_content + "\n"
-
-        result = user_prompt.strip()
-        return result if result else None
+        return get_last_user_message(messages)

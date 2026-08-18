@@ -13,11 +13,7 @@ interface AddFallbacksModalProps {
   children: React.ReactNode;
 }
 
-export function AddFallbacksModal({
-  open,
-  onCancel,
-  children,
-}: AddFallbacksModalProps) {
+export function AddFallbacksModal({ open, onCancel, children }: AddFallbacksModalProps) {
   return (
     <Modal
       title={

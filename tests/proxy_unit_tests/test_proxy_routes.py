@@ -217,9 +217,120 @@ def _create_request_with_host_header(path: str, host_header: str) -> Request:
     ],
 )
 def test_get_request_route_not_bypassed_by_malformed_host(host_header: str):
-    for protected_path in ["/health", "/user/new", "/key/generate", "/get/internal_user_settings"]:
-        request = _create_request_with_host_header(path=protected_path, host_header=host_header)
-        result = get_request_route(request)
-        assert result == protected_path, (
-            f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r}"
+    for protected_path in [
+        "/health",
+        "/user/new",
+        "/key/generate",
+        "/get/internal_user_settings",
+    ]:
+        request = _create_request_with_host_header(
+            path=protected_path, host_header=host_header
         )
+        result = get_request_route(request)
+        assert (
+            result == protected_path
+        ), f"Host: {host_header!r} caused route {protected_path!r} to resolve as {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for variant call sites that previously read request.url.path
+# (Host-derived) instead of the ASGI scope path. Each test sends a Host header
+# crafted to collapse url.path to a substring the call site's decision logic
+# would match on, while scope["path"] is the real (unmatching) route.
+# ---------------------------------------------------------------------------
+
+_BYPASS_HOSTS = [
+    "localhost/?x=1",
+    "localhost:4000/?x=1",
+    "localhost/#test",
+    "localhost:4000/#test",
+]
+
+
+def _is_assistants(req):
+    return RouteChecks._is_assistants_api_request(req)
+
+
+def _metadata_var_name(req):
+    from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
+
+    return _get_metadata_variable_name(req)
+
+
+def _vector_store_id_in_path(req):
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _add_vector_store_id_from_path,
+    )
+
+    data: dict = {}
+    _add_vector_store_id_from_path(request_data=data, request=req)
+    return "vector_store_id" in data
+
+
+# (label, scope_path, host_suffix_template, predicate, expected) — host_suffix_template
+# receives the host_header via %s substitution. The predicate is invoked on a Request
+# whose scope["path"] is scope_path and whose Host header is the formatted suffix.
+#
+# The MCP entries (well_known_mcp_bypass, pkce_token_suffix) call
+# get_request_route directly rather than the surrounding production handler
+# (MCPRequestHandler.process_mcp_request / _mcp_oauth_user_api_key_auth) —
+# those handlers require an ASGI scope plus MCP state to invoke, and the call
+# sites do nothing with the path except feed it to this helper. The helper-
+# level assertion is the relevant signal.
+_CALL_SITES = [
+    ("assistants_classification", "/key/generate", "%s/thread", _is_assistants, False),
+    (
+        "metadata_variable_name",
+        "/chat/completions",
+        "%s/thread",
+        _metadata_var_name,
+        "metadata",
+    ),
+    (
+        "vector_store_id_extraction",
+        "/key/generate",
+        "%s/vector_stores/x/files",
+        _vector_store_id_in_path,
+        False,
+    ),
+    (
+        "well_known_mcp_bypass",
+        "/mcp/tools/call",
+        "/.well-known/%s",
+        lambda r: get_request_route(r).startswith("/.well-known/"),
+        False,
+    ),
+    (
+        "pkce_token_suffix",
+        "/mcp/server-id/token",
+        "%s",
+        lambda r: get_request_route(r).rstrip("/").lower().endswith("/token"),
+        True,
+    ),
+    (
+        "spend_logs_v2_classification",
+        "/spend/logs",
+        "%s/spend/logs/v2",
+        lambda r: "/spend/logs/v2" in get_request_route(r),
+        False,
+    ),
+    ("health_route_echo", "/test", "%s", lambda r: get_request_route(r), "/test"),
+]
+
+
+@pytest.mark.parametrize("host_header", _BYPASS_HOSTS)
+@pytest.mark.parametrize(
+    "label,scope_path,host_suffix_template,predicate,expected",
+    _CALL_SITES,
+    ids=[c[0] for c in _CALL_SITES],
+)
+def test_call_site_uses_scope_path(
+    label, scope_path, host_suffix_template, predicate, expected, host_header
+):
+    """Each call site that previously read request.url.path must now make its
+    decision against scope["path"]. The Host header is crafted so url.path
+    would resolve to a value that flips the decision under the old code."""
+    request = _create_request_with_host_header(
+        path=scope_path, host_header=host_suffix_template % host_header
+    )
+    assert predicate(request) == expected

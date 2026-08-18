@@ -10,7 +10,7 @@ Convers
 Docs - https://docs.cohere.com/v2/reference/embed
 """
 
-from typing import Any, List, Optional, Union, cast
+from typing import Any, Final, cast
 
 import httpx
 
@@ -38,7 +38,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["encoding_format", "dimensions"]
 
     def map_openai_params(
@@ -62,13 +62,13 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
         }
         if api_key:
@@ -81,17 +81,17 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         return api_base or "https://api.cohere.ai/v2/embed"
 
     def _transform_request(
-        self, model: str, input: List[str], inference_params: dict
+        self, model: str, input: list[str], inference_params: dict
     ) -> CohereEmbeddingRequestWithModel:
         is_encoded = False
         for input_str in input:
@@ -111,7 +111,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             )
 
         for k, v in inference_params.items():
-            transformed_request[k] = v  # type: ignore
+            transformed_request[k] = v
 
         return transformed_request
 
@@ -122,27 +122,25 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        if isinstance(input, list) and (
-            isinstance(input[0], list) or isinstance(input[0], int)
-        ):
+        if isinstance(input, list) and (isinstance(input[0], list) or isinstance(input[0], int)):
             raise ValueError("Input must be a list of strings")
         return cast(
             dict,
             self._transform_request(
                 model=model,
-                input=cast(List[str], input) if isinstance(input, List) else [input],
+                input=cast(list[str], input) if isinstance(input, list) else [input],
                 inference_params=optional_params,
             ),
         )
 
-    def _calculate_usage(self, input: List[str], encoding: Any, meta: dict) -> Usage:
+    def _calculate_usage(self, input: list[str], encoding: Any, meta: dict) -> Usage:
         input_tokens = 0
 
-        text_tokens: Optional[int] = meta.get("billed_units", {}).get("input_tokens")
+        text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
 
-        image_tokens: Optional[int] = meta.get("billed_units", {}).get("images")
+        image_tokens: Final[int | None] = meta.get("billed_units", {}).get("images")
 
-        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         if image_tokens is None and text_tokens is None:
             for text in input:
                 input_tokens += len(encoding.encode(text))
@@ -166,15 +164,15 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
     def _transform_response(
         self,
         response: httpx.Response,
-        api_key: Optional[str],
+        api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
-        data: Union[dict, CohereEmbeddingRequest],
+        data: dict | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
         encoding: Any,
         input: list,
     ) -> EmbeddingResponse:
-        response_json = response.json()
+        response_json: Final = response.json()
         ## LOGGING
         logging_obj.post_call(
             input=input,
@@ -193,13 +191,11 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
                 'usage'
             }
         """
-        embeddings = response_json["embeddings"]
-        output_data = []
+        embeddings: Final = response_json["embeddings"]
+        output_data: Final = []
         for k, embedding_list in embeddings.items():
             for idx, embedding in enumerate(embedding_list):
-                output_data.append(
-                    {"object": "embedding", "index": idx, "embedding": embedding}
-                )
+                output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
         model_response.object = "list"
         model_response.data = output_data
         model_response.model = model
@@ -221,7 +217,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -237,9 +233,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             input=logging_obj.model_call_details["input"],
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CohereError(
             status_code=status_code,
             message=error_message,

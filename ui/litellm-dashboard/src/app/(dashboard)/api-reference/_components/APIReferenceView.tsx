@@ -1,0 +1,142 @@
+"use client";
+import React from "react";
+import CodeBlock from "@/components/CodeBlock";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import DocLink from "./DocLink";
+
+interface ApiRefProps {
+  proxySettings: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
+}
+
+const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
+  let base_url = "<your_proxy_base_url>";
+  const customDocBaseUrl = proxySettings?.LITELLM_UI_API_DOC_BASE_URL;
+  if (customDocBaseUrl && customDocBaseUrl.trim()) {
+    base_url = customDocBaseUrl;
+  } else if (proxySettings?.PROXY_BASE_URL) {
+    base_url = proxySettings.PROXY_BASE_URL;
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-2 p-8 h-[80vh] w-full mt-2">
+      <div className="mb-5">
+        {/* Header row with Docs link on the right */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold text-foreground">OpenAI Compatible Proxy: API Reference</h1>
+          <DocLink className="ml-3 shrink-0" href="https://docs.litellm.ai/docs/proxy/user_keys" />
+        </div>
+
+        <p className="mt-2 mb-2 text-sm text-muted-foreground">
+          LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url to
+          point to your litellm proxy. Example Below{" "}
+        </p>
+
+        <Tabs defaultValue="openai">
+          <TabsList variant="line" className="border-b rounded-none w-full justify-start h-auto p-0">
+            <TabsTrigger value="openai" className="rounded-none px-4 py-2 flex-none">
+              OpenAI Python SDK
+            </TabsTrigger>
+            <TabsTrigger value="llamaindex" className="rounded-none px-4 py-2 flex-none">
+              LlamaIndex
+            </TabsTrigger>
+            <TabsTrigger value="langchain" className="rounded-none px-4 py-2 flex-none">
+              Langchain Py
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="openai">
+            <CodeBlock
+              language="python"
+              code={`import openai
+client = openai.OpenAI(
+    api_key="your_api_key",
+    base_url="${base_url}" # LiteLLM Proxy is OpenAI compatible, Read More: https://docs.litellm.ai/docs/proxy/user_keys
+)
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo", # model to send to the proxy
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ]
+)
+
+print(response)`}
+            />
+          </TabsContent>
+
+          <TabsContent value="llamaindex">
+            <CodeBlock
+              language="python"
+              code={`import os, dotenv
+
+from llama_index.llms import AzureOpenAI
+from llama_index.embeddings import AzureOpenAIEmbedding
+from llama_index import VectorStoreIndex, SimpleDirectoryReader, ServiceContext
+
+llm = AzureOpenAI(
+    engine="azure-gpt-3.5",               # model_name on litellm proxy
+    temperature=0.0,
+    azure_endpoint="${base_url}", # litellm proxy endpoint
+    api_key="sk-1234",                    # litellm proxy API Key
+    api_version="2023-07-01-preview",
+)
+
+embed_model = AzureOpenAIEmbedding(
+    deployment_name="azure-embedding-model",
+    azure_endpoint="${base_url}",
+    api_key="sk-1234",
+    api_version="2023-07-01-preview",
+)
+
+documents = SimpleDirectoryReader("llama_index_data").load_data()
+service_context = ServiceContext.from_defaults(llm=llm, embed_model=embed_model)
+index = VectorStoreIndex.from_documents(documents, service_context=service_context)
+
+query_engine = index.as_query_engine()
+response = query_engine.query("What did the author do growing up?")
+print(response)`}
+            />
+          </TabsContent>
+
+          <TabsContent value="langchain">
+            <CodeBlock
+              language="python"
+              code={`from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="${base_url}",
+    model = "gpt-3.5-turbo",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)`}
+            />
+          </TabsContent>
+        </Tabs>
+      </div>
+    </div>
+  );
+};
+
+export default APIReferenceView;

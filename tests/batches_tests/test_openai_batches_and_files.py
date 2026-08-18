@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import sys
-import traceback
 import tempfile
 from dotenv import load_dotenv
 
@@ -15,12 +14,10 @@ sys.path.insert(
 
 import logging
 import time
-import asyncio
 
 import pytest
 from typing import Optional
 import litellm
-from litellm import create_batch, create_file
 from litellm._logging import verbose_logger
 import openai
 
@@ -28,10 +25,9 @@ verbose_logger.setLevel(logging.DEBUG)
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
-import random
 import socket
 import httpx
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 
 def _can_resolve_openai():
@@ -47,6 +43,21 @@ skip_if_no_openai_network = pytest.mark.skipif(
     not _can_resolve_openai(),
     reason="Cannot resolve api.openai.com - skipping integration test due to DNS issues",
 )
+
+
+async def _wait_for_standard_logging_object(
+    custom_logger: "TestCustomLogger", timeout: float = 15.0
+) -> StandardLoggingPayload:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        await GLOBAL_LOGGING_WORKER.flush()
+        if custom_logger.standard_logging_object is not None:
+            return custom_logger.standard_logging_object
+        await asyncio.sleep(0.25)
+    assert custom_logger.standard_logging_object is not None
+    return custom_logger.standard_logging_object
 
 
 def load_vertex_ai_credentials():
@@ -95,7 +106,7 @@ def load_vertex_ai_credentials():
 @pytest.mark.parametrize("provider", ["openai"])  # , "azure"
 @pytest.mark.asyncio
 @skip_if_no_openai_network
-async def test_create_batch(provider):
+async def test_create_batch(provider, tmp_path):
     """
     1. Create File for Batch completion
     2. Create Batch Request
@@ -108,11 +119,12 @@ async def test_create_batch(provider):
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
 
-    file_obj = await litellm.acreate_file(
-        file=open(file_path, "rb"),
-        purpose="batch",
-        custom_llm_provider=provider,
-    )
+    with open(file_path, "rb") as batch_file:
+        file_obj = await litellm.acreate_file(
+            file=batch_file,
+            purpose="batch",
+            custom_llm_provider=provider,
+        )
     print("Response from creating file=", file_obj)
 
     batch_input_file_id = file_obj.id
@@ -161,10 +173,8 @@ async def test_create_batch(provider):
 
     result = file_content.content
 
-    result_file_name = "batch_job_results_furniture.jsonl"
-
-    with open(result_file_name, "wb") as file:
-        file.write(result)
+    result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
+    result_file_path.write_bytes(result)
 
     # Cancel Batch - handle race condition where batch may already be completed
     try:
@@ -268,9 +278,8 @@ def cleanup_azure_ft_models():
 
 @pytest.mark.parametrize("provider", ["openai"])
 @pytest.mark.asyncio()
-@pytest.mark.flaky(retries=3, delay=1)
 @skip_if_no_openai_network
-async def test_async_create_batch(provider):
+async def test_async_create_batch(provider, tmp_path):
     """
     1. Create File for Batch completion
     2. Create Batch Request
@@ -279,17 +288,16 @@ async def test_async_create_batch(provider):
     litellm._turn_on_debug()
     print("Testing async create batch")
     litellm.logging_callback_manager._reset_all_callbacks()
-    custom_logger = TestCustomLogger()
-    litellm.callbacks = [custom_logger, "datadog"]
 
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
-    file_obj = await litellm.acreate_file(
-        file=open(file_path, "rb"),
-        purpose="batch",
-        custom_llm_provider=provider,
-    )
+    with open(file_path, "rb") as batch_file:
+        file_obj = await litellm.acreate_file(
+            file=batch_file,
+            purpose="batch",
+            custom_llm_provider=provider,
+        )
     print("Response from creating file=", file_obj)
 
     await asyncio.sleep(10)
@@ -302,6 +310,8 @@ async def test_async_create_batch(provider):
         "user_api_key_alias": "special_api_key_alias",
         "user_api_key_team_alias": "special_team_alias",
     }
+    custom_logger = TestCustomLogger()
+    litellm.callbacks = [custom_logger, "datadog"]
     create_batch_response = await litellm.acreate_batch(
         completion_window="24h",
         endpoint="/v1/chat/completions",
@@ -325,19 +335,18 @@ async def test_async_create_batch(provider):
         create_batch_response.input_file_id == batch_input_file_id
     ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
 
-    await asyncio.sleep(6)
     # Assert that the create batch event is logged on CustomLogger
-    assert custom_logger.standard_logging_object is not None
+    standard_logging_object = await _wait_for_standard_logging_object(custom_logger)
     print(
         "standard_logging_object=",
-        json.dumps(custom_logger.standard_logging_object, indent=4, default=str),
+        json.dumps(standard_logging_object, indent=4, default=str),
     )
     assert (
-        custom_logger.standard_logging_object["metadata"]["user_api_key_alias"]
+        standard_logging_object["metadata"]["user_api_key_alias"]
         == extra_metadata_field["user_api_key_alias"]
     )
     assert (
-        custom_logger.standard_logging_object["metadata"]["user_api_key_team_alias"]
+        standard_logging_object["metadata"]["user_api_key_team_alias"]
         == extra_metadata_field["user_api_key_team_alias"]
     )
 
@@ -383,10 +392,8 @@ async def test_async_create_batch(provider):
 
     print("all_files_list = ", all_files_list)
 
-    result_file_name = "batch_job_results_furniture.jsonl"
-
-    with open(result_file_name, "wb") as file:
-        file.write(file_content.content)
+    result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
+    result_file_path.write_bytes(file_content.content)
 
     # Cancel Batch - handle race condition where batch may already be completed
     try:
@@ -406,11 +413,6 @@ async def test_async_create_batch(provider):
         # Re-raise any other unexpected errors
         print(f"Unexpected error during batch cancellation: {e}")
         raise
-
-    if random.randint(1, 3) == 1:
-        print("Running random cleanup of Azure files and models...")
-        cleanup_azure_files()
-        cleanup_azure_ft_models()
 
 
 mock_file_response = {
@@ -511,10 +513,27 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_response.status_code = 200
         return mock_response
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        side_effect=mock_side_effect,
-    ) as mock_global_post:
+    # Batch jsonl creation now stages the body to a temp file and issues a single
+    # uploadType=media POST against the raw httpx.AsyncClient (client.client) inside
+    # _astage_and_upload_media, not AsyncHTTPHandler.post. Patch that raw POST so the
+    # real staging/upload + response transform run while the GCS object response is
+    # mocked; AsyncHTTPHandler.post still handles the batch-prediction call.
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            side_effect=mock_side_effect,
+        ),
+        patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=httpx.Response(
+                200,
+                json=mock_file_response,
+                request=httpx.Request("POST", "https://storage.googleapis.com/upload"),
+            ),
+        ) as mock_gcs_upload,
+    ):
         litellm.set_verbose = True
         litellm._turn_on_debug()
         file_name = "vertex_batch_completions.jsonl"
@@ -532,6 +551,15 @@ async def test_avertex_batch_prediction(monkeypatch):
         assert (
             file_obj.id
             == "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
+        )
+
+        mock_gcs_upload.assert_awaited_once()
+        upload_url = str(mock_gcs_upload.call_args.args[0])
+        assert "uploadType=media" in upload_url
+        assert "/b/litellm-local/o" in upload_url
+        assert (
+            mock_gcs_upload.call_args.kwargs["headers"]["Content-Type"]
+            == "application/json"
         )
 
         # Create batch

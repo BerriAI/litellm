@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -24,9 +24,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://api.cometapi.com"
     IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         https://api.cometapi.com/v1/images/generations
         """
@@ -45,10 +43,10 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     # CometAPI uses OpenAI-compatible parameters, so we can pass them directly
                     optional_params[k] = non_default_params[k]
@@ -63,12 +61,12 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -88,17 +86,13 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("COMETAPI_KEY")
-            or get_secret_str("COMETAPI_API_KEY")
-        )
+        final_api_key: str | None = api_key or get_secret_str("COMETAPI_KEY") or get_secret_str("COMETAPI_API_KEY")
         if not final_api_key:
             raise ValueError("COMETAPI_KEY or COMETAPI_API_KEY is not set")
 
@@ -120,7 +114,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         https://api.cometapi.com/v1/images/generations
         """
         # CometAPI uses OpenAI-compatible format
-        request_body = {
+        request_body: Final = {
             "prompt": prompt,
             "model": model,
             **optional_params,
@@ -137,8 +131,8 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the image generation response to the litellm image response
@@ -146,7 +140,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         https://api.cometapi.com/v1/images/generations
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",

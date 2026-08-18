@@ -1,12 +1,12 @@
 """Data extraction functions for Opik payload building."""
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Final
 
 from litellm import _logging
 
 
-def normalize_provider_name(provider: Optional[str]) -> Optional[str]:
+def normalize_provider_name(provider: str | None) -> str | None:
     """
     Normalize LiteLLM provider names to standardized string names.
 
@@ -20,7 +20,7 @@ def normalize_provider_name(provider: Optional[str]) -> Optional[str]:
         return None
 
     # Provider mapping to names used in Opik
-    provider_mapping = {
+    provider_mapping: Final = {
         "openai": "openai",
         "vertex_ai-language-models": "google_vertexai",
         "gemini": "google_ai",
@@ -35,35 +35,45 @@ def normalize_provider_name(provider: Optional[str]) -> Optional[str]:
 
 
 def extract_opik_metadata(
-    litellm_metadata: Dict[str, Any],
-    standard_logging_metadata: Dict[str, Any],
-) -> Dict[str, Any]:
+    litellm_metadata: dict[str, Any],
+    standard_logging_metadata: dict[str, Any],
+) -> dict[str, Any]:
     """
-    Extract and merge Opik metadata from request and requester.
+    Merge Opik metadata from three sources in increasing priority order:
+
+      1. user_api_key_auth_metadata– lowest priority (operator-level defaults)
+      2. litellm_metadata (request)– overrides auth-key defaults
+      3. requester_metadata – highest priority (e.g. proxy header overrides)
 
     Args:
-        litellm_metadata: Metadata from litellm_params
-        standard_logging_metadata: Metadata from standard_logging_object
+        litellm_metadata: Metadata from litellm_params.mak
+        standard_logging_metadata: Metadata from standard_logging_object.
 
     Returns:
-        Merged Opik metadata dictionary
+        Merged Opik metadata dictionary.
     """
-    opik_meta = litellm_metadata.get("opik", {}).copy()
+    # Start with auth-key defaults (lowest priority).
+    auth_meta: Final = standard_logging_metadata.get("user_api_key_auth_metadata") or {}
+    opik_meta: Final = (auth_meta.get("opik") or {}).copy()
 
-    requester_metadata = standard_logging_metadata.get("requester_metadata", {}) or {}
-    requester_opik = requester_metadata.get("opik", {}) or {}
-    opik_meta.update(requester_opik)
+    # Request-level values override auth-key defaults.
+    request_opik: Final = litellm_metadata.get("opik") or {}
+    opik_meta.update(request_opik)
 
-    _logging.verbose_logger.debug(
-        f"litellm_opik_metadata - {json.dumps(opik_meta, default=str)}"
-    )
+    # Requester-level values win over everything else.
+    requester_metadata: Final = standard_logging_metadata.get("requester_metadata", {}) or {}
+    requester_opik: Final = requester_metadata.get("opik", {}) or {}
+    if requester_opik:
+        opik_meta.update(requester_opik)
+
+    _logging.verbose_logger.debug("litellm_opik_metadata - %s", json.dumps(opik_meta, default=str))
 
     return opik_meta
 
 
 def extract_span_identifiers(
     current_span_data: Any,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """
     Extract trace_id and parent_span_id from current_span_data.
 
@@ -82,16 +92,14 @@ def extract_span_identifiers(
     try:
         return current_span_data.trace_id, current_span_data.id
     except AttributeError:
-        _logging.verbose_logger.warning(
-            f"Unexpected current_span_data format: {type(current_span_data)}"
-        )
+        _logging.verbose_logger.warning("Unexpected current_span_data format: %s", type(current_span_data))
         return None, None
 
 
 def extract_tags(
-    opik_metadata: Dict[str, Any],
-    custom_llm_provider: Optional[str],
-) -> List[str]:
+    opik_metadata: dict[str, Any],
+    custom_llm_provider: str | None,
+) -> list[str]:
     """
     Extract and build list of tags.
 
@@ -102,7 +110,7 @@ def extract_tags(
     Returns:
         List of tags
     """
-    tags = list(opik_metadata.get("tags", []))
+    tags: Final = list(opik_metadata.get("tags", []))
 
     if custom_llm_provider:
         tags.append(custom_llm_provider)
@@ -112,10 +120,10 @@ def extract_tags(
 
 def apply_proxy_header_overrides(
     project_name: str,
-    tags: List[str],
-    thread_id: Optional[str],
-    proxy_headers: Dict[str, Any],
-) -> Tuple[str, List[str], Optional[str]]:
+    tags: list[str],
+    thread_id: str | None,
+    proxy_headers: dict[str, Any],
+) -> tuple[str, list[str], str | None]:
     """
     Apply overrides from proxy request headers (opik_* prefix).
 
@@ -144,19 +152,17 @@ def apply_proxy_header_overrides(
                 if isinstance(parsed_tags, list):
                     tags.extend(parsed_tags)
             except (json.JSONDecodeError, TypeError):
-                _logging.verbose_logger.warning(
-                    f"Failed to parse tags from header: {value}"
-                )
+                _logging.verbose_logger.warning("Failed to parse tags from header: %s", value)
 
     return project_name, tags, thread_id
 
 
 def extract_and_build_metadata(
-    opik_metadata: Dict[str, Any],
-    standard_logging_metadata: Dict[str, Any],
-    standard_logging_object: Dict[str, Any],
-    litellm_kwargs: Dict[str, Any],
-) -> Dict[str, Any]:
+    opik_metadata: dict[str, Any],
+    standard_logging_metadata: dict[str, Any],
+    standard_logging_object: dict[str, Any],
+    litellm_kwargs: dict[str, Any],
+) -> dict[str, Any]:
     """
     Build the complete metadata dictionary from all available sources.
 
@@ -176,7 +182,7 @@ def extract_and_build_metadata(
         Complete metadata dictionary for trace/span
     """
     # Start with opik metadata (excluding current_span_data which is used for trace linking)
-    metadata = {k: v for k, v in opik_metadata.items() if k != "current_span_data"}
+    metadata: Final = {k: v for k, v in opik_metadata.items() if k != "current_span_data"}
     metadata["created_from"] = "litellm"
 
     # Merge with standard logging metadata
@@ -184,7 +190,7 @@ def extract_and_build_metadata(
 
     # Add fields from standard_logging_object
     # These come from the LiteLLM logging infrastructure
-    field_mappings = {
+    field_mappings: Final = {
         "call_type": "type",
         "status": "status",
         "model": "model",
@@ -214,8 +220,6 @@ def extract_and_build_metadata(
 
     # Add debug info if cost calculation failed
     if "response_cost_failure_debug_info" in litellm_kwargs:
-        metadata["response_cost_failure_debug_info"] = litellm_kwargs[
-            "response_cost_failure_debug_info"
-        ]
+        metadata["response_cost_failure_debug_info"] = litellm_kwargs["response_cost_failure_debug_info"]
 
     return metadata

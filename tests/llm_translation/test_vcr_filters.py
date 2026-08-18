@@ -21,10 +21,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from tests._vcr_conftest_common import (  # noqa: E402
     VCR_FIXED_MULTIPART_BOUNDARY,
     VCR_IMAGE_B64_PLACEHOLDER,
+    _before_record_request,
     _normalize_multipart_boundary,
+    _should_passthrough_credential_exchange,
     _strip_image_b64_payloads,
+    _vcr_load_guard,
 )
-
 
 # ---------------------------------------------------------------------------
 # Image b64 stripper
@@ -218,3 +220,55 @@ def test_normalize_multipart_handles_quoted_boundary():
     _normalize_multipart_boundary(req)
     assert b"quoted-boundary" not in req.body
     assert VCR_FIXED_MULTIPART_BOUNDARY.encode("utf-8") in req.body
+
+
+# ---------------------------------------------------------------------------
+# Credential-exchange passthrough (Google OAuth2/STS token mint must run live)
+# ---------------------------------------------------------------------------
+
+
+def _oauth_token_request() -> Request:
+    return Request(
+        method="POST",
+        uri="https://oauth2.googleapis.com/token",
+        body=b"assertion=eyJhbGciOiJSUzI1NiJ9.signed-jwt&grant_type=urn",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+
+
+def test_before_record_request_drops_oauth_token_mint():
+    # The token mint must never be stored or replayed, else a stale ya29.* token
+    # gets sent to a live Vertex/Gemini endpoint -> ACCESS_TOKEN_EXPIRED.
+    assert _before_record_request(_oauth_token_request()) is None
+
+
+def test_before_record_request_keeps_normal_request():
+    req = Request(
+        method="POST",
+        uri="https://api.openai.com/v1/chat/completions",
+        body=b'{"model":"gpt-4o"}',
+        headers={"content-type": "application/json"},
+    )
+    assert _before_record_request(req) is req
+
+
+def test_credential_exchange_passthrough_inert_during_cassette_load():
+    # During Cassette._load stored episodes are replayed through this hook;
+    # dropping there would mutate the cassette on read. The guard makes it inert.
+    _vcr_load_guard.active = True
+    try:
+        assert _should_passthrough_credential_exchange(_oauth_token_request()) is False
+        assert _before_record_request(_oauth_token_request()) is not None
+    finally:
+        _vcr_load_guard.active = False
+
+
+def test_credential_exchange_passthrough_covers_sts_and_metadata_hosts():
+    for host in ("sts.googleapis.com", "metadata.google.internal", "169.254.169.254"):
+        req = Request(
+            method="POST",
+            uri=f"https://{host}/token",
+            body=b"grant_type=urn",
+            headers={},
+        )
+        assert _should_passthrough_credential_exchange(req) is True

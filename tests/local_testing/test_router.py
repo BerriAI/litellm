@@ -34,6 +34,8 @@ from litellm.router_utils.cooldown_handlers import (
 )
 from litellm.types.router import DeploymentTypedDict
 
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
 load_dotenv()
 
 
@@ -144,14 +146,14 @@ async def test_router_provider_wildcard_routing_regex():
                 "model_name": "openai/fo::*:static::*",
                 "litellm_params": {
                     "model": "openai/fo::*:static::*",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
             {
                 "model_name": "openai/foo3::hello::*",
                 "litellm_params": {
                     "model": "openai/foo3::hello::*",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
         ]
@@ -1301,7 +1303,7 @@ def test_consistent_model_id():
     """
     - For a given model group + litellm params, assert the model id is always the same
 
-    Test on `_generate_model_id`
+    Test on `generate_model_id`
 
     Test on `set_model_list`
 
@@ -1315,11 +1317,11 @@ def test_consistent_model_id():
         "stream_timeout": 0.001,
     }
 
-    id1 = Router()._generate_model_id(
+    id1 = Router().generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
 
-    id2 = Router()._generate_model_id(
+    id2 = Router().generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
 
@@ -1639,7 +1641,7 @@ async def test_router_text_completion_client():
                 "litellm_params": {
                     "model": "text-completion-openai/gpt-3.5-turbo-instruct",
                     "api_key": os.getenv("OPENAI_API_KEY", None),
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             }
         ]

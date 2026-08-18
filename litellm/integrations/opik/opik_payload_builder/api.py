@@ -1,7 +1,7 @@
 """Public API for Opik payload building."""
 
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Final
 
 from litellm.integrations.opik import utils
 
@@ -9,12 +9,12 @@ from . import extractors, payload_builders, types
 
 
 def build_opik_payload(
-    kwargs: Dict[str, Any],
-    response_obj: Dict[str, Any],
+    kwargs: dict[str, Any],
+    response_obj: dict[str, Any],
     start_time: datetime,
     end_time: datetime,
     project_name: str,
-) -> Tuple[Optional[types.TracePayload], types.SpanPayload]:
+) -> tuple[types.TracePayload | None, types.SpanPayload]:
     """
     Build Opik trace and span payloads from LiteLLM completion data.
 
@@ -36,23 +36,21 @@ def build_opik_payload(
         - First element is TracePayload if creating a new trace, None if attaching to existing
         - Second element is always SpanPayload
     """
-    standard_logging_object = kwargs["standard_logging_object"]
+    standard_logging_object: Final = kwargs["standard_logging_object"]
 
     # Extract litellm params and metadata
-    litellm_params = kwargs.get("litellm_params", {}) or {}
-    litellm_metadata = litellm_params.get("metadata", {}) or {}
-    standard_logging_metadata = standard_logging_object.get("metadata", {}) or {}
+    litellm_params: Final = kwargs.get("litellm_params", {}) or {}
+    litellm_metadata: Final = litellm_params.get("metadata", {}) or {}
+    standard_logging_metadata: Final = standard_logging_object.get("metadata", {}) or {}
 
     # Extract and merge Opik metadata
-    opik_metadata = extractors.extract_opik_metadata(
-        litellm_metadata, standard_logging_metadata
-    )
+    opik_metadata: Final = extractors.extract_opik_metadata(litellm_metadata, standard_logging_metadata)
 
     # Extract project name
     current_project_name = opik_metadata.get("project_name", project_name)
 
     # Extract trace identifiers
-    current_span_data = opik_metadata.get("current_span_data")
+    current_span_data: Final = opik_metadata.get("current_span_data")
     trace_id, parent_span_id = extractors.extract_span_identifiers(current_span_data)
 
     # Extract tags and thread_id
@@ -60,14 +58,14 @@ def build_opik_payload(
     thread_id = opik_metadata.get("thread_id")
 
     # Apply proxy header overrides
-    proxy_request = litellm_params.get("proxy_server_request", {}) or {}
-    proxy_headers = proxy_request.get("headers", {}) or {}
+    proxy_request: Final = litellm_params.get("proxy_server_request", {}) or {}
+    proxy_headers: Final = proxy_request.get("headers", {}) or {}
     current_project_name, tags, thread_id = extractors.apply_proxy_header_overrides(
         current_project_name, tags, thread_id, proxy_headers
     )
 
     # Build shared metadata
-    metadata = extractors.extract_and_build_metadata(
+    metadata: Final = extractors.extract_and_build_metadata(
         opik_metadata=opik_metadata,
         standard_logging_metadata=standard_logging_metadata,
         standard_logging_object=standard_logging_object,
@@ -75,11 +73,11 @@ def build_opik_payload(
     )
 
     # Get input/output data
-    input_data = standard_logging_object.get("messages", {})
-    output_data = standard_logging_object.get("response", {})
+    input_data: Final = standard_logging_object.get("messages", {})
+    output_data: Final = standard_logging_object.get("response", {})
 
     # Decide whether to create a new trace or attach to existing
-    trace_payload: Optional[types.TracePayload] = None
+    trace_payload: types.TracePayload | None = None
     if trace_id is None:
         trace_id = utils.create_uuid7()
         trace_payload = payload_builders.build_trace_payload(
@@ -96,13 +94,13 @@ def build_opik_payload(
         )
 
     # Always create a span
-    usage = utils.create_usage_object(response_obj["usage"])
+    usage: Final = utils.create_usage_object(response_obj["usage"])
 
     # Extract provider and cost
-    provider = extractors.normalize_provider_name(kwargs.get("custom_llm_provider"))
-    cost = kwargs.get("response_cost")
+    provider: Final = extractors.normalize_provider_name(kwargs.get("custom_llm_provider"))
+    cost: Final = kwargs.get("response_cost")
 
-    span_payload = payload_builders.build_span_payload(
+    span_payload: Final = payload_builders.build_span_payload(
         project_name=current_project_name,
         trace_id=trace_id,
         parent_span_id=parent_span_id,

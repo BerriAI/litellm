@@ -7,7 +7,7 @@
 
 import json
 import os
-from typing import Any, Dict, List, Literal, Optional, Type
+from typing import Any, Final, Literal
 
 from fastapi import HTTPException
 
@@ -22,28 +22,37 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
-GUARDRAIL_NAME = "qualifire"
-DEFAULT_QUALIFIRE_API_BASE = "https://proxy.qualifire.ai"
+GUARDRAIL_NAME: Final = "qualifire"
+DEFAULT_QUALIFIRE_API_BASE: Final = "https://proxy.qualifire.ai"
 
 
 class QualifireGuardrail(CustomGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
+
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        evaluation_id: Optional[str] = None,
-        prompt_injections: Optional[bool] = None,
-        hallucinations_check: Optional[bool] = None,
-        grounding_check: Optional[bool] = None,
-        pii_check: Optional[bool] = None,
-        content_moderation_check: Optional[bool] = None,
-        tool_selection_quality_check: Optional[bool] = None,
-        assertions: Optional[List[str]] = None,
-        on_flagged: Optional[str] = "block",
+        api_key: str | None = None,
+        api_base: str | None = None,
+        evaluation_id: str | None = None,
+        prompt_injections: bool | None = None,
+        hallucinations_check: bool | None = None,
+        grounding_check: bool | None = None,
+        pii_check: bool | None = None,
+        content_moderation_check: bool | None = None,
+        tool_selection_quality_check: bool | None = None,
+        assertions: list[str] | None = None,
+        on_flagged: str | None = "block",
         **kwargs,
     ):
         """
@@ -62,11 +71,7 @@ class QualifireGuardrail(CustomGuardrail):
             assertions: Custom assertions to validate against the output
             on_flagged: Action when content is flagged: "block" or "monitor"
         """
-        self.qualifire_api_key = (
-            api_key
-            or get_secret_str("QUALIFIRE_API_KEY")
-            or os.environ.get("QUALIFIRE_API_KEY")
-        )
+        self.qualifire_api_key = api_key or get_secret_str("QUALIFIRE_API_KEY") or os.environ.get("QUALIFIRE_API_KEY")
         self.qualifire_api_base = (
             api_base
             or get_secret_str("QUALIFIRE_BASE_URL")
@@ -88,10 +93,9 @@ class QualifireGuardrail(CustomGuardrail):
             self.prompt_injections = True
 
         # Initialize async HTTP client for direct API calls
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
 
     def _has_any_check_enabled(self) -> bool:
@@ -108,9 +112,7 @@ class QualifireGuardrail(CustomGuardrail):
             ]
         )
 
-    def _convert_messages_to_api_format(
-        self, messages: List[AllMessageValues]
-    ) -> List[Dict[str, Any]]:
+    def _convert_messages_to_api_format(self, messages: list[AllMessageValues]) -> list[dict[str, Any]]:
         """
         Convert LiteLLM messages to Qualifire API format.
         Supports tool calls for tool_selection_quality_check.
@@ -123,7 +125,7 @@ class QualifireGuardrail(CustomGuardrail):
             "tool_calls": [{"id": "...", "name": "...", "arguments": {...}}]  # optional
         }
         """
-        api_messages = []
+        api_messages: Final = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -138,7 +140,7 @@ class QualifireGuardrail(CustomGuardrail):
                         text_parts.append(part)
                 content = "\n".join(text_parts)
 
-            api_message: Dict[str, Any] = {
+            api_message: dict[str, Any] = {
                 "role": role,
                 "content": content if isinstance(content, str) else str(content),
             }
@@ -176,9 +178,7 @@ class QualifireGuardrail(CustomGuardrail):
 
         return api_messages
 
-    def _convert_tools_to_api_format(
-        self, tools: Optional[List[Any]]
-    ) -> Optional[List[Dict[str, Any]]]:
+    def _convert_tools_to_api_format(self, tools: list[Any] | None) -> list[dict[str, Any]] | None:
         """
         Convert OpenAI-format tools to Qualifire API format.
 
@@ -192,7 +192,7 @@ class QualifireGuardrail(CustomGuardrail):
         if not tools:
             return None
 
-        api_tools = []
+        api_tools: Final = []
         for tool in tools:
             if isinstance(tool, dict):
                 # Handle OpenAI function tool format
@@ -217,7 +217,7 @@ class QualifireGuardrail(CustomGuardrail):
 
         return api_tools if api_tools else None
 
-    def _check_if_flagged(self, result: Dict[str, Any]) -> bool:
+    def _check_if_flagged(self, result: dict[str, Any]) -> bool:
         """
         Check if the Qualifire evaluation result indicates flagged content.
 
@@ -225,7 +225,7 @@ class QualifireGuardrail(CustomGuardrail):
         A high score (close to 100) indicates GOOD content, low score indicates problems.
         """
         # Check evaluation results for any flagged items
-        evaluation_results = result.get("evaluationResults", []) or []
+        evaluation_results: Final = result.get("evaluationResults", []) or []
 
         for eval_result in evaluation_results:
             results = eval_result.get("results", []) or []
@@ -237,13 +237,13 @@ class QualifireGuardrail(CustomGuardrail):
 
     def _build_evaluate_payload(
         self,
-        api_messages: List[Dict[str, Any]],
-        output: Optional[str],
-        assertions: Optional[List[str]],
-        available_tools: Optional[List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
+        api_messages: list[dict[str, Any]],
+        output: str | None,
+        assertions: list[str] | None,
+        available_tools: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
         """Build payload dictionary for the /api/evaluation/evaluate endpoint."""
-        payload: Dict[str, Any] = {"messages": api_messages}
+        payload: Final[dict[str, Any]] = {"messages": api_messages}
 
         if output is not None:
             payload["output"] = output
@@ -275,10 +275,10 @@ class QualifireGuardrail(CustomGuardrail):
 
     async def _run_qualifire_check(
         self,
-        messages: List[AllMessageValues],
-        output: Optional[str],
-        dynamic_params: Dict[str, Any],
-        available_tools: Optional[List[Any]] = None,
+        messages: list[AllMessageValues],
+        output: str | None,
+        dynamic_params: dict[str, Any],
+        available_tools: list[Any] | None = None,
     ) -> None:
         """
         Core Qualifire check logic - shared between hooks.
@@ -293,19 +293,19 @@ class QualifireGuardrail(CustomGuardrail):
             HTTPException: If content is blocked
         """
         # Apply dynamic param overrides
-        evaluation_id = dynamic_params.get("evaluation_id") or self.evaluation_id
-        assertions = dynamic_params.get("assertions") or self.assertions
-        on_flagged = dynamic_params.get("on_flagged") or self.on_flagged
+        evaluation_id: Final = dynamic_params.get("evaluation_id") or self.evaluation_id
+        assertions: Final = dynamic_params.get("assertions") or self.assertions
+        on_flagged: Final = dynamic_params.get("on_flagged") or self.on_flagged
 
         # Prepare headers
-        headers = {
+        headers: Final = {
             "X-Qualifire-API-Key": self.qualifire_api_key or "",
             "Content-Type": "application/json",
         }
 
         try:
             # Convert messages to API format
-            api_messages = self._convert_messages_to_api_format(messages)
+            api_messages: Final = self._convert_messages_to_api_format(messages)
 
             # Use invoke endpoint if evaluation_id is provided
             if evaluation_id:
@@ -344,19 +344,19 @@ class QualifireGuardrail(CustomGuardrail):
                 )
                 url = f"{self.qualifire_api_base}/api/evaluation/evaluate"
 
-            verbose_proxy_logger.debug(f"Qualifire Guardrail: Making request to {url}")
+            verbose_proxy_logger.debug("Qualifire Guardrail: Making request to %s", url)
 
             # Make the API request
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=url,
                 headers=headers,
                 json=payload,
             )
             response.raise_for_status()
-            result = response.json()
+            result: Final = response.json()
 
             # Extract response info for logging
-            qualifire_response = {
+            qualifire_response: Final = {
                 "score": result.get("score"),
                 "status": result.get("status"),
             }
@@ -368,13 +368,13 @@ class QualifireGuardrail(CustomGuardrail):
             )
 
             # Check if any evaluation flagged the content
-            is_flagged = self._check_if_flagged(result)
+            is_flagged: Final = self._check_if_flagged(result)
 
             if is_flagged:
                 if on_flagged == "monitor":
                     verbose_proxy_logger.warning(
-                        "Qualifire Guardrail: Monitoring mode - violation detected but allowing request. "
-                        f"Response: {qualifire_response}"
+                        "Qualifire Guardrail: Monitoring mode - violation detected but allowing request. Response: %s",
+                        qualifire_response,
                     )
                 else:
                     # Block the request
@@ -389,7 +389,7 @@ class QualifireGuardrail(CustomGuardrail):
         except HTTPException:
             raise
         except Exception as e:
-            verbose_proxy_logger.exception(f"Qualifire Guardrail error: {e}")
+            verbose_proxy_logger.exception("Qualifire Guardrail error: %s", e)
             raise
 
     @log_guardrail_information
@@ -398,7 +398,7 @@ class QualifireGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         """
         Apply Qualifire guardrail to the given inputs.
@@ -422,19 +422,17 @@ class QualifireGuardrail(CustomGuardrail):
             HTTPException: If content is blocked
         """
         # Get dynamic params from request body (allows runtime overrides)
-        dynamic_params = self.get_guardrail_dynamic_request_body_params(
-            request_data=request_data
-        )
+        dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
 
         # Extract messages from structured_messages or request_data
-        messages: Optional[List[AllMessageValues]] = inputs.get("structured_messages")
+        messages: list[AllMessageValues] | None = inputs.get("structured_messages")
         if not messages:
             messages = request_data.get("messages")
 
         # For response (post_call), messages may not be available in the inputs
         # We need to work with texts instead and construct messages if needed
-        output: Optional[str] = None
-        texts = inputs.get("texts", [])
+        output: str | None = None
+        texts: Final = inputs.get("texts", [])
 
         if input_type == "response":
             # For post_call, extract output from texts
@@ -444,20 +442,18 @@ class QualifireGuardrail(CustomGuardrail):
             # If no structured messages available, construct from texts
             if not messages and texts:
                 # Create a simple message structure for the output
-                messages = [{"role": "assistant", "content": output or ""}]  # type: ignore
+                messages = [{"role": "assistant", "content": output or ""}]
 
         if not messages:
             # For pre_call with no messages, try to construct from texts
             if texts:
-                messages = [{"role": "user", "content": texts[-1] if texts else ""}]  # type: ignore
+                messages = [{"role": "user", "content": texts[-1] if texts else ""}]
             else:
-                verbose_proxy_logger.debug(
-                    "Qualifire Guardrail: No messages or texts found, skipping"
-                )
+                verbose_proxy_logger.debug("Qualifire Guardrail: No messages or texts found, skipping")
                 return inputs
 
         # Get available tools from request_data for tool_selection_quality_check
-        available_tools = request_data.get("tools")
+        available_tools: Final = request_data.get("tools")
 
         await self._run_qualifire_check(
             messages=messages,
@@ -469,7 +465,7 @@ class QualifireGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:  # type: ignore
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
             QualifireGuardrailConfigModel,
         )

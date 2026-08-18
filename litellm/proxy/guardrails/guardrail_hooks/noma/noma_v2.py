@@ -8,7 +8,7 @@ import enum
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, Optional, Type, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
@@ -31,10 +31,17 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
-_DEFAULT_API_BASE = "https://api.noma.security/"
-_AIDR_SCAN_ENDPOINT = "/litellm/guardrail"
-_INTERVENED_INPUT_FIELDS = ("texts", "images", "tools", "tool_calls")
-_DEFAULT_API_BASE_HOSTNAME = urlparse(_DEFAULT_API_BASE).hostname
+_DEFAULT_API_BASE: Final = "https://api.noma.security/"
+_AIDR_SCAN_ENDPOINT: Final = "/litellm/guardrail"
+_INTERVENED_INPUT_FIELDS: Final = ("texts", "images", "tools", "tool_calls")
+_DEFAULT_API_BASE_HOSTNAME: Final = urlparse(_DEFAULT_API_BASE).hostname
+
+_KEYS_DUPLICATING_SCAN_INPUTS: Final = ("messages", "input")
+_LOGGING_KEYS_DUPLICATING_SCAN_INPUTS: Final = _KEYS_DUPLICATING_SCAN_INPUTS + (
+    "additional_args",
+    "standard_logging_object",
+    "original_response",
+)
 
 
 class _Action(str, enum.Enum):
@@ -46,59 +53,52 @@ class _Action(str, enum.Enum):
 class NomaV2Guardrail(CustomGuardrail):
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        application_id: Optional[str] = None,
-        monitor_mode: Optional[bool] = None,
-        block_failures: Optional[bool] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        application_id: str | None = None,
+        monitor_mode: bool | None = None,
+        block_failures: bool | None = None,
         **kwargs: Any,
     ) -> None:
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         self.api_key = api_key or os.environ.get("NOMA_API_KEY")
-        self.api_base = (
-            api_base or os.environ.get("NOMA_API_BASE") or _DEFAULT_API_BASE
-        ).rstrip("/")
+        self.api_base = (api_base or os.environ.get("NOMA_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
         self.application_id = application_id or os.environ.get("NOMA_APPLICATION_ID")
         if monitor_mode is None:
-            self.monitor_mode = (
-                os.environ.get("NOMA_MONITOR_MODE", "false").lower() == "true"
-            )
+            self.monitor_mode = os.environ.get("NOMA_MONITOR_MODE", "false").lower() == "true"
         else:
             self.monitor_mode = monitor_mode
 
         if block_failures is None:
-            self.block_failures = (
-                os.environ.get("NOMA_BLOCK_FAILURES", "true").lower() == "true"
-            )
+            self.block_failures = os.environ.get("NOMA_BLOCK_FAILURES", "true").lower() == "true"
         else:
             self.block_failures = block_failures
 
         if self._requires_api_key(api_base=self.api_base) and not self.api_key:
-            raise ValueError(
-                "Noma v2 guardrail requires api_key when using Noma SaaS endpoint"
-            )
+            raise ValueError("Noma v2 guardrail requires api_key when using Noma SaaS endpoint")
 
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.during_call,
-                GuardrailEventHooks.post_call,
-                GuardrailEventHooks.pre_mcp_call,
-                GuardrailEventHooks.during_mcp_call,
-            ]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         super().__init__(**kwargs)
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
             NomaV2GuardrailConfigModel,
         )
 
         return NomaV2GuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.during_mcp_call,
+        ]
 
     def _get_authorization_header(self) -> str:
         if not self.api_key:
@@ -107,21 +107,21 @@ class NomaV2Guardrail(CustomGuardrail):
 
     @staticmethod
     def _requires_api_key(api_base: str) -> bool:
-        parsed = urlparse(api_base)
+        parsed: Final = urlparse(api_base)
         return parsed.hostname == _DEFAULT_API_BASE_HOSTNAME
 
     @staticmethod
-    def _get_non_empty_str(value: Any) -> Optional[str]:
+    def _get_non_empty_str(value: Any) -> str | None:
         if not isinstance(value, str):
             return None
-        stripped = value.strip()
+        stripped: Final = value.strip()
         return stripped or None
 
     def _resolve_action_from_response(
         self,
         response_json: dict,
     ) -> _Action:
-        action = response_json.get("action")
+        action: Final = response_json.get("action")
         if isinstance(action, str):
             try:
                 return _Action(action)
@@ -136,15 +136,24 @@ class NomaV2Guardrail(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
-        application_id: Optional[str],
+        application_id: str | None,
     ) -> dict:
-        payload_request_data = self._sanitize_payload_for_transport(request_data)
+        payload_request_data: Final = self._sanitize_payload_for_transport(
+            {key: value for key, value in request_data.items() if key not in _KEYS_DUPLICATING_SCAN_INPUTS}
+        )
         if logging_obj is not None:
-            payload_request_data["litellm_logging_obj"] = getattr(
-                logging_obj, "model_call_details", None
+            model_call_details: Final = getattr(logging_obj, "model_call_details", None)
+            payload_request_data["litellm_logging_obj"] = (
+                {
+                    key: value
+                    for key, value in model_call_details.items()
+                    if key not in _LOGGING_KEYS_DUPLICATING_SCAN_INPUTS
+                }
+                if isinstance(model_call_details, dict)
+                else model_call_details
             )
 
-        payload: dict[str, Any] = {
+        payload: Final[dict[str, Any]] = {
             "inputs": inputs,
             "request_data": payload_request_data,
             "input_type": input_type,
@@ -169,7 +178,7 @@ class NomaV2Guardrail(CustomGuardrail):
         except (ValueError, TypeError):
             json_str = safe_dumps(payload)
 
-        safe_payload = safe_json_loads(json_str, default={})
+        safe_payload: Final = safe_json_loads(json_str, default={})
         if safe_payload == {} and payload:
             verbose_proxy_logger.warning(
                 "Noma v2 guardrail: payload serialization failed, falling back to empty payload"
@@ -188,14 +197,14 @@ class NomaV2Guardrail(CustomGuardrail):
         self,
         payload: dict,
     ) -> dict:
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        authorization_header = self._get_authorization_header()
+        headers: Final[dict[str, str]] = {"Content-Type": "application/json"}
+        authorization_header: Final = self._get_authorization_header()
         if authorization_header:
             headers["Authorization"] = authorization_header
 
-        endpoint = f"{self.api_base}{_AIDR_SCAN_ENDPOINT}"
-        sanitized_payload = self._sanitize_payload_for_transport(payload)
-        response = await self.async_handler.post(
+        endpoint: Final = f"{self.api_base}{_AIDR_SCAN_ENDPOINT}"
+        sanitized_payload: Final = self._sanitize_payload_for_transport(payload)
+        response: Final = await self.async_handler.post(
             url=endpoint,
             headers=headers,
             json=sanitized_payload,
@@ -206,7 +215,7 @@ class NomaV2Guardrail(CustomGuardrail):
             response.text,
         )
         response.raise_for_status()
-        response_json = response.json()
+        response_json: Final = response.json()
         verbose_proxy_logger.debug(
             "Noma v2 AIDR response parsed: %s",
             json.dumps(response_json, default=str),
@@ -220,8 +229,8 @@ class NomaV2Guardrail(CustomGuardrail):
         guardrail_status: GuardrailStatus,
         guardrail_json_response: Any,
     ) -> None:
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
+        end_time: Final = datetime.now()
+        duration: Final = (end_time - start_time).total_seconds()
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider="noma_v2",
             guardrail_json_response=guardrail_json_response,
@@ -242,11 +251,11 @@ class NomaV2Guardrail(CustomGuardrail):
             raise NomaBlockedMessage(response_json)
 
         if action == _Action.GUARDRAIL_INTERVENED:
-            updated_inputs = cast(GenericGuardrailAPIInputs, dict(inputs))
+            updated_inputs: Final = cast(GenericGuardrailAPIInputs, dict(inputs))
             for field in _INTERVENED_INPUT_FIELDS:
                 value = response_json.get(field)
                 if isinstance(value, list):
-                    updated_inputs[field] = value  # type: ignore[literal-required]
+                    updated_inputs[field] = value
             return updated_inputs
 
         return inputs
@@ -259,13 +268,13 @@ class NomaV2Guardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
         guardrail_status: GuardrailStatus = "success"
         guardrail_json_response: Any = {}
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
         if not isinstance(dynamic_params, dict):
             dynamic_params = {}
-        response_json: Optional[dict] = None
+        response_json: dict | None = None
 
         # Per-request dynamic params can override configured application context.
         application_id = self._get_non_empty_str(dynamic_params.get("application_id"))
@@ -278,12 +287,10 @@ class NomaV2Guardrail(CustomGuardrail):
         if application_id is None:
             application_id = self._get_non_empty_str(
                 request_data.get("litellm_metadata", {}).get("user_api_key_alias")
-            ) or self._get_non_empty_str(
-                request_data.get("metadata", {}).get("user_api_key_alias")
-            )
+            ) or self._get_non_empty_str(request_data.get("metadata", {}).get("user_api_key_alias"))
 
         try:
-            payload = self._build_scan_payload(
+            payload: Final = self._build_scan_payload(
                 inputs=inputs,
                 request_data=request_data,
                 input_type=input_type,
@@ -302,23 +309,19 @@ class NomaV2Guardrail(CustomGuardrail):
                 input_type,
                 action.value,
             )
-            processed_inputs = self._apply_action(
+            processed_inputs: Final = self._apply_action(
                 inputs=inputs,
                 response_json=response_json,
                 action=action,
             )
 
-            guardrail_status = (
-                "success" if action == _Action.NONE else "guardrail_intervened"
-            )
+            guardrail_status = "success" if action == _Action.NONE else "guardrail_intervened"
             return processed_inputs
 
         except NomaBlockedMessage as e:
             guardrail_status = "guardrail_intervened"
             guardrail_json_response = (
-                response_json
-                if isinstance(response_json, dict)
-                else getattr(e, "detail", {"error": "blocked"})
+                response_json if isinstance(response_json, dict) else getattr(e, "detail", {"error": "blocked"})
             )
             raise
         except Exception as e:

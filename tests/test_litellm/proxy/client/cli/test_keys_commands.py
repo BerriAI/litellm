@@ -262,7 +262,7 @@ def test_keys_import_actual_import_success(mock_keys_client, cli_runner):
 
         assert result.exit_code == 0
         assert "Found 1 keys in source instance" in result.output
-        assert "✓ Imported key: import-key-1" in result.output
+        assert "Imported key: import-key-1" in result.output
         assert "Successfully imported: 1" in result.output
         assert "Failed to import: 0" in result.output
 
@@ -481,8 +481,8 @@ def test_keys_import_partial_failure(mock_keys_client, cli_runner):
         )
 
         assert result.exit_code == 0  # Command completes even with partial failures
-        assert "✓ Imported key: success-key" in result.output
-        assert "✗ Failed to import key fail-key" in result.output
+        assert "Imported key: success-key" in result.output
+        assert "Failed to import key fail-key" in result.output
         assert "Successfully imported: 1" in result.output
         assert "Failed to import: 1" in result.output
         assert "Total keys processed: 2" in result.output

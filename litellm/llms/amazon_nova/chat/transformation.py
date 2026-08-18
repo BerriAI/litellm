@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Amazon Nova's `/v1/chat/completions`
 """
 
-from typing import Any, List, Optional, Tuple
+from typing import Any, Final
 
 import httpx
 
@@ -18,30 +18,30 @@ from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 
 class AmazonNovaChatConfig(OpenAILikeChatConfig):
-    max_completion_tokens: Optional[int] = None
-    max_tokens: Optional[int] = None
-    metadata: Optional[int] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    tools: Optional[list] = None
-    reasoning_effort: Optional[list] = None
+    max_completion_tokens: int | None = None
+    max_tokens: int | None = None
+    metadata: int | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    tools: list | None = None
+    reasoning_effort: list | None = None
 
     def __init__(
         self,
-        max_completion_tokens: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        tools: Optional[list] = None,
-        reasoning_effort: Optional[list] = None,
+        max_completion_tokens: int | None = None,
+        max_tokens: int | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        tools: list | None = None,
+        reasoning_effort: list | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "amazon_nova"
 
     @classmethod
@@ -49,25 +49,16 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         return super().get_config()
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
         # Amazon Nova is openai compatible, we just need to set this to custom_openai and have the api_base be Nova's endpoint
-        api_base = (
-            api_base
-            or get_secret_str("AMAZON_NOVA_API_BASE")
-            or "https://api.nova.amazon.com/v1"
-        )  # type: ignore
+        api_base = api_base or get_secret_str("AMAZON_NOVA_API_BASE") or "https://api.nova.amazon.com/v1"
 
         # Get API key from multiple sources
-        key = (
-            api_key
-            or litellm.amazon_nova_api_key
-            or get_secret_str("AMAZON_NOVA_API_KEY")
-            or litellm.api_key
-        )
+        key: Final = api_key or litellm.amazon_nova_api_key or get_secret_str("AMAZON_NOVA_API_KEY") or litellm.api_key
         return api_base, key
 
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "top_p",
             "temperature",
@@ -89,12 +80,12 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         model_response = super().transform_response(
             model=model,

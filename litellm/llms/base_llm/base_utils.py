@@ -5,7 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
@@ -20,19 +20,19 @@ class BaseTokenCounter(ABC):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: Optional[List[Dict[str, Any]]],
-        contents: Optional[List[Dict[str, Any]]],
-        deployment: Optional[Dict[str, Any]] = None,
+        messages: list[dict[str, Any]] | None,
+        contents: list[dict[str, Any]] | None,
+        deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system: Optional[Any] = None,
-    ) -> Optional[TokenCountResponse]:
+        tools: list[dict[str, Any]] | None = None,
+        system: Any | None = None,
+    ) -> TokenCountResponse | None:
         pass
 
     @abstractmethod
     def should_use_token_counting_api(
         self,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """
         Returns True if we should the this API for token counting for the selected `custom_llm_provider`
@@ -44,16 +44,14 @@ class BaseLLMModelInfo(ABC):
     def get_provider_info(
         self,
         model: str,
-    ) -> Optional[ProviderSpecificModelInfo]:
+    ) -> ProviderSpecificModelInfo | None:
         """
         Default values all models of this provider support.
         """
         return None
 
     @abstractmethod
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """
         Returns a list of models supported by this provider.
         """
@@ -61,14 +59,14 @@ class BaseLLMModelInfo(ABC):
 
     @staticmethod
     @abstractmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         pass
 
     @staticmethod
     @abstractmethod
     def get_api_base(
-        api_base: Optional[str] = None,
-    ) -> Optional[str]:
+        api_base: str | None = None,
+    ) -> str | None:
         pass
 
     @abstractmethod
@@ -76,26 +74,25 @@ class BaseLLMModelInfo(ABC):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         pass
 
     @staticmethod
     @abstractmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         """
         Returns the base model name from the given model name.
 
         Some providers like bedrock - can receive model=`invoke/anthropic.claude-3-opus-20240229-v1:0` or `converse/anthropic.claude-3-opus-20240229-v1:0`
             This function will return `anthropic.claude-3-opus-20240229-v1:0`
         """
-        pass
 
-    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+    def get_token_counter(self) -> BaseTokenCounter | None:
         """
         Factory method to create a token counter for this provider.
 
@@ -107,17 +104,17 @@ class BaseLLMModelInfo(ABC):
 
 
 def _convert_tool_response_to_message(
-    tool_calls: List[ChatCompletionToolCallChunk],
-) -> Optional[Message]:
+    tool_calls: list[ChatCompletionToolCallChunk],
+) -> Message | None:
     """
     In JSON mode, Anthropic API returns JSON schema as a tool call, we need to convert it to a message to follow the OpenAI format
 
     """
     ## HANDLE JSON MODE - anthropic returns single function call
-    json_mode_content_str: Optional[str] = tool_calls[0]["function"].get("arguments")
+    json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
     try:
         if json_mode_content_str is not None:
-            args = json.loads(json_mode_content_str)
+            args: Final = json.loads(json_mode_content_str)
             if isinstance(args, dict) and (values := args.get("values")) is not None:
                 _message = Message(content=json.dumps(values))
                 return _message
@@ -132,18 +129,16 @@ def _convert_tool_response_to_message(
     return None
 
 
-def _dict_to_response_format_helper(
-    response_format: dict, ref_template: Optional[str] = None
-) -> dict:
+def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:
     if ref_template is not None and response_format.get("type") == "json_schema":
         # Deep copy to avoid modifying original
-        modified_format = copy.deepcopy(response_format)
-        schema = modified_format["json_schema"]["schema"]
+        modified_format: Final = copy.deepcopy(response_format)
+        schema: Final = modified_format["json_schema"]["schema"]
 
         # Update all $ref values in the schema
         def update_refs(schema):
-            stack = [(schema, [])]
-            visited = set()
+            stack: Final = [(schema, [])]
+            visited: Final = set()
 
             while stack:
                 obj, path = stack.pop()
@@ -174,9 +169,9 @@ def _dict_to_response_format_helper(
 
 
 def type_to_response_format_param(
-    response_format: Optional[Union[Type[BaseModel], dict]],
-    ref_template: Optional[str] = None,
-) -> Optional[dict]:
+    response_format: type[BaseModel] | dict | None,
+    ref_template: str | None = None,
+) -> dict | None:
     """
     Re-implementation of openai's 'type_to_response_format_param' function
 
@@ -210,12 +205,12 @@ def type_to_response_format_param(
 
 
 def map_developer_role_to_system_role(
-    messages: List[AllMessageValues],
-) -> List[AllMessageValues]:
+    messages: list[AllMessageValues],
+) -> list[AllMessageValues]:
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    new_messages: List[AllMessageValues] = []
+    new_messages: Final[list[AllMessageValues]] = []
     for m in messages:
         if m["role"] == "developer":
             verbose_logger.debug(

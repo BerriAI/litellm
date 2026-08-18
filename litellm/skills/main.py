@@ -5,8 +5,9 @@ Provides create, list, get, and delete operations for skills
 
 import asyncio
 import contextvars
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Optional, Union
+from typing import Any, Final
 
 import httpx
 
@@ -28,13 +29,13 @@ from litellm.utils import ProviderConfigManager, client
 
 # Initialize HTTP handler
 base_llm_http_handler = BaseLLMHTTPHandler()
-DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com/v1"
+DEFAULT_ANTHROPIC_API_BASE: Final = "https://api.anthropic.com/v1"
 
 # Initialize LiteLLM skills handler (lazy - only used when custom_llm_provider="litellm")
 _litellm_skills_handler = None
 
 
-def _get_user_api_key_auth_from_kwargs(kwargs: Dict[str, Any]) -> Optional[Any]:
+def _get_user_api_key_auth_from_kwargs(kwargs: dict[str, Any]) -> Any | None:
     for metadata_key in ("metadata", "litellm_metadata"):
         metadata = kwargs.get(metadata_key)
         if isinstance(metadata, dict) and metadata.get("user_api_key_auth") is not None:
@@ -43,16 +44,14 @@ def _get_user_api_key_auth_from_kwargs(kwargs: Dict[str, Any]) -> Optional[Any]:
 
 
 def _get_skill_request_metadata(
-    kwargs: Dict[str, Any],
-    extra_body: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    kwargs: dict[str, Any],
+    extra_body: dict[str, Any] | None,
+) -> dict[str, Any] | None:
     if extra_body and isinstance(extra_body.get("metadata"), dict):
         return extra_body["metadata"]
 
-    metadata = kwargs.get("metadata")
-    if isinstance(metadata, dict) and isinstance(
-        metadata.get("requester_metadata"), dict
-    ):
+    metadata: Final = kwargs.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("requester_metadata"), dict):
         return metadata["requester_metadata"]
     return None
 
@@ -71,13 +70,13 @@ def _get_litellm_skills_handler():
 
 @client
 async def acreate_skill(
-    files: Optional[List[Any]] = None,
-    display_title: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    files: list[Any] | None = None,
+    display_title: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Skill:
     """
@@ -96,12 +95,12 @@ async def acreate_skill(
     Returns:
         Skill object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acreate_skill"] = True
 
-        func = partial(
+        func: Final = partial(
             create_skill,
             files=files,
             display_title=display_title,
@@ -113,9 +112,9 @@ async def acreate_skill(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -134,15 +133,15 @@ async def acreate_skill(
 
 @client
 def create_skill(
-    files: Optional[List[Any]] = None,
-    display_title: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    files: list[Any] | None = None,
+    display_title: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[Skill, Coroutine[Any, Any, Skill]]:
+) -> Skill | Coroutine[Any, Any, Skill]:
     """
     Create a new skill
 
@@ -159,21 +158,21 @@ def create_skill(
     Returns:
         Skill object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("acreate_skill", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("acreate_skill", False) is True
 
         # Get LiteLLM parameters
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
             custom_llm_provider = "anthropic"
 
         # Build create request
-        create_request: CreateSkillRequest = {}
+        create_request: Final[CreateSkillRequest] = {}
         if display_title is not None:
             create_request["display_title"] = display_title
         if files is not None:
@@ -181,7 +180,7 @@ def create_skill(
 
         # Merge extra_body if provided
         if extra_body:
-            create_request.update(extra_body)  # type: ignore
+            create_request.update(extra_body)
 
         # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
@@ -197,10 +196,8 @@ def create_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        skills_api_provider_config: BaseSkillsAPIConfig | None = ProviderConfigManager.get_provider_skills_api_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if skills_api_provider_config is None:
@@ -208,12 +205,10 @@ def create_skill(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
-        request_body = skills_api_provider_config.transform_create_skill_request(
+        request_body: Final = skills_api_provider_config.transform_create_skill_request(
             create_request=create_request,
             litellm_params=litellm_params,
             headers=headers,
@@ -222,10 +217,8 @@ def create_skill(
         # Get API base and URL
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
-        url = skills_api_provider_config.get_complete_url(
-            api_base=api_base, endpoint="skills"
-        )
+        api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        url: Final = skills_api_provider_config.get_complete_url(api_base=api_base, endpoint="skills")
 
         # Pre-call logging
         litellm_logging_obj.update_from_kwargs(
@@ -239,7 +232,7 @@ def create_skill(
         )
 
         # Make HTTP request
-        response = base_llm_http_handler.create_skill_handler(
+        response: Final = base_llm_http_handler.create_skill_handler(
             url=url,
             request_body=request_body,
             skills_api_provider_config=skills_api_provider_config,
@@ -266,13 +259,13 @@ def create_skill(
 
 @client
 async def alist_skills(
-    limit: Optional[int] = None,
-    page: Optional[str] = None,
-    source: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    limit: int | None = None,
+    page: str | None = None,
+    source: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ListSkillsResponse:
     """
@@ -291,12 +284,12 @@ async def alist_skills(
     Returns:
         ListSkillsResponse object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["alist_skills"] = True
 
-        func = partial(
+        func: Final = partial(
             list_skills,
             limit=limit,
             page=page,
@@ -308,9 +301,9 @@ async def alist_skills(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -329,15 +322,15 @@ async def alist_skills(
 
 @client
 def list_skills(
-    limit: Optional[int] = None,
-    page: Optional[str] = None,
-    source: Optional[str] = None,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    limit: int | None = None,
+    page: str | None = None,
+    source: str | None = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ListSkillsResponse, Coroutine[Any, Any, ListSkillsResponse]]:
+) -> ListSkillsResponse | Coroutine[Any, Any, ListSkillsResponse]:
     """
     List all skills
 
@@ -354,14 +347,14 @@ def list_skills(
     Returns:
         ListSkillsResponse object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("alist_skills", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("alist_skills", False) is True
 
         # Get LiteLLM parameters
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -379,17 +372,15 @@ def list_skills(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        skills_api_provider_config: BaseSkillsAPIConfig | None = ProviderConfigManager.get_provider_skills_api_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if skills_api_provider_config is None:
             raise ValueError(f"LIST skills is not supported for {custom_llm_provider}")
 
         # Build list parameters
-        list_params: ListSkillsParams = {}
+        list_params: Final[ListSkillsParams] = {}
         if limit is not None:
             list_params["limit"] = limit
         if page is not None:
@@ -399,13 +390,11 @@ def list_skills(
 
         # Merge extra_query if provided
         if extra_query:
-            list_params.update(extra_query)  # type: ignore
+            list_params.update(extra_query)
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         url, query_params = skills_api_provider_config.transform_list_skills_request(
@@ -426,7 +415,7 @@ def list_skills(
         )
 
         # Make HTTP request
-        response = base_llm_http_handler.list_skills_handler(
+        response: Final = base_llm_http_handler.list_skills_handler(
             url=url,
             query_params=query_params,
             skills_api_provider_config=skills_api_provider_config,
@@ -454,10 +443,10 @@ def list_skills(
 @client
 async def aget_skill(
     skill_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> Skill:
     """
@@ -474,12 +463,12 @@ async def aget_skill(
     Returns:
         Skill object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aget_skill"] = True
 
-        func = partial(
+        func: Final = partial(
             get_skill,
             skill_id=skill_id,
             extra_headers=extra_headers,
@@ -489,9 +478,9 @@ async def aget_skill(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -511,12 +500,12 @@ async def aget_skill(
 @client
 def get_skill(
     skill_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[Skill, Coroutine[Any, Any, Skill]]:
+) -> Skill | Coroutine[Any, Any, Skill]:
     """
     Get a skill by ID
 
@@ -531,14 +520,14 @@ def get_skill(
     Returns:
         Skill object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("aget_skill", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("aget_skill", False) is True
 
         # Get LiteLLM parameters
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -555,10 +544,8 @@ def get_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        skills_api_provider_config: BaseSkillsAPIConfig | None = ProviderConfigManager.get_provider_skills_api_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if skills_api_provider_config is None:
@@ -566,14 +553,12 @@ def get_skill(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Get API base
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.api_base)
 
         # Transform request
         url, headers = skills_api_provider_config.transform_get_skill_request(
@@ -595,7 +580,7 @@ def get_skill(
         )
 
         # Make HTTP request
-        response = base_llm_http_handler.get_skill_handler(
+        response: Final = base_llm_http_handler.get_skill_handler(
             url=url,
             skills_api_provider_config=skills_api_provider_config,
             custom_llm_provider=custom_llm_provider,
@@ -622,10 +607,10 @@ def get_skill(
 @client
 async def adelete_skill(
     skill_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> DeleteSkillResponse:
     """
@@ -642,12 +627,12 @@ async def adelete_skill(
     Returns:
         DeleteSkillResponse object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["adelete_skill"] = True
 
-        func = partial(
+        func: Final = partial(
             delete_skill,
             skill_id=skill_id,
             extra_headers=extra_headers,
@@ -657,9 +642,9 @@ async def adelete_skill(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -679,12 +664,12 @@ async def adelete_skill(
 @client
 def delete_skill(
     skill_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[DeleteSkillResponse, Coroutine[Any, Any, DeleteSkillResponse]]:
+) -> DeleteSkillResponse | Coroutine[Any, Any, DeleteSkillResponse]:
     """
     Delete a skill by ID
 
@@ -699,14 +684,14 @@ def delete_skill(
     Returns:
         DeleteSkillResponse object
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("adelete_skill", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("adelete_skill", False) is True
 
         # Get LiteLLM parameters
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -723,10 +708,8 @@ def delete_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        skills_api_provider_config: BaseSkillsAPIConfig | None = ProviderConfigManager.get_provider_skills_api_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if skills_api_provider_config is None:
@@ -734,14 +717,12 @@ def delete_skill(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Get API base
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.api_base)
 
         # Transform request
         url, headers = skills_api_provider_config.transform_delete_skill_request(
@@ -763,7 +744,7 @@ def delete_skill(
         )
 
         # Make HTTP request
-        response = base_llm_http_handler.delete_skill_handler(
+        response: Final = base_llm_http_handler.delete_skill_handler(
             url=url,
             skills_api_provider_config=skills_api_provider_config,
             custom_llm_provider=custom_llm_provider,

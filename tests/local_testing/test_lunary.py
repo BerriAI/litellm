@@ -26,9 +26,6 @@ def test_lunary_logging():
         print(e)
 
 
-test_lunary_logging()
-
-
 def test_lunary_template():
     import lunary
 

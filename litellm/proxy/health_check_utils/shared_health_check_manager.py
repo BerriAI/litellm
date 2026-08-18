@@ -1,15 +1,15 @@
 import asyncio
 import json
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
-    DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+    DEFAULT_SHARED_HEALTH_CHECK_TTL,
 )
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.health_check import perform_health_check
 
 
@@ -26,7 +26,7 @@ class SharedHealthCheckManager:
 
     def __init__(
         self,
-        redis_cache: Optional[RedisCache] = None,
+        redis_cache: RedisCache | None = None,
         health_check_ttl: int = DEFAULT_SHARED_HEALTH_CHECK_TTL,
         lock_ttl: int = DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     ):
@@ -67,8 +67,8 @@ class SharedHealthCheckManager:
             return False
 
         try:
-            lock_key = self.get_health_check_lock_key()
-            acquired = await self.redis_cache.async_set_cache(
+            lock_key: Final = self.get_health_check_lock_key()
+            acquired: Final = await self.redis_cache.async_set_cache(
                 lock_key,
                 self.pod_id,
                 nx=True,  # Only set if key doesn't exist
@@ -76,13 +76,9 @@ class SharedHealthCheckManager:
             )
 
             if acquired:
-                verbose_proxy_logger.info(
-                    "Pod %s acquired health check lock", self.pod_id
-                )
+                verbose_proxy_logger.info("Pod %s acquired health check lock", self.pod_id)
             else:
-                verbose_proxy_logger.debug(
-                    "Pod %s failed to acquire health check lock", self.pod_id
-                )
+                verbose_proxy_logger.debug("Pod %s failed to acquire health check lock", self.pod_id)
 
             return bool(acquired)
         except Exception as e:
@@ -95,18 +91,16 @@ class SharedHealthCheckManager:
             return
 
         try:
-            lock_key = self.get_health_check_lock_key()
+            lock_key: Final = self.get_health_check_lock_key()
             # Only release if we own the lock
-            current_owner = await self.redis_cache.async_get_cache(lock_key)
+            current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
             if current_owner == self.pod_id:
                 await self.redis_cache.async_delete_cache(lock_key)
-                verbose_proxy_logger.info(
-                    "Pod %s released health check lock", self.pod_id
-                )
+                verbose_proxy_logger.info("Pod %s released health check lock", self.pod_id)
         except Exception as e:
             verbose_proxy_logger.error("Error releasing health check lock: %s", str(e))
 
-    async def get_cached_health_check_results(self) -> Optional[Dict[str, Any]]:
+    async def get_cached_health_check_results(self) -> dict[str, Any] | None:
         """
         Get cached health check results from Redis.
 
@@ -117,8 +111,8 @@ class SharedHealthCheckManager:
             return None
 
         try:
-            cache_key = self.get_health_check_cache_key()
-            cached_data = await self.redis_cache.async_get_cache(cache_key)
+            cache_key: Final = self.get_health_check_cache_key()
+            cached_data: Final = await self.redis_cache.async_get_cache(cache_key)
 
             if cached_data is None:
                 return None
@@ -130,8 +124,8 @@ class SharedHealthCheckManager:
                 cached_results = cached_data
 
             # Check if the cache is still valid
-            cache_timestamp = cached_results.get("timestamp", 0)
-            current_time = time.time()
+            cache_timestamp: Final = cached_results.get("timestamp", 0)
+            current_time: Final = time.time()
 
             if current_time - cache_timestamp > self.health_check_ttl:
                 verbose_proxy_logger.debug("Cached health check results expired")
@@ -141,15 +135,13 @@ class SharedHealthCheckManager:
             return cached_results
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Error getting cached health check results: %s", str(e)
-            )
+            verbose_proxy_logger.error("Error getting cached health check results: %s", str(e))
             return None
 
     async def cache_health_check_results(
         self,
-        healthy_endpoints: List[Dict[str, Any]],
-        unhealthy_endpoints: List[Dict[str, Any]],
+        healthy_endpoints: list[dict[str, Any]],
+        unhealthy_endpoints: list[dict[str, Any]],
     ) -> None:
         """
         Cache health check results in Redis.
@@ -162,7 +154,7 @@ class SharedHealthCheckManager:
             return
 
         try:
-            cache_data = {
+            cache_data: Final = {
                 "healthy_endpoints": healthy_endpoints,
                 "unhealthy_endpoints": unhealthy_endpoints,
                 "healthy_count": len(healthy_endpoints),
@@ -171,7 +163,7 @@ class SharedHealthCheckManager:
                 "checked_by": self.pod_id,
             }
 
-            cache_key = self.get_health_check_cache_key()
+            cache_key: Final = self.get_health_check_cache_key()
             await self.redis_cache.async_set_cache(
                 cache_key,
                 safe_dumps(cache_data),
@@ -189,11 +181,11 @@ class SharedHealthCheckManager:
 
     async def perform_shared_health_check(
         self,
-        model_list: List[Dict[str, Any]],
+        model_list: list[dict[str, Any]],
         details: bool = True,
-        max_concurrency: Optional[int] = None,
+        max_concurrency: int | None = None,
         health_check_skip_disabled_background_models: bool = False,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         """
         Perform health check with shared state coordination.
 
@@ -223,7 +215,7 @@ class SharedHealthCheckManager:
             )
 
         # No recent cache, try to acquire lock
-        lock_acquired = await self.acquire_health_check_lock()
+        lock_acquired: Final = await self.acquire_health_check_lock()
 
         if lock_acquired:
             try:
@@ -246,9 +238,7 @@ class SharedHealthCheckManager:
                 )
 
                 # Cache the results
-                await self.cache_health_check_results(
-                    healthy_endpoints, unhealthy_endpoints
-                )
+                await self.cache_health_check_results(healthy_endpoints, unhealthy_endpoints)
 
                 return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
 
@@ -269,12 +259,10 @@ class SharedHealthCheckManager:
             # Lock not acquired — poll for cached results until the lock
             # holder finishes or the lock expires, rather than falling back
             # to a redundant local health check after only 2 seconds.
-            verbose_proxy_logger.debug(
-                "Pod %s waiting for other pod to complete health check", self.pod_id
-            )
+            verbose_proxy_logger.debug("Pod %s waiting for other pod to complete health check", self.pod_id)
 
-            poll_interval = 5  # seconds between cache checks
-            max_wait = self.lock_ttl  # wait at most as long as the lock can live
+            poll_interval: Final = 5  # seconds between cache checks
+            max_wait: Final = self.lock_ttl  # wait at most as long as the lock can live
             elapsed = 0
 
             while elapsed < max_wait:
@@ -334,23 +322,21 @@ class SharedHealthCheckManager:
             return False
 
         try:
-            lock_key = self.get_health_check_lock_key()
-            current_owner = await self.redis_cache.async_get_cache(lock_key)
+            lock_key: Final = self.get_health_check_lock_key()
+            current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
             return current_owner is not None and current_owner != self.pod_id
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Error checking health check lock status: %s", str(e)
-            )
+            verbose_proxy_logger.error("Error checking health check lock status: %s", str(e))
             return False
 
-    async def get_health_check_status(self) -> Dict[str, Any]:
+    async def get_health_check_status(self) -> dict[str, Any]:
         """
         Get the current status of health check coordination.
 
         Returns:
             Dict containing status information
         """
-        status = {
+        status: Final = {
             "pod_id": self.pod_id,
             "redis_available": self.redis_cache is not None,
             "lock_ttl": self.lock_ttl,
@@ -360,18 +346,16 @@ class SharedHealthCheckManager:
         if self.redis_cache is not None:
             try:
                 # Check if there's a current lock
-                lock_key = self.get_health_check_lock_key()
-                current_owner = await self.redis_cache.async_get_cache(lock_key)
+                lock_key: Final = self.get_health_check_lock_key()
+                current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
                 status["lock_owner"] = current_owner
                 status["lock_in_progress"] = current_owner is not None
 
                 # Check cache status
-                cached_results = await self.get_cached_health_check_results()
+                cached_results: Final = await self.get_cached_health_check_results()
                 status["cache_available"] = cached_results is not None
                 if cached_results:
-                    status["cache_age_seconds"] = time.time() - cached_results.get(
-                        "timestamp", 0
-                    )
+                    status["cache_age_seconds"] = time.time() - cached_results.get("timestamp", 0)
                     status["last_checked_by"] = cached_results.get("checked_by")
 
             except Exception as e:

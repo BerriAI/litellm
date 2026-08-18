@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -110,15 +110,19 @@ def test_azure_ai_grok_stop_parameter_handling():
     config = AzureAIStudioConfig()
 
     # Test Grok model detection
-    assert config._supports_stop_reason("grok-4-fast") == False
-    assert config._supports_stop_reason("grok-4") == False
-    assert config._supports_stop_reason("grok-3-mini") == False
-    assert config._supports_stop_reason("grok-code-fast") == False
-    assert config._supports_stop_reason("gpt-4") == True
+    assert config._supports_stop_reason("grok-4-fast") is False
+    assert config._supports_stop_reason("grok-4.3") is False
+    assert config._supports_stop_reason("grok-4") is False
+    assert config._supports_stop_reason("grok-3-mini") is False
+    assert config._supports_stop_reason("grok-code-fast") is False
+    assert config._supports_stop_reason("gpt-4") is True
 
     # Test supported parameters for Grok models
-    grok_params = config.get_supported_openai_params("grok-4-fast")
-    assert "stop" not in grok_params, "Grok models should not support stop parameter"
+    for model in ("grok-4-fast", "grok-4.3"):
+        grok_params = config.get_supported_openai_params(model)
+        assert (
+            "stop" not in grok_params
+        ), "Grok models should not support stop parameter"
 
     # Test supported parameters for non-Grok models
     gpt_params = config.get_supported_openai_params("gpt-4")
@@ -200,3 +204,187 @@ def test_azure_model_router_response_shows_actual_model():
         f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
         f"but got '{result.model}'"
     )
+
+
+def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
+    """
+    Regression test: Azure AI returns 400 when tools contain copilot_mcp_server_name.
+    LiteLLM should strip the field and retry automatically.
+    """
+    import httpx
+
+    config = AzureAIStudioConfig()
+
+    error_text = json.dumps(
+        {
+            "error": {
+                "message": "2 request validation errors: Extra inputs are not permitted, field: 'tools[0].copilot_mcp_server_name', value: 'github-mcp-server'; Extra inputs are not permitted, field: 'tools[1].copilot_mcp_server_name', value: 'ide'"
+            }
+        }
+    )
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = error_text
+    mock_response.json.return_value = json.loads(error_text)
+    mock_response.status_code = 400
+    e = httpx.HTTPStatusError(
+        message="400", request=MagicMock(), response=mock_response
+    )
+
+    assert config._error_has_tool_level_extra_fields(error_text) is True
+    assert (
+        config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
+    )
+
+    request_data = {
+        "model": "FW-Kimi-K2.6",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "tools": [
+            {
+                "type": "function",
+                "copilot_mcp_server_name": "github-mcp-server",
+                "function": {
+                    "name": "github_search_code",
+                    "description": "Search code",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "copilot_mcp_server_name": "ide",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+    }
+
+    result = config.transform_request_on_unprocessable_entity_error(e, request_data)
+
+    for tool in result["tools"]:
+        assert "copilot_mcp_server_name" not in tool
+    assert result["tools"][0]["type"] == "function"
+    assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+def _find_key_anywhere(obj, key: str) -> bool:
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        return any(_find_key_anywhere(v, key) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_find_key_anywhere(item, key) for item in obj)
+    return False
+
+
+def test_azure_ai_strips_non_openai_spec_message_fields():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/33961.
+
+    Azure AI Foundry backends set additionalProperties=false, so any message
+    field outside the OpenAI chat-completions schema causes a 400 "Extra inputs
+    are not permitted". Anthropic-format clients (e.g. Claude Code) echo prior
+    assistant turns back as history carrying thinking_blocks, a nested thought
+    signature at tool_calls[].function.provider_specific_fields, and Anthropic
+    cache_control annotations. transform_request must strip all of these before
+    the request reaches the upstream.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "The user wants me to read a file.",
+                    "signature": "",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "provider_specific_fields": {"thought_signature": "sig-top"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "sig-nested"},
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "go ahead"},
+    ]
+
+    request = config.transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    transformed_messages = request["messages"]
+
+    assert not _find_key_anywhere(transformed_messages, "thinking_blocks")
+    assert not _find_key_anywhere(transformed_messages, "provider_specific_fields")
+    assert not _find_key_anywhere(transformed_messages, "cache_control")
+
+    assistant_message = transformed_messages[1]
+    assert assistant_message["content"] == "I can help."
+    assert assistant_message["tool_calls"][0]["function"]["name"] == "read_file"
+
+
+def test_azure_ai_stripping_does_not_mutate_caller_messages():
+    """
+    The stripping must not touch the caller's messages. LiteLLM reuses the same
+    message objects when falling back to another provider, so stripping in place
+    would hand the fallback a conversation history with its thinking blocks and
+    provider metadata already destroyed.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Reading the file.", "signature": "sig"}
+            ],
+            "provider_specific_fields": {"thought_signature": "sig-top"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "sig-nested"},
+                    },
+                }
+            ],
+        },
+    ]
+
+    request = config.transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert not _find_key_anywhere(request["messages"], "thinking_blocks")
+
+    original_assistant = messages[1]
+    assert original_assistant["thinking_blocks"][0]["thinking"] == "Reading the file."
+    assert original_assistant["provider_specific_fields"] == {"thought_signature": "sig-top"}
+    assert original_assistant["tool_calls"][0]["function"]["provider_specific_fields"] == {
+        "thought_signature": "sig-nested"
+    }

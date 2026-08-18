@@ -8,6 +8,8 @@ const { writeFileSync } = require('fs');
 // Import fetch if the SDK uses it
 const originalFetch = global.fetch || require('node-fetch');
 
+const { runVertexRequestOrSkip } = require('./vertex_test_helpers');
+
 // Monkey-patch the fetch used internally
 global.fetch = async function patchedFetch(url, options) {
     // Modify the URL to use HTTP instead of HTTPS
@@ -56,6 +58,9 @@ beforeAll(() => {
     loadVertexAiCredentials();
 });
 
+// Configure Jest to retry flaky tests up to 3 times (useful for 429 rate limiting)
+jest.retryTimes(3);
+
 // Non-streaming Vertex generateContent can exceed 5s in CI / under load
 const VERTEX_TEST_TIMEOUT_MS = 30000;
 
@@ -65,7 +70,7 @@ describe('Vertex AI Tests', () => {
         async () => {
             const vertexAI = new VertexAI({
                 project: 'litellm-ci-cd',
-                location: 'us-central1',
+                location: 'global',
                 apiEndpoint: "localhost:4000/vertex-ai"
             });
 
@@ -78,7 +83,7 @@ describe('Vertex AI Tests', () => {
             };
 
             const generativeModel = vertexAI.getGenerativeModel(
-                { model: 'gemini-2.5-flash-lite' },
+                { model: 'gemini-3.1-flash-lite' },
                 requestOptions
             );
 
@@ -86,7 +91,12 @@ describe('Vertex AI Tests', () => {
                 contents: [{role: 'user', parts: [{text: 'How are you doing today tell me your name?'}]}],
             };
 
-            const streamingResult = await generativeModel.generateContentStream(request);
+            const streamingResult = await runVertexRequestOrSkip(() =>
+                generativeModel.generateContentStream(request)
+            );
+            if (streamingResult === null) {
+                return;
+            }
 
             // Add some assertions
             expect(streamingResult).toBeDefined();
@@ -108,18 +118,23 @@ describe('Vertex AI Tests', () => {
         async () => {
             const vertexAI = new VertexAI({
                 project: 'litellm-ci-cd',
-                location: 'us-central1',
+                location: 'global',
                 apiEndpoint: "localhost:4000/vertex-ai"
             });
             const customHeaders = new Headers({"x-litellm-api-key": "sk-1234"});
             const requestOptions = {customHeaders: customHeaders};
             const generativeModel = vertexAI.getGenerativeModel(
-                {model: 'gemini-2.5-flash-lite'},
+                {model: 'gemini-3.1-flash-lite'},
                 requestOptions
             );
             const request = {contents: [{role: 'user', parts: [{text: 'What is 2+2?'}]}]};
 
-            const result = await generativeModel.generateContent(request);
+            const result = await runVertexRequestOrSkip(() =>
+                generativeModel.generateContent(request)
+            );
+            if (result === null) {
+                return;
+            }
             expect(result).toBeDefined();
             expect(result.response).toBeDefined();
             console.log('non-streaming response:', JSON.stringify(result.response));

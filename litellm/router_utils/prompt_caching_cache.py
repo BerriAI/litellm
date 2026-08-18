@@ -4,7 +4,7 @@ Wrapper around router cache. Meant to store model id when prompt caching support
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from typing_extensions import TypedDict
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
     litellm_router = Router
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
     litellm_router = Any
@@ -41,9 +41,7 @@ class PromptCachingCache:
             return obj.dict()
         elif isinstance(obj, dict):
             # If the object is a dictionary, serialize it with sorted keys
-            return json.dumps(
-                obj, sort_keys=True, separators=(",", ":")
-            )  # Standardize serialization
+            return json.dumps(obj, sort_keys=True, separators=(",", ":"))  # Standardize serialization
 
         elif isinstance(obj, list):
             # Serialize lists by ensuring each element is handled properly
@@ -54,8 +52,8 @@ class PromptCachingCache:
 
     @staticmethod
     def extract_cacheable_prefix(
-        messages: List[AllMessageValues],
-    ) -> List[AllMessageValues]:
+        messages: list[AllMessageValues],
+    ) -> list[AllMessageValues]:
         """
         Extract the cacheable prefix from messages.
 
@@ -113,7 +111,7 @@ class PromptCachingCache:
             return []
 
         # Build the cacheable prefix: all messages up to and including the last cacheable message
-        cacheable_prefix = []
+        cacheable_prefix: Final = []
 
         for msg_idx, message in enumerate(messages):
             if msg_idx < last_cacheable_message_idx:
@@ -143,9 +141,9 @@ class PromptCachingCache:
 
     @staticmethod
     def get_prompt_caching_cache_key(
-        messages: Optional[List[AllMessageValues]],
-        tools: Optional[List[ChatCompletionToolParam]],
-    ) -> Optional[str]:
+        messages: list[AllMessageValues] | None,
+        tools: list[ChatCompletionToolParam] | None,
+    ) -> str | None:
         if messages is None and tools is None:
             return None
 
@@ -158,72 +156,68 @@ class PromptCachingCache:
                 return None
 
         # Use serialize_object for consistent and stable serialization
-        data_to_hash = {}
+        data_to_hash: Final = {}
         if cacheable_messages is not None:
-            serialized_messages = PromptCachingCache.serialize_object(
-                cacheable_messages
-            )
+            serialized_messages: Final = PromptCachingCache.serialize_object(cacheable_messages)
             data_to_hash["messages"] = serialized_messages
         if tools is not None:
-            serialized_tools = PromptCachingCache.serialize_object(tools)
+            serialized_tools: Final = PromptCachingCache.serialize_object(tools)
             data_to_hash["tools"] = serialized_tools
 
         # Combine serialized data into a single string
-        data_to_hash_str = json.dumps(
+        data_to_hash_str: Final = json.dumps(
             data_to_hash,
             sort_keys=True,
             separators=(",", ":"),
         )
 
         # Create a hash of the serialized data for a stable cache key
-        hashed_data = hashlib.sha256(data_to_hash_str.encode()).hexdigest()
+        hashed_data: Final = hashlib.sha256(data_to_hash_str.encode()).hexdigest()
         return f"deployment:{hashed_data}:prompt_caching"
 
     def add_model_id(
         self,
         model_id: str,
-        messages: Optional[List[AllMessageValues]],
-        tools: Optional[List[ChatCompletionToolParam]],
+        messages: list[AllMessageValues] | None,
+        tools: list[ChatCompletionToolParam] | None,
     ) -> None:
         if messages is None and tools is None:
-            return None
+            return
 
-        cache_key = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
+        cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
         # If no cacheable prefix found, don't cache (can't generate cache key)
         if cache_key is None:
-            return None
+            return
 
-        self.cache.set_cache(
-            cache_key, PromptCachingCacheValue(model_id=model_id), ttl=300
-        )
-        return None
+        self.cache.set_cache(cache_key, PromptCachingCacheValue(model_id=model_id), ttl=300)
+        return
 
     async def async_add_model_id(
         self,
         model_id: str,
-        messages: Optional[List[AllMessageValues]],
-        tools: Optional[List[ChatCompletionToolParam]],
+        messages: list[AllMessageValues] | None,
+        tools: list[ChatCompletionToolParam] | None,
     ) -> None:
         if messages is None and tools is None:
-            return None
+            return
 
-        cache_key = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
+        cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
         # If no cacheable prefix found, don't cache (can't generate cache key)
         if cache_key is None:
-            return None
+            return
 
         await self.cache.async_set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
             ttl=300,  # store for 5 minutes
         )
-        return None
+        return
 
     async def async_get_model_id(
         self,
-        messages: Optional[List[AllMessageValues]],
-        tools: Optional[List[ChatCompletionToolParam]],
-    ) -> Optional[PromptCachingCacheValue]:
+        messages: list[AllMessageValues] | None,
+        tools: list[ChatCompletionToolParam] | None,
+    ) -> PromptCachingCacheValue | None:
         """
         Get model ID from cache using the cacheable prefix.
 
@@ -235,23 +229,23 @@ class PromptCachingCache:
             return None
 
         # Generate cache key using cacheable prefix
-        cache_key = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
+        cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
         if cache_key is None:
             return None
 
         # Perform cache lookup
-        cache_result = await self.cache.async_get_cache(key=cache_key)
+        cache_result: Final = await self.cache.async_get_cache(key=cache_key)
         return cache_result
 
     def get_model_id(
         self,
-        messages: Optional[List[AllMessageValues]],
-        tools: Optional[List[ChatCompletionToolParam]],
-    ) -> Optional[PromptCachingCacheValue]:
+        messages: list[AllMessageValues] | None,
+        tools: list[ChatCompletionToolParam] | None,
+    ) -> PromptCachingCacheValue | None:
         if messages is None and tools is None:
             return None
 
-        cache_key = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
+        cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
         # If no cacheable prefix found, return None (can't cache)
         if cache_key is None:
             return None

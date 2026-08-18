@@ -22,16 +22,21 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
-# ``litellm.model_cost`` is loaded at import time from the URL pinned to
-# ``main`` (``LITELLM_MODEL_COST_MAP_URL``).  The in-tree backup ships with
-# this branch and can include pricing entries that main has not yet picked
-# up (e.g. an upstream provider rotates a model id and the test cassette
-# records the new name).  Backfill any entries that are missing from the
-# remote-fetched map so cost-calculator lookups in tests succeed against
-# the cassette state the branch is being tested with.
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+# ``litellm.model_cost`` is loaded at import time from the URL pinned to ``main``
+# (``LITELLM_MODEL_COST_MAP_URL``).  The in-tree backup ships with this branch
+# and can include pricing entries that ``main`` has not yet picked up (e.g.
+# Mistral now returns ``ministral-8b-2512`` from ``mistral-tiny`` and the entry
+# was added on this branch).  Backfill any entries that are missing from the
+# remote-fetched map so cost-calculator lookups in tests succeed against the
+# cassette state the branch is being tested with.
+from litellm.litellm_core_utils.get_model_cost_map import (
+    RESERVED_TOP_LEVEL_KEYS,
+    GetModelCostMap,
+)
 
 for _k, _v in GetModelCostMap.load_local_model_cost_map().items():
+    if _k in RESERVED_TOP_LEVEL_KEYS:
+        continue
     litellm.model_cost.setdefault(_k, _v)
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
@@ -47,6 +52,14 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     reset_vcr_diag_dir,
     vcr_config_dict,
 )
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
 
 # Per-item respx detection (``apply_vcr_auto_marker_to_items``) auto-skips
 # tests whose ``@pytest.mark.respx`` marker or ``respx_mock`` fixture
@@ -57,18 +70,29 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
 # blacklisting was masking valid cache opportunities.
 
 # Files where VCR replay breaks the test:
-# - ``test_assistants.py``: polls fresh per-session run IDs that no cassette
-#   can match, so every CI run re-records and the suite times out.
 # - ``test_router_caching.py``: asserts upstream returns a *new* id per call,
 #   which a deterministic cassette replay violates.
 _VCR_INCOMPATIBLE_FILES = frozenset(
     {
-        "test_assistants.py",
         "test_router_caching.py",
+        # Hits the local fake OpenAI endpoint on 127.0.0.1; nothing to record.
+        "test_fake_openai_endpoint.py",
     }
 )
 
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
+# Individual tests (vs. whole files above) that VCR replay can't model:
+# - ``test_router_text_completion_client``: a concurrency test that fires 300
+#   identical requests to verify the async OpenAI client is *reused* across
+#   calls (per its own comment, it "fails when we create a new Async OpenAI
+#   client per request"). vcrpy patches the HTTP transport, so replay never
+#   opens real connections and cannot exercise the client pool the test exists
+#   to validate. Recording instead stores ~300 near-identical episodes, which
+#   blows past MAX_EPISODES_PER_CASSETTE (50) so the cassette is refused on
+#   every run (MISS:OVERFLOW). The endpoint is a free mock, so the live calls
+#   carry no real provider cost.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
+    "test_router.py::test_router_text_completion_client",
+)
 
 
 _verbose_state = VerboseReporterState()

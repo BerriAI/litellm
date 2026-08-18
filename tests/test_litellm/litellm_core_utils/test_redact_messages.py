@@ -5,14 +5,17 @@ Covers the proxy flow where headers arrive in litellm_params["metadata"]["header
 but litellm_params["litellm_metadata"] is None.
 """
 
+import threading
 from types import SimpleNamespace
 
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     perform_redaction,
+    redact_streaming_responses_for_custom_logger,
     should_redact_message_logging,
 )
 from litellm.responses.main import mock_responses_api_response
@@ -318,6 +321,176 @@ class TestPerformRedaction:
         assert choice.message.content == "redacted-by-litellm"
         assert choice.message.reasoning_content == "redacted-by-litellm"
 
+    def test_redacts_tool_call_arguments_in_model_response_dict(self):
+        """Assistant tool call arguments must not leak when redaction is on."""
+        result = {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "sensitive-city"}',
+                                },
+                            }
+                        ],
+                        "function_call": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "sensitive-city"}',
+                        },
+                    }
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        message = redacted["choices"][0]["message"]
+        assert message["content"] == "redacted-by-litellm"
+        tool_call = message["tool_calls"][0]
+        assert tool_call["function"]["arguments"] == "redacted-by-litellm"
+        assert tool_call["function"]["name"] == "get_weather"
+        assert message["function_call"]["arguments"] == "redacted-by-litellm"
+
+    def test_redacts_tool_call_arguments_in_streaming_delta_dict(self):
+        result = {
+            "choices": [
+                {
+                    "delta": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "sensitive-city"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        delta = redacted["choices"][0]["delta"]
+        assert delta["tool_calls"][0]["function"]["arguments"] == "redacted-by-litellm"
+
+    def test_redacts_tool_call_arguments_on_model_response_object(self):
+        result = litellm.ModelResponse(
+            id="resp-1",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "sensitive-city"}',
+                                },
+                            }
+                        ],
+                    )
+                )
+            ],
+            model="gpt-4o",
+        )
+
+        redacted = perform_redaction({}, result)
+
+        tool_call = redacted.choices[0].message.tool_calls[0]
+        assert tool_call.function.arguments == "redacted-by-litellm"
+        assert tool_call.function.name == "get_weather"
+        assert result.choices[0].message.tool_calls[0].function.arguments == (
+            '{"city": "sensitive-city"}'
+        )
+
+    def test_redacts_tool_call_arguments_on_streaming_response_object(self):
+        """Reproduces the Stream=True path where tool calls arrive as deltas."""
+        streaming_choice = litellm.utils.StreamingChoices(
+            delta=litellm.utils.Delta(
+                content=None,
+                role="assistant",
+                tool_calls=[
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "sensitive-city"}',
+                        },
+                    }
+                ],
+            )
+        )
+        streaming_response = SimpleNamespace(choices=[streaming_choice])
+        details = {
+            "stream": True,
+            "complete_streaming_response": streaming_response,
+        }
+
+        perform_redaction(details, None)
+
+        tool_call = streaming_response.choices[0].delta.tool_calls[0]
+        assert tool_call.function.arguments == "redacted-by-litellm"
+
+    def test_redacts_tool_call_arguments_in_standard_logging_object(self):
+        details = {
+            "standard_logging_object": {
+                "response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "get_weather",
+                                            "arguments": '{"city": "sensitive-city"}',
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        message = details["standard_logging_object"]["response"]["choices"][0]["message"]
+        assert message["tool_calls"][0]["function"]["arguments"] == "redacted-by-litellm"
+
+    def test_redacts_responses_api_function_call_arguments_dict(self):
+        result = {
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "arguments": '{"city": "sensitive-city"}',
+                    "call_id": "call_1",
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted["output"][0]["arguments"] == "redacted-by-litellm"
+        assert redacted["output"][0]["name"] == "get_weather"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),
@@ -349,3 +522,246 @@ class TestPerformRedaction:
 
         assert redacted.output[0].content[0].text == "redacted-by-litellm"
         assert response.output[0].content[0].text == "sensitive output"
+
+    def test_redacts_vertex_provider_metadata_in_standard_logging_response(self):
+        details = {
+            "standard_logging_object": {
+                "messages": [{"role": "user", "content": "sensitive prompt"}],
+                "response": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "sensitive answer",
+                                "role": "assistant",
+                            }
+                        }
+                    ],
+                    "vertex_ai_grounding_metadata": [
+                        {"webSearchQueries": ["sensitive search term"]}
+                    ],
+                    "vertex_ai_url_context_metadata": [
+                        {"urlMetadata": [{"retrievedUrl": "https://example.com"}]}
+                    ],
+                },
+            }
+        }
+
+        perform_redaction(details, None)
+
+        response = details["standard_logging_object"]["response"]
+        assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
+        assert response["vertex_ai_grounding_metadata"] == []
+        assert response["vertex_ai_url_context_metadata"] == []
+
+    def test_redacts_vertex_provider_metadata_on_streaming_model_response(self):
+        response = litellm.ModelResponse(
+            id="resp-1",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content="sensitive answer",
+                        role="assistant",
+                    )
+                )
+            ],
+            model="gemini-2.5-flash",
+        )
+        setattr(
+            response,
+            "vertex_ai_grounding_metadata",
+            [{"webSearchQueries": ["sensitive search term"]}],
+        )
+        response._hidden_params["vertex_ai_grounding_metadata"] = [
+            {"webSearchQueries": ["sensitive search term"]}
+        ]
+
+        details = {
+            "stream": True,
+            "complete_streaming_response": response,
+        }
+
+        perform_redaction(details, response)
+
+        assert response.choices[0].message.content == "redacted-by-litellm"
+        assert getattr(response, "vertex_ai_grounding_metadata") == []
+        assert "vertex_ai_grounding_metadata" not in response._hidden_params
+
+    def test_redacts_vertex_provider_metadata_from_metadata_hidden_params(self):
+        """Streaming success_handler copies _hidden_params into metadata before redaction."""
+        details = {
+            "stream": True,
+            "litellm_params": {
+                "metadata": {
+                    "hidden_params": {
+                        "response_cost": 0.01,
+                        "vertex_ai_grounding_metadata": [
+                            {"webSearchQueries": ["sensitive search term"]}
+                        ],
+                        "vertex_ai_url_context_metadata": [
+                            {"urlMetadata": [{"retrievedUrl": "https://example.com"}]}
+                        ],
+                        "vertex_ai_safety_ratings": [{"category": "HARM"}],
+                        "vertex_ai_citation_metadata": [{"citations": ["source"]}],
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        hidden_params = details["litellm_params"]["metadata"]["hidden_params"]
+        assert hidden_params["response_cost"] == 0.01
+        assert "vertex_ai_grounding_metadata" not in hidden_params
+        assert "vertex_ai_url_context_metadata" not in hidden_params
+        assert "vertex_ai_safety_ratings" not in hidden_params
+        assert "vertex_ai_citation_metadata" not in hidden_params
+
+    def test_redact_async_complete_streaming_response(self):
+        """Test that async_complete_streaming_response is properly redacted."""
+        response_obj = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret content", role="assistant")
+                )
+            ]
+        )
+
+        model_call_details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "prompt": "hi",
+            "input": "hi",
+            "stream": True,
+            "async_complete_streaming_response": response_obj,
+        }
+
+        perform_redaction(model_call_details, result=None)
+
+        redacted_response = model_call_details["async_complete_streaming_response"]
+        assert redacted_response.choices[0].message.content == "redacted-by-litellm"
+
+    def test_redact_complete_streaming_response(self):
+        """Test that complete_streaming_response is properly redacted."""
+        response_obj = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret content", role="assistant")
+                )
+            ]
+        )
+
+        model_call_details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "prompt": "hi",
+            "input": "hi",
+            "stream": True,
+            "complete_streaming_response": response_obj,
+        }
+
+        perform_redaction(model_call_details, result=None)
+
+        redacted_response = model_call_details["complete_streaming_response"]
+        assert redacted_response.choices[0].message.content == "redacted-by-litellm"
+
+    def test_streaming_responses_untouched_when_disabled(self):
+        response_obj = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret content", role="assistant")
+                )
+            ]
+        )
+
+        model_call_details = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "prompt": "hi",
+            "input": "hi",
+            "stream": True,
+            "async_complete_streaming_response": response_obj,
+        }
+
+        perform_redaction(model_call_details, result=None, redact_streaming_responses=False)
+
+        assert response_obj.choices[0].message.content == "secret content"
+
+    def test_unredactable_result_is_not_deepcopied(self):
+        """A result shape no branch can redact must not be deepcopied.
+
+        Binary/HTTP response bodies (batch output, file content, audio) hold an
+        unpicklable ``_thread.lock``. Copying one raises TypeError inside
+        ``Logging.success_handler``, which aborts the handler body at the redaction call so
+        everything after it is skipped. The copy is also pointless: an unrecognized shape
+        returns the placeholder and the copy is discarded.
+
+        The lock is the assertion. If a deepcopy is ever reintroduced ahead of the type
+        check, this raises instead of returning.
+        """
+
+        class _BinaryResponseBody:
+            def __init__(self) -> None:
+                self.text = "batch output bytes"
+                self._client_lock = threading.Lock()
+
+        body = _BinaryResponseBody()
+
+        redacted = perform_redaction({"litellm_params": {}}, body)
+
+        assert redacted == {"text": "redacted-by-litellm"}
+
+    def test_recognized_shapes_still_redact_a_copy(self):
+        """The type gate must not change behaviour for shapes that were already handled."""
+        original = litellm.ModelResponse(
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
+        )
+
+        redacted = perform_redaction({"litellm_params": {}}, original)
+
+        assert redacted.choices[0].message.content == "redacted-by-litellm"
+        assert original.choices[0].message.content == "secret content"
+
+        embedding = litellm.EmbeddingResponse(data=[{"embedding": [1.0, 2.0]}])
+        assert perform_redaction({"litellm_params": {}}, embedding).data == []
+
+        as_dict = {"choices": [{"message": {"role": "assistant", "content": "secret content"}}]}
+        assert (
+            perform_redaction({"litellm_params": {}}, as_dict)["choices"][0]["message"]["content"]
+            == "redacted-by-litellm"
+        )
+
+
+class TestRedactStreamingResponsesForCustomLogger:
+    def _model_call_details(self):
+        response_obj = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="secret content", role="assistant")
+                )
+            ]
+        )
+        return {
+            "stream": True,
+            "async_complete_streaming_response": response_obj,
+        }, response_obj
+
+    def test_opted_out_logger_gets_redacted_copy(self):
+        model_call_details, response_obj = self._model_call_details()
+        opted_out_logger = CustomLogger(message_logging=False)
+
+        redacted_details = redact_streaming_responses_for_custom_logger(
+            model_call_details=model_call_details, custom_logger=opted_out_logger
+        )
+
+        redacted_response = redacted_details["async_complete_streaming_response"]
+        assert redacted_response.choices[0].message.content == "redacted-by-litellm"
+        assert response_obj.choices[0].message.content == "secret content"
+        assert model_call_details["async_complete_streaming_response"] is response_obj
+
+    def test_compliant_logger_gets_shared_response(self):
+        model_call_details, response_obj = self._model_call_details()
+        compliant_logger = CustomLogger()
+
+        result_details = redact_streaming_responses_for_custom_logger(
+            model_call_details=model_call_details, custom_logger=compliant_logger
+        )
+
+        assert result_details is model_call_details
+        assert response_obj.choices[0].message.content == "secret content"

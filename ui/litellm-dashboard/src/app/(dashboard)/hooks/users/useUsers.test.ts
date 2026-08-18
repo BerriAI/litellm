@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useInfiniteUsers } from "./useUsers";
+import { useInfiniteUsers, useUserLookup } from "./useUsers";
 import { userListCall } from "@/components/networking";
 import type { UserListResponse } from "@/components/networking";
 
@@ -36,11 +36,7 @@ const DEFAULT_AUTH = {
   showSSOBanner: false,
 };
 
-const buildUserListResponse = (
-  page: number,
-  totalPages: number,
-  userCount = 2,
-): UserListResponse => ({
+const buildUserListResponse = (page: number, totalPages: number, userCount = 2): UserListResponse => ({
   page,
   page_size: 50,
   total: totalPages * userCount,
@@ -90,13 +86,7 @@ describe("useInfiniteUsers", () => {
 
     expect(result.current.data?.pages).toHaveLength(1);
     expect(result.current.data?.pages[0]).toEqual(mockResponse);
-    expect(userListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null,
-      1,
-      50,
-      null,
-    );
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, null);
   });
 
   it("should use the default page size of 50", async () => {
@@ -109,13 +99,7 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null,
-      1,
-      50,
-      null,
-    );
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, null);
   });
 
   it("should use a custom page size when provided", async () => {
@@ -131,13 +115,7 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null,
-      1,
-      customPageSize,
-      null,
-    );
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, customPageSize, null);
   });
 
   it("should pass searchEmail to userListCall when provided", async () => {
@@ -153,13 +131,7 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null,
-      1,
-      50,
-      searchEmail,
-    );
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, searchEmail);
   });
 
   it("should pass null for searchEmail when not provided", async () => {
@@ -174,13 +146,7 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null,
-      1,
-      50,
-      null,
-    );
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, null);
   });
 
   it("should fetch the next page when more pages are available", async () => {
@@ -209,13 +175,7 @@ describe("useInfiniteUsers", () => {
 
     expect(result.current.data?.pages[1]).toEqual(page2);
     expect(userListCall).toHaveBeenCalledTimes(2);
-    expect(userListCall).toHaveBeenLastCalledWith(
-      "test-access-token",
-      null,
-      2,
-      50,
-      null,
-    );
+    expect(userListCall).toHaveBeenLastCalledWith("test-access-token", null, 2, 50, null);
   });
 
   it("should not have a next page when on the last page", async () => {
@@ -275,13 +235,7 @@ describe("useInfiniteUsers", () => {
   });
 
   it("should execute query for each admin role", async () => {
-    const adminRoles = [
-      "Admin",
-      "Admin Viewer",
-      "proxy_admin",
-      "proxy_admin_viewer",
-      "org_admin",
-    ];
+    const adminRoles = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"];
 
     for (const role of adminRoles) {
       vi.clearAllMocks();
@@ -328,12 +282,56 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null,
-      1,
-      50,
-      null,
-    );
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, null);
+  });
+});
+
+describe("useUserLookup", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue(DEFAULT_AUTH);
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("fetches exactly the requested user by id", async () => {
+    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+
+    const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["user-1-0"], 1, 1);
+    expect(result.current.data?.user_id).toBe("user-1-0");
+  });
+
+  it("resolves to null when the proxy returns a different user than requested", async () => {
+    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+
+    const { result } = renderHook(() => useUserLookup("someone-else"), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+  });
+
+  it("does not query without a user id", async () => {
+    const { result } = renderHook(() => useUserLookup(null), { wrapper });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(userListCall).not.toHaveBeenCalled();
+  });
+
+  it("does not query for a non-admin role", async () => {
+    mockUseAuthorized.mockReturnValue({ ...DEFAULT_AUTH, userRole: "Internal User" });
+
+    const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(userListCall).not.toHaveBeenCalled();
   });
 });

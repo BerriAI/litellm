@@ -7,7 +7,7 @@ Pre-built custom code for common guardrails (e.g. response rejection detection)
 is available in response_rejection_code.py.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -21,9 +21,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(
-    litellm_params: "LitellmParams", guardrail: "Guardrail"
-) -> CustomCodeGuardrail:
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> CustomCodeGuardrail:
     """
     Initialize a custom code guardrail.
 
@@ -36,18 +34,16 @@ def initialize_guardrail(
     """
     import litellm
 
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("Custom code guardrail requires a guardrail_name")
 
     # Get the custom code from litellm_params
-    custom_code = getattr(litellm_params, "custom_code", None)
+    custom_code: Final = getattr(litellm_params, "custom_code", None)
     if not custom_code:
-        raise ValueError(
-            "Custom code guardrail requires 'custom_code' in litellm_params"
-        )
+        raise ValueError("Custom code guardrail requires 'custom_code' in litellm_params")
 
-    custom_code_guardrail = CustomCodeGuardrail(
+    custom_code_guardrail: Final = CustomCodeGuardrail(
         guardrail_name=guardrail_name,
         custom_code=custom_code,
         event_hook=litellm_params.mode,
@@ -58,17 +54,17 @@ def initialize_guardrail(
     return custom_code_guardrail
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.CUSTOM_CODE.value: initialize_guardrail,
 }
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.CUSTOM_CODE.value: CustomCodeGuardrail,
 }
 
 __all__ = [
-    "CustomCodeGuardrail",
     "DEFAULT_REJECTION_PHRASES",
     "RESPONSE_REJECTION_GUARDRAIL_CODE",
+    "CustomCodeGuardrail",
     "initialize_guardrail",
 ]

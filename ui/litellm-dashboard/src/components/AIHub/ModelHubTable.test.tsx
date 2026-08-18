@@ -1,5 +1,5 @@
 import * as networking from "@/components/networking";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
 
@@ -7,6 +7,7 @@ const mockUseUISettings = vi.hoisted(() => vi.fn());
 const mockGetCookie = vi.hoisted(() => vi.fn());
 const mockCheckTokenValidity = vi.hoisted(() => vi.fn());
 const mockRouterReplace = vi.hoisted(() => vi.fn());
+const mockLocationReplace = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/networking", () => ({
   getUiConfig: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock("@/components/networking", () => ({
   fetchMCPServers: vi.fn(),
   getUiSettings: vi.fn(),
   getClaudeCodeMarketplace: vi.fn(),
+  getClaudeCodePluginsList: vi.fn(() => Promise.resolve({ plugins: [] })),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -43,16 +45,33 @@ vi.mock("@/utils/jwtUtils", () => ({
 }));
 
 describe("ModelHubTable", () => {
+  const originalLocation = window.location;
+
+  beforeEach(() => {
+    Object.defineProperty(window, "location", {
+      value: {
+        href: "http://localhost:4000/ui/model_hub_table",
+        origin: "http://localhost:4000",
+        hostname: "localhost",
+        pathname: "/ui/model_hub_table",
+        search: "",
+        protocol: "http:",
+        replace: mockLocationReplace,
+      },
+      writable: true,
+    });
+  });
+
   afterEach(() => {
+    Object.defineProperty(window, "location", {
+      value: originalLocation,
+      writable: true,
+    });
     vi.clearAllMocks();
   });
 
   // Reusable helper function to setup mocks for auth redirect tests
-  const setupAuthRedirectTest = (
-    requireAuth: boolean,
-    tokenValue: string | null,
-    isTokenValid: boolean
-  ) => {
+  const setupAuthRedirectTest = (requireAuth: boolean, tokenValue: string | null, isTokenValid: boolean) => {
     mockUseUISettings.mockReturnValue({
       data: {
         values: {
@@ -64,6 +83,7 @@ describe("ModelHubTable", () => {
     mockGetCookie.mockReturnValue(tokenValue);
     mockCheckTokenValidity.mockReturnValue(isTokenValid);
     mockRouterReplace.mockClear();
+    mockLocationReplace.mockClear();
 
     // Setup other required mocks
     vi.mocked(networking.getUiConfig).mockResolvedValue({
@@ -87,20 +107,19 @@ describe("ModelHubTable", () => {
     tokenValue: string | null,
     isTokenValid: boolean,
     shouldRedirect: boolean,
-    description: string
+    description: string,
   ) => {
     it(description, async () => {
       setupAuthRedirectTest(requireAuth, tokenValue, isTokenValid);
 
-      renderWithProviders(
-        <ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />
-      );
+      renderWithProviders(<ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />);
 
       await waitFor(() => {
         if (shouldRedirect) {
-          expect(mockRouterReplace).toHaveBeenCalledWith("http://localhost:4000/ui/login");
-        } else {
+          expect(mockLocationReplace).toHaveBeenCalledWith("http://localhost:4000/ui/login/");
           expect(mockRouterReplace).not.toHaveBeenCalled();
+        } else {
+          expect(mockLocationReplace).not.toHaveBeenCalled();
         }
       });
     });
@@ -125,11 +144,28 @@ describe("ModelHubTable", () => {
       isLoading: false,
     });
 
-    renderWithProviders(<ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole={null} />);
+    renderWithProviders(
+      <ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole={null} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("AI Hub")).toBeInTheDocument();
     });
+  });
+
+  it("should resolve loading to the empty state when there is no access token on the admin page", async () => {
+    vi.mocked(networking.getUiSettings).mockResolvedValue({
+      values: {},
+    });
+    mockUseUISettings.mockReturnValue({
+      data: { values: {} },
+      isLoading: false,
+    });
+
+    renderWithProviders(<ModelHubTable accessToken={null} publicPage={false} premiumUser={false} userRole={null} />);
+
+    expect(await screen.findByText("No models yet")).toBeInTheDocument();
+    expect(networking.modelHubCall).not.toHaveBeenCalled();
   });
 
   it("should call getUiConfig before modelHubPublicModelsCall when publicPage is true", async () => {
@@ -172,7 +208,7 @@ describe("ModelHubTable", () => {
       null,
       false,
       true,
-      "should redirect to login when requireAuth is true and there is no token"
+      "should redirect to login when requireAuth is true and there is no token",
     );
 
     testAuthRedirect(
@@ -180,7 +216,7 @@ describe("ModelHubTable", () => {
       "expired-token",
       false,
       true,
-      "should redirect to login when requireAuth is true and token is expired"
+      "should redirect to login when requireAuth is true and token is expired",
     );
 
     testAuthRedirect(
@@ -188,24 +224,18 @@ describe("ModelHubTable", () => {
       "malformed-token",
       false,
       true,
-      "should redirect to login when requireAuth is true and token is malformed"
+      "should redirect to login when requireAuth is true and token is malformed",
     );
 
     // Test cases where requireAuth is false - should NOT redirect regardless of token state
-    testAuthRedirect(
-      false,
-      null,
-      false,
-      false,
-      "should not redirect when requireAuth is false and there is no token"
-    );
+    testAuthRedirect(false, null, false, false, "should not redirect when requireAuth is false and there is no token");
 
     testAuthRedirect(
       false,
       "expired-token",
       false,
       false,
-      "should not redirect when requireAuth is false and token is expired"
+      "should not redirect when requireAuth is false and token is expired",
     );
 
     testAuthRedirect(
@@ -213,7 +243,7 @@ describe("ModelHubTable", () => {
       "malformed-token",
       false,
       false,
-      "should not redirect when requireAuth is false and token is malformed"
+      "should not redirect when requireAuth is false and token is malformed",
     );
   });
 });

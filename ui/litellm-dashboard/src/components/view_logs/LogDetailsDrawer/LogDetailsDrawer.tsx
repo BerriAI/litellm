@@ -1,22 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Drawer } from "antd";
-import {
-  CheckOutlined,
-  CopyOutlined,
-  LeftOutlined,
-  RightOutlined,
-} from "@ant-design/icons";
-import { Bot, Sparkles, Wrench } from "lucide-react";
+import { Bot, Check, ChevronLeft, ChevronRight, Copy, Sparkles, Wrench } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LogEntry } from "../columns";
+import { AutoRouterIcon, useIsAutoRoutedModelGroup } from "@/components/shared/table_cells";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
+import { ClassifyTag } from "./ClassifyTag";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
 import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
-import { normalizeGuardrailEntries } from "./utils";
+import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 
@@ -33,6 +31,14 @@ export interface LogDetailsDrawerProps {
 
 const SIDEBAR_WIDTH_PX = 224;
 
+// Session logs are fetched page-by-page from the paginated backend and
+// accumulated so the drawer can show the whole session. page_size is the
+// backend maximum (le=100); the page cap bounds the fetch and the
+// (un-virtualized) sidebar list for pathological sessions, keeping the most
+// recent logs since the endpoint returns newest-first.
+const SESSION_PAGE_SIZE = 100;
+const MAX_SESSION_PAGES = 50;
+
 /* ------------------------------------------------------------------ */
 /*  TraceEventRow — compact event row used in both session & non-     */
 /*  session sidebar lists.  Extracted to avoid JSX duplication.       */
@@ -43,9 +49,17 @@ interface TraceEventRowProps {
   onClick: () => void;
 }
 
+const TRACE_EVENT_ICON_CLASS = "text-slate-500 shrink-0";
+
+function TraceEventIcon({ callType, isAutoRouted }: { callType: string; isAutoRouted: boolean }) {
+  if (MCP_CALL_TYPES.includes(callType)) return <Wrench size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  if (AGENT_CALL_TYPES.includes(callType)) return <Bot size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  if (isAutoRouted) return <AutoRouterIcon size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  return <Sparkles size={12} className={TRACE_EVENT_ICON_CLASS} />;
+}
+
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
-  const isMcp = MCP_CALL_TYPES.includes(row.call_type);
-  const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
+  const isAutoRouted = useIsAutoRoutedModelGroup(row.model_group);
   const durationValue =
     row.request_duration_ms != null
       ? (row.request_duration_ms / 1000).toFixed(3)
@@ -62,16 +76,11 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
       onClick={onClick}
     >
       <div className="flex items-center gap-1">
-        {isMcp ? (
-          <Wrench size={12} className="text-slate-500 flex-shrink-0" />
-        ) : isAgent ? (
-          <Bot size={12} className="text-slate-500 flex-shrink-0" />
-        ) : (
-          <Sparkles size={12} className="text-slate-500 flex-shrink-0" />
-        )}
+        <TraceEventIcon callType={row.call_type} isAutoRouted={isAutoRouted} />
         <span className="text-xs font-medium text-slate-900 truncate">
           {getEventDisplayName(row.call_type, row.model)}
         </span>
+        <ClassifyTag origin={row.metadata?.internal_call_origin} className="ml-auto" />
       </div>
       <div className="text-[10px] text-slate-500 mt-0 flex items-center gap-1.5 font-mono">
         <span>{durationValue}s</span>
@@ -114,52 +123,99 @@ export function LogDetailsDrawer({
 }: LogDetailsDrawerProps) {
   const isSessionMode = Boolean(sessionId);
   const [selectedSessionRequestId, setSelectedSessionRequestId] = useState<string | null>(null);
+  const [sessionSortMode, setSessionSortMode] = useState<SessionLogSortMode>("duration");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
-  const { data: sessionLogs = [] } = useQuery({
+  const { data: sessionData } = useQuery({
     queryKey: ["sessionLogs", sessionId],
     queryFn: async () => {
-      if (!sessionId || !accessToken) return [];
-      const response = await sessionSpendLogsCall(accessToken, sessionId);
-      const allSessionLogs: LogEntry[] = response.data || response || [];
-      return allSessionLogs
-        .map((row) => ({
-          ...row,
-          request_duration_ms: row.request_duration_ms ?? (Date.parse(row.endTime) - Date.parse(row.startTime)),
-        }))
-        .sort((a, b) => {
-          const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
-          const bIsMcp = MCP_CALL_TYPES.includes(b.call_type) ? 1 : 0;
-          if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
-          return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
-        });
+      if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0 };
+
+      // Fetch the first page, then page through the rest so sessions with more
+      // than one page of logs are shown in full (capped for safety).
+      const firstPage = await sessionSpendLogsCall(accessToken, sessionId, 1, SESSION_PAGE_SIZE);
+      let rows: LogEntry[] = firstPage.data || firstPage || [];
+      const pagesToFetch = Math.min(firstPage.total_pages ?? 1, MAX_SESSION_PAGES);
+
+      if (pagesToFetch > 1) {
+        const BATCH = 5;
+        const remaining: Awaited<ReturnType<typeof sessionSpendLogsCall>>[] = [];
+        for (let start = 2; start <= pagesToFetch; start += BATCH) {
+          const end = Math.min(start + BATCH - 1, pagesToFetch);
+          const batch = await Promise.all(
+            Array.from({ length: end - start + 1 }, (_, i) =>
+              sessionSpendLogsCall(accessToken, sessionId, start + i, SESSION_PAGE_SIZE),
+            ),
+          );
+          remaining.push(...batch);
+        }
+        for (const page of remaining) {
+          rows = rows.concat(page.data || []);
+        }
+      }
+
+      // Fall back to the accumulated row count (not just the first page) when the
+      // backend omits total, so the truncation note reflects what was fetched.
+      const total: number = firstPage.total ?? rows.length;
+
+      const logs = rows.map((row) => ({
+        ...row,
+        request_duration_ms: row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime),
+      }));
+
+      return { logs, total };
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
   });
 
+  const sessionLogs: LogEntry[] = useMemo(
+    () => sortSessionLogs(sessionData?.logs ?? [], sessionSortMode),
+    [sessionData, sessionSortMode],
+  );
+  // total reported by the backend; when the page cap truncates the fetch this
+  // exceeds sessionLogs.length, which drives the "showing most recent" note.
+  const sessionTotalCount = sessionData?.total ?? sessionLogs.length;
+  const sessionTruncated = sessionTotalCount > sessionLogs.length;
+
+  // Default selection for a freshly opened session: the most recent log (latest
+  // startTime). The list is ordered by the selected sort mode, so the latest
+  // log by time is not necessarily sessionLogs[0]; compute it explicitly.
+  // A clicked/remembered log still wins over this default.
+  const mostRecentLog = useMemo<LogEntry | null>(
+    () =>
+      sessionLogs.reduce<LogEntry | null>(
+        (latest, row) =>
+          !latest || new Date(row.startTime).getTime() > new Date(latest.startTime).getTime() ? row : latest,
+        null,
+      ),
+    [sessionLogs],
+  );
+
   const currentLog = useMemo(() => {
     if (!isSessionMode) return logEntry;
     if (!sessionLogs.length) return null;
+    const fallbackLog = mostRecentLog ?? sessionLogs[0];
     if (selectedSessionRequestId) {
-      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || sessionLogs[0];
+      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || fallbackLog;
     }
     if (logEntry?.request_id) {
       const clickedLog = sessionLogs.find((row) => row.request_id === logEntry.request_id);
-      return clickedLog || sessionLogs[0];
+      return clickedLog || fallbackLog;
     }
-    return sessionLogs[0];
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+    return fallbackLog;
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   useEffect(() => {
     if (!isSessionMode || !sessionLogs.length) return;
     if (!selectedSessionRequestId || !sessionLogs.some((row) => row.request_id === selectedSessionRequestId)) {
-      const fallbackRequestId = logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
-        ? logEntry.request_id
-        : sessionLogs[0].request_id;
+      const fallbackRequestId =
+        logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
+          ? logEntry.request_id
+          : (mostRecentLog ?? sessionLogs[0]).request_id;
       setSelectedSessionRequestId(fallbackRequestId);
     }
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   // Reset transient UI state when the drawer opens or closes.
   useEffect(() => {
@@ -167,6 +223,7 @@ export function LogDetailsDrawer({
       setIsSidebarCollapsed(false);
     } else {
       if (isSessionMode) setSelectedSessionRequestId(null);
+      setSessionSortMode("duration");
       setCopiedLeftPanelId(false);
     }
   }, [open, isSessionMode]);
@@ -212,12 +269,10 @@ export function LogDetailsDrawer({
   const environment = metadata?.user_api_key_team_alias || "default";
 
   const totalSessionCost = sessionLogs.reduce((sum, row) => sum + (row.spend || 0), 0);
-  const sessionStart = sessionLogs.length > 0
-    ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime())))
-    : null;
-  const sessionEnd = sessionLogs.length > 0
-    ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime())))
-    : null;
+  const sessionStart =
+    sessionLogs.length > 0 ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime()))) : null;
+  const sessionEnd =
+    sessionLogs.length > 0 ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime()))) : null;
   const sessionDurationSeconds =
     sessionStart && sessionEnd ? ((sessionEnd.getTime() - sessionStart.getTime()) / 1000).toFixed(2) : "0.00";
   const llmCount = sessionLogs.filter(
@@ -227,8 +282,7 @@ export function LogDetailsDrawer({
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
-  const leftPanelDisplayId =
-    leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
+  const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
 
   const handleCopyLeftPanelId = async () => {
     if (!leftPanelId) return;
@@ -236,152 +290,172 @@ export function LogDetailsDrawer({
       await navigator.clipboard.writeText(leftPanelId);
       setCopiedLeftPanelId(true);
       setTimeout(() => setCopiedLeftPanelId(false), 1200);
-    } catch { /* clipboard unavailable in non-secure contexts */ }
+    } catch {
+      /* clipboard unavailable in non-secure contexts */
+    }
   };
 
   if (!currentLog || !enrichedLog) return null;
 
   return (
-    <Drawer
-      title={null}
-      placement="right"
-      onClose={onClose}
+    <Sheet
       open={open}
-      width={DRAWER_WIDTH}
-      closable={false}
-      mask={true}
-      maskClosable={true}
-      styles={{
-        body: { padding: 0, overflow: "hidden" },
-        header: { display: "none" },
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
       }}
     >
-      <div style={{ height: "100%" }} className="flex relative">
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none"
+        style={{ width: DRAWER_WIDTH }}
+      >
+        <SheetTitle className="sr-only">
+          {logEntry?.request_id ? `Request ${logEntry.request_id} details` : "Request details"}
+        </SheetTitle>
+        <div style={{ height: "100%" }} className="flex relative">
           {!isSidebarCollapsed ? (
             <Button
-              type="text"
-              size="small"
-              icon={<LeftOutlined />}
+              variant="ghost"
+              size="icon-sm"
               onClick={() => setIsSidebarCollapsed(true)}
-              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+              className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
               aria-label="Collapse trace sidebar"
-            />
+            >
+              <ChevronLeft className="size-4" />
+            </Button>
           ) : (
             <Button
-              type="text"
-              size="small"
-              icon={<RightOutlined />}
+              variant="ghost"
+              size="icon-sm"
               onClick={() => setIsSidebarCollapsed(false)}
-              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+              className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
               aria-label="Expand trace sidebar"
-            />
+            >
+              <ChevronRight className="size-4" />
+            </Button>
           )}
           {!isSidebarCollapsed && (
-          <div
-            className="border-r border-slate-200 bg-slate-50 flex flex-col"
-            style={{ width: SIDEBAR_WIDTH_PX }}
-          >
-            <div className="pl-12 pr-3 py-2 border-b border-slate-200 bg-white">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                    {isSessionMode ? "Session" : "Trace"}
-                  </div>
-                  <div className="font-mono text-[12px] text-slate-900 leading-tight flex items-center gap-1">
-                    <span className="truncate">{leftPanelDisplayId}</span>
-                    <button
-                      type="button"
-                      onClick={handleCopyLeftPanelId}
-                      className="text-slate-400 hover:text-slate-600"
-                      aria-label="Copy trace id"
-                    >
-                      {copiedLeftPanelId ? (
-                        <CheckOutlined className="text-[11px]" />
-                      ) : (
-                        <CopyOutlined className="text-[11px]" />
-                      )}
-                    </button>
+            <div className="border-r border-slate-200 bg-slate-50 flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
+              <div className="pl-12 pr-3 py-2 border-b border-slate-200 bg-white">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                      {isSessionMode ? "Session" : "Trace"}
+                    </div>
+                    <div className="font-mono text-[12px] text-slate-900 leading-tight flex items-center gap-1">
+                      <span className="truncate">{leftPanelDisplayId}</span>
+                      <button
+                        type="button"
+                        onClick={handleCopyLeftPanelId}
+                        className="text-slate-400 hover:text-slate-600"
+                        aria-label="Copy trace id"
+                      >
+                        {copiedLeftPanelId ? <Check className="size-3" /> : <Copy className="size-3" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="mt-1 text-[11px] text-slate-500 font-mono">
-                {logsForList.length} req
-                {[
-                  isSessionMode
-                    ? llmCount
-                    : logsForList.filter(
-                        (row) =>
-                          !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
-                      ).length,
-                  isSessionMode ? agentCount : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
-                  isSessionMode ? mcpCount : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
-                ].map((count, i) => {
-                  const label = [" LLM", " Agent", " MCP"][i];
-                  return count > 0 ? (
-                    <span key={label}>
+                <div className="mt-1 text-[11px] text-slate-500 font-mono">
+                  {logsForList.length} req
+                  {[
+                    isSessionMode
+                      ? llmCount
+                      : logsForList.filter(
+                          (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
+                        ).length,
+                    isSessionMode
+                      ? agentCount
+                      : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
+                    isSessionMode
+                      ? mcpCount
+                      : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
+                  ].map((count, i) => {
+                    const label = [" LLM", " Agent", " MCP"][i];
+                    return count > 0 ? (
+                      <span key={label}>
+                        <span className="mx-1.5">·</span>
+                        {count}
+                        {label}
+                      </span>
+                    ) : null;
+                  })}
+                  <span className="mx-1.5">·</span>
+                  {isSessionMode ? getSpendString(totalSessionCost) : getSpendString(currentLog.spend || 0)}
+                  {isSessionMode && (
+                    <>
                       <span className="mx-1.5">·</span>
-                      {count}
-                      {label}
-                    </span>
-                  ) : null;
-                })}
-                <span className="mx-1.5">·</span>
-                {isSessionMode
-                  ? getSpendString(totalSessionCost)
-                  : getSpendString(currentLog.spend || 0)}
+                      {sessionDurationSeconds}s
+                    </>
+                  )}
+                </div>
+                {isSessionMode && sessionTruncated && (
+                  <div className="mt-1 text-[11px] text-amber-600 font-mono">
+                    Showing most recent {logsForList.length} of {sessionTotalCount}
+                  </div>
+                )}
                 {isSessionMode && (
-                  <>
-                    <span className="mx-1.5">·</span>
-                    {sessionDurationSeconds}s
-                  </>
+                  <Tabs
+                    className="mt-1.5"
+                    value={sessionSortMode}
+                    onValueChange={(value) => setSessionSortMode(value as SessionLogSortMode)}
+                  >
+                    <TabsList className="w-full">
+                      <TabsTrigger value="duration" className="text-[11px]">
+                        Duration
+                      </TabsTrigger>
+                      <TabsTrigger value="start_time" className="text-[11px]">
+                        Start time
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
+                  <div className="px-3 pt-2">
+                    <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
+                  </div>
+                )}
+                {isSessionMode ? (
+                  <div className="py-1">
+                    {/* Child events — vertical tree line with horizontal connectors */}
+                    <div className="relative pl-2">
+                      <div className="absolute left-4 top-1 bottom-1 border-l border-slate-300" />
+                      {logsForList.map((row, idx) => {
+                        const isLast = idx === logsForList.length - 1;
+                        return (
+                          <div key={row.request_id} className="relative">
+                            <div className="absolute left-4 top-3 w-3 border-t border-slate-300" />
+                            {isLast && <div className="absolute left-4 top-3 bottom-0 w-px bg-slate-50" />}
+                            <TraceEventRow
+                              row={row}
+                              isSelected={row.request_id === currentLog.request_id}
+                              onClick={() => {
+                                setSelectedSessionRequestId(row.request_id);
+                                onSelectLog?.(row);
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-1">
+                    {logsForList.map((row) => (
+                      <TraceEventRow
+                        key={row.request_id}
+                        row={row}
+                        isSelected={row.request_id === currentLog.request_id}
+                        onClick={() => onSelectLog?.(row)}
+                      />
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
-
-            <div className="flex-1 overflow-y-auto">
-              {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
-                <div className="px-3 pt-2">
-                  <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
-                </div>
-              )}
-              {isSessionMode ? (
-                <div className="py-1">
-                  {/* Child events — vertical tree line with horizontal connectors */}
-                  <div className="relative pl-2">
-                    <div className="absolute left-4 top-1 bottom-1 border-l border-slate-300" />
-                    {logsForList.map((row, idx) => {
-                      const isLast = idx === logsForList.length - 1;
-                      return (
-                        <div key={row.request_id} className="relative">
-                          <div className="absolute left-4 top-3 w-3 border-t border-slate-300" />
-                          {isLast && <div className="absolute left-4 top-3 bottom-0 w-px bg-slate-50" />}
-                          <TraceEventRow
-                            row={row}
-                            isSelected={row.request_id === currentLog.request_id}
-                            onClick={() => {
-                              setSelectedSessionRequestId(row.request_id);
-                              onSelectLog?.(row);
-                            }}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <div className="py-1">
-                  {logsForList.map((row) => (
-                    <TraceEventRow
-                      key={row.request_id}
-                      row={row}
-                      isSelected={row.request_id === currentLog.request_id}
-                      onClick={() => onSelectLog?.(row)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
           )}
 
           <div className="flex-1 flex flex-col overflow-hidden">
@@ -403,6 +477,7 @@ export function LogDetailsDrawer({
             </div>
           </div>
         </div>
-    </Drawer>
+      </SheetContent>
+    </Sheet>
   );
 }

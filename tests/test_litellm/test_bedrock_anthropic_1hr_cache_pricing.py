@@ -72,9 +72,40 @@ US_EXPECTED = [
     ("us.anthropic.claude-haiku-4-5-20251001-v1:0", 2.2e-06, None),
 ]
 
+# EU/AU/JP cross-region inference profiles carry the same +10% regional
+# premium as US (per AWS Bedrock pricing). Coverage list filters to entries
+# that actually exist in the pricing JSON - e.g. Opus 4.6 has no JP profile.
+REGIONAL_EXPECTED = [
+    # Opus 4.6 - $11.00 / MTok (eu/au only; no jp profile)
+    ("eu.anthropic.claude-opus-4-6-v1", 1.1e-05, None),
+    ("au.anthropic.claude-opus-4-6-v1", 1.1e-05, None),
+    # Opus 4.7 - $11.00 / MTok (eu/au; jp is added in #28567)
+    ("eu.anthropic.claude-opus-4-7", 1.1e-05, None),
+    ("au.anthropic.claude-opus-4-7", 1.1e-05, None),
+    # Sonnet 4.6 - $6.60 / MTok
+    ("eu.anthropic.claude-sonnet-4-6", 6.6e-06, None),
+    ("au.anthropic.claude-sonnet-4-6", 6.6e-06, None),
+    ("jp.anthropic.claude-sonnet-4-6", 6.6e-06, None),
+    # Sonnet 4.5 - $6.60 / MTok with $13.20 / MTok long-context tier
+    ("eu.anthropic.claude-sonnet-4-5-20250929-v1:0", 6.6e-06, 1.32e-05),
+    ("au.anthropic.claude-sonnet-4-5-20250929-v1:0", 6.6e-06, 1.32e-05),
+    ("jp.anthropic.claude-sonnet-4-5-20250929-v1:0", 6.6e-06, 1.32e-05),
+    # Haiku 4.5 - $2.20 / MTok
+    ("eu.anthropic.claude-haiku-4-5-20251001-v1:0", 2.2e-06, None),
+    ("au.anthropic.claude-haiku-4-5-20251001-v1:0", 2.2e-06, None),
+    ("jp.anthropic.claude-haiku-4-5-20251001-v1:0", 2.2e-06, None),
+    # Note: eu.anthropic.claude-opus-4-5-20251101-v1:0 is intentionally NOT
+    # in this list. The existing entry carries base/global 5m rates
+    # (5e-06 / 6.25e-06) instead of the +10% regional premium (5.5e-06 /
+    # 6.875e-06), which would make the 1.6x 5m-to-1h invariant fail.
+    # Fixing the EU 5m rates first is left to a follow-up so this PR
+    # stays scoped to the 1-hour cache tier addition.
+]
+
 
 @pytest.mark.parametrize(
-    "model_key, expected_1hr, expected_1hr_lc", GLOBAL_EXPECTED + US_EXPECTED
+    "model_key, expected_1hr, expected_1hr_lc",
+    GLOBAL_EXPECTED + US_EXPECTED + REGIONAL_EXPECTED,
 )
 def test_bedrock_anthropic_1hr_cache_write_pricing(
     model_data, model_key, expected_1hr, expected_1hr_lc

@@ -8,17 +8,7 @@ confidence scoring and a tunable threshold (only block when confidence >= thresh
 
 import re
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
 
@@ -43,7 +33,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # Language tag aliases (normalize to canonical for comparison)
-LANGUAGE_ALIASES: Dict[str, str] = {
+LANGUAGE_ALIASES: Final[dict[str, str]] = {
     "js": "javascript",
     "py": "python",
     "sh": "bash",
@@ -51,20 +41,18 @@ LANGUAGE_ALIASES: Dict[str, str] = {
 }
 
 # Tags that indicate non-executable / plain text (lower confidence when block-all)
-NON_EXECUTABLE_TAGS: frozenset = frozenset(
-    {"text", "plaintext", "plain", "markdown", "md", "output", "result"}
-)
+NON_EXECUTABLE_TAGS: Final[frozenset] = frozenset({"text", "plaintext", "plain", "markdown", "md", "output", "result"})
 
 # Regex: fenced code block with optional language tag. Handles ```lang\n...\n```
 # Content between fences; does not handle nested ``` inside body (documented edge case).
-FENCED_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+FENCED_BLOCK_RE: Final = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
 
 # Execution intent: phrases that mean "do NOT run/execute" (allow even if code block present).
 # Checked first; if any match, we do not block on code execution request.
 # NOTE: Since matching uses substring search (p in text), shorter phrases subsume longer ones.
 # e.g. "don't run" matches any text containing "don't run it", "but don't run", etc.
 # Keep only the minimal set; do not add entries subsumed by existing shorter phrases.
-_NO_EXECUTION_PHRASES: Tuple[str, ...] = (
+_NO_EXECUTION_PHRASES: Final[tuple[str, ...]] = (
     # Core negation phrases (short — each subsumes many longer variants)
     "don't run",
     "do not run",
@@ -124,7 +112,7 @@ _NO_EXECUTION_PHRASES: Tuple[str, ...] = (
 # NOTE: Since matching uses substring search (p in text), shorter phrases subsume longer ones.
 # e.g. "run `" matches any text containing "run `git", "run `docker", etc.
 # Keep only the minimal set; do not add entries subsumed by existing shorter phrases.
-_EXECUTION_REQUEST_PHRASES: Tuple[str, ...] = (
+_EXECUTION_REQUEST_PHRASES: Final[tuple[str, ...]] = (
     # Direct execution requests (short — each subsumes many longer variants)
     "run this ",
     "run these ",
@@ -245,7 +233,7 @@ def _has_no_execution_intent(text: str) -> bool:
     """True if the text clearly indicates the user does not want code/commands run (e.g. explain, don't run)."""
     if not text:
         return False
-    lower = text.lower()
+    lower: Final = text.lower()
     return any(p in lower for p in _NO_EXECUTION_PHRASES)
 
 
@@ -253,7 +241,7 @@ def _has_execution_intent(text: str) -> bool:
     """True if the text clearly requests execution (run, execute, read file, run command, etc.)."""
     if not text:
         return False
-    lower = text.lower()
+    lower: Final = text.lower()
     return any(p in lower for p in _EXECUTION_REQUEST_PHRASES)
 
 
@@ -291,18 +279,18 @@ def _normalize_language(tag: str) -> str:
 
 def _is_blocked_language(
     tag: str,
-    blocked_languages: Optional[List[str]],
+    blocked_languages: list[str] | None,
     block_all: bool,
 ) -> bool:
     """True if this language tag should be considered blocked."""
-    normalized = _normalize_language(tag)
+    normalized: Final = _normalize_language(tag)
     if block_all:
         # Block all: only allow through if it's explicitly non-executable (we still block but with lower confidence)
         return True
     # When block_all is False, caller guarantees blocked_languages is non-empty.
     if not blocked_languages:
         return True
-    normalized_list = [_normalize_language(t) for t in blocked_languages]
+    normalized_list: Final = [_normalize_language(t) for t in blocked_languages]
     return normalized in normalized_list
 
 
@@ -312,7 +300,7 @@ def _confidence_for_block(
     tag_in_blocked_list: bool,
 ) -> float:
     """Return confidence in [0, 1] for this code block detection."""
-    normalized = _normalize_language(tag)
+    normalized: Final = _normalize_language(tag)
     if tag_in_blocked_list:
         return 1.0
     if block_all:
@@ -335,36 +323,25 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        guardrail_name: Optional[str] = None,
-        blocked_languages: Optional[List[str]] = None,
+        guardrail_name: str | None = None,
+        blocked_languages: list[str] | None = None,
         action: Literal["block", "mask"] = "block",
         confidence_threshold: float = 0.5,
         detect_execution_intent: bool = True,
-        event_hook: Optional[
-            Union[Literal["pre_call", "post_call", "during_call"], List[str]]
-        ] = None,
+        event_hook: Literal["pre_call", "post_call", "during_call"] | list[str] | None = None,
         default_on: bool = False,
         **kwargs: Any,
     ) -> None:
         # Normalize to type expected by CustomGuardrail
-        _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = (
-            None
-        )
+        _event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None
         if event_hook is not None:
             if isinstance(event_hook, list):
-                _event_hook = [
-                    GuardrailEventHooks(h) if isinstance(h, str) else h
-                    for h in event_hook
-                ]
+                _event_hook = [GuardrailEventHooks(h) if isinstance(h, str) else h for h in event_hook]
             else:
                 _event_hook = GuardrailEventHooks(event_hook)
         super().__init__(
             guardrail_name=guardrail_name or "block_code_execution",
-            supported_event_hooks=[
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-                GuardrailEventHooks.during_call,
-            ],
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             event_hook=_event_hook
             or [
                 GuardrailEventHooks.pre_call,
@@ -380,30 +357,34 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         self.detect_execution_intent = detect_execution_intent
 
     @staticmethod
-    def get_config_model() -> Optional[type[GuardrailConfigModel]]:
+    def get_config_model() -> type[GuardrailConfigModel] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
             BlockCodeExecutionGuardrailConfigModel,
         )
 
         return BlockCodeExecutionGuardrailConfigModel
 
-    def _find_blocks(
-        self, text: str
-    ) -> List[Tuple[int, int, str, str, float, CodeBlockActionTaken]]:
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.during_call,
+        ]
+
+    def _find_blocks(self, text: str) -> list[tuple[int, int, str, str, float, CodeBlockActionTaken]]:
         """
         Find all fenced code blocks in text. Returns list of
         (start, end, language_tag, block_content, confidence, action_taken).
         """
-        results: List[Tuple[int, int, str, str, float, CodeBlockActionTaken]] = []
+        results: Final[list[tuple[int, int, str, str, float, CodeBlockActionTaken]]] = []
         for m in FENCED_BLOCK_RE.finditer(text):
             tag = (m.group(1) or "").strip()
             body = m.group(2)
             tag_in_list = not self.block_all and _normalize_language(tag) in [
                 _normalize_language(t) for t in (self.blocked_languages or [])
             ]
-            is_blocked = _is_blocked_language(
-                tag, self.blocked_languages, self.block_all
-            )
+            is_blocked = _is_blocked_language(tag, self.blocked_languages, self.block_all)
             confidence = _confidence_for_block(tag, self.block_all, tag_in_list)
             if not is_blocked:
                 action_taken: CodeBlockActionTaken = "allow"
@@ -411,17 +392,15 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                 action_taken = "block"
             else:
                 action_taken = "log_only"
-            results.append(
-                (m.start(), m.end(), tag or "(none)", body, confidence, action_taken)
-            )
+            results.append((m.start(), m.end(), tag or "(none)", body, confidence, action_taken))
         return results
 
     def _scan_text(
         self,
         text: str,
-        detections: Optional[List[CodeBlockDetection]] = None,
+        detections: list[CodeBlockDetection] | None = None,
         input_type: Literal["request", "response"] = "request",
-    ) -> Tuple[str, bool]:
+    ) -> tuple[str, bool]:
         """
         Scan one text: find blocks, apply block/mask/allow by confidence.
         When detect_execution_intent is True and input_type is "request", only block if
@@ -434,7 +413,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             return text, False
         text = _normalize_escaped_newlines(text)
 
-        is_response = input_type == "response"
+        is_response: Final = input_type == "response"
 
         # Execution-intent heuristics only apply to requests, not LLM responses.
         # For responses, skip entirely — the LLM's output text won't contain user
@@ -450,14 +429,10 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         ):
             return text, False
 
-        blocks = self._find_blocks(text)
+        blocks: Final = self._find_blocks(text)
 
         # For requests, check execution intent; for responses, skip this check
-        has_execution_intent = (
-            not is_response
-            and self.detect_execution_intent
-            and _has_execution_intent(text)
-        )
+        has_execution_intent: Final = not is_response and self.detect_execution_intent and _has_execution_intent(text)
 
         if not blocks:
             if has_execution_intent and self.action == "block":
@@ -478,7 +453,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
 
         should_raise = False
         last_end = 0
-        parts: List[str] = []
+        parts: Final[list[str]] = []
         for start, end, tag, _body, confidence, action_taken in blocks:
             # For responses, always enforce the block action (no intent check needed).
             # For requests with detect_execution_intent, require execution intent.
@@ -493,9 +468,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                             "type": "code_block",
                             "language": tag,
                             "confidence": round(confidence, 2),
-                            "action_taken": (
-                                "block" if effective_block else action_taken
-                            ),
+                            "action_taken": ("block" if effective_block else action_taken),
                         },
                     )
                 )
@@ -510,12 +483,10 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             last_end = end
 
         parts.append(text[last_end:])
-        new_text = "".join(parts)
+        new_text: Final = "".join(parts)
         return new_text, should_raise
 
-    def _raise_block_error(
-        self, language: str, is_output: bool, request_data: dict
-    ) -> None:
+    def _raise_block_error(self, language: str, is_output: bool, request_data: dict) -> None:
         if language == "execution_request":
             msg = "Content blocked: execution request detected"
         else:
@@ -543,18 +514,18 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        start_time = datetime.now()
-        detections: List[CodeBlockDetection] = []
+        start_time: Final = datetime.now()
+        detections: Final[list[CodeBlockDetection]] = []
         status: GuardrailStatus = "success"
         exception_str = ""
 
         try:
-            texts = inputs.get("texts", [])
+            texts: Final = inputs.get("texts", [])
             if not texts:
                 return inputs
 
-            is_output = input_type == "response"
-            processed: List[str] = []
+            is_output: Final = input_type == "response"
+            processed: Final[list[str]] = []
             for text in texts:
                 new_text, should_raise = self._scan_text(text, detections, input_type)
                 processed.append(new_text)
@@ -580,26 +551,22 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             exception_str = str(e)
             raise
         finally:
-            guardrail_response: Union[List[dict], str] = [dict(d) for d in detections]
+            guardrail_response: list[dict] | str = [dict(d) for d in detections]
             if status != "success" and not detections:
                 guardrail_response = exception_str
-            max_confidence: Optional[float] = None
+            max_confidence: float | None = None
             for d in detections:
                 c = d.get("confidence")
                 if c is not None and (max_confidence is None or c > max_confidence):
                     max_confidence = c
-            tracing_kw: Dict[str, Any] = {
+            tracing_kw: Final[dict[str, Any]] = {
                 "guardrail_id": self.guardrail_name,
                 "detection_method": "fenced_code_block",
                 "match_details": guardrail_response,
             }
             if max_confidence is not None:
                 tracing_kw["confidence_score"] = max_confidence
-            event_type = (
-                GuardrailEventHooks.pre_call
-                if input_type == "request"
-                else GuardrailEventHooks.post_call
-            )
+            event_type = GuardrailEventHooks.pre_call if input_type == "request" else GuardrailEventHooks.post_call
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider="block_code_execution",
                 guardrail_json_response=guardrail_response,
@@ -609,5 +576,5 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
-                tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
+                tracing_detail=GuardrailTracingDetail(**tracing_kw),
             )

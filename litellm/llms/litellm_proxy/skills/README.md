@@ -18,7 +18,7 @@ flowchart TB
         F[Request with container.skills] --> G[SkillsInjectionHook]
         G --> H{skill_id prefix?}
         
-        H -->|"litellm:skill_abc"| I[Fetch from LiteLLM DB]
+        H -->|"litellm_skill_abc"| I[Fetch from LiteLLM DB]
         H -->|"skill_xyz" no prefix| J[Pass to Anthropic as native skill]
         
         I --> K{Model provider?}
@@ -57,7 +57,7 @@ sequenceDiagram
     
     Note over LiteLLM,PreHook: PRE-CALL HOOK
     LiteLLM->>PreHook: Intercept request
-    PreHook->>PreHook: Fetch skill from DB (litellm:skill_id)
+    PreHook->>PreHook: Fetch skill from DB (litellm_skill_id)
     PreHook->>PreHook: Extract SKILL.md from ZIP
     PreHook->>PreHook: Inject SKILL.md into system prompt
     PreHook->>PreHook: Add litellm_code_execution tool
@@ -105,7 +105,7 @@ response = await litellm.acompletion(
     model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Create a bouncing ball GIF"}],
     container={
-        "skills": [{"type": "custom", "skill_id": "litellm:skill_abc123"}]
+        "skills": [{"type": "custom", "skill_id": "litellm_skill_abc123"}]
     },
 )
 
@@ -261,7 +261,7 @@ response = litellm.completion(
     messages=[{"role": "user", "content": "Analyze this data..."}],
     container={
         "skills": [
-            {"type": "custom", "skill_id": "litellm:skill_abc123"}  # litellm: prefix
+            {"type": "custom", "skill_id": "litellm_skill_abc123"}  # litellm_skill_ prefix
         ]
     }
 )
@@ -277,7 +277,7 @@ response = litellm.completion(
     "messages": [{"role": "user", "content": "Help me analyze data"}],
     "container": {
         "skills": [
-            {"type": "custom", "skill_id": "litellm:skill_abc123"}
+            {"type": "custom", "skill_id": "litellm_skill_abc123"}
         ]
     }
 }
@@ -287,7 +287,7 @@ response = litellm.completion(
 
 The hook (`litellm/proxy/hooks/litellm_skills/main.py`) intercepts the request:
 
-1. **Detects `litellm:` prefix** → Fetches skill from database
+1. **Detects `litellm_skill_` prefix** → Fetches skill from database
 2. **Checks model provider** → Bedrock is not Anthropic
 3. **Extracts SKILL.md** from stored ZIP file
 4. **Converts skill to tool** + **Injects content into system prompt**
@@ -361,8 +361,8 @@ model LiteLLM_SkillsTable {
 | Create skill on Anthropic | `anthropic` | N/A | Forward to Anthropic API |
 | Create skill in LiteLLM DB | `litellm_proxy` | N/A | Store in database |
 | Use Anthropic native skill | N/A | `skill_xyz` | Pass to Anthropic container.skills |
-| Use LiteLLM skill on Anthropic | N/A | `litellm:skill_abc` | Convert to tools |
-| Use LiteLLM skill on Bedrock/OpenAI | N/A | `litellm:skill_abc` | Convert to tools + inject SKILL.md |
+| Use LiteLLM skill on Anthropic | N/A | `litellm_skill_abc` | Convert to tools |
+| Use LiteLLM skill on Bedrock/OpenAI | N/A | `litellm_skill_abc` | Convert to tools + inject SKILL.md |
 
 ## Testing
 

@@ -3,7 +3,7 @@
 Azure Text Moderation Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Union, cast
 
 from fastapi import HTTPException
 
@@ -13,11 +13,13 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 from .base import AzureGuardrailBase
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
         AzureTextModerationGuardrailResponse,
@@ -40,15 +42,24 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         default_on: Whether to enable by default
     """
 
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
     default_severity_threshold: int = 2
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
 
     def __init__(
         self,
         guardrail_name: str,
         api_key: str,
         api_base: str,
-        severity_threshold: Optional[int] = None,
-        severity_threshold_by_category: Optional[Dict[str, int]] = None,
+        severity_threshold: int | None = None,
+        severity_threshold_by_category: dict[str, int] | None = None,
         **kwargs,
     ):
         """Initialize Azure Text Moderation guardrail handler."""
@@ -56,6 +67,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             AzureTextModerationRequestBodyOptionalParams,
         )
 
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,
         # async_handler and forwards the rest to CustomGuardrail.
         super().__init__(
@@ -65,9 +77,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             **kwargs,
         )
 
-        self.optional_params_request_body: (
-            AzureTextModerationRequestBodyOptionalParams
-        ) = {
+        self.optional_params_request_body: AzureTextModerationRequestBodyOptionalParams = {
             "categories": kwargs.get("categories")
             or [
                 "Hate",
@@ -75,33 +85,25 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 "SelfHarm",
                 "Violence",
             ],
-            "blocklistNames": cast(
-                Optional[List[str]], kwargs.get("blocklistNames") or None
-            ),
+            "blocklistNames": cast(list[str] | None, kwargs.get("blocklistNames") or None),
             "haltOnBlocklistHit": kwargs.get("haltOnBlocklistHit") or False,
             "outputType": kwargs.get("outputType") or "FourSeverityLevels",
         }
 
-        self.severity_threshold = (
-            int(severity_threshold) if severity_threshold else None
-        )
+        self.severity_threshold = int(severity_threshold) if severity_threshold else None
         self.severity_threshold_by_category = severity_threshold_by_category
 
-        verbose_proxy_logger.info(
-            f"Initialized Azure Text Moderation Guardrail: {guardrail_name}"
-        )
+        verbose_proxy_logger.info("Initialized Azure Text Moderation Guardrail: %s", guardrail_name)
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
             AzureContentSafetyTextModerationConfigModel,
         )
 
         return AzureContentSafetyTextModerationConfigModel
 
-    async def async_make_request(
-        self, text: str
-    ) -> "AzureTextModerationGuardrailResponse":
+    async def async_make_request(self, text: str) -> "AzureTextModerationGuardrailResponse":
         """
         Make a request to the Azure Text Moderation API.
 
@@ -110,24 +112,23 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         chunk is analysed independently; a severity-threshold violation in
         *any* chunk raises an HTTPException immediately.
         """
-        from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
         from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
             AzureTextModerationGuardrailRequestBody,
             AzureTextModerationGuardrailResponse,
         )
 
-        chunks = self.split_text_by_words(text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
+        from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
 
-        last_response: Optional[AzureTextModerationGuardrailResponse] = None
+        chunks: Final = self.split_text_by_words(text, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
+
+        last_response: AzureTextModerationGuardrailResponse | None = None
 
         for chunk in chunks:
             request_body = AzureTextModerationGuardrailRequestBody(
                 text=chunk,
-                **self.optional_params_request_body,  # type: ignore[misc]
+                **self.optional_params_request_body,
             )
-            response_json = await self._post_to_content_safety(
-                "text:analyze", cast(dict, request_body)
-            )
+            response_json = await self._post_to_content_safety("text:analyze", cast(dict, request_body))
 
             chunk_response = cast(AzureTextModerationGuardrailResponse, response_json)
 
@@ -149,9 +150,20 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         assert last_response is not None
         return last_response
 
-    def check_severity_threshold(
-        self, response: "AzureTextModerationGuardrailResponse"
-    ) -> Literal[True]:
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        for text in inputs.get("texts") or ():
+            if text:
+                await self.async_make_request(text=text)
+        return inputs
+
+    def check_severity_threshold(self, response: "AzureTextModerationGuardrailResponse") -> Literal[True]:
         """
         - Check if threshold set by category
         - Check if general severity threshold set
@@ -160,9 +172,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
         if self.severity_threshold_by_category:
             for category in response["categoriesAnalysis"]:
-                severity_category_threshold_item = (
-                    self.severity_threshold_by_category.get(category["category"])
-                )
+                severity_category_threshold_item = self.severity_threshold_by_category.get(category["category"])
                 if (
                     severity_category_threshold_item is not None
                     and category["severity"] >= severity_category_threshold_item
@@ -172,9 +182,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                         detail={
                             "error": "Azure Content Safety Guardrail: {} crossed severity {}, Got severity: {}".format(
                                 category["category"],
-                                self.severity_threshold_by_category.get(
-                                    category["category"]
-                                ),
+                                self.severity_threshold_by_category.get(category["category"]),
                                 category["severity"],
                             )
                         },
@@ -192,10 +200,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                             )
                         },
                     )
-        if (
-            self.severity_threshold is None
-            and self.severity_threshold_by_category is None
-        ):
+        if self.severity_threshold is None and self.severity_threshold_by_category is None:
             for category in response["categoriesAnalysis"]:
                 if category["severity"] >= self.default_severity_threshold:
                     raise HTTPException(
@@ -215,9 +220,9 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: Any,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         call_type: CallTypesLiteral,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Pre-call hook to scan user prompts before sending to LLM.
 
@@ -227,18 +232,14 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             "Azure Text Moderation: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        new_messages: Final[list[AllMessageValues] | None] = data.get("messages")
         if new_messages is None:
-            verbose_proxy_logger.warning(
-                "Azure Text Moderation: not running guardrail. No messages in data"
-            )
+            verbose_proxy_logger.warning("Azure Text Moderation: not running guardrail. No messages in data")
             return data
-        user_prompt = self.get_user_prompt(new_messages)
+        user_prompt: Final = self.get_user_prompt(new_messages)
 
         if user_prompt:
-            verbose_proxy_logger.info(
-                f"Azure Text Moderation: User prompt: {user_prompt}"
-            )
+            verbose_proxy_logger.info("Azure Text Moderation: User prompt: %s", user_prompt)
             await self.async_make_request(
                 text=user_prompt,
             )
@@ -266,9 +267,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 )
         return response
 
-    async def async_post_call_streaming_hook(
-        self, user_api_key_dict: UserAPIKeyAuth, response: str
-    ) -> Any:
+    async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> Any:
         try:
             if response is not None and len(response) > 0:
                 await self.async_make_request(
@@ -278,7 +277,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         except HTTPException as e:
             import json
 
-            error_returned = json.dumps({"error": e.detail})
+            error_returned: Final = json.dumps({"error": e.detail})
             return f"data: {error_returned}\n\n"
 
 
@@ -286,10 +285,8 @@ def _message_content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        text_parts = [
-            item.get("text")
-            for item in content
-            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        text_parts: Final = [
+            item.get("text") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str)
         ]
         return "\n".join(part for part in text_parts if part)
     return ""

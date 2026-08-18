@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -54,9 +54,9 @@ class BasePassthroughLoggingHandler(ABC):
         """
         Transforms LLM response to OpenAI response, generates a standard logging object so downstream logging can be handled
         """
-        model = request_body.get("model", response_body.get("model", ""))
-        provider_config = self.get_provider_config(model=model)
-        litellm_model_response: ModelResponse = provider_config.transform_response(
+        model: Final = request_body.get("model", response_body.get("model", ""))
+        provider_config: Final = self.get_provider_config(model=model)
+        litellm_model_response: Final[ModelResponse] = provider_config.transform_response(
             raw_response=httpx_response,
             model_response=litellm.ModelResponse(),
             model=model,
@@ -87,15 +87,15 @@ class BasePassthroughLoggingHandler(ABC):
     def _get_user_from_metadata(
         self,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
-    ) -> Optional[str]:
-        request_body = passthrough_logging_payload.get("request_body")
+    ) -> str | None:
+        request_body: Final = passthrough_logging_payload.get("request_body")
         if request_body:
             return get_end_user_id_from_request_body(request_body)
         return None
 
     def _create_response_logging_payload(
         self,
-        litellm_model_response: Union[ModelResponse, TextCompletionResponse],
+        litellm_model_response: ModelResponse | TextCompletionResponse,
         model: str,
         kwargs: dict,
         start_time: datetime,
@@ -109,28 +109,29 @@ class BasePassthroughLoggingHandler(ABC):
         """
 
         try:
-            response_cost = litellm.completion_cost(
+            response_cost: Final = litellm.completion_cost(
                 completion_response=litellm_model_response,
                 model=model,
             )
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
-            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
-                kwargs.get("passthrough_logging_payload")
+            # the pass-through success path reads spend from
+            # model_call_details["response_cost"], not from kwargs
+            logging_obj.model_call_details["response_cost"] = response_cost
+            passthrough_logging_payload: Final[PassthroughStandardLoggingPayload | None] = kwargs.get(
+                "passthrough_logging_payload"
             )
             if passthrough_logging_payload:
-                user = self._get_user_from_metadata(
+                user: Final = self._get_user_from_metadata(
                     passthrough_logging_payload=passthrough_logging_payload,
                 )
                 if user:
                     kwargs.setdefault("litellm_params", {})
-                    kwargs["litellm_params"].update(
-                        {"proxy_server_request": {"body": {"user": user}}}
-                    )
+                    kwargs["litellm_params"].update({"proxy_server_request": {"body": {"user": user}}})
 
             # Make standard logging object for Anthropic
-            standard_logging_object = get_standard_logging_object_payload(
+            standard_logging_object: Final = get_standard_logging_object_payload(
                 kwargs=kwargs,
                 init_response_obj=litellm_model_response,
                 start_time=start_time,
@@ -152,18 +153,16 @@ class BasePassthroughLoggingHandler(ABC):
             logging_obj.model_call_details["model"] = model
             return kwargs
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error creating LLM passthrough response logging payload: %s", e
-            )
+            verbose_proxy_logger.exception("Error creating LLM passthrough response logging payload: %s", e)
             return kwargs
 
     @abstractmethod
     def _build_complete_streaming_response(
         self,
-        all_chunks: List[str],
+        all_chunks: list[str],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
-    ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
+    ) -> ModelResponse | TextCompletionResponse | None:
         """
         Builds complete response from raw chunks
 
@@ -171,7 +170,6 @@ class BasePassthroughLoggingHandler(ABC):
         - Converts generic chunks to litellm chunks (OpenAI format)
         - Builds complete response from litellm chunks
         """
-        pass
 
     def _handle_logging_llm_collected_chunks(
         self,
@@ -181,7 +179,7 @@ class BasePassthroughLoggingHandler(ABC):
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        all_chunks: List[str],
+        all_chunks: list[str],
         end_time: datetime,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -192,8 +190,8 @@ class BasePassthroughLoggingHandler(ABC):
         - Logs in litellm callbacks
         """
 
-        model = request_body.get("model", "")
-        complete_streaming_response = self._build_complete_streaming_response(
+        model: Final = request_body.get("model", "")
+        complete_streaming_response: Final = self._build_complete_streaming_response(
             all_chunks=all_chunks,
             litellm_logging_obj=litellm_logging_obj,
             model=model,
@@ -206,7 +204,7 @@ class BasePassthroughLoggingHandler(ABC):
                 "result": None,
                 "kwargs": {},
             }
-        kwargs = self._create_response_logging_payload(
+        kwargs: Final = self._create_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
             kwargs={},

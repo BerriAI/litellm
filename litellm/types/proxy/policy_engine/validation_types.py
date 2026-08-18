@@ -6,7 +6,7 @@ validation results.
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,15 +30,13 @@ class PolicyValidationError(BaseModel):
     """
 
     policy_name: str = Field(description="Name of the policy with the issue.")
-    error_type: PolicyValidationErrorType = Field(
-        description="Type of validation error."
-    )
+    error_type: PolicyValidationErrorType = Field(description="Type of validation error.")
     message: str = Field(description="Human-readable error message.")
-    field: Optional[str] = Field(
+    field: str | None = Field(
         default=None,
         description="Specific field that caused the error (e.g., 'guardrails.add', 'scope.teams').",
     )
-    value: Optional[str] = Field(
+    value: str | None = Field(
         default=None,
         description="The invalid value that caused the error.",
     )
@@ -56,11 +54,11 @@ class PolicyValidationResponse(BaseModel):
     """
 
     valid: bool = Field(description="True if the policy configuration is valid.")
-    errors: List[PolicyValidationError] = Field(
+    errors: list[PolicyValidationError] = Field(
         default_factory=list,
         description="List of blocking validation errors.",
     )
-    warnings: List[PolicyValidationError] = Field(
+    warnings: list[PolicyValidationError] = Field(
         default_factory=list,
         description="List of non-blocking validation warnings.",
     )
@@ -73,7 +71,7 @@ class PolicyValidateRequest(BaseModel):
     Request body for the /policy/validate endpoint.
     """
 
-    policies: Dict[str, Any] = Field(
+    policies: dict[str, Any] = Field(
         description="Policy configuration to validate. Map of policy names to policy definitions."
     )
 

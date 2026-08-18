@@ -8,7 +8,7 @@ encrypted_content for multi-turn stateless workflows.
 Docs: https://openrouter.ai/docs/api/reference/responses/overview
 """
 
-from typing import Optional
+from typing import Final
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -37,10 +37,10 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         headers: dict,
         model: str,
-        litellm_params: Optional[GenericLiteLLMParams],
+        litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = (
+        api_key: Final = (
             litellm_params.api_key
             or litellm.api_key
             or get_secret_str("OPENROUTER_API_KEY")
@@ -49,8 +49,7 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         if not api_key:
             raise ValueError(
-                "OpenRouter API key is required. Set OPENROUTER_API_KEY "
-                "environment variable or pass api_key parameter."
+                "OpenRouter API key is required. Set OPENROUTER_API_KEY environment variable or pass api_key parameter."
             )
 
         headers.update(
@@ -62,14 +61,11 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret_str("OPENROUTER_API_BASE")
-            or "https://openrouter.ai/api/v1"
+            api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
         )
 
         api_base = api_base.rstrip("/")
