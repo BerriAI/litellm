@@ -41,7 +41,7 @@ class FakeAnthropicMessagesStreamIterator:
 
     def _create_content_block_chunks(self, block_dict: Mapping[str, object], index: int) -> list[bytes]:
         """Build SSE chunks for a single content block."""
-        chunks: Final = []
+        chunks: Final[list[bytes]] = []  # mutable-ok: built up by the appends below
         block_type: Final = block_dict.get("type")
 
         if block_type == "text":
@@ -114,7 +114,31 @@ class FakeAnthropicMessagesStreamIterator:
             }
             chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
 
+        elif block_type == "server_tool_use":
+            empty_input: Final[Mapping[str, object]] = {}
+            server_tool_start: Final = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "server_tool_use",
+                    "id": block_dict.get("id"),
+                    "name": block_dict.get("name"),
+                    "input": empty_input,
+                },
+            }
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(server_tool_start)}\n\n".encode())
+            server_tool_delta: Final = {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps(block_dict.get("input", {})),
+                },
+            }
+            chunks.append(f"event: content_block_delta\ndata: {json.dumps(server_tool_delta)}\n\n".encode())
+
         else:
+            # Anthropic does not delta server-generated result blocks either
             passthrough_start: Final = {
                 "type": "content_block_start",
                 "index": index,
