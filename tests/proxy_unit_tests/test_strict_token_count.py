@@ -15,15 +15,17 @@ model into the same behaviour.
 
 import os
 import sys
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
+import litellm.proxy.proxy_server as proxy_server
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.proxy._types import TokenCountRequest
+from litellm.proxy._types import ProxyException, TokenCountRequest
+from litellm.proxy.proxy_server import token_counter
 from litellm.router import Router
 
 # the error Bedrock CountTokens returns for a model it cannot count
@@ -48,20 +50,12 @@ def _router(model_info=None):
 def _unsupported_count_tokens():
     """Patch Bedrock CountTokens to reject the model, as it does in the report."""
     return patch(
-        "litellm.llms.bedrock.count_tokens.handler."
-        "BedrockCountTokensHandler.handle_count_tokens_request",
-        new=AsyncMock(
-            side_effect=BedrockError(
-                status_code=400, message=UNSUPPORTED_MODEL_ERROR
-            )
-        ),
+        "litellm.llms.bedrock.count_tokens.handler.BedrockCountTokensHandler.handle_count_tokens_request",
+        new=AsyncMock(side_effect=BedrockError(status_code=400, message=UNSUPPORTED_MODEL_ERROR)),
     )
 
 
 async def _count_tokens(router):
-    import litellm.proxy.proxy_server as proxy_server
-    from litellm.proxy.proxy_server import token_counter
-
     original_router = getattr(proxy_server, "llm_router", None)
     setattr(proxy_server, "llm_router", router)
     try:
@@ -79,8 +73,6 @@ async def _count_tokens(router):
 @pytest.mark.asyncio
 async def test_strict_token_count_raises_instead_of_estimating():
     """A model marked strict must fail rather than return a local estimate."""
-    from litellm.proxy._types import ProxyException
-
     router = _router(model_info={"strict_token_count": True})
 
     with _unsupported_count_tokens():
@@ -121,9 +113,6 @@ async def test_strict_token_count_does_not_affect_other_models():
     The point of the flag: one strict model must not make every other model
     strict. `disable_token_counter` could not express this.
     """
-    import litellm.proxy.proxy_server as proxy_server
-    from litellm.proxy.proxy_server import token_counter
-
     router = Router(
         model_list=[
             {
@@ -151,8 +140,6 @@ async def test_strict_token_count_does_not_affect_other_models():
     original_router = getattr(proxy_server, "llm_router", None)
     setattr(proxy_server, "llm_router", router)
     try:
-        from litellm.proxy._types import ProxyException
-
         with _unsupported_count_tokens():
             # strict model refuses, with the provider's reason preserved.
             # Asserting the type matters: it distinguishes the provider-failure
@@ -184,8 +171,6 @@ async def test_strict_token_count_does_not_affect_other_models():
 @pytest.mark.asyncio
 async def test_disable_token_counter_still_applies_proxy_wide():
     """The existing proxy-wide flag must keep working for unmarked models."""
-    from litellm.proxy._types import ProxyException
-
     router = _router()
     original = litellm.disable_token_counter
     litellm.disable_token_counter = True
