@@ -4826,3 +4826,127 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+def test_success_handler_survives_concurrent_model_call_details_mutation(logging_obj):
+    """
+    success_handler runs on a worker thread while async_success_handler writes new
+    keys into the shared model_call_details on the event loop. Iterating a live
+    .items() view raised 'dictionary changed size during iteration', aborting the
+    callback mid-loop. Snapshotting with list(...) must let the callback complete
+    even when a key is inserted during iteration.
+    """
+    original_success_callbacks = list(litellm.success_callback or [])
+    litellm.success_callback = ["langfuse"]
+
+    class _InsertsKeyOnCompare(str):
+        def __new__(cls, value, sink):
+            obj = super().__new__(cls, value)
+            obj._sink = sink
+            return obj
+
+        def __ne__(self, other):
+            if "concurrent_insert" not in self._sink:
+                self._sink["concurrent_insert"] = "added-mid-iteration"
+            return str.__ne__(self, other)
+
+        def __hash__(self):
+            return str.__hash__(self)
+
+    result = ModelResponse(
+        id="resp-concurrent",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    mock_langfuse_logger = MagicMock()
+
+    try:
+        logging_obj.stream = False
+        logging_obj.call_type = "completion"
+        model_call_details = logging_obj.model_call_details
+        existing_key = next(iter(model_call_details.keys()))
+        existing_value = model_call_details.pop(existing_key)
+        model_call_details[_InsertsKeyOnCompare(existing_key, model_call_details)] = existing_value
+
+        with patch(
+            "litellm.litellm_core_utils.litellm_logging.LangFuseHandler.get_langfuse_logger_for_request",
+            return_value=mock_langfuse_logger,
+        ):
+            logging_obj.success_handler(result=result)
+
+        assert "concurrent_insert" in logging_obj.model_call_details
+        mock_langfuse_logger.log_event_on_langfuse.assert_called_once()
+    finally:
+        litellm.success_callback = original_success_callbacks
+
+
+def _build_model_response():
+    return ModelResponse(
+        id="resp-snapshot",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+
+@pytest.mark.parametrize("callback_name", ["logfire", "greenscale", "athina", "traceloop"])
+def test_success_handler_snapshots_model_call_details_per_callback(logging_obj, callback_name):
+    """Every sync success callback that copies model_call_details must iterate a snapshot."""
+    logger_attr = {
+        "logfire": "logfireLogger",
+        "greenscale": "greenscaleLogger",
+        "athina": "athinaLogger",
+        "traceloop": "traceloopLogger",
+    }[callback_name]
+
+    original_success_callbacks = list(litellm.success_callback or [])
+    litellm.success_callback = [callback_name]
+    try:
+        logging_obj.stream = False
+        logging_obj.call_type = "completion"
+        with patch(
+            f"litellm.litellm_core_utils.litellm_logging.{logger_attr}",
+            MagicMock(),
+            create=True,
+        ):
+            logging_obj.success_handler(result=_build_model_response())
+    finally:
+        litellm.success_callback = original_success_callbacks
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse", "logfire"])
+def test_failure_handler_snapshots_model_call_details_per_callback(logging_obj, callback_name):
+    """Every sync failure callback that copies model_call_details must iterate a snapshot."""
+    original_failure_callbacks = list(litellm.failure_callback or [])
+    litellm.failure_callback = [callback_name]
+    try:
+        logging_obj.stream = False
+        logging_obj.call_type = "completion"
+        with (
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.logfireLogger",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.LangFuseHandler.get_langfuse_logger_for_request",
+                return_value=MagicMock(),
+            ),
+        ):
+            logging_obj.failure_handler(
+                Exception("boom"),
+                "traceback",
+            )
+    finally:
+        litellm.failure_callback = original_failure_callbacks
