@@ -2303,6 +2303,8 @@ class LiteLLMCompletionResponsesConfig:
                 output_details_dict["image_tokens"] = completion_details.image_tokens
 
             if output_details_dict:
+                if "reasoning_tokens" not in output_details_dict:
+                    output_details_dict["reasoning_tokens"] = 0
                 response_usage.output_tokens_details = OutputTokensDetails(**output_details_dict)
 
         return response_usage
