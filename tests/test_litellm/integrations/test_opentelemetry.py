@@ -6007,3 +6007,84 @@ class TestOTELServiceTierAttributes(unittest.TestCase):
             response_obj,
         )
         self.assertEqual(attributes[self.RESPONSE_KEY], "tier-added-by-provider-later")
+
+
+class TestEndedParentSpanNotWritten(unittest.TestCase):
+    """A caller-owned parent span (e.g. a framework server span) can end before
+    LiteLLM's async success handler runs; writing to it is dropped by the SDK and
+    logs a warning per attribute."""
+
+    HERE = os.path.dirname(__file__)
+
+    def _load_captured(self):
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
+            kwargs = json.load(f)
+        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
+            response_obj = json.load(f)
+        return kwargs, response_obj
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_no_writes_to_ended_ambient_server_span(self):
+        from opentelemetry import context as otel_context
+
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        kwargs, response_obj = self._load_captured()
+        kwargs["litellm_params"]["metadata"].pop("litellm_parent_otel_span", None)
+        kwargs["litellm_params"]["proxy_server_request"]["headers"].pop("traceparent", None)
+
+        server_span = tracer_provider.get_tracer(__name__).start_span(name="POST /chat")
+        token = otel_context.attach(trace.set_span_in_context(server_span))
+        try:
+            server_span.end()
+            start = datetime.utcnow()
+            end = start + timedelta(seconds=1)
+            with self.assertNoLogs("opentelemetry.sdk.trace", level="WARNING"):
+                otel._handle_success(kwargs, response_obj, start, end)
+        finally:
+            otel_context.detach(token)
+
+        exported = span_exporter.get_finished_spans()
+        server_spans = [s for s in exported if s.name == "POST /chat"]
+        self.assertEqual(len(server_spans), 1)
+        self.assertNotIn("gen_ai.request.model", server_spans[0].attributes or {})
+
+        litellm_spans = [s for s in exported if s.name == "litellm_request"]
+        self.assertEqual(len(litellm_spans), 1, "attributes must land on a fresh child span, not be dropped")
+        self.assertIn("gen_ai.request.model", litellm_spans[0].attributes or {})
+        self.assertEqual(litellm_spans[0].parent.span_id, server_spans[0].context.span_id)
+
+    def test_safe_set_attribute_skips_ended_span(self):
+        tracer_provider = TracerProvider()
+        span = tracer_provider.get_tracer(__name__).start_span(name="ended")
+        span.end()
+
+        with self.assertNoLogs("opentelemetry.sdk.trace", level="WARNING"):
+            OpenTelemetry(tracer_provider=tracer_provider).safe_set_attribute(span, "gen_ai.request.model", "gpt-5")
+
+    def test_shared_safe_set_attribute_skips_ended_span(self):
+        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
+
+        tracer_provider = TracerProvider()
+        ended = tracer_provider.get_tracer(__name__).start_span(name="ended")
+        ended.end()
+        recording = tracer_provider.get_tracer(__name__).start_span(name="recording")
+
+        with self.assertNoLogs("opentelemetry.sdk.trace", level="WARNING"):
+            safe_set_attribute(ended, "llm.model_name", "gpt-5")
+        safe_set_attribute(recording, "llm.model_name", "gpt-5")
+        recording.end()
+
+        self.assertEqual((recording.attributes or {}).get("llm.model_name"), "gpt-5")
+
+    def test_safe_set_attribute_still_writes_to_recording_span(self):
+        tracer_provider = TracerProvider()
+        span = tracer_provider.get_tracer(__name__).start_span(name="recording")
+
+        OpenTelemetry(tracer_provider=tracer_provider).safe_set_attribute(span, "gen_ai.request.model", "gpt-5")
+        span.end()
+
+        self.assertEqual((span.attributes or {}).get("gen_ai.request.model"), "gpt-5")
