@@ -162,7 +162,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 output_text = inner
                             elif isinstance(inner, list):
                                 parts = [
-                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") in TEXT_BLOCK_TYPES
+                                    c.get("text", "")
+                                    for c in inner
+                                    if isinstance(c, dict) and c.get("type") in TEXT_BLOCK_TYPES
                                 ]
                                 output_text = "\n".join(parts)
                                 image_candidates = tuple(
@@ -178,7 +180,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                         else TOOL_RESULT_IMAGE_PLACEHOLDER
                                     )
                                     tool_image_parts.extend(
-                                        {"type": "input_image", "image_url": url, "detail": "auto"}  # mutable-ok: json content part
+                                        {  # mutable-ok: json content part
+                                            "type": "input_image",
+                                            "image_url": url,
+                                            "detail": "auto",
+                                        }
                                         for url in image_urls
                                     )
                             else:
@@ -242,7 +248,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "thinking":
                             thinking_text = block.get("thinking", "")
                             if thinking_text:
-                                input_items.append({"type": "reasoning", "id": block.get("signature") or f"reasoning_{len(input_items)}", "summary": [{"type": "summary_text", "text": thinking_text}]})
+                                input_items.append(
+                                    {
+                                        "type": "reasoning",
+                                        "id": block.get("signature") or f"reasoning_{len(input_items)}",
+                                        "summary": [{"type": "summary_text", "text": thinking_text}],
+                                    }
+                                )
                     if asst_parts:
                         input_items.append(
                             {
