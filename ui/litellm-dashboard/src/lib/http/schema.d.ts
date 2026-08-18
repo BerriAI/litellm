@@ -36221,6 +36221,8 @@ export interface components {
             ptu_effective_from?: string | null;
             /** Ptu Effective To */
             ptu_effective_to?: string | null;
+            /** Strict Token Count */
+            strict_token_count?: boolean | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
