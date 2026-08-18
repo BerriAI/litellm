@@ -1251,7 +1251,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/app/(dashboard)/prompts/_components/index.tsx": {
@@ -1836,11 +1836,6 @@
   "src/components/TeamsPage/teamTableColumns.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    }
-  },
-  "src/components/UIAccessControlForm.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/UsagePage/components/EntityUsage/TopKeyView.tsx": {
