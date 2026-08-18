@@ -4,12 +4,12 @@ import { z } from "zod/v4";
 
 import { useCloudZeroUpdateSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import MessageManager from "@/components/molecules/message_manager";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { toast } from "@/lib/toast";
 
 import { CloudZeroApiKeyInput, labelWithHint } from "./CloudZeroFormControls";
 import { buildCloudZeroPayload, EMPTY_CLOUDZERO_FORM_VALUES, type CloudZeroFormValues } from "./cloudZeroPayload";
@@ -48,12 +48,12 @@ export default function CloudZeroUpdateModal({ open, onOk, onCancel, settings }:
   const handleSubmit = (values: CloudZeroFormValues) => {
     updateMutation.mutate(buildCloudZeroPayload(values), {
       onSuccess: () => {
-        MessageManager.success("CloudZero integration updated successfully");
+        toast.success("CloudZero integration updated successfully");
         form.reset(EMPTY_CLOUDZERO_FORM_VALUES);
         onOk();
       },
       onError: (error: Error) => {
-        MessageManager.error(error.message || "Failed to update CloudZero integration");
+        toast.error(error.message || "Failed to update CloudZero integration");
       },
     });
   };

@@ -2,7 +2,7 @@
 
 import { useMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useMCPSemanticFilterSettings";
 import { useUpdateMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useUpdateMCPSemanticFilterSettings";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   Alert,
   Button,
@@ -90,12 +90,10 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
           setIsDirty(false);
           setSaveSuccess(true);
           setTimeout(() => setSaveSuccess(false), 3000);
-          NotificationManager.success(
-            "Settings updated successfully. Changes will be applied across all pods within 10 seconds.",
-          );
+          toast.success("Settings updated successfully. Changes will be applied across all pods within 10 seconds.");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       });
     } catch (error) {

@@ -14058,6 +14058,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Daily Activity Aggregated
+         * @description Aggregated daily activity for teams without pagination, including per-team breakdown.
+         *
+         *     One SQL GROUPING SETS pass returns every day in the range regardless of row
+         *     volume, so callers never reassemble pages. Same response shape as the
+         *     paginated endpoint with page metadata pinned to a single page.
+         *
+         *     Args:
+         *         team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+         *         start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+         *         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+         *         model (Optional[str]): Filter by model name.
+         *         api_key (Optional[str]): Filter by API key.
+         *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+         *         timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+         *     Returns:
+         *         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
+         */
+        get: operations["get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -26142,7 +26177,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -32334,6 +32369,16 @@ export interface components {
              */
             match_threshold: number;
             /**
+             * Plan Mode Min Tier
+             * @description When set, requests carrying a coding-agent plan-mode sentinel (Claude Code plan mode, VS Code Copilot Plan mode, Copilot CLI's exit_plan_mode tool) are routed to at least this tier: the classified tier still wins when it is higher, and the floor also overrides a session-affinity pin to a lower tier for exactly the turns carrying the sentinel, without rewriting the pin -- the first turn after plan mode exits routes as if plan mode had never happened. Names a built-in tier, or with tier_definitions set, one of the defined tier names (list order is ascending severity, same as keyword_tier_rules). Unset disables detection entirely. The sentinels ride in client-injected prompt text, so a caller who pastes one can spend up to this tier's models -- never down, and never outside the configured pools.
+             */
+            plan_mode_min_tier?: string | null;
+            /**
+             * Plan Mode Patterns
+             * @description Additional case-sensitive literal sentinels that mark a request as plan mode, on top of the built-in Claude Code and Copilot ones. For clients whose plan-mode wording the built-ins don't cover, or after a client release changes its strings.
+             */
+            plan_mode_patterns?: string[] | null;
+            /**
              * Plugins
              * @description Not settable over HTTP; routing plugins are runtime objects
              */
@@ -33317,7 +33362,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -53742,6 +53787,43 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_team_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_aggregated_team_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
             };
             header?: never;
             path?: never;

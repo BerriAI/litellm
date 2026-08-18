@@ -6,7 +6,6 @@ import { z } from "zod/v4";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createGuardrailCall, getGuardrailsList } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -15,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { toast } from "@/lib/toast";
 import {
   buildCompressionGuardrailPayload,
   compressionGuardrailsOf,
@@ -64,7 +64,7 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
       .then((response) => setGuardrails(compressionGuardrailsOf(response as GuardrailListResponse)))
       .catch((error) => {
         console.error("Failed to load compression guardrails:", error);
-        NotificationsManager.fromBackend("Failed to load compression guardrails");
+        toast.fromError("Failed to load compression guardrails");
       })
       .finally(() => setIsLoading(false));
   }, [accessToken]);
@@ -87,12 +87,12 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
           defaultOn: values.defaultOn ?? true,
         }),
       );
-      NotificationsManager.success("Compression guardrail created");
+      toast.success("Compression guardrail created");
       form.reset(EMPTY_VALUES);
       await loadGuardrails();
     } catch (error) {
       console.error("Failed to create compression guardrail:", error);
-      NotificationsManager.fromBackend("Failed to create compression guardrail");
+      toast.fromError("Failed to create compression guardrail");
     } finally {
       setIsSaving(false);
     }

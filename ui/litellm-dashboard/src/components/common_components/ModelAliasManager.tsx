@@ -3,7 +3,7 @@ import { PlusCircleIcon, PencilIcon, TrashIcon } from "@heroicons/react/outline"
 import { Card, CardTitle } from "@/components/ui/card";
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import ModelSelector from "./ModelSelector";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 interface ModelAliasManagerProps {
   accessToken: string;
@@ -40,13 +40,13 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
 
   const handleAddAlias = () => {
     if (!newAlias.aliasName || !newAlias.targetModel) {
-      NotificationsManager.fromBackend("Please provide both alias name and target model");
+      toast.fromError("Please provide both alias name and target model");
       return;
     }
 
     // Check for duplicate alias names
     if (aliases.some((alias) => alias.aliasName === newAlias.aliasName)) {
-      NotificationsManager.fromBackend("An alias with this name already exists");
+      toast.fromError("An alias with this name already exists");
       return;
     }
 
@@ -70,7 +70,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
       onAliasUpdate(aliasObject);
     }
 
-    NotificationsManager.success("Alias added successfully");
+    toast.success("Alias added successfully");
   };
 
   const handleEditAlias = (alias: AliasItem) => {
@@ -81,13 +81,13 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
     if (!editingAlias) return;
 
     if (!editingAlias.aliasName || !editingAlias.targetModel) {
-      NotificationsManager.fromBackend("Please provide both alias name and target model");
+      toast.fromError("Please provide both alias name and target model");
       return;
     }
 
     // Check for duplicate alias names (excluding current alias)
     if (aliases.some((alias) => alias.id !== editingAlias.id && alias.aliasName === editingAlias.aliasName)) {
-      NotificationsManager.fromBackend("An alias with this name already exists");
+      toast.fromError("An alias with this name already exists");
       return;
     }
 
@@ -106,7 +106,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
       onAliasUpdate(aliasObject);
     }
 
-    NotificationsManager.success("Alias updated successfully");
+    toast.success("Alias updated successfully");
   };
 
   const handleCancelEdit = () => {
@@ -127,7 +127,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
       onAliasUpdate(aliasObject);
     }
 
-    NotificationsManager.success("Alias deleted successfully");
+    toast.success("Alias deleted successfully");
   };
 
   // Convert current aliases to object for config example
