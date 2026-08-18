@@ -62,6 +62,7 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganization: vi.fn(),
   useOrganizations: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+  organizationKeys: { all: ["organizations"] },
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
@@ -121,8 +122,12 @@ vi.mock("@/components/common_components/ModelAliasManager", () => ({
   default: vi.fn(({ initialModelAliases, onAliasUpdate }) => (
     <div>
       <div data-testid="alias-editor-initial">{JSON.stringify(initialModelAliases)}</div>
-      <button onClick={() => onAliasUpdate({ "gpt-4o": "gpt-4" })}>Set Alias</button>
-      <button onClick={() => onAliasUpdate({})}>Clear Aliases</button>
+      <button type="button" onClick={() => onAliasUpdate({ "gpt-4o": "gpt-4" })}>
+        Set Alias
+      </button>
+      <button type="button" onClick={() => onAliasUpdate({})}>
+        Clear Aliases
+      </button>
     </div>
   )),
 }));
