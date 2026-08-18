@@ -5,9 +5,10 @@ import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Accordion, AccordionBody, AccordionHeader, TextInput } from "@tremor/react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input as UIInput } from "@/components/ui/input";
 import { Button, Form, Input, Layout, Modal, Select, Switch, Tabs, theme, Tooltip, Typography } from "antd";
-import { Plus, Users } from "lucide-react";
+import { ChevronDown, Plus, Users } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -542,7 +543,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   },
                 ]}
               >
-                <TextInput placeholder="" data-testid="team-name-input" />
+                <UIInput placeholder="" data-testid="team-name-input" />
               </Form.Item>
               {(() => {
                 const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
@@ -684,17 +685,18 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 />
               </Form.Item>
 
-              <Accordion className="mt-20 mb-8">
-                <AccordionHeader>
+              <Collapsible className="mt-20 mb-8 overflow-hidden rounded-lg border">
+                <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                   <b>Additional Settings</b>
-                </AccordionHeader>
-                <AccordionBody>
+                  <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-4 pb-3">
                   <Form.Item
                     label="Team ID"
                     name="team_id"
                     help="ID of the team you want to create. If not provided, it will be generated automatically."
                   >
-                    <TextInput
+                    <UIInput
                       onChange={(e) => {
                         e.target.value = e.target.value.trim();
                       }}
@@ -713,7 +715,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     name="team_member_key_duration"
                     tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
                   >
-                    <TextInput placeholder="e.g., 30d" />
+                    <UIInput placeholder="e.g., 30d" />
                   </Form.Item>
                   <Form.Item
                     label="Team Member RPM Limit"
@@ -898,14 +900,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       disabled={!premiumUser || !isProxyAdminRole(userRole || "")}
                     />
                   </Form.Item>
-                </AccordionBody>
-              </Accordion>
+                </CollapsibleContent>
+              </Collapsible>
 
-              <Accordion className="mt-8 mb-8">
-                <AccordionHeader>
+              <Collapsible className="mt-8 mb-8 overflow-hidden rounded-lg border">
+                <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                   <b>MCP Settings</b>
-                </AccordionHeader>
-                <AccordionBody>
+                  <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-4 pb-3">
                   <Form.Item
                     label={
                       <span>
@@ -951,14 +954,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       </div>
                     )}
                   </Form.Item>
-                </AccordionBody>
-              </Accordion>
+                </CollapsibleContent>
+              </Collapsible>
 
-              <Accordion className="mt-8 mb-8">
-                <AccordionHeader>
+              <Collapsible className="mt-8 mb-8 overflow-hidden rounded-lg border">
+                <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                   <b>Agent Settings</b>
-                </AccordionHeader>
-                <AccordionBody>
+                  <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-4 pb-3">
                   <Form.Item
                     label={
                       <span>
@@ -979,14 +983,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       placeholder="Select agents or access groups (optional)"
                     />
                   </Form.Item>
-                </AccordionBody>
-              </Accordion>
+                </CollapsibleContent>
+              </Collapsible>
 
-              <Accordion className="mt-8 mb-8">
-                <AccordionHeader>
+              <Collapsible className="mt-8 mb-8 overflow-hidden rounded-lg border">
+                <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                   <b>Search Tool Settings</b>
-                </AccordionHeader>
-                <AccordionBody>
+                  <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-4 pb-3">
                   <Form.Item
                     label={
                       <span>
@@ -1007,14 +1012,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       placeholder="Select search tools (optional, empty = all allowed)"
                     />
                   </Form.Item>
-                </AccordionBody>
-              </Accordion>
+                </CollapsibleContent>
+              </Collapsible>
 
-              <Accordion className="mt-8 mb-8">
-                <AccordionHeader>
+              <Collapsible className="mt-8 mb-8 overflow-hidden rounded-lg border">
+                <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                   <b>Logging Settings</b>
-                </AccordionHeader>
-                <AccordionBody>
+                  <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-4 pb-3">
                   <div className="mt-4">
                     <PremiumLoggingSettings
                       value={loggingSettings}
@@ -1022,14 +1028,18 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       premiumUser={premiumUser}
                     />
                   </div>
-                </AccordionBody>
-              </Accordion>
+                </CollapsibleContent>
+              </Collapsible>
 
-              <Accordion key={`router-settings-accordion-${routerSettingsKey}`} className="mt-8 mb-8">
-                <AccordionHeader>
+              <Collapsible
+                key={`router-settings-accordion-${routerSettingsKey}`}
+                className="mt-8 mb-8 overflow-hidden rounded-lg border"
+              >
+                <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                   <b>Router Settings</b>
-                </AccordionHeader>
-                <AccordionBody>
+                  <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-4 pb-3">
                   <div className="mt-4 w-full">
                     <RouterSettingsAccordion
                       key={routerSettingsKey}
@@ -1041,14 +1051,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       }
                     />
                   </div>
-                </AccordionBody>
-              </Accordion>
+                </CollapsibleContent>
+              </Collapsible>
 
-              <Accordion className="mt-8 mb-8">
-                <AccordionHeader>
+              <Collapsible className="mt-8 mb-8 overflow-hidden rounded-lg border">
+                <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                   <b>Model Aliases</b>
-                </AccordionHeader>
-                <AccordionBody>
+                  <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-4 pb-3">
                   <div className="mt-4">
                     <Text type="secondary" style={{ fontSize: 14, marginBottom: 16, display: "block" }}>
                       Create custom aliases for models that can be used by team members in API calls. This allows you to
@@ -1061,8 +1072,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       showExampleConfig={false}
                     />
                   </div>
-                </AccordionBody>
-              </Accordion>
+                </CollapsibleContent>
+              </Collapsible>
             </>
             <div style={{ textAlign: "right", marginTop: "10px" }}>
               <Button htmlType="submit" data-testid="create-team-submit">

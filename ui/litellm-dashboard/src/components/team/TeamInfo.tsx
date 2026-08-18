@@ -29,10 +29,13 @@ import {
   SaveOutlined,
 } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { Accordion, AccordionBody, AccordionHeader, Badge, Card, Grid, Text, TextInput, Title } from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input as UIInput } from "@/components/ui/input";
 import { Button, Form, Input, InputNumber, Select, Space, Switch, Tabs, Tag, Tooltip } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, ChevronDown, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
@@ -93,11 +96,11 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "disable_global_guardrails",
 ]);
 
-const TEAM_MODEL_BADGE_COLORS: Record<TeamModelBadgeKind, "red" | "gray" | "blue" | "green"> = {
-  "all-proxy": "red",
-  "no-default": "gray",
-  direct: "blue",
-  "access-group": "green",
+const TEAM_MODEL_BADGE_VARIANTS: Record<TeamModelBadgeKind, "secondary" | "outline"> = {
+  "all-proxy": "secondary",
+  "no-default": "outline",
+  direct: "secondary",
+  "access-group": "secondary",
 };
 
 export interface TeamMembership {
@@ -733,9 +736,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           <Button type="text" icon={<ArrowLeftIcon className="h-4 w-4" />} onClick={onClose} className="mb-4">
             Back to Teams
           </Button>
-          <Title>{info.team_alias}</Title>
+          <h1 className="text-2xl font-semibold">{info.team_alias}</h1>
           <div className="flex items-center">
-            <Text className="text-gray-500 font-mono">{info.team_id}</Text>
+            <p className="text-sm text-gray-500 font-mono">{info.team_id}</p>
             <Button
               type="text"
               size="small"
@@ -759,30 +762,30 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             key: TEAM_INFO_TAB_KEYS.OVERVIEW,
             label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW],
             children: (
-              <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
-                <Card>
-                  <Text>Budget Status</Text>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                <Card className="block p-6">
+                  <p>Budget Status</p>
                   <div className="mt-2">
-                    <Title>${formatNumberWithCommas(info.spend, 2)}</Title>
-                    <Text>
+                    <h3 className="text-lg font-medium">${formatNumberWithCommas(info.spend, 2)}</h3>
+                    <p>
                       of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}
-                    </Text>
-                    {info.budget_duration && <Text className="text-gray-500">Reset: {info.budget_duration}</Text>}
+                    </p>
+                    {info.budget_duration && <p className="text-gray-500">Reset: {info.budget_duration}</p>}
                     <br />
                     {info.team_member_budget_table && (
-                      <Text className="text-gray-500">
+                      <p className="text-gray-500">
                         Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
-                      </Text>
+                      </p>
                     )}
                   </div>
                 </Card>
 
-                <Card>
-                  <Text>Rate Limits</Text>
+                <Card className="block p-6">
+                  <p>Rate Limits</p>
                   <div className="mt-2">
-                    <Text>TPM: {info.tpm_limit || "Unlimited"}</Text>
-                    <Text>RPM: {info.rpm_limit || "Unlimited"}</Text>
-                    {info.max_parallel_requests && <Text>Max Parallel Requests: {info.max_parallel_requests}</Text>}
+                    <p>TPM: {info.tpm_limit || "Unlimited"}</p>
+                    <p>RPM: {info.rpm_limit || "Unlimited"}</p>
+                    {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
                     {(() => {
                       const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
                       const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
@@ -790,33 +793,33 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       if (models.length === 0) return null;
                       return (
                         <div className="mt-3">
-                          <Text className="text-gray-500">Per-model limits:</Text>
+                          <p className="text-gray-500">Per-model limits:</p>
                           {models.map((m) => (
-                            <Text key={m} className="text-xs">
+                            <p key={m} className="text-xs">
                               {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
-                            </Text>
+                            </p>
                           ))}
                         </div>
                       );
                     })()}
-                    <Text>Estimated Output Tokens: {info.metadata?.default_estimated_output_tokens ?? "Default"}</Text>
-                    <Text>
+                    <p>Estimated Output Tokens: {info.metadata?.default_estimated_output_tokens ?? "Default"}</p>
+                    <p>
                       Estimated Output Tokens Per Model:{" "}
                       {info.metadata?.default_estimated_output_tokens_per_model
                         ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
                         : "Default"}
-                    </Text>
+                    </p>
                   </div>
                 </Card>
 
-                <Card>
-                  <Text>Models</Text>
+                <Card className="block p-6">
+                  <p>Models</p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details).map(
                       (badge, index) => (
                         <Tooltip key={`${badge.kind}-${badge.label}-${index}`} title={badge.tooltip}>
                           <span>
-                            <Badge color={TEAM_MODEL_BADGE_COLORS[badge.kind]}>{badge.label}</Badge>
+                            <Badge variant={TEAM_MODEL_BADGE_VARIANTS[badge.kind]}>{badge.label}</Badge>
                           </span>
                         </Tooltip>
                       ),
@@ -824,12 +827,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                 </Card>
 
-                <Card>
-                  <Text className="font-semibold text-gray-900">Virtual Keys</Text>
+                <Card className="block p-6">
+                  <p className="font-semibold text-gray-900">Virtual Keys</p>
                   <div className="mt-2">
-                    <Text>User Keys: {teamData.keys.filter((key) => key.user_id).length}</Text>
-                    <Text>Service Account Keys: {teamData.keys.filter((key) => !key.user_id).length}</Text>
-                    <Text className="text-gray-500">Total: {teamData.keys.length}</Text>
+                    <p>User Keys: {teamData.keys.filter((key) => key.user_id).length}</p>
+                    <p>Service Account Keys: {teamData.keys.filter((key) => !key.user_id).length}</p>
+                    <p className="text-gray-500">Total: {teamData.keys.length}</p>
                   </div>
                 </Card>
 
@@ -839,7 +842,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   accessToken={accessToken}
                 />
 
-                <Card>
+                <Card className="block p-6">
                   <GuardrailSettingsView
                     globalGuardrailNames={globalGuardrailNames}
                     teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
@@ -853,22 +856,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   />
                 </Card>
 
-                <Card>
-                  <Text className="font-semibold text-gray-900 mb-3">Policies</Text>
+                <Card className="block p-6">
+                  <p className="font-semibold text-gray-900 mb-3">Policies</p>
                   {info.policies && info.policies.length > 0 ? (
                     <div className="space-y-4">
                       {info.policies.map((policy: string, index: number) => (
                         <div key={index} className="space-y-2">
                           <div className="flex items-center gap-2">
-                            <Badge color="purple">{policy}</Badge>
-                            {loadingPolicies && <Text className="text-xs text-gray-400">Loading guardrails...</Text>}
+                            <Badge variant="secondary">{policy}</Badge>
+                            {loadingPolicies && <p className="text-xs text-gray-400">Loading guardrails...</p>}
                           </div>
                           {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
                             <div className="ml-4 pl-3 border-l-2 border-gray-200">
-                              <Text className="text-xs text-gray-500 mb-1">Resolved Guardrails:</Text>
+                              <p className="text-xs text-gray-500 mb-1">Resolved Guardrails:</p>
                               <div className="flex flex-wrap gap-1">
                                 {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
-                                  <Badge key={gIndex} color="blue" size="xs">
+                                  <Badge key={gIndex} variant="secondary">
                                     {guardrail}
                                   </Badge>
                                 ))}
@@ -879,7 +882,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       ))}
                     </div>
                   ) : (
-                    <Text className="text-gray-500">No policies configured</Text>
+                    <p className="text-gray-500">No policies configured</p>
                   )}
                 </Card>
 
@@ -888,7 +891,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   disabledCallbacks={[]}
                   variant="card"
                 />
-              </Grid>
+              </div>
             ),
           },
           {
@@ -924,9 +927,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             key: TEAM_INFO_TAB_KEYS.SETTINGS,
             label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS],
             children: (
-              <Card className="overflow-y-auto max-h-[65vh]">
+              <Card className="block p-6 overflow-y-auto max-h-[65vh]">
                 <div className="flex justify-between items-center mb-4">
-                  <Title>Team Settings</Title>
+                  <h3 className="text-lg font-medium">Team Settings</h3>
                   {canEditTeam && !isEditing && (
                     <Button
                       icon={<EditOutlined className="h-4 w-4" />}
@@ -1080,15 +1083,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Input placeholder="example1@test.com, example2@test.com" />
                     </Form.Item>
 
-                    <Accordion className="mt-4 mb-4">
-                      <AccordionHeader>
+                    <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                      <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                         <b>Team Member Settings</b>
-                      </AccordionHeader>
-                      <AccordionBody>
-                        <Text className="text-xs text-gray-500 mb-4">
+                        <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="px-4 pb-3">
+                        <p className="text-xs text-gray-500 mb-4">
                           Optional defaults applied when members join this team. All fields can be overridden per
                           member.
-                        </Text>
+                        </p>
                         <Form.Item
                           label={
                             <span>
@@ -1133,7 +1137,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           name="team_member_key_duration"
                           tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
                         >
-                          <TextInput placeholder="e.g., 30d" />
+                          <UIInput placeholder="e.g., 30d" />
                         </Form.Item>
                         <Form.Item
                           label="Default TPM Limit"
@@ -1149,8 +1153,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         >
                           <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 100" />
                         </Form.Item>
-                      </AccordionBody>
-                    </Accordion>
+                      </CollapsibleContent>
+                    </Collapsible>
 
                     <Form.Item label="Reset Budget" name="budget_duration">
                       <BudgetDurationDropdown placeholder="Never resets" />
@@ -1448,11 +1452,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     </Form.Item>
 
-                    <Accordion className="mt-4 mb-4">
-                      <AccordionHeader>
+                    <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                      <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                         <b>Search Tool Settings</b>
-                      </AccordionHeader>
-                      <AccordionBody>
+                        <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="px-4 pb-3">
                         <Form.Item
                           label="Allowed Search Tools"
                           name="object_permission_search_tools"
@@ -1465,8 +1470,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             placeholder="Select search tools (optional, empty = all allowed)"
                           />
                         </Form.Item>
-                      </AccordionBody>
-                    </Accordion>
+                      </CollapsibleContent>
+                    </Collapsible>
 
                     <Form.Item label="Organization" name="organization_id">
                       <Select
@@ -1538,22 +1543,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 ) : (
                   <div className="space-y-4">
                     <div>
-                      <Text className="font-medium">Team Name</Text>
+                      <p className="font-medium">Team Name</p>
                       <div>{info.team_alias}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Team ID</Text>
+                      <p className="font-medium">Team ID</p>
                       <div className="font-mono">{info.team_id}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Created At</Text>
+                      <p className="font-medium">Created At</p>
                       <div>{new Date(info.created_at).toLocaleString()}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Models</Text>
+                      <p className="font-medium">Models</p>
                       <div className="flex flex-wrap gap-2 mt-1">
                         {info.models.map((model, index) => (
-                          <Badge key={index} color="red">
+                          <Badge key={index} variant="secondary">
                             {model}
                           </Badge>
                         ))}
@@ -1561,10 +1566,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     </div>
                     {info.default_team_member_models && info.default_team_member_models.length > 0 && (
                       <div>
-                        <Text className="font-medium">Default Member Models</Text>
+                        <p className="font-medium">Default Member Models</p>
                         <div className="flex flex-wrap gap-2 mt-1">
                           {info.default_team_member_models.map((model, index) => (
-                            <Badge key={index} color="blue">
+                            <Badge key={index} variant="secondary">
                               {model}
                             </Badge>
                           ))}
@@ -1572,7 +1577,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </div>
                     )}
                     <div>
-                      <Text className="font-medium">Model Aliases</Text>
+                      <p className="font-medium">Model Aliases</p>
                       {(() => {
                         const aliasEntries = Object.entries(info.litellm_model_table?.model_aliases ?? {});
                         if (aliasEntries.length === 0) {
@@ -1592,7 +1597,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       })()}
                     </div>
                     <div>
-                      <Text className="font-medium">Rate Limits</Text>
+                      <p className="font-medium">Rate Limits</p>
                       <div>TPM: {info.tpm_limit || "Unlimited"}</div>
                       <div>RPM: {info.rpm_limit || "Unlimited"}</div>
                       {(() => {
@@ -1602,7 +1607,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         if (models.length === 0) return null;
                         return (
                           <div className="mt-2">
-                            <Text className="text-gray-500">Per-model limits:</Text>
+                            <p className="text-gray-500">Per-model limits:</p>
                             {models.map((m) => (
                               <div key={m} className="text-xs ml-2">
                                 {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
@@ -1620,7 +1625,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </div>
                     </div>
                     <div>
-                      <Text className="font-medium">Team Budget</Text>
+                      <p className="font-medium">Team Budget</p>
                       <div>
                         Max Budget:{" "}
                         {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : "No Limit"}
@@ -1639,12 +1644,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         )}
                     </div>
                     <div>
-                      <Text className="font-medium">
+                      <p className="font-medium">
                         Team Member Settings{" "}
                         <Tooltip title="These are limits on individual team members">
                           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
-                      </Text>
+                      </p>
                       <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
                       <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
                       <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
@@ -1652,7 +1657,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <div>RPM Limit: {info.team_member_budget_table?.rpm_limit || "No Limit"}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Router Settings</Text>
+                      <p className="font-medium">Router Settings</p>
                       {info.router_settings &&
                       Object.values(info.router_settings).some(
                         (v) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0),
@@ -1660,7 +1665,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         <div className="mt-1 space-y-1">
                           {info.router_settings.routing_strategy && (
                             <div>
-                              Routing Strategy: <Badge color="blue">{info.router_settings.routing_strategy}</Badge>
+                              Routing Strategy:{" "}
+                              <Badge variant="secondary">{info.router_settings.routing_strategy}</Badge>
                             </div>
                           )}
                           {info.router_settings.num_retries != null && (
@@ -1688,12 +1694,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       )}
                     </div>
                     <div>
-                      <Text className="font-medium">Organization ID</Text>
+                      <p className="font-medium">Organization ID</p>
                       <div>{info.organization_id}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Status</Text>
-                      <Badge color={info.blocked ? "red" : "green"}>{info.blocked ? "Blocked" : "Active"}</Badge>
+                      <p className="font-medium">Status</p>
+                      <Badge variant={info.blocked ? "destructive" : "secondary"}>
+                        {info.blocked ? "Blocked" : "Active"}
+                      </Badge>
                     </div>
 
                     <ObjectPermissionsView
@@ -1725,7 +1733,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     {info.metadata?.secret_manager_settings && (
                       <div className="pt-4 border-t border-gray-200">
-                        <Text className="font-medium">Secret Manager Settings</Text>
+                        <p className="font-medium">Secret Manager Settings</p>
                         <pre className="mt-2 bg-gray-50 p-3 rounded-sm text-xs overflow-x-auto">
                           {JSON.stringify(info.metadata.secret_manager_settings, null, 2)}
                         </pre>

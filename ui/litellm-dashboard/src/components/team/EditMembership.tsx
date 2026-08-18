@@ -1,4 +1,4 @@
-import { Text, TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { Button as AntButton, Form, Modal, Select } from "antd";
 import React, { useEffect, useState } from "react";
 import NumericalInput from "../shared/numerical_input";
@@ -124,7 +124,7 @@ const MemberModal = <T extends BaseMember>({
   }) => {
     switch (field.type) {
       case "input":
-        return <TextInput placeholder={field.placeholder} />;
+        return <Input placeholder={field.placeholder} />;
       case "numerical":
         return (
           <NumericalInput
@@ -176,19 +176,19 @@ const MemberModal = <T extends BaseMember>({
             className="mb-4"
             rules={[{ type: "email", message: "Please enter a valid email!" }]}
           >
-            <TextInput placeholder="user@example.com" />
+            <Input placeholder="user@example.com" />
           </Form.Item>
         )}
 
         {config.showEmail && config.showUserId && (
           <div className="text-center mb-4">
-            <Text>OR</Text>
+            <p className="text-sm">OR</p>
           </div>
         )}
 
         {config.showUserId && (
           <Form.Item label="User ID" name="user_id" className="mb-4">
-            <TextInput placeholder="user_123" />
+            <Input placeholder="user_123" />
           </Form.Item>
         )}
 

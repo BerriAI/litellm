@@ -1850,7 +1850,7 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "prefer-const": {
       "count": 2
@@ -2819,12 +2819,12 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/team/LoggingSettings.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/team/TeamInfo.tsx": {
@@ -2835,7 +2835,7 @@
       "count": 3
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
