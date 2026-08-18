@@ -80,24 +80,70 @@ async def test_usage_units_rolled_up_by_guardrail_team_key_and_date():
     }
 
 
+def _fake_sleep() -> tuple[AsyncMock, list[float]]:
+    delays: list[float] = []
+    sleep = AsyncMock(side_effect=lambda delay: delays.append(delay))
+    return sleep, delays
+
+
 @pytest.mark.asyncio
 async def test_one_failing_upsert_does_not_drop_remaining_writes():
     """
     A DB error on one daily-metrics or usage-unit upsert must not cancel the
     remaining upserts in the flushed batch, or the usage endpoints would
-    permanently under-report billable counters (batches are never retried).
+    permanently under-report billable counters.
     """
     prisma = _prisma()
     prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = RuntimeError("db down")
-    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [RuntimeError("db down"), None]
+    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [RuntimeError("db down"), None, None]
+    sleep, _ = _fake_sleep()
     logs = [
         _payload("r1", usage={"topicPolicyUnits": 1}),
         _payload("r2", team_id=None, api_key="hashed-key-2", usage={"topicPolicyUnits": 1}),
     ]
 
-    await process_spend_logs_guardrail_usage(prisma, logs)
+    await process_spend_logs_guardrail_usage(prisma, logs, sleep=sleep)
 
-    assert prisma.db.litellm_dailyguardrailusageunits.upsert.call_count == 2
+    assert _units_upserts(prisma) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
+        ("bedrock-guard", "2026-08-17", "", "hashed-key-2", "topicPolicyUnits"): 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_transient_upsert_failure_is_retried_with_backoff_for_failed_rows_only():
+    """
+    A transient DB error must not permanently drop billed units from the
+    aggregates: only the rows that failed are re-sent, after exponential
+    backoff, and the batch ends once every row has landed.
+    """
+    prisma = _prisma()
+    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [RuntimeError("blip"), None, None]
+    sleep, delays = _fake_sleep()
+    logs = [
+        _payload("r1", usage={"topicPolicyUnits": 1}),
+        _payload("r2", team_id=None, api_key="hashed-key-2", usage={"topicPolicyUnits": 1}),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs, sleep=sleep)
+
+    calls = prisma.db.litellm_dailyguardrailusageunits.upsert.call_args_list
+    assert len(calls) == 3
+    assert calls[2].kwargs["where"] == calls[0].kwargs["where"]
+    assert delays == [1]
+
+
+@pytest.mark.asyncio
+async def test_persistent_upsert_failure_stops_after_three_retries():
+    prisma = _prisma()
+    prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = RuntimeError("db down")
+    sleep, delays = _fake_sleep()
+
+    await process_spend_logs_guardrail_usage(prisma, [_payload("r1", usage={"topicPolicyUnits": 1})], sleep=sleep)
+
+    assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_count == 4
+    assert delays == [1, 2, 4]
+    assert prisma.db.litellm_dailyguardrailusageunits.upsert.call_count == 1
 
 
 @pytest.mark.asyncio

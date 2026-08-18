@@ -57,7 +57,7 @@
     "limit": 5681
   },
   "reportMissingTypeArgument": {
-    "limit": 15609
+    "limit": 15608
   },
   "reportMissingTypeStubs": {
     "limit": 40
