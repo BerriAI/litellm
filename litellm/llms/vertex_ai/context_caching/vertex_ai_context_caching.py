@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import datetime
 from typing import Final, Literal
@@ -43,12 +44,19 @@ MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
 # Entries are only trusted until the cache's own `expireTime`, so an expired
 # cache is re-resolved rather than passed to the model. `_RESOLVED_CACHE_MAX_ENTRIES`
 # bounds the dict for long-lived proxies with many distinct prefixes.
-_resolved_cache_names: Final[dict[str, tuple[str, float]]] = {}  # mutable-ok: a process-local memo that is inserted into and evicted from at runtime
+_memo: Final[dict[str, tuple[str, float]]] = {}  # mutable-ok: runtime memo
 _RESOLVED_CACHE_MAX_ENTRIES: Final = 1000
 
 # Re-resolve slightly before the stated expiry, so a cache that lapses between
 # our check and Google serving the request is not handed to generateContent.
 _EXPIRY_SAFETY_MARGIN_SECONDS: Final = 30.0
+
+# RFC 3339 with an optional fractional part and an optional UTC offset.
+_EXPIRE_TIME_PATTERN: Final = re.compile(
+    r"^(?P<head>\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2})"
+    r"(?:\.(?P<fraction>\d+))?"
+    r"(?P<offset>[+-]\d{2}:\d{2})?$"
+)
 
 
 def _parse_expire_time(expire_time: str | None) -> float | None:
@@ -59,22 +67,17 @@ def _parse_expire_time(expire_time: str | None) -> float | None:
     """
     if not expire_time:
         return None
+    # `fromisoformat` rejects more than 6 fractional-second digits and Google
+    # emits up to 9, so truncate the fraction before parsing.
+    match: Final = _EXPIRE_TIME_PATTERN.match(expire_time.replace("Z", "+00:00"))
+    if match is None:
+        verbose_logger.debug("Vertex context caching: could not parse expireTime=%s", expire_time)
+        return None
+    head, fraction, offset = match.group("head"), match.group("fraction"), match.group("offset")
+    normalized: Final = f"{head}.{fraction[:6]}{offset}" if fraction else f"{head}{offset}"
     try:
-        normalized = expire_time.replace("Z", "+00:00")  # rebind-ok: rewritten below when the timestamp carries sub-second digits
-        # Python's fromisoformat rejects more than 6 fractional-second digits,
-        # and Google emits up to 9.
-        if "." in normalized:
-            head, _, tail = normalized.partition(".")
-            digits = ""  # rebind-ok: accumulated one character at a time
-            for ch in tail:
-                if ch.isdigit():
-                    digits += ch
-                else:
-                    break
-            offset: Final = tail[len(digits) :]
-            normalized = f"{head}.{digits[:6]}{offset}"  # rebind-ok: see above
         return datetime.fromisoformat(normalized).timestamp()
-    except (ValueError, TypeError, OverflowError, OSError):
+    except (ValueError, OverflowError, OSError):
         verbose_logger.debug("Vertex context caching: could not parse expireTime=%s", expire_time)
         return None
 
@@ -88,19 +91,19 @@ def _remember_cache_name(cache_key: str, cache_name: str | None, expire_time: st
         # No usable expiry: prefer today's behaviour (re-resolve) over serving
         # a name we cannot age out.
         return
-    if len(_resolved_cache_names) >= _RESOLVED_CACHE_MAX_ENTRIES:
-        _resolved_cache_names.clear()
-    _resolved_cache_names[cache_key] = (cache_name, expires_at)
+    if len(_memo) >= _RESOLVED_CACHE_MAX_ENTRIES:
+        _memo.clear()
+    _memo[cache_key] = (cache_name, expires_at)
 
 
 def _get_remembered_cache_name(cache_key: str) -> str | None:
     """Return a previously resolved cache name if it has not expired."""
-    entry: Final = _resolved_cache_names.get(cache_key)
+    entry: Final = _memo.get(cache_key)
     if entry is None:
         return None
     cache_name, expires_at = entry
     if time.time() + _EXPIRY_SAFETY_MARGIN_SECONDS >= expires_at:
-        _resolved_cache_names.pop(cache_key, None)
+        _memo.pop(cache_key, None)
         return None
     return cache_name
 
@@ -249,7 +252,7 @@ class ContextCachingEndpoints(VertexBase):
             for cached_item in all_cached_items["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
-                    cache_name = cached_item.get("name")  # rebind-ok: assigned once per pagination iteration
+                    cache_name = cached_item.get("name")  # rebind-ok: per page
                     _remember_cache_name(cache_key, cache_name, cached_item.get("expireTime"))
                     return cache_name
 
@@ -347,7 +350,7 @@ class ContextCachingEndpoints(VertexBase):
             for cached_item in all_cached_items["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
-                    cache_name = cached_item.get("name")  # rebind-ok: assigned once per pagination iteration
+                    cache_name = cached_item.get("name")  # rebind-ok: per page
                     _remember_cache_name(cache_key, cache_name, cached_item.get("expireTime"))
                     return cache_name
 
