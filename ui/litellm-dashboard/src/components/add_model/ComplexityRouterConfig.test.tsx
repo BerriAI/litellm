@@ -785,3 +785,61 @@ describe("ComplexityRouterConfig default model", () => {
     expect(screen.getByRole("radio", { name: /Route to the default model \(claude-3-opus\)/ })).toBeInTheDocument();
   });
 });
+
+describe("plan-mode override", () => {
+  const openPanel = () => fireEvent.click(screen.getByText("Advanced: Plan-Mode Override"));
+  const switchName = "Route plan-mode requests to a minimum tier";
+
+  it("toggling on floors at the highest tier that has models", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    openPanel();
+    fireEvent.click(await screen.findByRole("switch", { name: switchName }));
+    expect(onChange.mock.calls.at(-1)?.[0].plan_mode_min_tier).toBe("REASONING");
+  });
+
+  it("toggling off drops the key entirely instead of storing an empty value", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, plan_mode_min_tier: "COMPLEX" }}
+        onChange={onChange}
+      />,
+    );
+    openPanel();
+    const control = await screen.findByRole("switch", { name: switchName });
+    expect(control).toBeChecked();
+    fireEvent.click(control);
+    const updated = onChange.mock.calls.at(-1)?.[0];
+    expect(updated.plan_mode_min_tier).toBeUndefined();
+  });
+
+  it("only offers tiers that have models, since the backend rejects a floor at an empty tier", async () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{
+          ...defaultValue,
+          tiers: { ...defaultValue.tiers, REASONING: [] },
+          plan_mode_min_tier: "COMPLEX",
+        }}
+      />,
+    );
+    openPanel();
+    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Plan-mode minimum tier" }));
+    expect(await screen.findByTitle("Medium")).toBeInTheDocument();
+    expect(screen.queryByTitle("Reasoning")).not.toBeInTheDocument();
+  });
+
+  it("disables the toggle until some tier has models", async () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] } }}
+      />,
+    );
+    openPanel();
+    expect(await screen.findByRole("switch", { name: switchName })).toBeDisabled();
+  });
+});

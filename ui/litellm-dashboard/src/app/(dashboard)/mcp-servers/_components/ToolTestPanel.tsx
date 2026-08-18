@@ -1,10 +1,13 @@
 import React from "react";
-import { Button, TextInput } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { MCPTool, InputSchema, InputSchemaProperty } from "@/components/mcp_tools/types";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { Form, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { X } from "lucide-react";
+import { toast } from "@/lib/toast";
 
 const isPlainObject = (value: unknown): value is Record<string, any> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -279,18 +282,18 @@ export function ToolTestPanel({
   const handleCopyResult = async () => {
     const success = await copyToClipboard(JSON.stringify(result, null, 2));
     if (success) {
-      NotificationsManager.success("Result copied to clipboard");
+      toast.success("Result copied to clipboard");
     } else {
-      NotificationsManager.fromBackend("Failed to copy result");
+      toast.fromError("Failed to copy result");
     }
   };
 
   const handleCopyToolName = async () => {
     const success = await copyToClipboard(tool.name);
     if (success) {
-      NotificationsManager.success("Tool name copied to clipboard");
+      toast.success("Tool name copied to clipboard");
     } else {
-      NotificationsManager.fromBackend("Failed to copy tool name");
+      toast.fromError("Failed to copy tool name");
     }
   };
 
@@ -335,10 +338,14 @@ export function ToolTestPanel({
             <p className="text-xs text-gray-500">Provider: {tool.mcp_info.server_name}</p>
           </div>
         </div>
-        <Button onClick={onClose} variant="light" size="sm" className="text-gray-500 hover:text-gray-700">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
+        <Button
+          onClick={onClose}
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close"
+          className="text-gray-500 hover:text-gray-700"
+        >
+          <X className="size-4" />
         </Button>
       </div>
 
@@ -369,7 +376,7 @@ export function ToolTestPanel({
                     rules={[{ required: true, message: "Please enter input for this tool" }]}
                     className="mb-3"
                   >
-                    <TextInput
+                    <Input
                       placeholder="Enter input for this tool"
                       className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                     />
@@ -466,7 +473,7 @@ export function ToolTestPanel({
                         )}
 
                         {prop.type === "string" && !prop.enum && (
-                          <TextInput
+                          <Input
                             placeholder={prop.description || `Enter ${key}`}
                             defaultValue={(initialValue as string) ?? ""}
                             className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
@@ -525,10 +532,10 @@ export function ToolTestPanel({
                   type="button"
                   onClick={() => form.submit()}
                   disabled={isLoading}
-                  variant="primary"
+                  aria-busy={isLoading}
                   className="w-full"
-                  loading={isLoading}
                 >
+                  {isLoading && <UiLoadingSpinner className="size-4" />}
                   {isLoading ? "Calling Tool..." : result || error ? "Call Again" : "Call Tool"}
                 </Button>
               </div>

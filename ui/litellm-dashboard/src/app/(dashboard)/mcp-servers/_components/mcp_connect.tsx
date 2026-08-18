@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { Card, Typography, Space, Alert, Button, Switch, Form } from "antd";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, Title as TremorTitle, Text as TremorText } from "@tremor/react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
@@ -458,57 +458,55 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     <div>
       <Space direction="vertical" size="large" className="w-full">
         <div>
-          <TremorTitle className="text-3xl font-bold text-gray-900 mb-3">Connect to your MCP client</TremorTitle>
-          <TremorText className="text-lg text-gray-600">
+          <h2 className="text-3xl font-bold text-gray-900 mb-3">Connect to your MCP client</h2>
+          <p className="text-lg text-gray-600">
             Use tools directly from any MCP client with LiteLLM MCP. Enable your AI assistant to perform real-world
             tasks through a simple, secure connection.
-          </TremorText>
+          </p>
         </div>
 
-        <TabGroup className="w-full">
-          <TabList className="flex justify-start mt-8 mb-6">
-            <div className="flex bg-gray-100 p-1 rounded-lg">
-              <Tab className="px-6 py-3 rounded-md transition-all duration-200">
+        <Tabs defaultValue="openai" className="w-full">
+          <TabsList variant="line" className="mt-8 mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+            <div className="flex rounded-lg bg-gray-100 p-1">
+              <TabsTrigger value="openai" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Code size={18} />
                   OpenAI API
                 </span>
-              </Tab>
-              <Tab className="px-6 py-3 rounded-md transition-all duration-200">
+              </TabsTrigger>
+              <TabsTrigger value="litellm" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Zap size={18} />
                   LiteLLM Proxy
                 </span>
-              </Tab>
-              <Tab className="px-6 py-3 rounded-md transition-all duration-200">
+              </TabsTrigger>
+              <TabsTrigger value="cursor" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Terminal size={18} />
                   Cursor
                 </span>
-              </Tab>
-              <Tab className="px-6 py-3 rounded-md transition-all duration-200">
+              </TabsTrigger>
+              <TabsTrigger value="http" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Globe size={18} />
                   Streamable HTTP
                 </span>
-              </Tab>
+              </TabsTrigger>
             </div>
-          </TabList>
-          <TabPanels>
-            <TabPanel className="mt-6">
-              <OpenAITab />
-            </TabPanel>
-            <TabPanel className="mt-6">
-              <LiteLLMProxyTab />
-            </TabPanel>
-            <TabPanel className="mt-6">
-              <CursorTab />
-            </TabPanel>
-            <TabPanel className="mt-6">
-              <StreamableHTTPTab />
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+          </TabsList>
+          <TabsContent value="openai" keepMounted className="mt-6">
+            <OpenAITab />
+          </TabsContent>
+          <TabsContent value="litellm" keepMounted className="mt-6">
+            <LiteLLMProxyTab />
+          </TabsContent>
+          <TabsContent value="cursor" keepMounted className="mt-6">
+            <CursorTab />
+          </TabsContent>
+          <TabsContent value="http" keepMounted className="mt-6">
+            <StreamableHTTPTab />
+          </TabsContent>
+        </Tabs>
       </Space>
     </div>
   );

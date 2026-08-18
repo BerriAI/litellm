@@ -657,6 +657,7 @@ from litellm.types.proxy.model_deprecation import (
 )
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
+    ClassifierPlugin,
     DeploymentTypedDict,
     RouterGeneralSettings,
     RoutingPlugin,
@@ -4034,17 +4035,70 @@ def resolve_complexity_router_plugins(
 ) -> None:
     """
     Resolves `complexity_router_config["plugins"]` dotted-path strings to live
-    instances in place, via `resolve_routing_plugins`.
+    instances in place, via `resolve_routing_plugins`, and
+    `complexity_router_config["classifier_plugin"]` via `resolve_classifier_plugin`.
     """
     plugin_paths: Final = complexity_router_config.get("plugins")
-    if not isinstance(plugin_paths, list):
-        return
+    if isinstance(plugin_paths, list):
+        complexity_router_config["plugins"] = resolve_routing_plugins(
+            plugin_paths=plugin_paths,
+            config_file_path=config_file_path,
+            source_label=f"complexity_router_config.plugins on model {model_name!r}",
+        )
 
-    complexity_router_config["plugins"] = resolve_routing_plugins(
-        plugin_paths=plugin_paths,
-        config_file_path=config_file_path,
-        source_label=f"complexity_router_config.plugins on model {model_name!r}",
-    )
+    classifier_plugin_path: Final = complexity_router_config.get("classifier_plugin")
+    if isinstance(classifier_plugin_path, str):
+        resolved_classifier: Final = resolve_classifier_plugin(
+            plugin_path=classifier_plugin_path,
+            config_file_path=config_file_path,
+            source_label=f"complexity_router_config.classifier_plugin on model {model_name!r}",
+        )
+        complexity_router_config["classifier_plugin"] = resolved_classifier  # rebind-ok: out-param, resolved in place
+
+
+def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
+    """
+    Stamps `model_info.id` from the raw litellm_params before plugin resolution swaps
+    dotted-path strings for live instances. `_delete_deployment` re-reads the raw config
+    and re-hashes these params to decide which ids the config wants served; an id the
+    Router derived from the resolved params would never match that hash, so the reconcile
+    would evict every plugin-bearing deployment one sync after startup.
+    """
+    litellm_params: Final = model.get("litellm_params")
+    if not isinstance(litellm_params, dict) or not isinstance(litellm_params.get("complexity_router_config"), dict):
+        return
+    model_info = model.get("model_info")
+    if not isinstance(model_info, dict):
+        model_info = {}  # mutable-ok: fresh model_info stamped onto the raw yaml model dict
+        model["model_info"] = model_info  # rebind-ok: out-param, stamped in place
+    if model_info.get("id") is None:
+        model_info["id"] = litellm.Router.generate_model_id(
+            model_group=model.get("model_name", ""),
+            litellm_params=litellm_params,
+        )
+
+
+def resolve_classifier_plugin(
+    plugin_path: str,
+    config_file_path: str | None,
+    source_label: str,
+) -> ClassifierPlugin:
+    """
+    Resolves a classifier-plugin dotted path to a live `ClassifierPlugin` instance, with the
+    same load-time interface check `resolve_routing_plugins` applies to routing plugins: a
+    sync `def classify` passes the runtime_checkable isinstance and would only fail on the
+    first classified request, so reject it here where the error names the config key.
+    """
+    resolved: Final = get_instance_fn(value=plugin_path, config_file_path=config_file_path)
+    if not isinstance(resolved, ClassifierPlugin) or not inspect.iscoroutinefunction(
+        getattr(resolved, "classify", None)
+    ):
+        raise ValueError(
+            f"{source_label} entry {plugin_path!r} resolved to {resolved!r}, which does not "
+            "implement the ClassifierPlugin interface (an async `classify(context)` method). Fix "
+            "the referenced module before starting the proxy."
+        )
+    return resolved
 
 
 def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
@@ -5266,6 +5320,7 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
+                pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
                     resolve_complexity_router_plugins(
@@ -5663,7 +5718,7 @@ class ProxyConfig:
                 model_id = model.get("model_info", {}).get("id", None)
                 if model_id is None:
                     ## else - generate stable id's ##
-                    model_id = llm_router._generate_model_id(
+                    model_id = llm_router.generate_model_id(
                         model_group=model["model_name"],
                         litellm_params=model["litellm_params"],
                     )

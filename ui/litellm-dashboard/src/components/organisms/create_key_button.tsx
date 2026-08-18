@@ -42,7 +42,7 @@ import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   getAgentsList,
   getGuardrailsList,
@@ -371,14 +371,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         );
       }
 
-      NotificationsManager.info("Making API Call");
+      toast.info("Making API Call");
       setIsModalVisible(true);
 
       if (keyOwner === "you") {
         formValues.user_id = userID;
       } else if (keyOwner === "agent") {
         if (!selectedAgentId) {
-          NotificationsManager.fromBackend("Please select an agent");
+          toast.fromError("Please select an agent");
           return;
         }
         formValues.agent_id = selectedAgentId;
@@ -562,7 +562,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
 
       setApiKey(response["key"]);
-      NotificationsManager.success("Virtual Key Created");
+      toast.success("Virtual Key Created");
       form.resetFields();
       setBudgetLimits([]);
       setTagRateLimits([]);
@@ -571,7 +571,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       const simplifiedError = simplifyKeyGenerateError(error);
-      NotificationsManager.fromBackend(simplifiedError);
+      toast.fromError(simplifiedError);
     }
   };
 
@@ -665,7 +665,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setUserOptions(options);
     } catch (error) {
       console.error("Error fetching users:", error);
-      NotificationsManager.fromBackend("Failed to search for users");
+      toast.fromError("Failed to search for users");
     } finally {
       setUserSearchLoading(false);
     }
@@ -1128,14 +1128,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
-                  <RateLimitTypeFormItem
-                    type="tpm"
-                    name="tpm_limit_type"
-                    className="mt-4"
-                    initialValue={null}
-                    form={form}
-                    showDetailedDescriptions={true}
-                  />
+                  <Form.Item name="tpm_limit_type" initialValue={null} noStyle>
+                    <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" className="mt-4" showDetailedDescriptions />
+                  </Form.Item>
                   <Form.Item
                     className="mt-4"
                     label={
@@ -1160,14 +1155,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
-                  <RateLimitTypeFormItem
-                    type="rpm"
-                    name="rpm_limit_type"
-                    className="mt-4"
-                    initialValue={null}
-                    form={form}
-                    showDetailedDescriptions={true}
-                  />
+                  <Form.Item name="rpm_limit_type" initialValue={null} noStyle>
+                    <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" className="mt-4" showDetailedDescriptions />
+                  </Form.Item>
                   <Form.Item
                     className="mt-4"
                     label={
@@ -1633,14 +1623,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     </AccordionHeader>
                     <AccordionBody>
                       <div className="mt-4">
-                        <KeyLifecycleSettings
-                          form={form}
-                          autoRotationEnabled={autoRotationEnabled}
-                          onAutoRotationChange={setAutoRotationEnabled}
-                          rotationInterval={rotationInterval}
-                          onRotationIntervalChange={setRotationInterval}
-                          isCreateMode={true}
-                        />
+                        <Form.Item name="duration" initialValue="" noStyle>
+                          <KeyLifecycleSettings
+                            autoRotationEnabled={autoRotationEnabled}
+                            onAutoRotationChange={setAutoRotationEnabled}
+                            rotationInterval={rotationInterval}
+                            onRotationIntervalChange={setRotationInterval}
+                            isCreateMode={true}
+                          />
+                        </Form.Item>
                       </div>
                     </AccordionBody>
                   </Accordion>

@@ -45,7 +45,7 @@ import CacheControlSettings from "./add_model/cache_control_settings";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   CredentialItem,
   credentialCreateCall,
@@ -375,9 +375,9 @@ export default function ModelInfoView({
         custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
       },
     };
-    NotificationsManager.info("Storing credential..");
+    toast.info("Storing credential..");
     let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
-    NotificationsManager.success("Credential stored successfully");
+    toast.success("Credential stored successfully");
   };
 
   const handleModelUpdate = async (values: any) => {
@@ -391,7 +391,7 @@ export default function ModelInfoView({
         parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
         delete parsedExtraParams.litellm_credential_name;
       } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in LiteLLM Params");
+        toast.fromError("Invalid JSON in LiteLLM Params");
         setIsSaving(false);
         return;
       }
@@ -503,7 +503,7 @@ export default function ModelInfoView({
         }
         updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in Model Info");
+        toast.fromError("Invalid JSON in Model Info");
         return;
       }
 
@@ -535,12 +535,12 @@ export default function ModelInfoView({
         onModelUpdate(updatedModelData);
       }
 
-      NotificationsManager.success("Model settings updated successfully");
+      toast.success("Model settings updated successfully");
       setIsDirty(false);
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      NotificationsManager.fromBackend("Failed to update model settings");
+      toast.fromError("Failed to update model settings");
     } finally {
       setIsSaving(false);
     }
@@ -577,7 +577,7 @@ export default function ModelInfoView({
     if (isComplexityRouterModel) {
       const targets = buildComplexityRouterTestTargets(localModelData ?? modelData);
       if (targets.length === 0) {
-        NotificationsManager.warning("No complexity tiers are configured yet, so there is nothing to test.");
+        toast.warning("No complexity tiers are configured yet, so there is nothing to test.");
         return;
       }
       setAutoRouterTestTargets(targets);
@@ -586,7 +586,7 @@ export default function ModelInfoView({
       return;
     }
     try {
-      NotificationsManager.info("Testing connection...");
+      toast.info("Testing connection...");
       const response = await testConnectionRequest(
         accessToken,
         {
@@ -607,15 +607,15 @@ export default function ModelInfoView({
       );
 
       if (response.status === "success") {
-        NotificationsManager.success("Connection test successful!");
+        toast.success("Connection test successful!");
       } else {
         throw new Error(response?.result?.error || response?.message || "Unknown error");
       }
     } catch (error) {
       if (error instanceof Error) {
-        NotificationsManager.error("Error testing connection: " + truncateString(error.message, 100));
+        toast.error("Error testing connection: " + truncateString(error.message, 100));
       } else {
-        NotificationsManager.error("Error testing connection: " + String(error));
+        toast.error("Error testing connection: " + String(error));
       }
     }
   };
@@ -625,7 +625,7 @@ export default function ModelInfoView({
       setDeleteLoading(true);
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
-      NotificationsManager.success("Model deleted successfully");
+      toast.success("Model deleted successfully");
 
       if (onModelUpdate) {
         onModelUpdate({
@@ -637,7 +637,7 @@ export default function ModelInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);
-      NotificationsManager.fromBackend("Failed to delete model");
+      toast.fromError("Failed to delete model");
     } finally {
       setDeleteLoading(false);
       setIsDeleteModalOpen(false);

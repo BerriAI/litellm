@@ -3972,6 +3972,8 @@ def get_optional_params(
     thinking: AnthropicThinkingParam | None = None,
     web_search_options: OpenAIWebSearchOptions | None = None,
     safety_identifier: str | None = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
     base_model: str | None = None,
     **kwargs,
 ):

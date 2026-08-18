@@ -1,7 +1,8 @@
 import React from "react";
-import { Form, Input, InputNumber, Select, Tooltip } from "antd";
+import { Form, Input as AntdInput, InputNumber, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TextInput } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { OAUTH_FLOW } from "@/components/mcp_tools/types";
 import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
 
@@ -44,7 +45,7 @@ const UpstreamResourceField: React.FC = () => (
     label={<FieldLabel label="Resource Indicator (optional)" tooltip={UPSTREAM_RESOURCE_TOOLTIP} />}
     name={["credentials", "upstream_resource"]}
   >
-    <TextInput placeholder="auto, or https://mcp.example.com/mcp" className={fieldClassName} />
+    <Input placeholder="auto, or https://mcp.example.com/mcp" className={fieldClassName} />
   </Form.Item>
 );
 
@@ -93,11 +94,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name={["credentials", "client_id"]}
             rules={requiredWhenCreating("Client ID is required for M2M OAuth")}
           >
-            <TextInput
-              type="password"
-              placeholder={`Enter OAuth client ID${placeholderSuffix}`}
-              className={fieldClassName}
-            />
+            <AntdInput.Password placeholder={`Enter OAuth client ID${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={
@@ -106,8 +103,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name={["credentials", "client_secret"]}
             rules={requiredWhenCreating("Client Secret is required for M2M OAuth")}
           >
-            <TextInput
-              type="password"
+            <AntdInput.Password
               placeholder={`Enter OAuth client secret${placeholderSuffix}`}
               className={fieldClassName}
             />
@@ -117,7 +113,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name="token_url"
             rules={requiredWhenCreating("Token URL is required for M2M OAuth")}
           >
-            <TextInput placeholder="https://auth.example.com/oauth/token" className={fieldClassName} />
+            <Input placeholder="https://auth.example.com/oauth/token" className={fieldClassName} />
           </Form.Item>
           <TokenEndpointAuthMethodField isEditing={isEditing} />
           <Form.Item
@@ -157,7 +153,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name={["credentials", "client_id"]}
           >
-            <TextInput type="password" placeholder={`Enter client ID${placeholderSuffix}`} className={fieldClassName} />
+            <AntdInput.Password placeholder={`Enter client ID${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={
@@ -168,11 +164,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name={["credentials", "client_secret"]}
           >
-            <TextInput
-              type="password"
-              placeholder={`Enter client secret${placeholderSuffix}`}
-              className={fieldClassName}
-            />
+            <AntdInput.Password placeholder={`Enter client secret${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={
@@ -195,7 +187,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name="issuer"
           >
-            <TextInput placeholder="https://issuer.example.com" className={fieldClassName} />
+            <Input placeholder="https://issuer.example.com" className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={
@@ -206,13 +198,13 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name="authorization_url"
           >
-            <TextInput placeholder="https://example.com/oauth/authorize" className={fieldClassName} />
+            <Input placeholder="https://example.com/oauth/authorize" className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={<FieldLabel label="Token URL (optional)" tooltip="Optional override for the token endpoint." />}
             name="token_url"
           >
-            <TextInput placeholder="https://example.com/oauth/token" className={fieldClassName} />
+            <Input placeholder="https://example.com/oauth/token" className={fieldClassName} />
           </Form.Item>
           <TokenEndpointAuthMethodField isEditing={isEditing} />
           <Form.Item
@@ -224,7 +216,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name="registration_url"
           >
-            <TextInput placeholder="https://example.com/oauth/register" className={fieldClassName} />
+            <Input placeholder="https://example.com/oauth/register" className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={
@@ -248,7 +240,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
               },
             ]}
           >
-            <Input.TextArea
+            <AntdInput.TextArea
               placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
               rows={4}
               className="font-mono text-sm rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"

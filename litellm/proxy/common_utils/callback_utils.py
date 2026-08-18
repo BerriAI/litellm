@@ -39,10 +39,10 @@ _EXTRA_SENSITIVE_CALLBACK_KEYS: Final = {"gcs_path_service_account"}
 # already-encrypted input cheaply (no decrypt-attempt round trip) and
 # avoid double-encrypting if `LITELLM_SALT_KEY` is rotated between writes.
 _CALLBACK_VAR_ENCRYPTED_PREFIX: Final = "litellm_enc::"
-# Metadata slots that hold operator-configured callback setup (and therefore
-# integration credentials). Resolved from UserAPIKeyAuth during pre-call setup,
-# never read back off the copies stamped into request metadata.
-_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings"})
+# Metadata slots that hold operator-configured callback and secret-manager setup
+# (and therefore integration credentials). Resolved from UserAPIKeyAuth during
+# pre-call setup, never read back off the copies stamped into request metadata.
+_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings", "secret_manager_settings"})
 
 blue_color_code: Final = "\033[94m"
 reset_color_code: Final = "\033[0m"
