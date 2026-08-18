@@ -5890,7 +5890,9 @@ class TestMCPDcrBridgeDelegateAdmission:
 
     async def test_expired_envelope_fails_closed_401(self):
         """An envelope whose exp is in the past must fail closed with a 401, never fall through to
-        anonymous admission."""
+        anonymous admission. The 401 must carry a WWW-Authenticate challenge (RFC 9728 resource
+        metadata + RFC 6750 invalid_token), matching the gateway session arm's equivalent failure,
+        so a DCR client can discover where to re-authorize instead of seeing a bare 401."""
         expired = self._mint_bridge_envelope(
             expires_in=60,
             minted_at=datetime.now(timezone.utc) - timedelta(hours=2),
@@ -5899,7 +5901,10 @@ class TestMCPDcrBridgeDelegateAdmission:
             "type": "http",
             "method": "POST",
             "path": "/mcp/bridge_delegate_server",
-            "headers": [(b"authorization", f"Bearer {expired}".encode("latin-1"))],
+            "headers": [
+                (b"host", b"testserver"),
+                (b"authorization", f"Bearer {expired}".encode("latin-1")),
+            ],
         }
 
         with (
@@ -5916,6 +5921,13 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 401
         mock_auth.assert_not_called()
+        challenge = (exc_info.value.headers or {}).get("www-authenticate")
+        assert challenge is not None
+        assert 'error="invalid_token"' in challenge
+        assert (
+            'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/bridge_delegate_server"'
+            in challenge
+        )
 
     async def test_envelope_minted_for_a_different_server_fails_closed_401(self):
         """An envelope sealed for another server_id must be rejected when presented to this server,

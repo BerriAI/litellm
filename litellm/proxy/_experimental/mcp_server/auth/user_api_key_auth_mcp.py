@@ -1,6 +1,7 @@
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import HTTPException
@@ -13,6 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
+    get_passthrough_www_authenticate,
     get_request_base_url,
     well_known_root_suffix,
 )
@@ -769,7 +771,10 @@ class MCPRequestHandler:
         mutating the input. Fails closed with a 401 on an invalid or expired envelope, or
         when the referenced key is missing, blocked, or expired, its owner is
         SCIM-deactivated, or the centralized policy gate rejects it (blocked team or
-        project, org or budget limits).
+        project, org or budget limits). The 401 carries the server's RFC 9728
+        ``WWW-Authenticate`` challenge with RFC 6750 ``error="invalid_token"``, matching
+        :meth:`_admit_gateway_session`'s ``SessionBearerInvalid`` arm, so a DCR client
+        re-authorizes instead of surfacing an opaque failure.
 
         The sealed token is keyed alias-first, matching the order egress resolves
         (``lookup_mcp_server_auth_in_headers`` tries ``alias`` before ``server_name``). Keying
@@ -797,7 +802,20 @@ class MCPRequestHandler:
                 new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
-                raise HTTPException(status_code=401, detail="Invalid or expired credential")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid or expired credential",
+                    headers=MappingProxyType(
+                        {
+                            "www-authenticate": get_passthrough_www_authenticate(
+                                scope=request.scope,
+                                # _single_dcr_bridge_delegate_target already requires one of these.
+                                server_name=server.alias or server.server_name or "",
+                                invalid_token=True,
+                            )
+                        }
+                    ),
+                )
             case _:
                 assert_never(result)
 
