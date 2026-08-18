@@ -148,6 +148,12 @@ class ModelInfo(MirroredPricingParams):
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     tier: Literal["free", "paid"] | None = None
 
+    # Require an exact provider token count for this model. When the provider's
+    # token counting API is unavailable or does not support the model, fail the
+    # request instead of silently returning a local tiktoken estimate.
+    # This is the per-model form of the proxy-wide `litellm.disable_token_counter`.
+    strict_token_count: bool | None = None
+
     """
     Team Model Specific Fields
     """

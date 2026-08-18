@@ -11695,8 +11695,13 @@ async def _try_provider_token_count(
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
+    strict_token_count: bool = False,
 ) -> Optional["TokenCountResponse"]:
-    """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
+    """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting.
+
+    When `strict_token_count` is True, a failed provider count raises instead of
+    falling through to a local estimate.
+    """
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
         return None
     try:
@@ -11719,7 +11724,7 @@ async def _try_provider_token_count(
             code=status_code,
         )
     if result is not None and result.error is True:
-        if litellm.disable_token_counter is True:
+        if strict_token_count is True:
             raise ProxyException(
                 message=result.error_message or "Token counting failed",
                 type="token_counting_error",
@@ -11792,6 +11797,19 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
 
+    #########################################################
+    # Strict token counting.
+    #
+    # `litellm.disable_token_counter` turns a failed provider count into an
+    # error instead of a local estimate, but it applies proxy-wide.
+    # `strict_token_count` in a model's `model_info` opts a single model into
+    # that same behaviour, so a deployment can require an exact count for one
+    # model without giving up the local estimate for every other model.
+    #########################################################
+    strict_token_count: bool = litellm.disable_token_counter is True
+    if strict_token_count is False and model_info is not None:
+        strict_token_count = bool(model_info.get("strict_token_count", False))
+
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
     provider_counter: BaseTokenCounter | None = None
     custom_llm_provider: str | None = None
@@ -11812,12 +11830,13 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             request_model=request.model,
             tools=tools,
             system=system,
+            strict_token_count=strict_token_count,
         )
         if result is not None:
             return result
 
-    # Check if token counter is disabled before fallback
-    if litellm.disable_token_counter is True:
+    # Check if strict token counting is required before falling back to an estimate
+    if strict_token_count is True:
         raise ProxyException(
             message="Token counting is disabled and no provider API result available",
             type="token_counting_disabled",
