@@ -83,7 +83,7 @@ def _is_misparsed_authority(parsed: ParseResult, raw_database: str, query: Mappi
     """
     if parsed.fragment:
         return True
-    if _MISPARSED_AUTHORITY_MARKERS & set(raw_database):
+    if any(marker in raw_database for marker in _MISPARSED_AUTHORITY_MARKERS):
         return True
     return "@" in parsed.query and (not query or not parsed.path)
 
