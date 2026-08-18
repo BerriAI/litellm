@@ -9404,6 +9404,27 @@ class BaseLLMHTTPHandler:
             )
 
     ###### VECTOR STORE HANDLER ######
+    @staticmethod
+    def _pre_call_direct_vector_store_search(
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str,
+        vector_store_id: str,
+        query: str | list[str],
+    ) -> None:
+        """Direct providers have no HTTP request to echo, and an empty api_base makes the debug
+        logger fall back to dumping model_call_details, which holds stored provider credentials."""
+        endpoint: Final = f"{custom_llm_provider}://{vector_store_id}"
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
+                "query": query,
+                "vector_store_id": vector_store_id,
+                "api_base": endpoint,
+                "request_str": f"direct vector store search: {endpoint}",
+            },
+        )
+
     async def async_vector_store_search_handler(
         self,
         vector_store_id: str,
@@ -9420,13 +9441,11 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
     ) -> VectorStoreSearchResponse:
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
-            logging_obj.pre_call(
-                input="",
-                api_key="",
-                additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
-                    "query": query,
-                    "vector_store_id": vector_store_id,
-                },
+            self._pre_call_direct_vector_store_search(
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vector_store_id=vector_store_id,
+                query=query,
             )
             return await vector_store_provider_config.aexecute_search_vector_store_request(
                 vector_store_id=vector_store_id,
@@ -9551,13 +9570,11 @@ class BaseLLMHTTPHandler:
             )
 
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
-            logging_obj.pre_call(
-                input="",
-                api_key="",
-                additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
-                    "query": query,
-                    "vector_store_id": vector_store_id,
-                },
+            self._pre_call_direct_vector_store_search(
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vector_store_id=vector_store_id,
+                query=query,
             )
             return vector_store_provider_config.execute_search_vector_store_request(
                 vector_store_id=vector_store_id,
