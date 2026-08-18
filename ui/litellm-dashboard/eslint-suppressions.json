@@ -1476,9 +1476,6 @@
   "src/app/(dashboard)/users/_components/user_edit_view.test.tsx": {
     "no-nested-ternary": {
       "count": 1
-    },
-    "react/display-name": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/users/_components/user_edit_view.tsx": {
@@ -1508,7 +1505,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
