@@ -109,11 +109,11 @@ async def handle_budget_for_entity(
 
             _budget: Final = await BudgetRepository(prisma_client).table.create(
                 data={
-                    **new_budget_data,  # type: ignore
+                    **new_budget_data,
                     "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 }
-            )  # type: ignore
+            )
 
             return _budget.budget_id
         else:
@@ -321,7 +321,7 @@ async def add_new_member(
         )
         if existing_user_row is None or (isinstance(existing_user_row, list) and len(existing_user_row) == 0):
             new_user_defaults["teams"] = [team_id]
-            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")
 
             if _returned_user is not None:
                 returned_user = LiteLLM_UserTable.model_validate(_returned_user.model_dump())

@@ -4,7 +4,7 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 
 import os
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 from packaging.version import Version
 
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
     LangfuseClass: TypeAlias = Langfuse
 
-    PROMPT_CLIENT = Union[TextPromptClient, ChatPromptClient]
+    PROMPT_CLIENT = TextPromptClient | ChatPromptClient
 else:
     PROMPT_CLIENT = Any
     LangfuseClass = Any

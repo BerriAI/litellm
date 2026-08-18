@@ -81,7 +81,7 @@ def _get_tags_from_metadata(metadata: object, json_metadata: object = None) -> l
 
 async def _fetch_all_teams(prisma_client: object) -> list:
     """Fetch teams from DB once. Reuse the result across tag and alias lookups."""
-    return await TeamRepository(prisma_client).table.find_many(  # type: ignore
+    return await TeamRepository(prisma_client).table.find_many(
         where={},
         order={"created_at": "desc"},
         take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
@@ -161,7 +161,7 @@ async def _find_affected_by_team_patterns(
     new_keys: Final[list] = []
     unnamed_keys_count = 0
     if matched_team_ids:
-        keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
+        keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
             where={"team_id": {"in": matched_team_ids}},
             order={"created_at": "desc"},
             take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
@@ -182,7 +182,7 @@ async def _find_affected_keys_by_alias(prisma_client: object, key_patterns: list
 
     affected: Final[list] = []
 
-    keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
+    keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
         where=_build_alias_where("key_alias", key_patterns),
         order={"created_at": "desc"},
         take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
@@ -364,7 +364,7 @@ async def estimate_attachment_impact(
 
         # Tag-based impact
         if tag_patterns:
-            keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
+            keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
                 where={},
                 order={"created_at": "desc"},
                 take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,

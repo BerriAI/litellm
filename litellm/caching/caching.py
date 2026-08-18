@@ -66,20 +66,7 @@ class Cache:
         default_in_memory_ttl: float | None = None,
         default_in_redis_ttl: float | None = None,
         similarity_threshold: float | None = None,
-        supported_call_types: list[CachingSupportedCallTypes] | None = [
-            "completion",
-            "acompletion",
-            "embedding",
-            "aembedding",
-            "atranscription",
-            "transcription",
-            "atext_completion",
-            "text_completion",
-            "arerank",
-            "rerank",
-            "responses",
-            "aresponses",
-        ],
+        supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
         # s3 Bucket, boto3 configuration
         azure_account_url: str | None = None,
         azure_blob_container: str | None = None,
@@ -534,11 +521,9 @@ class Cache:
                 if isinstance(cached_response, dict):
                     pass
                 else:
-                    cached_response = json.loads(
-                        cached_response  # type: ignore
-                    )  # Convert string to dictionary
+                    cached_response = json.loads(cached_response)  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)  # type: ignore
+                cached_response = ast.literal_eval(cached_response)
             return cached_response
         return cached_result
 
@@ -929,20 +914,7 @@ def enable_cache(
     host: str | None = None,
     port: str | None = None,
     password: str | None = None,
-    supported_call_types: list[CachingSupportedCallTypes] | None = [
-        "completion",
-        "acompletion",
-        "embedding",
-        "aembedding",
-        "atranscription",
-        "transcription",
-        "atext_completion",
-        "text_completion",
-        "arerank",
-        "rerank",
-        "responses",
-        "aresponses",
-    ],
+    supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
     **kwargs,
 ):
     """
@@ -989,20 +961,7 @@ def update_cache(
     host: str | None = None,
     port: str | None = None,
     password: str | None = None,
-    supported_call_types: list[CachingSupportedCallTypes] | None = [
-        "completion",
-        "acompletion",
-        "embedding",
-        "aembedding",
-        "atranscription",
-        "transcription",
-        "atext_completion",
-        "text_completion",
-        "arerank",
-        "rerank",
-        "responses",
-        "aresponses",
-    ],
+    supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
     **kwargs,
 ):
     """

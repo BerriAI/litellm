@@ -47,7 +47,7 @@ import {
   normalizeToolOverrideMap,
   TOOL_DISPLAY_NAME_PATTERN,
 } from "./utils";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
@@ -221,7 +221,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           token_type: token.token_type,
         };
         setToken(mcpServer.server_id, browserHeldToken, userID);
-        NotificationsManager.success(
+        toast.success(
           "Token held for this browser session. Tools can now be loaded and configured; the token is not saved to LiteLLM.",
         );
         return;
@@ -242,9 +242,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       // Re-capture after writing credentials so the token is not invalidated by its own credential write.
       authorizedIdentityRef.current = getOAuthAuthorizationIdentity(form.getFieldsValue(true));
 
-      NotificationsManager.success(
-        "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
-      );
+      toast.success("OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.");
     },
     onBeforeRedirect: persistEditUiState,
     flowSource: "edit",
@@ -677,7 +675,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
     );
     if (invalidDisplayName) {
-      NotificationsManager.fromBackend(
+      toast.fromError(
         `Tool display name "${invalidDisplayName[1]}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`,
       );
       return;
@@ -777,11 +775,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             };
 
             if (!stdioFields.command) {
-              NotificationsManager.fromBackend("Stdio configuration must include a command");
+              toast.fromError("Stdio configuration must include a command");
               return;
             }
           } catch {
-            NotificationsManager.fromBackend("Invalid JSON in stdio configuration");
+            toast.fromError("Invalid JSON in stdio configuration");
             return;
           }
         } else {
@@ -798,7 +796,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 }, {});
               }
             } catch {
-              NotificationsManager.fromBackend("Invalid JSON in stdio env configuration");
+              toast.fromError("Invalid JSON in stdio env configuration");
               return;
             }
           }
@@ -808,7 +806,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
           const parsedCommand = rawCommand ? String(rawCommand).trim() : "";
           if (!parsedCommand) {
-            NotificationsManager.fromBackend("Stdio transport requires a command");
+            toast.fromError("Stdio transport requires a command");
             return;
           }
 
@@ -831,7 +829,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         try {
           tokenValidation = JSON.parse(rawTokenValidationJson);
         } catch {
-          NotificationsManager.fromBackend("Invalid JSON in Token Validation Rules");
+          toast.fromError("Invalid JSON in Token Validation Rules");
           return;
         }
       }
@@ -982,18 +980,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           }
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : "";
-          NotificationsManager.fromBackend(
-            "MCP Server updated, but failed to persist OAuth token" + (message ? `: ${message}` : ""),
-          );
+          toast.fromError("MCP Server updated, but failed to persist OAuth token" + (message ? `: ${message}` : ""));
           return;
         }
       }
 
-      NotificationsManager.success("MCP Server updated successfully");
+      toast.success("MCP Server updated successfully");
       setAppMayNotMatchUpstream(false);
       onSuccess(updated);
     } catch (error: any) {
-      NotificationsManager.fromBackend("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
+      toast.fromError("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
     }
   };
 

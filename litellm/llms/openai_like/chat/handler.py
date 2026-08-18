@@ -12,6 +12,7 @@ import httpx
 
 import litellm
 from litellm import LlmProviders
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
@@ -112,7 +113,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         stream,
         data: dict,
         optional_params=None,
@@ -214,7 +215,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         print_verbose: Callable,
         encoding,
         api_key: str | None,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         acompletion=None,
         litellm_params: dict = {},
@@ -343,7 +344,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 )
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = HTTPHandler(timeout=timeout)  # type: ignore
+                    client = HTTPHandler(timeout=timeout)
                 try:
                     response: Final = client.post(url=api_base, headers=headers, data=json.dumps(data))
                     response.raise_for_status()

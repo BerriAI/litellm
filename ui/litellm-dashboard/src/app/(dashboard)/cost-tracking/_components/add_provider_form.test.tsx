@@ -48,7 +48,7 @@ describe("AddProviderForm", () => {
 
   it("should enable the submit button when both a provider and a discount value are provided", () => {
     renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} selectedProvider="OpenAI" newDiscount="5" />);
-    expect(screen.getByRole("button", { name: /add provider discount/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /add provider discount/i })).toBeEnabled();
   });
 
   it("should call onAddProvider when the enabled submit button is clicked", async () => {
@@ -71,7 +71,7 @@ describe("AddProviderForm", () => {
     renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} selectedProvider="OpenAI" />);
 
     const logo = await screen.findByRole("img", { name: `${Providers.OpenAI} logo` });
-    expect(logo.getAttribute("src")).toBe(providerLogoMap[Providers.OpenAI]);
+    expect(logo).toHaveAttribute("src", providerLogoMap[Providers.OpenAI]);
   });
 
   it("falls back to a letter avatar for a selected provider that has no bundled logo", () => {

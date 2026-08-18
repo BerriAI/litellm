@@ -137,7 +137,7 @@ class InMemoryPromptRegistry:
             custom_prompt_callback = initializer(litellm_params, prompt)
             if not isinstance(custom_prompt_callback, CustomPromptManagement):
                 raise ValueError(f"CustomPromptManagement is required, got {type(custom_prompt_callback)}")
-            litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)
         else:
             raise ValueError(f"Unsupported prompt: {prompt_integration}")
 
@@ -180,7 +180,7 @@ class InMemoryPromptRegistry:
         from litellm.proxy.prompts.prompt_endpoints import get_base_prompt_id
 
         prompts_to_delete: Final = [
-            pid for pid in self.IN_MEMORY_PROMPTS.keys() if get_base_prompt_id(prompt_id=pid) == base_prompt_id
+            pid for pid in self.IN_MEMORY_PROMPTS if get_base_prompt_id(prompt_id=pid) == base_prompt_id
         ]
 
         for pid in prompts_to_delete:

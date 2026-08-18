@@ -85,12 +85,8 @@ class ValkeySemanticCache(RedisSemanticCache):
         resolved_url = None
         if sync_client is None or async_client is None:
             resolved_url = redis_url or self._build_valkey_url(host, port, password, ssl)
-        self.sync_client = (
-            sync_client if sync_client is not None else Redis.from_url(resolved_url)  # type: ignore[arg-type]
-        )
-        self.async_client = (
-            async_client if async_client is not None else AsyncRedis.from_url(resolved_url)  # type: ignore[arg-type]
-        )
+        self.sync_client = sync_client if sync_client is not None else Redis.from_url(resolved_url)
+        self.async_client = async_client if async_client is not None else AsyncRedis.from_url(resolved_url)
 
         print_verbose(f"Valkey semantic-cache initializing index - {self.index_name}")
 

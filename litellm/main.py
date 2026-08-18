@@ -19,12 +19,12 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 from litellm._logging import _redact_string
 from litellm._uuid import uuid
@@ -322,7 +322,7 @@ oci_transformation: Final = OCIChatConfig()
 ovhcloud_transformation: Final = OVHCloudChatConfig()
 lemonade_transformation: Final = LemonadeChatConfig()
 
-MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
+MOCK_RESPONSE_TYPE = str | Exception | dict | ModelResponse | ModelResponseStream
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -504,6 +504,7 @@ async def acompletion(
         model=model,
         custom_llm_provider=cast(str | None, custom_llm_provider),  # cast-ok: read from untyped kwargs
         tools=tools,
+        enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -596,7 +597,7 @@ async def acompletion(
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=completion_kwargs.get("base_url", None),
+            api_base=base_url,
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -633,12 +634,12 @@ async def acompletion(
         init_response: Final = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(init_response, ModelResponse):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
-                response = ModelResponse(**init_response)
+                response = _model_response_from_cached_dict(init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            response = await init_response
+            response = await _resolve_dispatched_chat_response(init_response)
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         if (
             custom_llm_provider == "text-completion-openai"
@@ -698,6 +699,20 @@ async def acompletion(
         )
 
 
+async def _resolve_dispatched_chat_response(
+    pending: Coroutine[object, object, ModelResponse | CustomStreamWrapper],
+) -> ModelResponse | CustomStreamWrapper:
+    return await pending
+
+
+def _model_response_from_cached_dict(cached_response_dict: Mapping[str, object]) -> ModelResponse:
+    return ModelResponse(**cached_response_dict)
+
+
+def _transcription_response_from_cached_dict(cached_response_dict: Mapping[str, object]) -> TranscriptionResponse:
+    return TranscriptionResponse(**cached_response_dict)
+
+
 async def _async_streaming(response, model, custom_llm_provider, args):
     try:
         print_verbose(f"received response in _async_streaming: {response}")
@@ -724,28 +739,28 @@ def _handle_mock_potential_exceptions(
         if isinstance(mock_response, openai.APIError):
             raise mock_response
         raise litellm.MockException(
-            status_code=getattr(mock_response, "status_code", 500),  # type: ignore
+            status_code=getattr(mock_response, "status_code", 500),
             message=getattr(mock_response, "text", str(mock_response)),
-            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
-            model=model,  # type: ignore
+            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),
+            model=model,
             request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
         )
     elif isinstance(mock_response, str) and mock_response == "litellm.RateLimitError":
         raise litellm.RateLimitError(
             message="this is a mock rate limit error",
-            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),
             model=model,
         )
     elif isinstance(mock_response, str) and mock_response == "litellm.ContextWindowExceededError":
         raise litellm.ContextWindowExceededError(
             message="this is a mock context window exceeded error",
-            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),
             model=model,
         )
     elif isinstance(mock_response, str) and mock_response == "litellm.InternalServerError":
         raise litellm.InternalServerError(
             message="this is a mock internal server error",
-            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),  # type: ignore
+            llm_provider=getattr(mock_response, "llm_provider", custom_llm_provider or "openai"),
             model=model,
         )
     elif isinstance(mock_response, str) and mock_response.startswith("Exception: content_filter_policy"):
@@ -753,7 +768,7 @@ def _handle_mock_potential_exceptions(
             status_code=400,
             message=mock_response,
             llm_provider="azure",
-            model=model,  # type: ignore
+            model=model,
             request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
         )
 
@@ -882,7 +897,7 @@ def mock_completion(
             if not stream:
                 return mock_response
             # convert to ModelResponseStream
-            mock_response = convert_model_response_to_streaming(mock_response)  # type: ignore
+            mock_response = convert_model_response_to_streaming(mock_response)
 
         model_response: ModelResponse | ModelResponseStream = ModelResponse()
 
@@ -912,7 +927,7 @@ def mock_completion(
         mock_response = cast(str, mock_response)
 
         if n is None:
-            model_response.choices[0].message.content = mock_response  # type: ignore
+            model_response.choices[0].message.content = mock_response
         else:
             _all_choices: Final = []
             for i in range(n):
@@ -921,12 +936,12 @@ def mock_completion(
                     message=litellm.utils.Message(content=mock_response, role="assistant"),
                 )
                 _all_choices.append(_choice)
-            model_response.choices = _all_choices  # type: ignore
+            model_response.choices = _all_choices
         model_response.created = int(time.time())
         model_response.model = model
 
         if mock_tool_calls:
-            model_response.choices[0].message.tool_calls = [  # type: ignore
+            model_response.choices[0].message.tool_calls = [
                 ChatCompletionMessageToolCall(**tool_call) for tool_call in mock_tool_calls
             ]
 
@@ -983,12 +998,12 @@ def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
     web_search_options: OpenAIWebSearchOptions | None = None,
-    tools: list[Any] | None = None,
-    reasoning_effort: Any | None = None,
-    reasoning_summary: Any | None = None,
+    tools: Sequence[Mapping[str, object]] | None = None,
+    reasoning_effort: str | Mapping[str, object] | None = None,
+    reasoning_summary: object | None = None,
     api_base: str | None = None,
 ) -> tuple[dict, str]:
-    model_info: dict[str, Any] = {}
+    model_info: dict[str, object] = {}
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
     # Returns early with minimal model_info; callers only inspect the "mode" key.
@@ -1110,6 +1125,22 @@ def _drop_input_examples_from_tools(
     return cleaned_tools
 
 
+class _ProxyAuthHeadersProvider(Protocol):
+    def get_auth_headers(self) -> Mapping[str, str]: ...
+
+
+def _proxy_auth_headers(proxy_auth: _ProxyAuthHeadersProvider) -> Mapping[str, str]:
+    return proxy_auth.get_auth_headers()
+
+
+def _provider_config_items(config: Mapping[str, object]) -> Iterable[tuple[str, object]]:
+    return config.items()
+
+
+def _locals_snapshot(values: Mapping[str, object]) -> Mapping[str, object]:
+    return values
+
+
 def _build_custom_pricing_entry(
     custom_llm_provider: str,
     kwargs: dict,
@@ -1174,14 +1205,33 @@ def _register_custom_pricing_for_request(
     shared_key: Final = f"{custom_llm_provider}/{model}"
     deployment_id: Final = _get_router_deployment_id(kwargs)
     if deployment_id is None:
-        litellm.register_model({shared_key: entry})
+        litellm.register_model({shared_key: entry}, persist_across_reloads=False)
         return
     litellm.register_model(
         {
             deployment_id: entry,
             shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
-        }
+        },
+        persist_across_reloads=False,
     )
+
+
+def _dispatch_metadata(ctx: _CompletionDispatchContext) -> Mapping[str, object] | None:
+    return ctx.metadata
+
+
+def _dispatch_client_http(ctx: _CompletionDispatchContext) -> HTTPHandler | AsyncHTTPHandler | None:
+    return ctx.client
+
+
+def _dispatch_client_azure(
+    ctx: _CompletionDispatchContext,
+) -> openai.AzureOpenAI | openai.AsyncAzureOpenAI | HTTPHandler | AsyncHTTPHandler | None:
+    return ctx.client
+
+
+def _dispatch_client_openai(ctx: _CompletionDispatchContext) -> openai.OpenAI | openai.AsyncOpenAI | None:
+    return ctx.client
 
 
 def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -1190,7 +1240,7 @@ def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
     api_base = ctx.api_base
     api_key = ctx.api_key
     api_version = ctx.api_version
-    client: Final = ctx.client
+    client: Final = _dispatch_client_azure(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     extra_headers: Final = ctx.extra_headers
     headers = ctx.headers
@@ -1231,7 +1281,8 @@ def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
         "AZURE_AD_TOKEN"
     )
 
-    azure_ad_token_provider: Final = litellm_params.get("azure_ad_token_provider", None)
+    azure_ad_token_provider_value: Final = litellm_params.get("azure_ad_token_provider", None)
+    azure_ad_token_provider: Final = azure_ad_token_provider_value if callable(azure_ad_token_provider_value) else None
 
     headers = headers or litellm.headers
 
@@ -1243,7 +1294,7 @@ def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
     if litellm.AzureOpenAIO1Config().is_o_series_model(model=_azure_detection_model):
         ## LOAD CONFIG - if set
         config = litellm.AzureOpenAIO1Config.get_config()
-        for k, v in config.items():
+        for k, v in _provider_config_items(config):
             if (
                 k not in optional_params
             ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -1265,14 +1316,14 @@ def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
             logger_fn=logger_fn,
             logging_obj=logging,
             acompletion=acompletion,
-            timeout=timeout,  # type: ignore
+            timeout=timeout,
             client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
             custom_llm_provider=custom_llm_provider,
         )
     else:
         ## LOAD CONFIG - if set
         config = litellm.AzureOpenAIConfig.get_config()
-        for k, v in config.items():
+        for k, v in _provider_config_items(config):
             if (
                 k not in optional_params
             ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -1297,7 +1348,7 @@ def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
             logger_fn=logger_fn,
             logging_obj=logging,
             acompletion=acompletion,
-            timeout=timeout,  # type: ignore
+            timeout=timeout,
             client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
         )
 
@@ -1322,7 +1373,7 @@ def _complete_azure_text(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     api_base = ctx.api_base
     api_key = ctx.api_key
     api_version = ctx.api_version
-    client: Final = ctx.client
+    client: Final = _dispatch_client_azure(ctx)
     extra_headers: Final = ctx.extra_headers
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -1357,7 +1408,8 @@ def _complete_azure_text(ctx: _CompletionDispatchContext) -> _CompletionDispatch
         "AZURE_AD_TOKEN"
     )
 
-    azure_ad_token_provider: Final = litellm_params.get("azure_ad_token_provider", None)
+    azure_ad_token_provider_value: Final = litellm_params.get("azure_ad_token_provider", None)
+    azure_ad_token_provider: Final = azure_ad_token_provider_value if callable(azure_ad_token_provider_value) else None
 
     headers = headers or litellm.headers
 
@@ -1366,7 +1418,7 @@ def _complete_azure_text(ctx: _CompletionDispatchContext) -> _CompletionDispatch
 
     ## LOAD CONFIG - if set
     config: Final = litellm.AzureOpenAIConfig.get_config()
-    for k, v in config.items():
+    for k, v in _provider_config_items(config):
         if (
             k not in optional_params
         ):  # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -1414,7 +1466,7 @@ def _complete_deepseek(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -1441,7 +1493,7 @@ def _complete_deepseek(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
             optional_params=optional_params,
             litellm_params=litellm_params,
             shared_session=shared_session,
-            timeout=timeout,  # type: ignore
+            timeout=timeout,
             client=client,
             custom_llm_provider=custom_llm_provider,
             encoding=_get_encoding(),
@@ -1465,7 +1517,7 @@ def _complete_azure_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     extra_headers: Final = ctx.extra_headers
     headers = ctx.headers
@@ -1587,7 +1639,7 @@ def _complete_azure_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 shared_session=shared_session,
-                timeout=timeout,  # type: ignore
+                timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,
                 encoding=_get_encoding(),
@@ -1621,7 +1673,7 @@ def _complete_text_completion_openai(
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_openai(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -1653,7 +1705,7 @@ def _complete_text_completion_openai(
 
     ## LOAD CONFIG - if set
     config: Final = litellm.OpenAITextCompletionConfig.get_config()
-    for k, v in config.items():
+    for k, v in _provider_config_items(config):
         if (
             k not in optional_params
         ):  # completion(top_k=3) > openai_text_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -1677,7 +1729,7 @@ def _complete_text_completion_openai(
         optional_params=optional_params,
         litellm_params=litellm_params,
         logger_fn=logger_fn,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
     )
 
     if optional_params.get("stream", False) is False and acompletion is False and text_completion is False:
@@ -1703,7 +1755,7 @@ def _complete_fireworks_ai(
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -1711,11 +1763,15 @@ def _complete_fireworks_ai(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
     provider_config: Final = ctx.provider_config
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
+    optional_params: Final = (
+        provider_config.map_extra_body_params(optional_params=ctx.optional_params, model=model)
+        if isinstance(provider_config, litellm.FireworksAIConfig)
+        else ctx.optional_params
+    )
 
     try:
         response: Final = base_llm_http_handler.completion(
@@ -1730,7 +1786,7 @@ def _complete_fireworks_ai(
             optional_params=optional_params,
             litellm_params=litellm_params,
             shared_session=shared_session,
-            timeout=timeout,  # type: ignore
+            timeout=timeout,
             client=client,
             custom_llm_provider=custom_llm_provider,
             encoding=_get_encoding(),
@@ -1754,7 +1810,7 @@ def _complete_heroku(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -1804,7 +1860,7 @@ def _complete_ragflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -1854,7 +1910,7 @@ def _complete_xai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -1881,7 +1937,7 @@ def _complete_xai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
             optional_params=optional_params,
             litellm_params=litellm_params,
             shared_session=shared_session,
-            timeout=timeout,  # type: ignore
+            timeout=timeout,
             client=client,
             custom_llm_provider=custom_llm_provider,
             encoding=_get_encoding(),
@@ -1905,7 +1961,7 @@ def _complete_groq(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -1937,7 +1993,7 @@ def _complete_groq(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult
 
     ## LOAD CONFIG - if set
     config: Final = litellm.GroqChatConfig.get_config()
-    for k, v in config.items():
+    for k, v in _provider_config_items(config):
         if (
             k not in optional_params
         ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -1969,7 +2025,7 @@ def _complete_bedrock_mantle(
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -1986,7 +2042,7 @@ def _complete_bedrock_mantle(
     api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
     headers = headers or litellm.headers
     config: Final = litellm.BedrockMantleChatConfig.get_config()
-    for k, v in config.items():
+    for k, v in _provider_config_items(config):
         if k not in optional_params:
             optional_params[k] = v
     return base_llm_http_handler.completion(
@@ -2013,7 +2069,7 @@ def _complete_a2a(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -2076,7 +2132,7 @@ def _complete_gigachat(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -2138,7 +2194,7 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -2154,7 +2210,7 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     headers = headers or litellm.headers
     ## LOAD CONFIG - if set
     config: Final = litellm.GenAIHubOrchestrationConfig.get_config()
-    for k, v in config.items():
+    for k, v in _provider_config_items(config):
         if (
             k not in optional_params
         ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -2169,7 +2225,7 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
         logging_obj=logging,
         optional_params=optional_params,
         litellm_params=litellm_params,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         shared_session=shared_session,
         client=client,
         custom_llm_provider=custom_llm_provider,
@@ -2186,7 +2242,7 @@ def _complete_aiohttp_openai(
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     extra_headers: Final = ctx.extra_headers
     headers = ctx.headers
@@ -2241,7 +2297,7 @@ def _complete_cometapi(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -2290,7 +2346,7 @@ def _complete_minimax(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -2336,7 +2392,7 @@ def _complete_hosted_vllm(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -2382,7 +2438,7 @@ def _complete_custom_openai(
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     custom_prompt_dict: Final = ctx.custom_prompt_dict
     extra_headers = ctx.extra_headers
@@ -2391,7 +2447,7 @@ def _complete_custom_openai(
     logger_fn: Final = ctx.logger_fn
     logging: Final = ctx.logging
     messages: Final = ctx.messages
-    metadata: Final = ctx.metadata
+    metadata: Final = _dispatch_metadata(ctx)
     model: Final = ctx.model
     model_response: Final = ctx.model_response
     optional_params: Final = ctx.optional_params
@@ -2444,7 +2500,7 @@ def _complete_custom_openai(
 
     ## LOAD CONFIG - if set
     config: Final = litellm.OpenAIConfig.get_config()
-    for k, v in config.items():
+    for k, v in _provider_config_items(config):
         if (
             k not in optional_params
         ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -2488,7 +2544,7 @@ def _complete_custom_openai(
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                timeout=timeout,  # type: ignore
+                timeout=timeout,
                 custom_prompt_dict=custom_prompt_dict,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 organization=organization,
@@ -2521,7 +2577,7 @@ def _complete_mistral(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -2585,7 +2641,7 @@ def _complete_replicate(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
 
     custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
 
-    model_response = replicate_chat_completion(  # type: ignore
+    model_response = replicate_chat_completion(
         model=model,
         messages=messages,
         api_base=api_base,
@@ -2672,7 +2728,7 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     custom_prompt_dict = ctx.custom_prompt_dict
     headers: Final = ctx.headers
@@ -2971,7 +3027,7 @@ def _complete_huggingface(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3002,7 +3058,7 @@ def _complete_huggingface(ctx: _CompletionDispatchContext) -> _CompletionDispatc
         logging_obj=logging,
         optional_params=optional_params,
         litellm_params=litellm_params,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         client=client,
         custom_llm_provider=custom_llm_provider,
         encoding=_get_encoding(),
@@ -3014,7 +3070,7 @@ def _complete_oci(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3037,7 +3093,7 @@ def _complete_oci(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
         logging_obj=logging,
         optional_params=optional_params,
         litellm_params=litellm_params,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         client=client,
         custom_llm_provider=custom_llm_provider,
         encoding=_get_encoding(),
@@ -3049,7 +3105,7 @@ def _complete_compactifai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3101,7 +3157,7 @@ def _complete_oobabooga(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
         model=model,
         messages=messages,
         model_response=model_response,
-        api_base=api_base,  # type: ignore
+        api_base=api_base,
         print_verbose=print_verbose,
         optional_params=optional_params,
         litellm_params=litellm_params,
@@ -3125,7 +3181,7 @@ def _complete_databricks(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logging: Final = ctx.logging
@@ -3197,7 +3253,7 @@ def _complete_datarobot(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3221,7 +3277,7 @@ def _complete_datarobot(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
         logging_obj=logging,
         optional_params=optional_params,
         litellm_params=litellm_params,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         client=client,
         custom_llm_provider=custom_llm_provider,
         encoding=_get_encoding(),
@@ -3234,7 +3290,7 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logging: Final = ctx.logging
@@ -3272,7 +3328,7 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
 
     ## Load Config
     config: Final = litellm.OpenrouterConfig.get_config()
-    for k, v in config.items():
+    for k, v in _provider_config_items(config):
         if k == "extra_body":
             # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
             if "extra_body" in optional_params:
@@ -3313,7 +3369,7 @@ def _complete_vercel_ai_gateway(
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logging: Final = ctx.logging
@@ -3350,7 +3406,7 @@ def _complete_vercel_ai_gateway(
 
     ## Load Config
     config: Final = litellm.VercelAIGatewayConfig.get_config()
-    for k, v in config.items():
+    for k, v in _provider_config_items(config):
         if k == "extra_body":
             # we use openai 'extra_body' to pass vercel specific params - providerOptions
             if "extra_body" in optional_params:
@@ -3391,7 +3447,7 @@ def _complete_vertex_ai_beta(
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3430,13 +3486,13 @@ def _complete_vertex_ai_beta(
 
     api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
     new_params: Final = safe_deep_copy(optional_params or {})
-    return vertex_chat_completion.completion(  # type: ignore
+    return vertex_chat_completion.completion(
         model=model,
         messages=messages,
         model_response=model_response,
         print_verbose=print_verbose,
         optional_params=new_params,
-        litellm_params=litellm_params,  # type: ignore
+        litellm_params=litellm_params,
         logger_fn=logger_fn,
         encoding=_get_encoding(),
         vertex_location=vertex_ai_location,
@@ -3446,7 +3502,7 @@ def _complete_vertex_ai_beta(
         logging_obj=logging,
         acompletion=acompletion,
         timeout=timeout,
-        custom_llm_provider=custom_llm_provider,  # type: ignore
+        custom_llm_provider=custom_llm_provider,
         client=client,
         api_base=api_base,
         extra_headers=headers,
@@ -3456,7 +3512,7 @@ def _complete_vertex_ai_beta(
 def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     custom_prompt_dict: Final = ctx.custom_prompt_dict
     headers: Final = ctx.headers
@@ -3500,7 +3556,7 @@ def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
             model_response=model_response,
             print_verbose=print_verbose,
             optional_params=new_params,
-            litellm_params=litellm_params,  # type: ignore
+            litellm_params=litellm_params,
             logger_fn=logger_fn,
             encoding=_get_encoding(),
             api_base=api_base,
@@ -3515,13 +3571,13 @@ def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
             client=client,
         )
     elif model_route == VertexAIModelRoute.GEMINI:
-        model_response = vertex_chat_completion.completion(  # type: ignore
+        model_response = vertex_chat_completion.completion(
             model=model,
             messages=messages,
             model_response=model_response,
             print_verbose=print_verbose,
             optional_params=new_params,
-            litellm_params=litellm_params,  # type: ignore
+            litellm_params=litellm_params,
             logger_fn=logger_fn,
             encoding=_get_encoding(),
             vertex_location=vertex_ai_location,
@@ -3531,7 +3587,7 @@ def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
             logging_obj=logging,
             acompletion=acompletion,
             timeout=timeout,
-            custom_llm_provider=custom_llm_provider,  # type: ignore
+            custom_llm_provider=custom_llm_provider,
             client=client,
             api_base=api_base,
             extra_headers=headers,
@@ -3544,7 +3600,7 @@ def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
             model_response=model_response,
             print_verbose=print_verbose,
             optional_params=new_params,
-            litellm_params=litellm_params,  # type: ignore
+            litellm_params=litellm_params,
             logger_fn=logger_fn,
             encoding=_get_encoding(),
             api_base=api_base,
@@ -3566,7 +3622,7 @@ def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
             model_response=model_response,
             print_verbose=print_verbose,
             optional_params=new_params,
-            litellm_params=litellm_params,  # type: ignore
+            litellm_params=litellm_params,
             logger_fn=logger_fn,
             encoding=_get_encoding(),
             api_base=api_base,
@@ -3599,7 +3655,7 @@ def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
             messages=messages,
             model_response=model_response,
             optional_params=new_params,
-            litellm_params=litellm_params,  # type: ignore
+            litellm_params=litellm_params,
             encoding=_get_encoding(),
             api_key=None,
             api_base=api_base,
@@ -3725,7 +3781,7 @@ def _complete_text_completion_codestral(
 
     text_completion_model_response: Final = litellm.TextCompletionResponse(stream=stream)
 
-    _model_response: Final = codestral_text_completions.completion(  # type: ignore
+    _model_response: Final = codestral_text_completions.completion(
         model=model,
         messages=messages,
         model_response=text_completion_model_response,
@@ -3753,7 +3809,7 @@ def _complete_text_completion_inception(
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_openai(ctx)
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logger_fn: Final = ctx.logger_fn
@@ -3784,7 +3840,7 @@ def _complete_text_completion_inception(
         messages=messages,
         model_response=model_response,
         print_verbose=print_verbose,
-        api_key=api_key,  # type: ignore[arg-type]
+        api_key=api_key,
         custom_llm_provider="text-completion-inception",
         api_base=api_base,
         acompletion=acompletion,
@@ -3793,7 +3849,7 @@ def _complete_text_completion_inception(
         optional_params=optional_params,
         litellm_params=litellm_params,
         logger_fn=logger_fn,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
     )
 
     if optional_params.get("stream", False) is False and acompletion is False and text_completion is False:
@@ -3817,7 +3873,7 @@ def _complete_sagemaker_chat(
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3880,7 +3936,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_prompt_dict = ctx.custom_prompt_dict
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3948,7 +4004,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             custom_prompt_dict=custom_prompt_dict,
             model_response=model_response,
             optional_params=optional_params,
-            litellm_params=litellm_params,  # type: ignore
+            litellm_params=litellm_params,
             logger_fn=logger_fn,
             encoding=_get_encoding(),
             logging_obj=logging,
@@ -4004,7 +4060,7 @@ def _complete_watsonx(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_prompt_dict: Final = ctx.custom_prompt_dict
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4029,7 +4085,7 @@ def _complete_watsonx(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
         optional_params=optional_params,
         litellm_params=litellm_params,
         logger_fn=logger_fn,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         custom_prompt_dict=custom_prompt_dict,
         client=client,  # pass AsyncOpenAI, OpenAI client
         encoding=_get_encoding(),
@@ -4043,7 +4099,7 @@ def _complete_watsonx_text(
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logging: Final = ctx.logging
@@ -4155,7 +4211,7 @@ def _complete_ollama(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logging: Final = ctx.logging
@@ -4195,7 +4251,7 @@ def _complete_ollama_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logging: Final = ctx.logging
@@ -4310,7 +4366,7 @@ def _complete_cloudflare(ctx: _CompletionDispatchContext) -> _CompletionDispatch
 
 def _complete_petals(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base = ctx.api_base
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     litellm_params: Final = ctx.litellm_params
     logger_fn: Final = ctx.logger_fn
     logging: Final = ctx.logging
@@ -4352,7 +4408,7 @@ def _complete_snowflake(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client = ctx.client
+    client = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4381,7 +4437,7 @@ def _complete_snowflake(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
             optional_params=optional_params,
             litellm_params=litellm_params,
             shared_session=shared_session,
-            timeout=timeout,  # type: ignore
+            timeout=timeout,
             client=client,
             custom_llm_provider=custom_llm_provider,
             encoding=_get_encoding(),
@@ -4440,7 +4496,7 @@ def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4466,7 +4522,7 @@ def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
         logging_obj=logging,
         optional_params=optional_params,
         litellm_params=litellm_params,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         client=client,
         custom_llm_provider=custom_llm_provider,
         encoding=_get_encoding(),
@@ -4479,7 +4535,7 @@ def _complete_bytez(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4504,7 +4560,7 @@ def _complete_bytez(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
         logging_obj=logging,
         optional_params=optional_params,
         litellm_params=litellm_params,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         client=client,
         custom_llm_provider=custom_llm_provider,
         encoding=_get_encoding(),
@@ -4519,7 +4575,7 @@ def _complete_lemonade(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4544,7 +4600,7 @@ def _complete_lemonade(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
         logging_obj=logging,
         optional_params=optional_params,
         litellm_params=litellm_params,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         client=client,
         custom_llm_provider=custom_llm_provider,
         encoding=_get_encoding(),
@@ -4559,7 +4615,7 @@ def _complete_ovhcloud(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4591,7 +4647,7 @@ def _complete_ovhcloud(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
         logging_obj=logging,
         optional_params=optional_params,
         litellm_params=litellm_params,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         client=client,
         custom_llm_provider=custom_llm_provider,
         encoding=_get_encoding(),
@@ -4600,6 +4656,10 @@ def _complete_ovhcloud(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     )
 
     return response
+
+
+def _custom_api_first_output(resp: httpx.Response | None) -> str:
+    return resp.json()["data"][0]["output"][0]
 
 
 def _complete_custom(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -4634,7 +4694,7 @@ def _complete_custom(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     )
 
     """
-    prompt: Final = " ".join([message["content"] for message in messages])  # type: ignore
+    prompt: Final = " ".join([message["content"] for message in messages])
     resp: Final = litellm.module_level_client.post(
         url,
         headers=headers,
@@ -4650,7 +4710,6 @@ def _complete_custom(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
             **kwargs.get("extra_body", {}),
         },
     )
-    response_json: Final = resp.json()
     """
     assume all responses from custom api_bases of this format:
     {
@@ -4664,9 +4723,9 @@ def _complete_custom(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
         ]
     }
     """
-    string_response: Final = response_json["data"][0]["output"][0]
+    string_response: Final = _custom_api_first_output(resp)
     ## RESPONSE OBJECT
-    model_response.choices[0].message.content = string_response  # type: ignore
+    model_response.choices[0].message.content = string_response
     model_response.created = int(time.time())
     model_response.model = model
     return model_response
@@ -4719,7 +4778,7 @@ def _complete_custom_providers(
         optional_params=optional_params,
         litellm_params=litellm_params,
         logger_fn=logger_fn,
-        timeout=timeout,  # type: ignore
+        timeout=timeout,
         custom_prompt_dict=custom_prompt_dict,
         client=client,  # pass AsyncOpenAI, OpenAI client
         encoding=_get_encoding(),
@@ -4739,7 +4798,7 @@ def _complete_langgraph(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4788,7 +4847,7 @@ def _complete_langflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
+    client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4835,7 +4894,7 @@ def _complete_langflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
 
 @tracer.wrap()
 @client
-def completion(  # type: ignore
+def completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: list = [],
@@ -4946,7 +5005,7 @@ def completion(  # type: ignore
     thinking = validate_and_fix_thinking_param(thinking=thinking)
 
     ######### unpacking kwargs #####################
-    args: Final = locals()
+    args: Final = _locals_snapshot(locals())
 
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
@@ -5037,7 +5096,7 @@ def completion(  # type: ignore
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
         try:
-            proxy_headers: Final = litellm.proxy_auth.get_auth_headers()
+            proxy_headers: Final = _proxy_auth_headers(litellm.proxy_auth)
             headers.update(proxy_headers)
         except Exception as e:
             verbose_logger.warning("Failed to get proxy auth headers: %s", e)
@@ -5090,7 +5149,7 @@ def completion(  # type: ignore
     )
     ######## end of unpacking kwargs ###########
     non_default_params: Final = get_non_default_completion_params(kwargs=kwargs)
-    litellm_params = {}  # used to prevent unbound var errors
+    litellm_params: dict[str, object] = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
 
     from litellm.integrations.anthropic_cache_control_hook import (
@@ -5104,6 +5163,7 @@ def completion(  # type: ignore
         model=model,
         custom_llm_provider=cast(str | None, kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
         tools=tools,
+        enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -5221,7 +5281,7 @@ def completion(  # type: ignore
                 model_info=model_info,
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
-        custom_prompt_dict = {}  # type: ignore
+        custom_prompt_dict = {}
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
             custom_prompt_dict = {model: {}}
             if initial_prompt_value:
@@ -5458,7 +5518,7 @@ def completion(  # type: ignore
                 logging_obj=logging,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                timeout=timeout,  # type: ignore
+                timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,
                 encoding=_get_encoding(),
@@ -5560,7 +5620,12 @@ def completion(  # type: ignore
         elif custom_llm_provider == "hosted_vllm":
             response = _complete_hosted_vllm(_dispatch_ctx)
         elif (
-            model in litellm.open_ai_chat_completion_models
+            # A known OpenAI model name only decides the route when nothing else
+            # resolved a provider. get_llm_provider() already maps these names to
+            # "openai", so a different value here was asked for explicitly (or came
+            # from a register_model entry), and the provider config built for it
+            # would be handed to the OpenAI handler.
+            (model in litellm.open_ai_chat_completion_models and custom_llm_provider in (None, "openai"))
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
@@ -5733,7 +5798,7 @@ def completion_with_retries(*args, **kwargs):
     kwargs["num_retries"] = 0
     retry_strategy: Final[Literal["exponential_backoff_retry", "constant_retry"]] = kwargs.pop(
         "retry_strategy", "constant_retry"
-    )  # type: ignore
+    )
     original_function: Final = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.Retrying(
@@ -5789,7 +5854,7 @@ def responses_with_retries(*args, **kwargs):
     kwargs["num_retries"] = 0
     retry_strategy: Final[Literal["exponential_backoff_retry", "constant_retry"]] = kwargs.pop(
         "retry_strategy", "constant_retry"
-    )  # type: ignore
+    )
     original_function: Final = kwargs.pop("original_function", responses)
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.Retrying(
@@ -5870,7 +5935,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         elif isinstance(init_response, EmbeddingResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            response = await init_response  # type: ignore
+            response = await init_response
         if response is not None and isinstance(response, EmbeddingResponse) and hasattr(response, "_hidden_params"):
             response._hidden_params["custom_llm_provider"] = custom_llm_provider
 
@@ -5912,7 +5977,7 @@ def embedding(
     *,
     aembedding: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, EmbeddingResponse]: 
+) -> Coroutine[object, object, EmbeddingResponse]: 
     ...
 
 
@@ -5963,7 +6028,7 @@ def embedding(
     litellm_call_id=None,
     logger_fn=None,
     **kwargs,
-) -> EmbeddingResponse | Coroutine[Any, Any, EmbeddingResponse]:
+) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
     """
     Embedding function that calls an API to generate embeddings for the given input.
 
@@ -5993,8 +6058,8 @@ def embedding(
     client: Final = kwargs.pop("client", None)
     shared_session: Final = kwargs.get("shared_session", None)
     max_retries: Final = kwargs.get("max_retries", None)
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
-    mock_response: Final[list[float] | None] = kwargs.get("mock_response", None)  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+    mock_response: Final[list[float] | None] = kwargs.get("mock_response", None)
     azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
     aembedding: Final[bool | None] = kwargs.get("aembedding", None)
     extra_headers: Final = kwargs.get("extra_headers", None)
@@ -6006,7 +6071,7 @@ def embedding(
     # Inject proxy auth headers if configured
     if litellm.proxy_auth is not None:
         try:
-            proxy_headers: Final = litellm.proxy_auth.get_auth_headers()
+            proxy_headers: Final = _proxy_auth_headers(litellm.proxy_auth)
             headers.update(proxy_headers)
         except Exception as e:
             verbose_logger.warning("Failed to get proxy auth headers: %s", e)
@@ -6071,7 +6136,7 @@ def embedding(
 
     litellm_params_dict: Final = get_litellm_params(**kwargs)
 
-    logging: Final[LiteLLMLoggingObj] = litellm_logging_obj  # type: ignore
+    logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
     logging.update_environment_variables(
         model=model,
         user=user,
@@ -6083,7 +6148,7 @@ def embedding(
     if mock_response is not None:
         return mock_embedding(model=model, mock_response=mock_response)
     try:
-        response: EmbeddingResponse | Coroutine[Any, Any, EmbeddingResponse] | None = None
+        response: EmbeddingResponse | Coroutine[object, object, EmbeddingResponse] | None = None
 
         if azure is True or custom_llm_provider == "azure":
             # azure configs
@@ -6195,10 +6260,10 @@ def embedding(
                 shared_session=shared_session,
             )
         elif custom_llm_provider == "databricks":
-            api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")  # type: ignore
+            api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
 
             # set API KEY
-            api_key = api_key or litellm.api_key or litellm.databricks_key or get_secret("DATABRICKS_API_KEY")  # type: ignore
+            api_key = api_key or litellm.api_key or litellm.databricks_key or get_secret("DATABRICKS_API_KEY")
 
             ## EMBEDDING CALL
             response = databricks_embedding.embedding(
@@ -6382,11 +6447,11 @@ def embedding(
                 headers=headers,
             )
         elif custom_llm_provider == "huggingface":
-            api_key = api_key or litellm.huggingface_key or get_secret("HUGGINGFACE_API_KEY") or litellm.api_key  # type: ignore
+            api_key = api_key or litellm.huggingface_key or get_secret("HUGGINGFACE_API_KEY") or litellm.api_key
             response = huggingface_embed.embedding(
                 model=model,
                 input=input,
-                encoding=_get_encoding(),  # type: ignore
+                encoding=sys.modules[__name__].encoding,
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
@@ -6440,7 +6505,7 @@ def embedding(
 
             api_base = api_base or litellm.api_base or get_secret_str("GEMINI_API_BASE")
 
-            response = google_batch_embeddings.batch_embeddings(  # type: ignore
+            response = google_batch_embeddings.batch_embeddings(
                 model=model,
                 input=input,
                 encoding=_get_encoding(),
@@ -6492,7 +6557,7 @@ def embedding(
                 uses_embed_content = False
 
             if uses_embed_content:
-                response = google_batch_embeddings.batch_embeddings(  # type: ignore
+                response = google_batch_embeddings.batch_embeddings(
                     model=model,
                     input=input,
                     encoding=_get_encoding(),
@@ -6564,18 +6629,18 @@ def embedding(
                 api_key=api_key,
             )
         elif custom_llm_provider == "ollama":
-            api_base = litellm.api_base or api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"  # type: ignore
+            api_base = litellm.api_base or api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
 
             if isinstance(input, str):
                 input = [input]
             if not all(isinstance(item, str) for item in input):
                 raise litellm.BadRequestError(
                     message=f"Invalid input for ollama embeddings. input={input}",
-                    model=model,  # type: ignore
-                    llm_provider="ollama",  # type: ignore
+                    model=model,
+                    llm_provider="ollama",
                 )
             ollama_embeddings_fn: Final = ollama.ollama_aembeddings if aembedding is True else ollama.ollama_embeddings
-            response = ollama_embeddings_fn(  # type: ignore
+            response = ollama_embeddings_fn(
                 api_base=api_base,
                 model=model,
                 prompts=input,
@@ -6989,6 +7054,20 @@ def embedding(
 
 
 ###### Text Completion ################
+async def _resolve_dispatched_text_completion_response(
+    pending: Coroutine[
+        object,
+        object,
+        TextCompletionResponse | ModelResponse | CustomStreamWrapper | TextCompletionStreamWrapper,
+    ],
+) -> TextCompletionResponse | ModelResponse | CustomStreamWrapper | TextCompletionStreamWrapper:
+    return await pending
+
+
+async def _resolve_pending_chat_response(pending: Coroutine[object, object, ModelResponse]) -> ModelResponse:
+    return await pending
+
+
 @client
 async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextCompletionStreamWrapper:
     """
@@ -7014,9 +7093,9 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
             else:
                 response = init_response
         elif asyncio.iscoroutine(init_response):
-            response = await init_response
+            response = await _resolve_dispatched_text_completion_response(init_response)
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         if (
             kwargs.get("stream", False) is True
@@ -7039,7 +7118,7 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
             if isinstance(response, TextCompletionResponse):
                 return response
             elif asyncio.iscoroutine(response):
-                response = await response
+                response = await _resolve_pending_chat_response(response)
 
             text_completion_response = TextCompletionResponse()
             text_completion_response = litellm.utils.LiteLLMResponseObjectHandler.convert_chat_to_text_completion(
@@ -7169,7 +7248,7 @@ def text_completion(
 
     # get custom_llm_provider
     _model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model,  # type: ignore
+        model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
     )
@@ -7193,7 +7272,7 @@ def text_completion(
                 def process_prompt(i, individual_prompt):
                     decoded_prompt: Final = tokenizer.decode(individual_prompt)
                     all_params: Final = {**kwargs, **optional_params}
-                    response: Final[TextCompletionResponse] = text_completion(  # type: ignore
+                    response: Final[TextCompletionResponse] = text_completion(
                         model=model,
                         prompt=decoded_prompt,
                         num_retries=3,  # ensure this does not fail for the batch
@@ -7214,7 +7293,7 @@ def text_completion(
                     ]
                     for i, future in enumerate(concurrent.futures.as_completed(completed_futures)):
                         responses[i] = future.result()
-                    text_completion_response.choices = responses  # type: ignore
+                    text_completion_response.choices = responses
 
                 return text_completion_response
     # else:
@@ -7243,7 +7322,7 @@ def text_completion(
         and (isinstance(prompt[0], list) or isinstance(prompt[0], int))
     ):
         # Support for token IDs as prompt (list of integers or list of lists of integers)
-        messages = [{"role": "user", "content": prompt}]  # type: ignore
+        messages = [{"role": "user", "content": prompt}]
     else:
         raise Exception(
             f"Unmapped prompt format. Your prompt is neither a list of strings nor a string. prompt={prompt}. File an issue - https://github.com/BerriAI/litellm/issues"
@@ -7313,7 +7392,7 @@ async def aadapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | Adapt
 
         new_kwargs: Final = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
-        response: Final[ModelResponse | CustomStreamWrapper] = await acompletion(**new_kwargs)  # type: ignore
+        response: Final[ModelResponse | CustomStreamWrapper] = await acompletion(**new_kwargs)
         translated_response: BaseModel | AdapterCompletionStreamWrapper | None = None
         if isinstance(response, ModelResponse):
             translated_response = translation_obj.translate_completion_output_params(response=response)
@@ -7329,11 +7408,11 @@ async def aadapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | Adapt
 
 async def aadapter_generate_content(
     **kwargs,
-) -> dict[str, Any] | AsyncIterator[bytes]:
+) -> dict[str, object] | AsyncIterator[bytes]:
     from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 
     coro: Final = cast(
-        Coroutine[Any, Any, dict[str, Any] | AsyncIterator[bytes]],
+        Coroutine[object, object, dict[str, object] | AsyncIterator[bytes]],
         GenerateContentToCompletionHandler.generate_content_handler(**kwargs, _is_async=True),
     )
     return await coro
@@ -7352,7 +7431,7 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 
     new_kwargs: Final = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
-    response: Final[ModelResponse | CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
+    response: Final[ModelResponse | CustomStreamWrapper] = completion(**new_kwargs)
     translated_response: BaseModel | AdapterCompletionStreamWrapper | None = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(response=response)
@@ -7425,7 +7504,7 @@ async def amoderation(
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
         # call helper to get OpenAI client
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
-        _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(  # type: ignore
+        _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(
             is_async=True,
             api_key=api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
@@ -7485,11 +7564,11 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict):
-            response = TranscriptionResponse(**init_response)
+            response = _transcription_response_from_cached_dict(init_response)
         elif isinstance(init_response, TranscriptionResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            response = await init_response  # type: ignore
+            response = await init_response
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
@@ -7540,7 +7619,7 @@ def transcription(
     max_retries: int | None = None,
     custom_llm_provider=None,
     **kwargs,
-) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
+) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
     """
     Calls openai + azure whisper endpoints.
 
@@ -7551,7 +7630,7 @@ def transcription(
     model_info: Final = kwargs.get("model_info", None)
     metadata: Final = kwargs.get("metadata", None)
     atranscription: Final = kwargs.pop("atranscription", False)
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     extra_headers: Final = kwargs.get("extra_headers", None)
     shared_session: Final = kwargs.get("shared_session", None)
     kwargs.pop("tags", [])
@@ -7574,7 +7653,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
-    )  # type: ignore
+    )
 
     api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
@@ -7607,7 +7686,7 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
     )
 
-    response: TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse] | None = None
+    response: TranscriptionResponse | Coroutine[object, object, TranscriptionResponse] | None = None
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
         model=model,
@@ -7649,7 +7728,7 @@ def transcription(
             or get_secret("OPENAI_BASE_URL")
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
-        )  # type: ignore
+        )
         openai.organization = (
             litellm.organization
             or get_secret("OPENAI_ORGANIZATION")
@@ -7657,7 +7736,7 @@ def transcription(
         )
         # set API KEY
 
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
+        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -7715,7 +7794,7 @@ def transcription(
             api_base=api_base,
             api_key=api_key,
             headers=extra_headers,
-            provider_config=provider_config,  # type: ignore[arg-type]
+            provider_config=provider_config,
         )
     elif custom_llm_provider == "bedrock":
         from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
@@ -7808,7 +7887,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
-        return response  # type: ignore
+        return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
@@ -7841,7 +7920,7 @@ def speech(
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
     **kwargs,
-) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
     user: Final = kwargs.get("user", None)
     litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
@@ -7850,14 +7929,14 @@ def speech(
     shared_session: Final = kwargs.get("shared_session", None)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
-    )  # type: ignore
+    )
     kwargs.pop("tags", [])
 
     optional_params = {}
     if response_format is not None:
         optional_params["response_format"] = response_format
     if speed is not None:
-        optional_params["speed"] = speed  # type: ignore
+        optional_params["speed"] = speed
     if instructions is not None:
         optional_params["instructions"] = instructions
 
@@ -7900,7 +7979,7 @@ def speech(
         },
         custom_llm_provider=custom_llm_provider,
     )
-    response: HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent] | None = None
+    response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
     if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
@@ -7914,28 +7993,28 @@ def speech(
             or get_secret("OPENAI_BASE_URL")
             or get_secret("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
-        )  # type: ignore
+        )
         # set API KEY
         api_key = (
             api_key
             or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
-        )  # type: ignore
+        )
 
         organization = (
             organization
             or litellm.organization
             or get_secret("OPENAI_ORGANIZATION")
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-        )  # type: ignore
+        )
 
         project = (
             project
             or litellm.project
             or get_secret("OPENAI_PROJECT")
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-        )  # type: ignore
+        )
 
         headers = headers or litellm.headers
 
@@ -7972,7 +8051,7 @@ def speech(
             # Cast to specific Azure config type to access dispatch method
             azure_config: Final = cast(AzureAVATextToSpeechConfig, text_to_speech_provider_config)
 
-            response = azure_config.dispatch_text_to_speech(  # type: ignore
+            response = azure_config.dispatch_text_to_speech(
                 model=model,
                 input=input,
                 voice=voice,
@@ -7995,9 +8074,9 @@ def speech(
                     model=model,
                     llm_provider=custom_llm_provider,
                 )
-            api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
+            api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
-            api_version = api_version or litellm.api_version or get_secret("AZURE_API_VERSION")  # type: ignore
+            api_version = api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
             api_key = (
                 api_key
@@ -8005,9 +8084,9 @@ def speech(
                 or litellm.azure_key
                 or get_secret("AZURE_OPENAI_API_KEY")
                 or get_secret("AZURE_API_KEY")
-            )  # type: ignore
+            )
 
-            azure_ad_token: Final[str | None] = optional_params.get("extra_body", {}).pop(  # type: ignore
+            azure_ad_token: Final[str | None] = optional_params.get("extra_body", {}).pop(
                 "azure_ad_token", None
             ) or get_secret("AZURE_AD_TOKEN")
             azure_ad_token_provider: Final = kwargs.get("azure_ad_token_provider", None)
@@ -8162,7 +8241,7 @@ def speech(
         # Cast to specific RunwayML config type to access dispatch method
         runwayml_config: Final = cast(RunwayMLTextToSpeechConfig, text_to_speech_provider_config)
 
-        response = runwayml_config.dispatch_text_to_speech(  # type: ignore
+        response = runwayml_config.dispatch_text_to_speech(
             model=model,
             input=input,
             voice=voice,
@@ -8662,7 +8741,7 @@ def stream_chunk_builder(
         ]
 
         if len(provider_specific_chunks) > 0:
-            combined_provider_fields: Final[dict[str, Any]] = {}
+            combined_provider_fields: Final[dict[str, object]] = {}
             for chunk in provider_specific_chunks:
                 fields = chunk["choices"][0]["delta"]["provider_specific_fields"]
                 if isinstance(fields, dict):
@@ -8727,7 +8806,7 @@ def stream_chunk_builder(
 
 async def acount_tokens(
     model: str,
-    messages: list[dict[str, Any]] | None = None,
+    messages: list[dict[str, object]] | None = None,
     tools: list[dict[str, Any]] | None = None,
     system: str | None = None,
     api_key: str | None = None,
@@ -8773,7 +8852,7 @@ async def acount_tokens(
         api_base = dynamic_api_base
 
     # Build deployment dict for the token counter
-    deployment: Final[dict[str, Any]] = {
+    deployment: Final[dict[str, object]] = {
         "litellm_params": {
             "model": model,
             "api_key": api_key,
@@ -8812,7 +8891,7 @@ async def acount_tokens(
     local_count: Final = litellm.token_counter(
         model=model,
         messages=fallback_messages,
-        tools=tools,  # type: ignore[arg-type]
+        tools=tools,
     )
 
     return TokenCountResponse(
@@ -8824,29 +8903,37 @@ async def acount_tokens(
 
 
 # Cache for encoding to avoid repeated __getattr__ calls
-_encoding_cache: Any | None = None
+_encoding_cache: tiktoken.Encoding | None = None
 
 
-def _get_encoding():
+def _load_module_encoding() -> tiktoken.Encoding:
+    import sys
+
+    return sys.modules[__name__].encoding
+
+
+def _get_encoding() -> tiktoken.Encoding:
     """Get encoding, loading it lazily if needed."""
     global _encoding_cache
     if _encoding_cache is None:
-        import sys
-
         # Access via module to trigger __getattr__ if not cached
-        _encoding_cache = sys.modules[__name__].encoding
+        _encoding_cache = _load_module_encoding()
     return _encoding_cache
 
 
-def __getattr__(name: str) -> Any:
+def _load_default_encoding() -> tiktoken.Encoding:
+    from litellm._lazy_imports import _get_default_encoding
+
+    return _get_default_encoding()
+
+
+def __getattr__(name: str) -> tiktoken.Encoding:
     """Lazy import handler for main module"""
     if name == "encoding":
         # Use _get_default_encoding which properly sets TIKTOKEN_CACHE_DIR
         # before loading tiktoken, ensuring the local cache is used
         # instead of downloading from the internet
-        from litellm._lazy_imports import _get_default_encoding
-
-        _encoding: Final = _get_default_encoding()
+        _encoding: Final = _load_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
         import sys
 

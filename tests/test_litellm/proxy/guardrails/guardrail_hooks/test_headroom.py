@@ -1041,6 +1041,64 @@ async def test_apply_guardrail_http_status_error_raises():
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_404_error_includes_troubleshooting_hint():
+    """404 responses include a troubleshooting hint for self-hosted Headroom deployments."""
+    guardrail = _make_guardrail()
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=_make_http_status_error(404, "Not Found"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["status_code"] == 404
+    assert exc_info.value.detail["body"] == "Not Found"
+    assert "hint" in exc_info.value.detail
+    assert "HEADROOM_COMPRESS_ALLOW_REMOTE=1" in exc_info.value.detail["hint"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_non_404_error_omits_troubleshooting_hint():
+    guardrail = _make_guardrail()
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=_make_http_status_error(500, "headroom internal error"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["status_code"] == 500
+    assert exc_info.value.detail["body"] == "headroom internal error"
+    assert "hint" not in exc_info.value.detail
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_http_status_error_fail_open_forwards_uncompressed():
     guardrail = _make_guardrail(unreachable_fallback="fail_open")
 

@@ -34,7 +34,7 @@ from litellm.types.utils import (
 try:
     from fastapi.exceptions import HTTPException
 except ImportError:
-    HTTPException = None  # type: ignore
+    HTTPException = None
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -101,6 +101,9 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
 class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
+
+    # If True, every proxy lifecycle event runs this guardrail's own hooks, not apply_guardrail.
+    use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
 
@@ -198,6 +201,7 @@ class CustomGuardrail(CustomLogger):
         violation_message: str,
         request_data: dict[str, Any],
         detection_info: dict[str, Any] | None = None,
+        original_response: object = None,
     ) -> None:
         """
         Raise a passthrough exception for guardrail violations.
@@ -213,6 +217,10 @@ class CustomGuardrail(CustomLogger):
             violation_message: The formatted violation message to return to the user
             request_data: The original request data dictionary
             detection_info: Optional dictionary with detection metadata (scores, rules, etc.)
+            original_response: The blocked LLM response when raising from a post-call
+                hook. It carries the real token usage the upstream call consumed, so
+                the synthetic block response reports it instead of zeros. Leave None
+                for pre-call/during-call blocks (the LLM was never invoked).
 
         Raises:
             ModifyResponseException: Always raises this exception to short-circuit
@@ -235,6 +243,7 @@ class CustomGuardrail(CustomLogger):
             request_data=request_data,
             guardrail_name=self.guardrail_name,
             detection_info=detection_info,
+            original_response=original_response,
         )
 
     def raise_sensitive_data_route_exception(
@@ -410,7 +419,7 @@ class CustomGuardrail(CustomLogger):
         if self.should_route_on_sensitive_data():
             try:
                 self.raise_sensitive_data_route_exception(
-                    route_to_model=self.sensitive_data_route_to_model,  # type: ignore
+                    route_to_model=self.sensitive_data_route_to_model,
                     request_data=request_data,
                     detection_info=detection_info,
                 )
@@ -626,7 +635,7 @@ class CustomGuardrail(CustomLogger):
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
     def _deployment_pre_call_target(self) -> "CustomLogger":
-        if not self.uses_apply_guardrail_interface():
+        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
         try:
             from litellm.proxy.utils import unified_guardrail
@@ -713,6 +722,29 @@ class CustomGuardrail(CustomLogger):
             return response
 
         return result
+
+    def supports_scan_only_tool_results(self) -> bool:
+        """Whether this guardrail can scan tool-result content.
+
+        Guardrails whose own role filtering only ever scans human-authored
+        messages override this to return False, so configuring them with
+        ``scan_only_tool_results`` is rejected at initialization instead of
+        silently scanning nothing on every request.
+        """
+        return True
+
+    def structured_messages_cover_full_request(self) -> bool:
+        """Whether returned ``structured_messages`` span the whole request.
+
+        Translation handlers hand guardrails only the in-scope subset of the
+        conversation and merge a returned ``structured_messages`` list back
+        into the full request. A guardrail that already rebuilds the complete
+        conversation itself (like CrowdStrike AIDR with its skip filters
+        active) overrides this to return True so the handler installs the
+        returned list as-is instead of merging it a second time, which would
+        duplicate the out-of-scope messages.
+        """
+        return False
 
     def should_run_guardrail(
         self,
@@ -892,9 +924,9 @@ class CustomGuardrail(CustomLogger):
         if event_type is not None:
             guardrail_mode = event_type
         elif isinstance(self.event_hook, Mode):
-            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))  # type: ignore[typeddict-item]
+            guardrail_mode = GuardrailMode(**dict(self.event_hook.model_dump()))
         else:
-            guardrail_mode = self.event_hook  # type: ignore[assignment]
+            guardrail_mode = self.event_hook
 
         from litellm.litellm_core_utils.core_helpers import (
             filter_exceptions_from_params,

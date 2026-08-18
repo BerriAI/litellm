@@ -1,6 +1,6 @@
 import warnings
 from enum import Enum
-from typing import Final, Literal, Union
+from typing import Final, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -115,7 +115,7 @@ class SAPToolChatMessage(BaseModel):
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
-ChatMessage = Union[SAPMessage, SAPUserMessage, SAPAssistantMessage, SAPToolChatMessage]
+ChatMessage = SAPMessage | SAPUserMessage | SAPAssistantMessage | SAPToolChatMessage
 
 
 class ResponseFormat(BaseModel):

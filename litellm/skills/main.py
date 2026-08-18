@@ -160,7 +160,7 @@ def create_skill(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate_skill", False) is True
 
@@ -180,7 +180,7 @@ def create_skill(
 
         # Merge extra_body if provided
         if extra_body:
-            create_request.update(extra_body)  # type: ignore
+            create_request.update(extra_body)
 
         # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
@@ -349,7 +349,7 @@ def list_skills(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist_skills", False) is True
 
@@ -390,7 +390,7 @@ def list_skills(
 
         # Merge extra_query if provided
         if extra_query:
-            list_params.update(extra_query)  # type: ignore
+            list_params.update(extra_query)
 
         # Validate environment and get headers
         headers = extra_headers or {}
@@ -522,7 +522,7 @@ def get_skill(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_skill", False) is True
 
@@ -686,7 +686,7 @@ def delete_skill(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_skill", False) is True
 

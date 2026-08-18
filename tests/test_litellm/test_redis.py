@@ -864,3 +864,49 @@ def test_redis_uses_the_hiredis_response_parser():
     client = get_redis_client(host="redis-host", port=6379)
     connection = client.connection_pool.make_connection()
     assert isinstance(connection._parser, _HiredisParser)
+
+
+def test_init_arg_names_sees_through_decorated_inits():
+    """redis-py >= 7.4 wraps AbstractConnection.__init__ with @deprecated_args, whose
+    wrapper is declared (self, *args, **kwargs). Introspecting the wrapper directly
+    yields no real parameters, which silently emptied the from_url allowlist and
+    dropped socket_timeout from url-configured connections. The MRO walk must follow
+    __wrapped__ to the true signature.
+    """
+    import functools
+
+    from litellm._redis import _init_arg_names
+
+    def deprecating(fn):
+        @functools.wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            return fn(self, *args, **kwargs)
+
+        return wrapper
+
+    class Base:
+        @deprecating
+        def __init__(self, socket_timeout=None, socket_connect_timeout=None):
+            pass
+
+    class Concrete(Base):
+        def __init__(self, host=None, **kwargs):
+            super().__init__(**kwargs)
+
+    names = _init_arg_names(Concrete)
+    assert "socket_timeout" in names
+    assert "socket_connect_timeout" in names
+    assert "host" in names
+
+
+def test_url_allowlist_always_carries_socket_timeouts():
+    """The load-bearing invariant behind test_url_config_* against the INSTALLED
+    redis-py, whatever its version: if a redis-py release changes how its __init__
+    signatures are declared (7.4 did, via @deprecated_args), this is the first
+    assertion that goes red.
+    """
+    from litellm._redis import _get_redis_url_kwargs
+
+    allowed = _get_redis_url_kwargs()
+    assert "socket_timeout" in allowed
+    assert "socket_connect_timeout" in allowed

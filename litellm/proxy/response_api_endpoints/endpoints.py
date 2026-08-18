@@ -12,6 +12,9 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_responses_api_usage as _blocked_responses_api_usage,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
@@ -23,7 +26,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
 )
-from litellm.types.llms.openai import REASONING_EFFORT, ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import REASONING_EFFORT, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
 if TYPE_CHECKING:
@@ -95,7 +98,7 @@ def _normalize_tool_dialect(
 
 def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
     messages: Final = data.get("messages")
-    if isinstance(messages, list) and len(messages) > 0:
+    if isinstance(messages, list) and messages:
         return True
     return "messages" in data and "input" not in data
 
@@ -121,7 +124,7 @@ def _parse_cursor_model_variant(model: str) -> _CursorModelVariant:
 def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
     if llm_router is None:
         return False
-    if model in llm_router.model_names or model in llm_router.model_group_alias:
+    if llm_router.is_recognized_model(model):
         return True
     if model in llm_router.team_public_model_names:
         return True
@@ -356,7 +359,7 @@ async def responses_api(
         # Store in managed objects table if background mode is enabled
         if data.get("background") and isinstance(response, ResponsesAPIResponse):
             if response.status in ["queued", "in_progress"]:
-                from litellm_enterprise.proxy.hooks.managed_files import (  # type: ignore
+                from litellm_enterprise.proxy.hooks.managed_files import (
                     _PROXY_LiteLLMManagedFiles,
                 )
 
@@ -415,7 +418,7 @@ async def responses_api(
             model=e.model or data.get("model"),
             output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
             status="completed",
-            usage=ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+            usage=_blocked_responses_api_usage(e.original_response),
         )
         return response_obj
     except Exception as e:
@@ -1327,7 +1330,7 @@ async def responses_websocket_endpoint(
     async def return_body():
         return _body_bytes
 
-    request.body = return_body  # type: ignore
+    request.body = return_body
 
     # Phase 1: pre-call processing (auth, guardrails, rate limits)
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)

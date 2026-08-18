@@ -27,7 +27,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
 try:
     from fastapi.exceptions import HTTPException
 except ImportError:
-    HTTPException = None  # type: ignore
+    HTTPException = None
 
 
 class PipelineExecutor:
@@ -174,7 +174,9 @@ class PipelineExecutor:
 
             # Use unified_guardrail path if callback implements apply_guardrail
             target: CustomLogger = callback
-            use_unified: Final = "apply_guardrail" in type(callback).__dict__
+            use_unified: Final = (
+                "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
+            )
             if use_unified:
                 data["guardrail_to_apply"] = callback
                 target = UnifiedLLMGuardrails()
@@ -182,9 +184,9 @@ class PipelineExecutor:
             if mode == "pre_call":
                 response = await target.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
-                    cache=None,  # type: ignore
+                    cache=None,
                     data=data,
-                    call_type=call_type,  # type: ignore
+                    call_type=call_type,
                 )
                 if isinstance(callback, CustomGuardrail):
                     callback.mark_pre_call_hook_ran(data)
@@ -194,7 +196,7 @@ class PipelineExecutor:
                 response = await target.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
                     data=data,
-                    response=data.get("response"),  # type: ignore
+                    response=data.get("response"),
                 )
             else:
                 return ("error", None, f"Unsupported pipeline mode: {mode}", None)

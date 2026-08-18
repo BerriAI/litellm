@@ -2,7 +2,7 @@ import React from "react";
 import { Button, Modal, Typography } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Text } from "@tremor/react";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 export interface InvitationLink {
   id: string;
@@ -58,7 +58,7 @@ export default function OnboardingModal({
   invitationLinkData,
   modalType = "invitation",
 }: OnboardingProps) {
-  const { Title, Paragraph } = Typography;
+  const { Paragraph } = Typography;
   const handleInvitationOk = () => {
     setIsInvitationLinkModalVisible(false);
   };
@@ -100,7 +100,7 @@ export default function OnboardingModal({
         </Text>
       </div>
       <div className="flex justify-end mt-5">
-        <CopyToClipboard text={getInvitationUrl()} onCopy={() => NotificationsManager.success("Copied!")}>
+        <CopyToClipboard text={getInvitationUrl()} onCopy={() => toast.success("Copied!")}>
           <Button type="primary">
             {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
           </Button>
