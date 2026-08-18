@@ -4269,10 +4269,9 @@ class TestClassifierPlugin:
         plugin = _FixedTierClassifier("SIMPLE")
         router = _plugin_router(mock_router_instance, plugin)
         raw = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-        resolved = [{"role": "user", "content": "hi"}]
-        await router.aclassify("hi", messages=resolved, raw_messages=raw)
+        await router.aclassify("hi", messages=[{"role": "user", "content": "hi"}], raw_messages=raw)
         assert plugin.seen_context.raw_messages == raw
-        assert plugin.seen_context.structured_messages == resolved
+        assert plugin.seen_context.structured_messages == raw
         assert plugin.seen_context.candidate_models == [
             "gpt-4o-mini",
             "gpt-4o",

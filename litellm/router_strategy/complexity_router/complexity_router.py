@@ -28,6 +28,7 @@ from pydantic import BaseModel, create_model
 from litellm._logging import verbose_router_logger
 from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import (
@@ -1120,7 +1121,7 @@ class ComplexityRouter(CustomLogger):
         system_prompt: str | None = None,
         request_kwargs: dict[str, Any] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
-        raw_messages: Sequence[Mapping[str, object]] | None = None,
+        raw_messages: list[dict[str, Any]] | None = None,  # mutable-ok: same shape _run_routing_plugins receives
     ) -> ClassificationOutcome:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
@@ -1131,7 +1132,7 @@ class ComplexityRouter(CustomLogger):
         the heuristic scorer and default_model. The outcome's `cause` reports which path actually ran.
         """
         if self.config.classifier_type == "custom":
-            return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, messages, raw_messages)
+            return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
@@ -1172,23 +1173,25 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None,
-        request_kwargs: Mapping[str, Any] | None,
-        messages: Sequence[Mapping[str, object]] | None,
-        raw_messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to resolve_structured_messages as-is
+        raw_messages: list[dict[str, Any]] | None,  # mutable-ok: same shape _run_routing_plugins receives
     ) -> ClassificationOutcome:
+        from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
         from litellm.types.router import RoutingContext
 
         plugin: Final = self.config.classifier_plugin
         if plugin is None:
             return self._classifier_failure_outcome("classifier_plugin is not set", prompt, system_prompt)
-        kwargs: Final = request_kwargs or EMPTY_MAPPING
-        metadata_key: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        kwargs: Final = request_kwargs if request_kwargs is not None else EMPTY_MAPPING
         pools: Final = self._tier_pools()
         context: Final = RoutingContext(
-            raw_messages=tuple(raw_messages or messages or ()),
-            structured_messages=tuple(messages or ()),
+            raw_messages=raw_messages or (),
+            structured_messages=resolve_structured_messages(
+                messages=raw_messages, request_kwargs=request_kwargs or EMPTY_MAPPING
+            )
+            or (),
             candidate_models=tuple(model for pool in pools.values() for model in pool),
-            metadata=kwargs.get(metadata_key) or EMPTY_MAPPING,
+            metadata=kwargs.get(get_metadata_variable_name_from_kwargs(kwargs)) or EMPTY_MAPPING,
         )
         try:
             verdict: Final = await asyncio.wait_for(
@@ -1464,7 +1467,7 @@ class ComplexityRouter(CustomLogger):
         from litellm.types.router import RoutingContext
 
         tier_key: Final = _tier_name(tier)
-        metadata_key: Final = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
         pool: Final = tuple(self._tier_pools().get(tier_key, ()))
         if not pool:
             # Nothing for the plugins to filter. Falling through would raise the
