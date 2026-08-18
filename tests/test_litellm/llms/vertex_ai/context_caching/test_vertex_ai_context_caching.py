@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2122,3 +2123,146 @@ class TestContextCachingMultiRegionUrls:
 
         assert url.startswith("https://aiplatform.googleapis.com/")
         assert "/locations/global/cachedContents" in url
+
+
+class TestResolvedCacheNameMemoization:
+    """A resolved cache name is remembered, so a cache *hit* costs no round trip.
+
+    See https://github.com/BerriAI/litellm/issues/36395 - the `cachedContents`
+    list call ran before every generation, adding ~1.55s p50 to each cache read.
+    """
+
+    def setup_method(self):
+        from litellm.llms.vertex_ai.context_caching import (
+            vertex_ai_context_caching as ctx_caching,
+        )
+
+        ctx_caching._resolved_cache_names.clear()
+        self.ctx_caching = ctx_caching
+        self.context_caching = ContextCachingEndpoints()
+        self.mock_logging = MagicMock(spec=Logging)
+        self.mock_client = MagicMock(spec=HTTPHandler)
+
+    def teardown_method(self):
+        self.ctx_caching._resolved_cache_names.clear()
+
+    @staticmethod
+    def _expire_time(seconds_from_now: int) -> str:
+        return (datetime.now(timezone.utc) + timedelta(seconds=seconds_from_now)).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+
+    def _list_response(self, cache_key: str, expire_time: str | None):
+        item = {"name": "cache_1", "displayName": cache_key}
+        if expire_time is not None:
+            item["expireTime"] = expire_time
+        response = MagicMock()
+        response.json.return_value = {"cachedContents": [item]}
+        return response
+
+    def _check(self, cache_key: str):
+        return self.context_caching.check_cache(
+            cache_key=cache_key,
+            client=self.mock_client,
+            headers={"Authorization": "Bearer token"},
+            api_key="test_key",
+            api_base=None,
+            logging_obj=self.mock_logging,
+            custom_llm_provider="vertex_ai",
+            vertex_project="test_project",
+            vertex_location="us-central1",
+            vertex_auth_header="Bearer test-token",
+        )
+
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_repeated_lookups_issue_one_list_call(self, mock_get_token_url):
+        """The second and third lookups must not hit the network at all."""
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        self.mock_client.get.return_value = self._list_response(
+            "target_key", self._expire_time(3600)
+        )
+
+        for _ in range(3):
+            assert self._check("target_key") == "cache_1"
+
+        assert self.mock_client.get.call_count == 1
+
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_expired_entry_is_re_resolved(self, mock_get_token_url):
+        """An entry past its expiry must not be served; re-list instead."""
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        self.mock_client.get.return_value = self._list_response(
+            "target_key", self._expire_time(3600)
+        )
+
+        assert self._check("target_key") == "cache_1"
+        assert self.mock_client.get.call_count == 1
+
+        # the cache lapsed while the proxy was up
+        self.ctx_caching._resolved_cache_names["target_key"] = (
+            "cache_1",
+            datetime.now(timezone.utc).timestamp() - 1,
+        )
+
+        assert self._check("target_key") == "cache_1"
+        assert self.mock_client.get.call_count == 2
+
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_entry_near_expiry_is_re_resolved(self, mock_get_token_url):
+        """Within the safety margin, prefer a re-list over a cache about to lapse."""
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        self.mock_client.get.return_value = self._list_response(
+            "target_key", self._expire_time(5)
+        )
+
+        assert self._check("target_key") == "cache_1"
+        assert self._check("target_key") == "cache_1"
+        assert self.mock_client.get.call_count == 2
+
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_missing_expire_time_is_not_memoized(self, mock_get_token_url):
+        """Without a usable expiry we cannot age the entry out, so don't keep it."""
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        self.mock_client.get.return_value = self._list_response("target_key", None)
+
+        assert self._check("target_key") == "cache_1"
+        assert self._check("target_key") == "cache_1"
+        assert self.mock_client.get.call_count == 2
+        assert "target_key" not in self.ctx_caching._resolved_cache_names
+
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_distinct_keys_do_not_share_an_entry(self, mock_get_token_url):
+        """Two prefixes must resolve independently."""
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        expire = self._expire_time(3600)
+
+        def _respond(url, headers):
+            # echo back whichever key was asked for last
+            return self._list_response(_respond.key, expire)
+
+        for key in ("key_a", "key_b"):
+            _respond.key = key
+            self.mock_client.get.side_effect = _respond
+            assert self._check(key) == "cache_1"
+
+        assert self.mock_client.get.call_count == 2
+        assert set(self.ctx_caching._resolved_cache_names) == {"key_a", "key_b"}
+
+    def test_unparseable_expire_time_is_not_memoized(self):
+        """A malformed expiry degrades to today's behaviour rather than guessing."""
+        self.ctx_caching._remember_cache_name("k", "cache_1", "not-a-timestamp")
+        assert "k" not in self.ctx_caching._resolved_cache_names
+
+    def test_nanosecond_precision_expire_time_is_parsed(self):
+        """Google emits up to 9 fractional digits; fromisoformat accepts 6."""
+        parsed = self.ctx_caching._parse_expire_time("2099-10-02T15:01:23.045123456Z")
+        assert parsed is not None
+        assert parsed > datetime.now(timezone.utc).timestamp()
+
+    def test_entry_count_is_bounded(self):
+        """A long-lived proxy with many prefixes must not grow without bound."""
+        expire = self._expire_time(3600)
+        limit = self.ctx_caching._RESOLVED_CACHE_MAX_ENTRIES
+        for i in range(limit + 5):
+            self.ctx_caching._remember_cache_name(f"key_{i}", f"cache_{i}", expire)
+        assert len(self.ctx_caching._resolved_cache_names) <= limit

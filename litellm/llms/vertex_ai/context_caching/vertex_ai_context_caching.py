@@ -1,5 +1,8 @@
 from typing import Final, Literal
 
+import time
+from datetime import datetime
+
 import httpx
 
 import litellm
@@ -30,6 +33,77 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
+
+# Maps a generated cache key -> (google cache name, expiry as a unix timestamp).
+#
+# Google does not let us choose the cache name, so finding an existing cache
+# means listing `cachedContents` and matching on `displayName`. That list call
+# runs before every generation, which adds a full round trip (and pagination)
+# to every cache *hit*. Remembering the name we already resolved removes it.
+#
+# Entries are only trusted until the cache's own `expireTime`, so an expired
+# cache is re-resolved rather than passed to the model. `_RESOLVED_CACHE_MAX_ENTRIES`
+# bounds the dict for long-lived proxies with many distinct prefixes.
+_resolved_cache_names: dict[str, tuple[str, float]] = {}
+_RESOLVED_CACHE_MAX_ENTRIES: Final = 1000
+
+# Re-resolve slightly before the stated expiry, so a cache that lapses between
+# our check and Google serving the request is not handed to generateContent.
+_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 30.0
+
+
+def _parse_expire_time(expire_time: str | None) -> float | None:
+    """Convert Google's RFC 3339 `expireTime` to a unix timestamp.
+
+    Returns None when absent or unparseable, which makes the caller skip
+    memoization rather than guess at a lifetime.
+    """
+    if not expire_time:
+        return None
+    try:
+        normalized = expire_time.replace("Z", "+00:00")
+        # Python's fromisoformat rejects more than 6 fractional-second digits,
+        # and Google emits up to 9.
+        if "." in normalized:
+            head, _, tail = normalized.partition(".")
+            digits = ""
+            for ch in tail:
+                if ch.isdigit():
+                    digits += ch
+                else:
+                    break
+            offset = tail[len(digits) :]
+            normalized = f"{head}.{digits[:6]}{offset}"
+        return datetime.fromisoformat(normalized).timestamp()
+    except Exception:
+        verbose_logger.debug("Vertex context caching: could not parse expireTime=%s", expire_time)
+        return None
+
+
+def _remember_cache_name(cache_key: str, cache_name: str | None, expire_time: str | None) -> None:
+    """Memoize a resolved cache name until its own expiry."""
+    if not cache_name:
+        return
+    expires_at = _parse_expire_time(expire_time)
+    if expires_at is None:
+        # No usable expiry: prefer today's behaviour (re-resolve) over serving
+        # a name we cannot age out.
+        return
+    if len(_resolved_cache_names) >= _RESOLVED_CACHE_MAX_ENTRIES:
+        _resolved_cache_names.clear()
+    _resolved_cache_names[cache_key] = (cache_name, expires_at)
+
+
+def _get_remembered_cache_name(cache_key: str) -> str | None:
+    """Return a previously resolved cache name if it has not expired."""
+    entry = _resolved_cache_names.get(cache_key)
+    if entry is None:
+        return None
+    cache_name, expires_at = entry
+    if time.time() + _EXPIRY_SAFETY_MARGIN_SECONDS >= expires_at:
+        _resolved_cache_names.pop(cache_key, None)
+        return None
+    return cache_name
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -115,6 +189,10 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
+        remembered = _get_remembered_cache_name(cache_key)
+        if remembered is not None:
+            return remembered
+
         _, base_url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider=custom_llm_provider,
@@ -172,7 +250,9 @@ class ContextCachingEndpoints(VertexBase):
             for cached_item in all_cached_items["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
-                    return cached_item.get("name")
+                    cache_name = cached_item.get("name")
+                    _remember_cache_name(cache_key, cache_name, cached_item.get("expireTime"))
+                    return cache_name
 
             # Check if there are more pages
             page_token = all_cached_items.get("nextPageToken")
@@ -206,6 +286,10 @@ class ContextCachingEndpoints(VertexBase):
         OR
         - None
         """
+
+        remembered = _get_remembered_cache_name(cache_key)
+        if remembered is not None:
+            return remembered
 
         _, base_url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
@@ -264,7 +348,9 @@ class ContextCachingEndpoints(VertexBase):
             for cached_item in all_cached_items["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
-                    return cached_item.get("name")
+                    cache_name = cached_item.get("name")
+                    _remember_cache_name(cache_key, cache_name, cached_item.get("expireTime"))
+                    return cache_name
 
             # Check if there are more pages
             page_token = all_cached_items.get("nextPageToken")
@@ -427,6 +513,11 @@ class ContextCachingEndpoints(VertexBase):
         cached_content_response_obj: Final = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
+        _remember_cache_name(
+            generated_cache_key,
+            cached_content_response_obj["name"],
+            raw_response_cached.get("expireTime"),
+        )
         return (
             non_cached_messages,
             optional_params,
@@ -581,6 +672,11 @@ class ContextCachingEndpoints(VertexBase):
         raw_response_cached: Final = response.json()
         cached_content_response_obj: Final = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
+        )
+        _remember_cache_name(
+            generated_cache_key,
+            cached_content_response_obj["name"],
+            raw_response_cached.get("expireTime"),
         )
         return (
             non_cached_messages,
