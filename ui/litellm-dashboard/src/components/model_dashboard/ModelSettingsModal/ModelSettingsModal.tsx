@@ -4,8 +4,14 @@ import { ConfigType, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/
 import { StoreModelInDBParams, useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { Button, Form, Modal, Skeleton, Space, Switch, Typography } from "antd";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button, Modal, Skeleton, Space, Typography } from "antd";
+import { CircleHelp } from "lucide-react";
 import React, { useEffect, useMemo } from "react";
+import { useForm } from "react-hook-form";
 
 interface ModelSettingsModalProps {
   isVisible: boolean;
@@ -13,8 +19,17 @@ interface ModelSettingsModalProps {
   onSuccess?: () => void;
 }
 
+const labelWithHint = (label: string, hint: string): React.ReactNode => (
+  <>
+    {label}
+    <Tooltip>
+      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  </>
+);
+
 const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCancel, onSuccess }) => {
-  const [form] = Form.useForm();
   const { mutateAsync, isPending } = useStoreModelInDB();
   const { data: proxyConfigData, isLoading: isLoadingConfig, refetch } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
 
@@ -26,7 +41,7 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
   }, [isVisible, refetch]);
 
   // Compute initial values from fetched config data
-  const initialValues = useMemo(() => {
+  const initialValues = useMemo<StoreModelInDBParams>(() => {
     if (!proxyConfigData) {
       return {
         store_model_in_db: false,
@@ -39,6 +54,8 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
       store_model_in_db: storeModelField?.field_value ?? false,
     };
   }, [proxyConfigData]);
+
+  const form = useForm<StoreModelInDBParams>({ defaultValues: initialValues, values: initialValues });
 
   const handleFormSubmit = async (formValues: StoreModelInDBParams) => {
     try {
@@ -58,7 +75,7 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
   };
 
   const handleCancel = () => {
-    form.resetFields();
+    form.reset(initialValues);
     onCancel();
   };
 
@@ -71,32 +88,47 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
           <Button onClick={handleCancel} disabled={isPending || isLoadingConfig}>
             Cancel
           </Button>
-          <Button type="primary" loading={isPending} disabled={isLoadingConfig} onClick={() => form.submit()}>
+          <Button
+            type="primary"
+            loading={isPending}
+            disabled={isLoadingConfig}
+            onClick={() => void form.handleSubmit(handleFormSubmit)()}
+          >
             {isPending ? "Saving..." : "Save Settings"}
           </Button>
         </Space>
       }
       onCancel={handleCancel}
     >
-      <Form
-        key={proxyConfigData ? JSON.stringify(initialValues) : "loading"}
-        form={form}
-        layout="horizontal"
-        onFinish={handleFormSubmit}
-        initialValues={initialValues}
-      >
-        <Form.Item
-          label="Store Model in DB"
-          name="store_model_in_db"
-          tooltip={
-            proxyConfigData?.find((f) => f.field_name === "store_model_in_db")?.field_description ||
-            "If enabled, models and config are stored in and loaded from the database."
-          }
-          valuePropName="checked"
-        >
-          {isLoadingConfig ? <Skeleton.Input active block /> : <Switch />}
-        </Form.Item>
-      </Form>
+      <TooltipProvider>
+        <form onSubmit={(event) => event.preventDefault()}>
+          <FieldGroup>
+            <FormField
+              control={form.control}
+              name="store_model_in_db"
+              label={labelWithHint(
+                "Store Model in DB",
+                proxyConfigData?.find((f) => f.field_name === "store_model_in_db")?.field_description ||
+                  "If enabled, models and config are stored in and loaded from the database.",
+              )}
+            >
+              {({ id, value, onChange, onBlur }) =>
+                isLoadingConfig ? (
+                  <Skeleton.Input active block />
+                ) : (
+                  <Switch
+                    id={id}
+                    checked={Boolean(value)}
+                    onCheckedChange={onChange}
+                    onBlur={onBlur}
+                    className="w-fit"
+                  />
+                )
+              }
+            </FormField>
+          </FieldGroup>
+        </form>
+      </TooltipProvider>
     </Modal>
   );
 };
