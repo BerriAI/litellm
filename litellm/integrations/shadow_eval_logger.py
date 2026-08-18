@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from itertools import groupby
 from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator, model_validator
 
@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
@@ -306,16 +307,21 @@ Criteria: correctness, completeness, clarity, conciseness.
 Return ONLY valid JSON in this exact format, no other text:
 {
   "preference": "A" | "B" | "tie",
-  "confidence": <0.0 to 1.0>,
-  "reasoning": "<one sentence>"
+  "confidence": <0.0 to 1.0>
 }"""
 
 
 class PairwiseVerdict(BaseModel):
-    """The judge's blind A/B verdict, validated at the parse boundary."""
+    """The judge's blind A/B verdict: the response_format schema sent with the judge call
+    and the validation contract on its reply. Both fields are required and preference is
+    closed over the prompt's labels, so a malformed or truncated reply is an
+    unparseable-verdict error row, never a defaulted or fabricated verdict."""
 
-    preference: str = "tie"
-    confidence: float = 0.0
+    preference: Literal["A", "B", "tie"]
+    confidence: float
+
+
+PAIRWISE_JUDGE_RESPONSE_FORMAT: Final = type_to_response_format_param(PairwiseVerdict)
 
 
 def _sample_hits(request_id: str, job_id: str, percentage: float) -> bool:
@@ -826,6 +832,7 @@ class ShadowEvalLogger(CustomLogger):
                 judge_messages,  # pyright: ignore[reportArgumentType]  # plain SDK message dicts
                 temperature=0,
                 max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
+                response_format=PAIRWISE_JUDGE_RESPONSE_FORMAT,
                 metadata=judge_metadata,
             )
         except Exception as e:  # noqa: BLE001  # judge outages become error rows, not crashes

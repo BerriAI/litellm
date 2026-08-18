@@ -15,6 +15,7 @@ from litellm.integrations.shadow_eval_logger import (
     _MAX_ERROR_CHARS,
     _MAX_JUDGE_PROMPT_CHARS,
     JUDGE_MAX_OUTPUT_TOKENS,
+    PAIRWISE_JUDGE_RESPONSE_FORMAT,
     ActiveShadowEvalJob,
     ShadowEvalLogger,
     _failure_detail,
@@ -493,6 +494,26 @@ class TestSuccessHookSkipChain:
         assert row["error"] is None
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 0
 
+    async def test_judge_call_carries_the_verdict_schema(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        router = _router()
+        logger = _logger(router=router, prisma=_prisma(), jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+
+        judge_call = next(
+            c.kwargs
+            for c in router.acompletion.call_args_list
+            if c.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_JUDGE_CALL_ORIGIN
+        )
+        assert judge_call["response_format"] == PAIRWISE_JUDGE_RESPONSE_FORMAT
+        schema = judge_call["response_format"]["json_schema"]["schema"]
+        assert schema["required"] == ["preference", "confidence"]
+        assert schema["properties"]["preference"]["enum"] == ["A", "B", "tie"]
+
     async def test_shadow_call_messages_survive_in_place_provider_rewrites(self, monkeypatch: pytest.MonkeyPatch):
         """Provider transforms (anthropic factory, cache-control hook) rewrite messages with
         `messages[i] = ...`; the logger's immutable snapshot must never reach them directly."""
@@ -760,8 +781,17 @@ class TestShadowPipeline:
         [
             (lambda: _failing_router(), "provider exploded", 0.0),
             (lambda: _router(judge_json="I prefer response A, definitely"), "unparseable judge verdict", 0.007),
+            (lambda: _router(judge_json='{"preference": "'), "unparseable judge verdict", 0.007),
+            (lambda: _router(judge_json="{}"), "unparseable judge verdict", 0.007),
+            (lambda: _router(judge_json='{"preference": "A", "confidence": "0.8'), "unparseable judge verdict", 0.007),
         ],
-        ids=["shadow-call-fails", "judge-verdict-unparseable"],
+        ids=[
+            "shadow-call-fails",
+            "judge-verdict-unparseable",
+            "verdict-truncated-before-fields",
+            "verdict-empty-object",
+            "verdict-truncated-inside-confidence",
+        ],
     )
     async def test_failures_become_error_rows_and_keep_billed_judge_cost(
         self, router_factory, expected_error, expected_cost, monkeypatch: pytest.MonkeyPatch
