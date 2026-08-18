@@ -433,7 +433,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if explicit_cap is not None:
             try:
                 return max(0, int(explicit_cap)) * candidate_count
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         return self.parallel_request_limiter.no_max_tokens_output_floor(min_configured_otpm_limit) * candidate_count
 
