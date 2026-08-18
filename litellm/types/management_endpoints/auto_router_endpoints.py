@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final, Literal, TypeAlias
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.utils import StandardLoggingRoutingDecision
@@ -155,13 +155,17 @@ DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
 
 
 class StartShadowEvalRequest(BaseModel):
-    """Start duplicating a key's traffic for blind comparison against an auto-router."""
+    """Start duplicating one or more keys' traffic for blind comparison against an auto-router."""
 
-    api_key_id: str = Field(
+    api_key_ids: tuple[str, ...] = Field(
+        min_length=1,
+        max_length=100,
         description=(
-            "The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this "
-            "key's traffic; requests made with any other key are not sampled."
-        )
+            "The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these "
+            "keys' traffic; requests made with any other key are not sampled. Each key carries its own "
+            "max_turns budget, so one key exhausting its budget leaves the others sampling. At most 100 "
+            "keys per job, which also bounds every read the job's endpoints make."
+        ),
     )
     router_name: str = Field(description="The auto-router under evaluation, in either direction")
     direction: ShadowEvalDirection = Field(
@@ -204,8 +208,9 @@ class StartShadowEvalRequest(BaseModel):
         ge=1,
         le=2000,
         description=(
-            "Sample budget: the job judges at most this many turns, then completes. This is also the spend "
-            "bound; expected judge cost is roughly max_turns times one judge call"
+            "Per-key sample budget: the job judges at most this many turns of EACH scoped key's traffic, "
+            "so a job over N keys judges at most N times max_turns turns. This is also the spend bound; "
+            "expected judge cost is roughly that turn ceiling times one judge call"
         ),
     )
 
@@ -213,6 +218,12 @@ class StartShadowEvalRequest(BaseModel):
     @classmethod
     def _round_percentage(cls, value: float) -> float:
         return round(value, 2)
+
+    @field_validator("api_key_ids")
+    @classmethod
+    def _dedupe_keys(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """A key named twice would collide with itself on the one-active-per-(key, direction) index."""
+        return tuple(dict.fromkeys(value))
 
     @model_validator(mode="after")
     def _baseline_model_matches_direction(self) -> "StartShadowEvalRequest":
@@ -251,24 +262,33 @@ class ShadowEvalResult(BaseModel):
     by_tier: tuple[ShadowEvalSlice, ...]
     by_current_model: tuple[ShadowEvalSlice, ...] = Field(
         description=(
-            "Sliced by the model that served the real arm: the key's incumbent models in forward mode, "
+            "Sliced by the model that served the real arm: the keys' incumbent models in forward mode, "
             "and in reverse the models the router itself picked"
         )
+    )
+    by_key: tuple[ShadowEvalSlice, ...] = Field(
+        description=(
+            "One slice per scoped key that has judged verdicts, grouped on the raw key hash. Keys the job "
+            "scopes but has not judged a turn for yet are absent rather than reported as zero"
+        ),
     )
     overall_shadow_win_rate_pct: float
     overall_tie_rate_pct: float
 
 
-class ShadowEvalJobResponse(BaseModel):
-    """A shadow-eval job. Validates directly from the prisma record (job_id reads the
-    row's id); status is derived from stopped_at and ends_at, never stored, so no writer
-    anywhere can produce an inconsistent one. Aggregate fields are populated by the
-    detail endpoint only and stay None on list responses."""
+class ShadowEvalJobKeyResponse(BaseModel):
+    """One key a job shadows, with its own budget and stop state."""
 
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
-
-    job_id: str = Field(validation_alias=AliasChoices("id", "job_id"))
-    api_key_id: str = Field(description="The hashed virtual key whose traffic this job evaluates, and only that key's")
+    api_key_id: str = Field(description="The hashed virtual key whose traffic this entry scopes")
+    max_turns: int = Field(description="This key's own sample budget, independent of its siblings'")
+    stopped_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When this key stopped sampling, whether its own budget ran out, the window closed, or an "
+            "operator stopped the job. The key reads completed whenever the job does, otherwise stopped "
+            "once this is set and running until then"
+        ),
+    )
     key_alias: str | None = Field(
         default=None,
         description="Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted",
@@ -277,15 +297,26 @@ class ShadowEvalJobResponse(BaseModel):
         default=None,
         description="Masked display name (sk-...) of the shadowed key, resolved at read time like key_alias",
     )
+
+
+class ShadowEvalJobResponse(BaseModel):
+    """A shadow-eval job over one or more keys, each with its own budget and stop state;
+    status is derived from the keys' stopped_at and ends_at, never stored, so no writer
+    anywhere can produce an inconsistent one. Aggregate fields are populated by the
+    detail endpoint only and stay None on list responses."""
+
+    job_id: str
+    keys: tuple[ShadowEvalJobKeyResponse, ...] = Field(
+        min_length=1,
+        description="The keys whose traffic this job evaluates, and only those keys', each with its own budget",
+    )
     router_name: str
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
     judge_model: str
     shadow_percentage: float
-    max_turns: int
     created_at: datetime
     ends_at: datetime
-    stopped_at: datetime | None = None
 
     judged_count: int | None = Field(default=None, description="Verdicts recorded; detail endpoint only")
     error_count: int | None = Field(default=None, description="Sampled attempts that errored; detail endpoint only")
@@ -296,12 +327,13 @@ class ShadowEvalJobResponse(BaseModel):
     @computed_field
     @property
     def status(self) -> ShadowEvalStatus:
-        """A job whose window has passed reads completed even if a later sweep stamped
-        stopped_at; stopped means sampling ended before the window did."""
+        """A job whose window has passed reads completed even if a sweep stamped its keys
+        first; stopped means every key ended sampling before the window did. One key
+        exhausting its own budget leaves the job running while any sibling still samples."""
         if datetime.now(timezone.utc) >= (
             self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
         ):
             return "completed"
-        if self.stopped_at is not None:
+        if all(key.stopped_at is not None for key in self.keys):
             return "stopped"
         return "running"

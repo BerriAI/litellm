@@ -77,7 +77,15 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   baseline_model: null,
   judge_model: "anthropic/claude-sonnet-5",
   shadow_percentage: 10,
-  max_turns: 200,
+  keys: [
+    {
+      api_key_id: "hashed-key-abc",
+      max_turns: 200,
+      stopped_at: null,
+      key_alias: "prod-alpha",
+      key_name: "sk-...alpha",
+    },
+  ],
   judged_count: 42,
   error_count: 1,
   judge_spend: 3.21,
@@ -110,16 +118,25 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         avg_judge_confidence: 0.8,
       },
     ],
+    by_key: [],
     overall_shadow_win_rate_pct: 48.0,
     overall_tie_rate_pct: 22.0,
   },
   created_at: "2026-08-07T00:00:00Z",
   ends_at: "2026-09-07T00:00:00Z",
-  stopped_at: null,
-  api_key_id: "hashed-key-abc",
-  key_alias: "prod-alpha",
-  key_name: "sk-...alpha",
   last_error: null,
+  ...overrides,
+});
+
+const keyEntry = (
+  api_key_id: string,
+  overrides: Partial<ShadowEvalJob["keys"][number]> = {},
+): ShadowEvalJob["keys"][number] => ({
+  api_key_id,
+  max_turns: 200,
+  stopped_at: null,
+  key_alias: null,
+  key_name: null,
   ...overrides,
 });
 
@@ -199,8 +216,8 @@ describe("ShadowEvalSection", () => {
   it("gives every active job its own card with a stop button, with the form still offered", () => {
     mockHooks({
       jobs: [
-        job({ job_id: "job-a", status: "running", api_key_id: "key-a" }),
-        job({ job_id: "job-b", status: "running", api_key_id: "key-b" }),
+        job({ job_id: "job-a", status: "running", keys: [keyEntry("key-a")] }),
+        job({ job_id: "job-b", status: "running", keys: [keyEntry("key-b")] }),
       ],
     });
     render(<ShadowEvalSection />);
@@ -342,7 +359,7 @@ describe("ShadowEvalSection", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("keeps the start button disabled until key, router, and judge model are picked, then submits them", async () => {
+  it("keeps the start button disabled until key, router, and judge model are picked, then submits the key as a list", async () => {
     const user = userEvent.setup();
     const { start } = mockHooks({});
     render(<ShadowEvalSection />);
@@ -361,7 +378,7 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
-      api_key_id: "hash-alpha",
+      api_key_ids: ["hash-alpha"],
       router_name: "gpt-auto",
       direction: "forward",
       shadow_percentage: 10,
@@ -396,7 +413,7 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
-      api_key_id: "hash-alpha",
+      api_key_ids: ["hash-alpha"],
       router_name: "gpt-auto",
       direction: "reverse",
       baseline_model: "prod-claude",
@@ -429,9 +446,9 @@ describe("ShadowEvalSection", () => {
   });
 
   it("labels the shadowed key by alias, then masked name, then truncated hash", () => {
-    expect(shadowedKeyLabel(job())).toBe("prod-alpha");
-    expect(shadowedKeyLabel(job({ key_alias: null }))).toBe("sk-...alpha");
-    expect(shadowedKeyLabel(job({ key_alias: null, key_name: null }))).toBe("hashed-key…");
+    expect(shadowedKeyLabel(job().keys[0])).toBe("prod-alpha");
+    expect(shadowedKeyLabel(keyEntry("hashed-key-abc", { key_name: "sk-...alpha" }))).toBe("sk-...alpha");
+    expect(shadowedKeyLabel(keyEntry("hashed-key-abc"))).toBe("hashed-key…");
   });
 
   it("keeps an older job's verdicts reachable through the previous evaluations list", async () => {
