@@ -29,6 +29,7 @@ import {
   SaveOutlined,
 } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -96,11 +97,11 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "disable_global_guardrails",
 ]);
 
-const TEAM_MODEL_BADGE_VARIANTS: Record<TeamModelBadgeKind, "secondary" | "outline"> = {
-  "all-proxy": "secondary",
-  "no-default": "outline",
-  direct: "secondary",
-  "access-group": "secondary",
+const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
+  "all-proxy": "error",
+  "no-default": "neutral",
+  direct: "info",
+  "access-group": "success",
 };
 
 export interface TeamMembership {
@@ -819,7 +820,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       (badge, index) => (
                         <Tooltip key={`${badge.kind}-${badge.label}-${index}`} title={badge.tooltip}>
                           <span>
-                            <Badge variant={TEAM_MODEL_BADGE_VARIANTS[badge.kind]}>{badge.label}</Badge>
+                            <StatusBadge tone={TEAM_MODEL_BADGE_TONES[badge.kind]} label={badge.label} />
                           </span>
                         </Tooltip>
                       ),
