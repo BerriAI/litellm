@@ -2077,6 +2077,8 @@ def test_estimate_entry_output_tokens_prefers_max_tokens_over_max_output_tokens(
         ({"max_tokens": 40, "n": 5.0}, 200),
         ({"max_tokens": 40, "n": "10"}, 400),
         ({"max_tokens": 40, "n": "not-a-number"}, 40),
+        ({"max_tokens": 40, "n": 1e309}, 40),
+        ({"max_tokens": 1e309, "n": 3}, 2997),
         ({"n": 3}, 2997),
     ],
 )

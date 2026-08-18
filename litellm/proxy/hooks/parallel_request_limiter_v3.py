@@ -768,7 +768,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         for value in candidate_values:
             try:
                 candidate_count = max(candidate_count, int(value or 1))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
         return candidate_count
 
