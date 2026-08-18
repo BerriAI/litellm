@@ -1,11 +1,13 @@
 import asyncio
 import concurrent.futures
+import gc
 import json
 import os
 import sys
 import threading
 import time
 import unittest
+import weakref
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from parameterized import parameterized
@@ -6081,6 +6083,7 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
     def test_evicted_provider_is_shut_down(self):
         """An evicted provider is stopped, not silently dropped with its thread running."""
         logger = self._logger(cap=3)
+        before = len(self._live_exporter_threads())
         with patch.object(otel_module, "_shutdown_tracer_provider") as mock_shutdown:
             logger._get_tracer_with_dynamic_headers({"authorization": "Basic evict-me"})
             evicted = next(iter(logger._tracer_provider_cache.values()))
@@ -6091,6 +6094,12 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
             self.assertNotIn(evicted, logger._tracer_provider_cache.values())
             self._wait_for_call(mock_shutdown)
             mock_shutdown.assert_called_once_with(evicted.provider)
+
+        # The patch stopped the real shutdown, so stop the victim here; leaving its
+        # exporter thread alive would perturb the thread-census assertions elsewhere.
+        evicted.provider.shutdown()
+        still_cached = len(logger._tracer_provider_cache)
+        self.assertEqual(self._wait_for_exporter_threads(before + still_cached), before + still_cached)
 
     def _wait_for_call(self, mock_fn, timeout=10.0):
         """The shutdown runs on a worker thread, so give it a moment to land."""
@@ -6175,3 +6184,31 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
         logger._get_tracer_with_dynamic_headers({"authorization": "Basic shared-owner"})
 
         self.assertEqual(self._wait_for_exporter_threads(before) - before, 0)
+
+    def test_dropped_shared_exporter_provider_is_not_retained_by_an_exit_hook(self):
+        """A provider we may never shut down must not register an interpreter-exit hook.
+        The hook holds a strong reference, so the provider would be pinned for the life of
+        the process (the very leak this fixes) and would stop the shared exporter at exit."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic a"})
+        entry = next(iter(logger._tracer_provider_cache.values()))
+        self.assertFalse(entry.owns_exporter)
+        victim = weakref.ref(entry.provider)
+
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic b"})
+        del entry
+        gc.collect()
+
+        self.assertIsNone(victim(), "evicted shared-exporter provider is still referenced")
+
+    def test_provider_that_owns_its_exporter_keeps_its_exit_flush(self):
+        """The counterpart: a provider that owns a buffering processor must keep its exit
+        hook so its last batch still flushes when the process stops."""
+        logger = self._logger(cap=3)
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic owned"})
+        entry = next(iter(logger._tracer_provider_cache.values()))
+
+        self.assertTrue(entry.owns_exporter)
+        self.assertIsNotNone(entry.provider._atexit_handler)

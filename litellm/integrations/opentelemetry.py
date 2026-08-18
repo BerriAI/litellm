@@ -89,9 +89,7 @@ class _ResponseWithUsageView(TypedDict, total=False):
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
 
-# Dedicated so a dropped provider whose endpoint is unreachable, whose shutdown blocks for
-# the OTLP retry budget, cannot starve the shared executor that serves unrelated logging.
-# Threads spawn lazily, so a proxy that never evicts a provider never pays for this.
+# Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
 
 LITELLM_TRACER_NAME: Final = os.getenv("OTEL_TRACER_NAME", "litellm")
@@ -1100,6 +1098,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         drops is shut down. Without both, a proxy serving key-scoped credentials accumulates
         one live thread per credential set for the life of the process.
 
+        ``owns_exporter`` also decides ``shutdown_on_exit`` at build time: a provider we may
+        never shut down must not hold an interpreter-exit hook, which would both pin it in
+        memory for the life of the process and stop the shared exporter at exit. Those
+        providers use ``SimpleSpanProcessor``, which buffers nothing, so the hook costs them
+        no flush.
+
         ``owns_exporter`` describes the provider being built, and is cached with it, because
         the two dynamic entry points share this cache and can disagree: whether the LRU
         victim may be shut down is a property of the victim, never of the request that
@@ -1111,16 +1115,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self._tracer_provider_cache.move_to_end(cache_key)
                 return cached.provider.get_tracer(LITELLM_TRACER_NAME)
 
-        # Built outside the lock: constructing an exporter can block on DNS/TLS setup,
-        # which would otherwise stall every other tenant's spans.
+        # Built outside the lock: exporter construction can block on DNS/TLS.
         built: Final = _CachedTracerProvider(provider=build(), owns_exporter=owns_exporter)
 
         with self._tracer_provider_cache_lock:
             winner, dropped = self._insert_or_drop(cache_key, built)
 
         if dropped is not None and dropped.owns_exporter:
-            # Off the caller's thread: shutdown joins the exporter worker, which flushes
-            # with the OTLP retry budget and would otherwise stall the event loop.
+            # Off the caller's thread: shutdown joins the exporter worker.
             _PROVIDER_SHUTDOWN_EXECUTOR.submit(_shutdown_tracer_provider, dropped.provider)
         return winner.provider.get_tracer(LITELLM_TRACER_NAME)
 
@@ -1128,27 +1130,35 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         """Create (or reuse) a tracer whose exporter target comes from a per-request config."""
         from opentelemetry.sdk.trace import TracerProvider
 
+        owns_exporter: Final = _provider_owns_exporter(dynamic_config.exporter)
+
         def _build() -> "_SDKTracerProvider":
-            provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
+            provider: Final = TracerProvider(
+                resource=self._get_litellm_resource(self.config), shutdown_on_exit=owns_exporter
+            )
             provider.add_span_processor(self._get_span_processor(config_override=dynamic_config))
             return provider
 
         cache_key: Final = (
             f"dynamic_config:{dynamic_config.exporter}:{dynamic_config.endpoint}:{dynamic_config.headers}"
         )
-        return self._cached_dynamic_tracer(cache_key, _build, _provider_owns_exporter(dynamic_config.exporter))
+        return self._cached_dynamic_tracer(cache_key, _build, owns_exporter)
 
     def _get_tracer_with_dynamic_headers(self, dynamic_headers: Mapping[str, str]) -> "_Tracer":
         """Create (or reuse) a tracer whose OTLP headers come from a per-request credential set."""
         from opentelemetry.sdk.trace import TracerProvider
 
+        owns_exporter: Final = _provider_owns_exporter(self.OTEL_EXPORTER)
+
         def _build() -> "_SDKTracerProvider":
-            provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
+            provider: Final = TracerProvider(
+                resource=self._get_litellm_resource(self.config), shutdown_on_exit=owns_exporter
+            )
             provider.add_span_processor(self._get_span_processor(dynamic_headers=dynamic_headers))
             return provider
 
         cache_key: Final = str(sorted(dynamic_headers.items()))
-        return self._cached_dynamic_tracer(cache_key, _build, _provider_owns_exporter(self.OTEL_EXPORTER))
+        return self._cached_dynamic_tracer(cache_key, _build, owns_exporter)
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
