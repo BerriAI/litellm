@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 
 _UPSERT_RETRY_TIMES: Final = 3
+_MAX_PENDING_ROWS: Final = 10_000
 
 _RowKey = TypeVar("_RowKey")
 _RowValue = TypeVar("_RowValue")
@@ -46,6 +47,58 @@ class _MetricsKey(NamedTuple):
     date: str
 
 
+class PendingRollups:
+    """Rollup rows whose connection-error retries exhausted, held for the next flush."""
+
+    def __init__(self) -> None:
+        self.lock: Final = asyncio.Lock()
+        self.metrics: Mapping[_MetricsKey, Mapping[str, int]] = MappingProxyType({})
+        self.units: Mapping[_UsageUnitKey, int] = MappingProxyType({})
+
+
+_PENDING_ROLLUPS: Final = PendingRollups()
+
+_NO_COUNTERS: Final[Mapping[str, int]] = MappingProxyType({})
+
+
+def _merged_keys(base: Mapping[_RowKey, object], extra: Mapping[_RowKey, object]) -> tuple[_RowKey, ...]:
+    return (*base, *(key for key in extra if key not in base))
+
+
+def _merged_unit_rows(
+    base: Mapping[_UsageUnitKey, int], extra: Mapping[_UsageUnitKey, int]
+) -> Mapping[_UsageUnitKey, int]:
+    return MappingProxyType({key: base.get(key, 0) + extra.get(key, 0) for key in _merged_keys(base, extra)})
+
+
+def _merged_metric_rows(
+    base: Mapping[_MetricsKey, Mapping[str, int]], extra: Mapping[_MetricsKey, Mapping[str, int]]
+) -> Mapping[_MetricsKey, Mapping[str, int]]:
+    def merged_counters(key: _MetricsKey) -> Mapping[str, int]:
+        base_counters: Final = base.get(key, _NO_COUNTERS)
+        extra_counters: Final = extra.get(key, _NO_COUNTERS)
+        return MappingProxyType(
+            {
+                counter: int(base_counters.get(counter, 0)) + int(extra_counters.get(counter, 0))
+                for counter in _merged_keys(base_counters, extra_counters)
+            }
+        )
+
+    return MappingProxyType({key: merged_counters(key) for key in _merged_keys(base, extra)})
+
+
+def _capped(rows: Mapping[_RowKey, _RowValue], label: str) -> Mapping[_RowKey, _RowValue]:
+    if len(rows) <= _MAX_PENDING_ROWS:
+        return rows
+    verbose_proxy_logger.warning(
+        "Guardrail usage tracking: pending %s requeue exceeds %d rows; dropping the %d oldest (non-fatal)",
+        label,
+        _MAX_PENDING_ROWS,
+        len(rows) - _MAX_PENDING_ROWS,
+    )
+    return MappingProxyType(dict(tuple(rows.items())[len(rows) - _MAX_PENDING_ROWS :]))
+
+
 async def _attempt_upsert(
     upsert_row: Callable[[_RowKey, _RowValue], Awaitable[None]], key: _RowKey, value: _RowValue
 ) -> Exception | None:
@@ -62,7 +115,8 @@ async def _upsert_rows_with_retry(
     label: str,
     sleep: Callable[[float], Awaitable[None]],
     retries_left: int = _UPSERT_RETRY_TIMES,
-) -> None:
+) -> Mapping[_RowKey, _RowValue]:
+    """Returns the rows still failing with connection errors once retries exhaust, for requeueing."""
     outcomes: Final = {key: await _attempt_upsert(upsert_row, key, value) for key, value in rows.items()}
     for key, error in outcomes.items():
         if error is not None and not isinstance(error, DB_RETRY_SAFE_ERROR_TYPES):
@@ -76,19 +130,20 @@ async def _upsert_rows_with_retry(
         {key: rows[key] for key, error in outcomes.items() if isinstance(error, DB_RETRY_SAFE_ERROR_TYPES)}
     )
     if not retryable:
-        return
+        return MappingProxyType({})
     if retries_left == 0:
         for key in retryable:
             verbose_proxy_logger.warning(
-                "Guardrail usage tracking: %s upsert failed for %s after %d retries (non-fatal): %s",
+                "Guardrail usage tracking: %s upsert failed for %s after %d retries; requeued for the next flush "
+                "(non-fatal): %s",
                 label,
                 key,
                 _UPSERT_RETRY_TIMES,
                 outcomes[key],
             )
-        return
+        return retryable
     await sleep(2 ** (_UPSERT_RETRY_TIMES - retries_left))
-    await _upsert_rows_with_retry(retryable, upsert_row, label, sleep, retries_left - 1)
+    return await _upsert_rows_with_retry(retryable, upsert_row, label, sleep, retries_left - 1)
 
 
 def _guardrail_status_to_action(status: str | None) -> str:
@@ -217,6 +272,7 @@ async def process_spend_logs_guardrail_usage(
     prisma_client: PrismaClient,
     logs_to_process: list[dict[str, Any]],
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    pending: PendingRollups = _PENDING_ROLLUPS,
 ) -> None:
     """
     After spend logs are written: update DailyGuardrailMetrics and insert
@@ -265,9 +321,20 @@ async def process_spend_logs_guardrail_usage(
                 }
             )
 
-    usage_unit_totals: Final = _sum_usage_unit_increments(logs_to_process)
+    async with pending.lock:
+        pending_metrics: Final = pending.metrics
+        pending_units: Final = pending.units
+        pending.metrics = MappingProxyType({})
+        pending.units = MappingProxyType({})
 
-    if not daily_guardrail and not index_rows and not usage_unit_totals:
+    # Upsert daily guardrail metrics (counts only; latency/score dropped)
+    evaluated_metrics: Final = MappingProxyType(
+        {key: agg for key, agg in daily_guardrail.items() if int(agg["requests_evaluated"]) > 0}
+    )
+    metrics_rows: Final = _merged_metric_rows(pending_metrics, evaluated_metrics)
+    unit_rows: Final = _merged_unit_rows(pending_units, _sum_usage_unit_increments(logs_to_process))
+
+    if not metrics_rows and not index_rows and not unit_rows:
         return
 
     try:
@@ -281,13 +348,15 @@ async def process_spend_logs_guardrail_usage(
             except Exception as e:
                 verbose_proxy_logger.debug("Guardrail usage tracking: index create_many skipped: %s", e)
 
-        # Upsert daily guardrail metrics (counts only; latency/score dropped)
-        metrics_rows: Final = MappingProxyType(
-            {key: agg for key, agg in daily_guardrail.items() if int(agg["requests_evaluated"]) > 0}
+        failed_metrics: Final = await _upsert_rows_with_retry(
+            metrics_rows, partial(_upsert_metrics_row, prisma_client), "daily metrics", sleep
         )
-        await _upsert_rows_with_retry(metrics_rows, partial(_upsert_metrics_row, prisma_client), "daily metrics", sleep)
-        await _upsert_rows_with_retry(
-            usage_unit_totals, partial(_upsert_usage_unit_row, prisma_client), "usage unit", sleep
+        failed_units: Final = await _upsert_rows_with_retry(
+            unit_rows, partial(_upsert_usage_unit_row, prisma_client), "usage unit", sleep
         )
+        if failed_metrics or failed_units:
+            async with pending.lock:
+                pending.metrics = _capped(_merged_metric_rows(pending.metrics, failed_metrics), "daily metrics")
+                pending.units = _capped(_merged_unit_rows(pending.units, failed_units), "usage unit")
     except Exception as e:
         verbose_proxy_logger.warning("Guardrail usage tracking failed (non-fatal): %s", e)
