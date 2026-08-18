@@ -16,12 +16,18 @@ shared fixtures build on it.
 import functools
 import os
 from collections.abc import Iterator
+from datetime import datetime, timezone
 
 import pytest
 import requests
 
-from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
+from e2e_config import CONTROL_PLANE_BASE_URL, FIXTURE_DIR, FIXTURE_MODE_RAW, PROXY_BASE_URL
 from e2e_db import RESET_OPT_IN_ENV, reset_spend_logs, run_spend_log_cleanup
+from fixture_transport import (
+    fixture_mode_collection_error,
+    fixture_report_lines,
+    parse_fixture_mode,
+)
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
 from proxy_client import ProxyClient, build_proxy_client
@@ -47,6 +53,21 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "weekly: real-provider anomaly load test that spends real money; deselected unless E2E_WEEKLY_ANOMALY is set",
     )
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Abort before collection when E2E_FIXTURE_MODE can never work: an unknown
+    mode value, or replay against a missing, unreadable, or stale bundle (the
+    stale message names the bundle's age). Live and record modes pass through."""
+    reason = fixture_mode_collection_error(
+        FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc)
+    )
+    if reason is not None:
+        raise pytest.UsageError(reason)
+
+
+def pytest_report_header(config: pytest.Config) -> list[str]:
+    return fixture_report_lines(FIXTURE_MODE_RAW, FIXTURE_DIR, now=datetime.now(timezone.utc))
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -91,8 +112,11 @@ def _proxy_fail_reason() -> str | None:
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Hard-fail `e2e`-marked tests unless a proxy answers its liveness probe.
     Unmarked tests (unit coverage of the harness) don't touch the proxy, so they
-    run even when none is up. Never skip for a missing proxy."""
+    run even when none is up. Never skip for a missing proxy. Replay mode serves
+    every call from the fixture bundle, so it needs no live proxy either."""
     if item.get_closest_marker("e2e") is None:
+        return
+    if parse_fixture_mode(FIXTURE_MODE_RAW) == "replay":
         return
     reason = _proxy_fail_reason()
     if reason is not None:
