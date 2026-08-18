@@ -280,16 +280,16 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       )}
 
       <Tabs defaultValue="overview">
-        <TabsList className="mb-4">
-          <TabsTrigger value="overview" className="flex-none">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
           {promptTemplate && (
-            <TabsTrigger value="prompt-template" className="flex-none">
+            <TabsTrigger value="prompt-template" className="flex-none rounded-none px-4 py-2">
               Prompt Template
             </TabsTrigger>
           )}
-          <TabsTrigger value="raw-json" className="flex-none">
+          <TabsTrigger value="raw-json" className="flex-none rounded-none px-4 py-2">
             Raw JSON
           </TabsTrigger>
         </TabsList>

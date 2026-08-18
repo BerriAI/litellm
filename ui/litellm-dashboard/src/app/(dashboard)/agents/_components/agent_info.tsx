@@ -230,12 +230,12 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       </div>
 
       <Tabs defaultValue="overview">
-        <TabsList className="mb-4">
-          <TabsTrigger value="overview" className="flex-none">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
           {isAdmin && (
-            <TabsTrigger value="settings" className="flex-none">
+            <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
               Settings
             </TabsTrigger>
           )}
