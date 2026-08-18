@@ -1,7 +1,10 @@
+import contextlib
 import json
 import os
 import sys
 import traceback
+from collections.abc import Mapping
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -22,6 +25,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _join_url_paths,
     azure_proxy_route,
     bedrock_llm_proxy_route,
+    bedrock_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
     get_azure_ai_search_index_from_endpoint,
@@ -1728,6 +1732,128 @@ class TestBedrockLLMProxyRoute:
 
         assert exc_info.value.status_code == 400
         assert "Blocked by guardrail" in str(exc_info.value.detail)
+
+
+class TestBedrockAgentRuntimePassthroughToggle:
+    """`general_settings.disable_bedrock_agent_runtime_passthrough` gates only the
+    bedrock-agent-runtime branch of `/bedrock/{endpoint:path}`."""
+
+    AGENT_RUNTIME_ENDPOINT: Final = "knowledgebases/KB1234567/retrieve"
+    MODEL_ENDPOINT: Final = "model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/converse"
+    DISABLED: Final = MappingProxyType({"disable_bedrock_agent_runtime_passthrough": True})
+
+    @staticmethod
+    def _mock_request() -> Mock:
+        request: Final = Mock()
+        request.method = "POST"
+        request.state = SimpleNamespace()
+        request.json = AsyncMock(return_value={"retrievalQuery": {"text": "hi"}})  # mutable-ok: must be json.dumps-able
+        return request
+
+    @contextlib.contextmanager
+    def _patched_dispatch(self, general_settings: Mapping[str, object]):
+        """Patch out signing + forwarding so the routing decision is observable."""
+        from botocore.credentials import Credentials
+
+        bedrock_llm: Final = Mock()
+        bedrock_llm.get_credentials = Mock(return_value=Credentials("ak", "sk"))
+        forwarder: Final = AsyncMock(return_value="forwarded")
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.utils.get_secret", return_value="us-east-1"),
+            patch("litellm.llms.bedrock.chat.BedrockConverseLLM", return_value=bedrock_llm),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
+                Mock(),
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+                return_value=forwarder,
+            ) as create_route,
+        ):
+            yield create_route, forwarder
+
+    @pytest.mark.asyncio
+    async def test_agent_runtime_dispatch_allowed_by_default(self):
+        """Default config must keep forwarding to bedrock-agent-runtime."""
+        with self._patched_dispatch(MappingProxyType({})) as (create_route, forwarder):
+            result: Final = await bedrock_proxy_route(
+                endpoint=self.AGENT_RUNTIME_ENDPOINT,
+                request=self._mock_request(),
+                fastapi_response=Mock(),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert result == "forwarded"
+        forwarder.assert_awaited_once()
+        assert "bedrock-agent-runtime.us-east-1.amazonaws.com" in create_route.call_args.kwargs["target"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", (True, "true", "True"))
+    async def test_agent_runtime_dispatch_rejected_when_disabled(self, value: bool | str):
+        """With the setting on, the request is rejected before it is signed or sent.
+
+        The string forms matter: /config/field/update persists the raw value, so the
+        setting can reach general_settings as a string rather than a bool.
+        """
+        settings: Final = MappingProxyType({"disable_bedrock_agent_runtime_passthrough": value})
+
+        with self._patched_dispatch(settings) as (create_route, forwarder):
+            with pytest.raises(HTTPException) as exc_info:
+                await bedrock_proxy_route(
+                    endpoint=self.AGENT_RUNTIME_ENDPOINT,
+                    request=self._mock_request(),
+                    fastapi_response=Mock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "bedrock-agent-runtime pass-through is disabled" in str(exc_info.value.detail)
+        create_route.assert_not_called()
+        forwarder.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_model_invoke_still_routed_when_agent_runtime_disabled(self):
+        """The setting must not touch plain bedrock-runtime model pass-through."""
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", self.DISABLED),
+            patch("litellm.utils.get_secret", return_value="us-east-1"),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
+                Mock(),
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.bedrock_llm_proxy_route",
+                new=AsyncMock(return_value="llm-route"),
+            ) as llm_route,
+        ):
+            result: Final = await bedrock_proxy_route(
+                endpoint=self.MODEL_ENDPOINT,
+                request=self._mock_request(),
+                fastapi_response=Mock(),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert result == "llm-route"
+        llm_route.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", (False, "false", None, "", "yes"))
+    async def test_agent_runtime_dispatch_allowed_for_non_true_values(self, value: object):
+        """Anything that is not a recognised true value leaves dispatch untouched."""
+        settings: Final = MappingProxyType({"disable_bedrock_agent_runtime_passthrough": value})
+
+        with self._patched_dispatch(settings) as (create_route, forwarder):
+            result: Final = await bedrock_proxy_route(
+                endpoint=self.AGENT_RUNTIME_ENDPOINT,
+                request=self._mock_request(),
+                fastapi_response=Mock(),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert result == "forwarded"
+        create_route.assert_called_once()
 
 
 class TestLLMPassthroughFactoryProxyRoute:
