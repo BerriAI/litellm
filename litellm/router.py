@@ -280,7 +280,14 @@ def _cost_value_as_float(value: str | float | None) -> float | None:
         return None
 
 
-_CUSTOM_PRICING_THRESHOLD_COST_KEY: Final[re.Pattern[str]] = re.compile(r"_above_\d+k?_tokens$")
+_CUSTOM_PRICING_THRESHOLD_COST_KEY: Final[re.Pattern[str]] = re.compile(
+    r"^(?:"
+    r"input_cost_per_token|"
+    r"output_cost_per_token|"
+    r"cache_creation_input_token_cost(?:_above_1hr)?|"
+    r"cache_read_input_token_cost"
+    r")_above_\d+k?_tokens$"
+)
 
 
 def _is_custom_pricing_field(field: str) -> bool:

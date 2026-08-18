@@ -83,6 +83,54 @@ def test_copy_custom_pricing_fields_preserves_declared_and_arbitrary_threshold_f
     }
 
 
+def test_is_custom_pricing_field_accepts_supported_threshold_base_keys():
+    """Every threshold base key the cost calculator supports stays accepted."""
+    for field in (
+        "input_cost_per_token_above_32k_tokens",
+        "output_cost_per_token_above_32k_tokens",
+        "cache_read_input_token_cost_above_32k_tokens",
+        "cache_creation_input_token_cost_above_32k_tokens",
+        "cache_creation_input_token_cost_above_1hr_above_32k_tokens",
+    ):
+        assert _is_custom_pricing_field(field), field
+
+
+def test_is_custom_pricing_field_rejects_non_pricing_threshold_like_params():
+    """Deployment params that merely look like *_above_<N>_tokens are not pricing."""
+    for field in (
+        "api_key_above_32k_tokens",
+        "secret_above_32k_tokens",
+        "credential_above_32k_tokens",
+        "custom_provider_param_above_32k_tokens",
+    ):
+        assert not _is_custom_pricing_field(field), field
+
+
+def test_copy_custom_pricing_fields_ignores_non_pricing_threshold_like_params():
+    """Only supported pricing fields are copied; threshold-like deployment params stay out of model_info."""
+    model_info = {}
+    litellm_params = LiteLLM_Params(
+        model="openai/gpt-4o-mini",
+        api_key="fake-key",
+        input_cost_per_token=1e-6,
+        input_cost_per_token_above_32k_tokens=9e-6,
+        api_key_above_32k_tokens="leaked",
+        secret_above_32k_tokens="leaked",
+        credential_above_32k_tokens="leaked",
+        custom_provider_param_above_32k_tokens="leaked",
+    )
+
+    _copy_custom_pricing_fields(
+        model_info=model_info,
+        litellm_params=litellm_params,
+    )
+
+    assert model_info == {
+        "input_cost_per_token": 1e-6,
+        "input_cost_per_token_above_32k_tokens": 9e-6,
+    }
+
+
 def test_should_not_pollute_shared_key_with_zero_cost_pricing():
     """
     When deployment A has input_cost_per_token=0 and deployment B has no
@@ -1573,6 +1621,56 @@ def test_router_registers_arbitrary_above_threshold_pricing_from_litellm_params(
     finally:
         _restore_model_cost_entries(original_entries)
 
+
+def test_router_registration_never_registers_non_pricing_threshold_like_params():
+    """Non-pricing *_above_<N>_tokens deployment params must not reach litellm.model_cost."""
+    backend_model = "openai/gpt-4o-mini"
+    model_id = "router-rejects-non-pricing-above-32k-34504"
+    shared_keys = ("gpt-4o-mini", backend_model)
+
+    original_entries = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (*shared_keys, model_id)
+    }
+
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "custom-above-32k-model",
+                    "litellm_params": {
+                        "model": backend_model,
+                        "api_key": "fake-key",
+                        "input_cost_per_token": 1e-6,
+                        "output_cost_per_token": 2e-6,
+                        "input_cost_per_token_above_32k_tokens": 9e-6,
+                        "api_key_above_32k_tokens": "leaked",
+                        "secret_above_32k_tokens": "leaked",
+                        "credential_above_32k_tokens": "leaked",
+                        "custom_provider_param_above_32k_tokens": "leaked",
+                    },
+                    "model_info": {
+                        "id": model_id,
+                    },
+                }
+            ]
+        )
+
+        registered = litellm.model_cost.get(model_id)
+        assert registered is not None
+
+        assert registered["input_cost_per_token"] == 1e-6
+        assert registered["output_cost_per_token"] == 2e-6
+        assert registered["input_cost_per_token_above_32k_tokens"] == 9e-6
+        for junk in (
+            "api_key_above_32k_tokens",
+            "secret_above_32k_tokens",
+            "credential_above_32k_tokens",
+            "custom_provider_param_above_32k_tokens",
+        ):
+            assert junk not in registered, junk
+    finally:
+        _restore_model_cost_entries(original_entries)
 
 
 def test_add_deployment_registers_arbitrary_above_threshold_pricing():
