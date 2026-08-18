@@ -26161,7 +26161,7 @@ export interface components {
             /**
              * Store Prompts In Spend Logs
              * @description If True, stores request messages and responses in spend logs. Default is False.
-            */
+             */
             store_prompts_in_spend_logs?: boolean | null;
             /**
              * Store Responses In Spend Logs
