@@ -80,6 +80,9 @@ class _LabeledTierClassification(BaseModel):
     tier: str
 
 
+_EMPTY_METADATA: Final[Mapping[str, Any]] = MappingProxyType({})
+
+
 def _tier_name(tier: ComplexityTier | str) -> str:
     """The plain tier name, whether the pipeline carries a built-in tier or a defined name."""
     return tier.value if isinstance(tier, ComplexityTier) else tier
@@ -655,6 +658,7 @@ class ClassificationOutcome(NamedTuple):
         "heuristic_scorer",
         "reasoning_override",
         "llm_classifier",
+        "classifier_plugin",
         "classifier_fallback",
         "default_model_fallback",
     ]
@@ -1119,15 +1123,18 @@ class ComplexityRouter(CustomLogger):
         system_prompt: str | None = None,
         request_kwargs: dict[str, Any] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
+        raw_messages: Sequence[Mapping[str, object]] | None = None,
     ) -> ClassificationOutcome:
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
 
         Falls back to the local heuristic scorer if classifier_type is "heuristic". If the LLM call
-        fails, times out, or returns an unparseable response, the configured fallback_tier wins on a
-        custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
-        default_model. The outcome's `cause` reports which path actually ran.
+        or the classifier plugin fails, times out, or produces no usable tier, the configured
+        fallback_tier wins on a custom tier set, and classifier_fallback otherwise decides between
+        the heuristic scorer and default_model. The outcome's `cause` reports which path actually ran.
         """
+        if self.config.classifier_type == "plugin":
+            return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, messages, raw_messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
@@ -1142,26 +1149,78 @@ class ComplexityRouter(CustomLogger):
                 classifier_cost=classifier_cost,
             )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
-            fallback_tier: Final = self.config.fallback_tier
-            if fallback_tier is not None:
-                verbose_router_logger.warning(
-                    "ComplexityRouter: LLM classifier failed (%s), routing to fallback_tier %s", e, fallback_tier
-                )
-                return ClassificationOutcome(
-                    tier=fallback_tier,
-                    score=None,
-                    signals=(f"classifier-fallback:{fallback_tier}",),
-                    cause="classifier_fallback",
-                )
-            verbose_router_logger.warning(
-                "ComplexityRouter: LLM classifier failed (%s), falling back to %s",
-                e,
-                self.config.classifier_fallback,
+            return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt)
+
+    def _classifier_failure_outcome(self, reason: str, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+        """The outcome when the LLM classifier or classifier plugin produced no usable tier:
+        fallback_tier on a custom tier set, classifier_fallback otherwise."""
+        fallback_tier: Final = self.config.fallback_tier
+        if fallback_tier is not None:
+            verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
+            return ClassificationOutcome(
+                tier=fallback_tier,
+                score=None,
+                signals=(f"classifier-fallback:{fallback_tier}",),
+                cause="classifier_fallback",
             )
-            if self.config.classifier_fallback == "default_model":
-                return self._default_model_fallback_outcome()
-            tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        verbose_router_logger.warning(
+            "ComplexityRouter: %s, falling back to %s", reason, self.config.classifier_fallback
+        )
+        if self.config.classifier_fallback == "default_model":
+            return self._default_model_fallback_outcome()
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+
+    async def _classify_with_plugin(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, Any] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        raw_messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        from litellm.types.router import RoutingContext
+
+        plugin: Final = self.config.classifier_plugin
+        if plugin is None:
+            return self._classifier_failure_outcome("classifier_plugin is not set", prompt, system_prompt)
+        kwargs: Final = request_kwargs or _EMPTY_METADATA
+        metadata_key: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        pools: Final = self._tier_pools()
+        context: Final = RoutingContext(
+            raw_messages=tuple(raw_messages or messages or ()),
+            structured_messages=tuple(messages or ()),
+            candidate_models=tuple(model for pool in pools.values() for model in pool),
+            metadata=kwargs.get(metadata_key) or _EMPTY_METADATA,
+        )
+        try:
+            verdict: Final = await asyncio.wait_for(
+                plugin.classify(context), timeout=self.config.classifier_plugin_timeout_ms / 1000
+            )
+        except asyncio.TimeoutError:
+            return self._classifier_failure_outcome(
+                f"classifier plugin timed out after {self.config.classifier_plugin_timeout_ms}ms", prompt, system_prompt
+            )
+        except Exception as e:  # noqa: BLE001 -- an operator hook can fail in arbitrary ways (network, bug); any failure must fall back rather than fail the request
+            return self._classifier_failure_outcome(f"classifier plugin failed ({e})", prompt, system_prompt)
+        if verdict is None:
+            return self._classifier_failure_outcome("classifier plugin declined to classify", prompt, system_prompt)
+        tier: Final = self.config.resolve_classified_tier(verdict)
+        if tier is None:
+            return self._classifier_failure_outcome(
+                f"classifier plugin returned unknown tier {verdict!r}", prompt, system_prompt
+            )
+        tier_key: Final = _tier_name(tier)
+        if not pools.get(tier_key):
+            return self._classifier_failure_outcome(
+                f"classifier plugin returned tier {tier_key!r}, which has no models configured", prompt, system_prompt
+            )
+        return ClassificationOutcome(
+            tier=tier,
+            score=None,
+            signals=(f"classifier-plugin:{tier_key}",),
+            cause="classifier_plugin",
+        )
 
     def _default_model_fallback_outcome(self) -> ClassificationOutcome:
         """The classifier-failed outcome for classifier_fallback='default_model'.
@@ -2218,7 +2277,9 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
 
-        outcome: Final = await self.aclassify(user_message, system_prompt, request_kwargs, resolved_messages)
+        outcome: Final = await self.aclassify(
+            user_message, system_prompt, request_kwargs, resolved_messages, raw_messages=messages
+        )
         tier, score, signals = outcome.tier, outcome.score, outcome.signals
         classified_tier: Final = tier
         if escalation_keyword is not None:

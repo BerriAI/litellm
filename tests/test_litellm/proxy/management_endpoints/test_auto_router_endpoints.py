@@ -286,6 +286,13 @@ def test_semantic_matching_without_an_embedding_model_is_rejected():
         _request("what is 2+2", semantic_keyword_matching=True)
 
 
+def test_classifier_plugin_is_not_settable_over_http():
+    """classifier_plugin holds a live runtime object, closed off like `plugins`; a plugin-mode
+    config is therefore unrepresentable in a request body."""
+    with pytest.raises(ValidationError):
+        _request("what is 2+2", classifier_type="plugin", classifier_plugin="my_module.instance")
+
+
 class TestAutoRouterBenchmarks:
     from litellm.proxy.management_endpoints.auto_router_endpoints import _SessionAggRow
 

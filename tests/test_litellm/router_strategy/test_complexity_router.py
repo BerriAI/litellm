@@ -4127,6 +4127,303 @@ class TestRoutingPlugins:
         assert spy.call_count == 2
 
 
+class _FixedTierClassifier:
+    """Classifier plugin double returning a fixed verdict; records the context it received."""
+
+    def __init__(self, verdict):
+        self.verdict = verdict
+        self.seen_context = None
+
+    async def classify(self, context):
+        self.seen_context = context
+        return self.verdict
+
+
+class _TeamTierClassifier:
+    async def classify(self, context):
+        team = context.metadata.get("user_api_key_team_id")
+        return "REASONING" if team == "team-premium" else "SIMPLE"
+
+
+class _RaisingClassifier:
+    async def classify(self, context):
+        raise RuntimeError("lookup service down")
+
+
+class _SlowClassifier:
+    async def classify(self, context):
+        await asyncio.sleep(5)
+        return "SIMPLE"
+
+
+def _plugin_router(mock_router_instance, plugin, **config_overrides):
+    config = {
+        "tiers": {
+            "SIMPLE": "gpt-4o-mini",
+            "MEDIUM": "gpt-4o",
+            "COMPLEX": "claude-sonnet-4-20250514",
+            "REASONING": "o1-preview",
+        },
+        "classifier_type": "plugin",
+        "classifier_plugin": plugin,
+        **config_overrides,
+    }
+    return ComplexityRouter(
+        model_name="test-complexity-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config=config,
+    )
+
+
+class TestClassifierPluginConfig:
+    """Config validation for classifier_type='plugin'."""
+
+    def test_plugin_classifier_type_requires_plugin(self):
+        with pytest.raises(ValidationError, match="classifier_plugin is required"):
+            ComplexityRouterConfig(classifier_type="plugin")
+
+    def test_classifier_plugin_without_plugin_mode_raises(self):
+        """A wired hook that would silently never run is a config error, not a no-op."""
+        with pytest.raises(ValidationError, match="would never run"):
+            ComplexityRouterConfig(classifier_plugin=_FixedTierClassifier("SIMPLE"))
+
+    def test_plugin_mode_tolerates_stale_llm_config(self):
+        """Switching classifier_type llm -> plugin must not force deleting classifier_llm_config,
+        matching how classifier_type='heuristic' tolerates it."""
+        config = ComplexityRouterConfig(
+            classifier_type="plugin",
+            classifier_plugin=_FixedTierClassifier("SIMPLE"),
+            classifier_llm_config={"model": "haiku-classifier"},
+        )
+        assert config.classifier_type == "plugin"
+
+    def test_plugin_mode_composes_with_adaptive(self):
+        """adaptive replaces selection, not classification, so a classifier plugin is allowed
+        where narrowing `plugins` are rejected (their pools bypass the bandit)."""
+        config = ComplexityRouterConfig(
+            classifier_type="plugin",
+            classifier_plugin=_FixedTierClassifier("SIMPLE"),
+            adaptive=True,
+        )
+        assert config.adaptive is True
+
+    def test_plugin_mode_composes_with_tier_definitions(self):
+        config = ComplexityRouterConfig(
+            classifier_type="plugin",
+            classifier_plugin=_FixedTierClassifier("cheap"),
+            tiers={"cheap": "gpt-4o-mini", "premium": "o1-preview"},
+            tier_definitions=[
+                {"name": "cheap", "description": "routine asks"},
+                {"name": "premium", "description": "hard asks"},
+            ],
+            fallback_tier="cheap",
+        )
+        assert config.tier_names() == ("cheap", "premium")
+
+    def test_tier_definitions_still_reject_heuristic(self):
+        with pytest.raises(ValidationError, match="heuristic scorer only"):
+            ComplexityRouterConfig(
+                classifier_type="heuristic",
+                tiers={"cheap": "gpt-4o-mini", "premium": "o1-preview"},
+                tier_definitions=[
+                    {"name": "cheap", "description": "routine asks"},
+                    {"name": "premium", "description": "hard asks"},
+                ],
+                fallback_tier="cheap",
+            )
+
+
+class TestClassifierPlugin:
+    """classifier_type='plugin': an operator hook decides the tier."""
+
+    @pytest.mark.asyncio
+    async def test_plugin_verdict_decides_tier_without_scorer_or_llm(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock()
+        router = _plugin_router(mock_router_instance, _FixedTierClassifier("COMPLEX"))
+        outcome = await router.aclassify("hello")
+        assert outcome.cause == "classifier_plugin"
+        assert outcome.tier == ComplexityTier.COMPLEX
+        assert outcome.score is None
+        assert outcome.signals == ("classifier-plugin:COMPLEX",)
+        mock_router_instance.acompletion.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_plugin_verdict_resolves_case_insensitively(self, mock_router_instance):
+        router = _plugin_router(mock_router_instance, _FixedTierClassifier("reasoning"))
+        outcome = await router.aclassify("hello")
+        assert outcome.tier == ComplexityTier.REASONING
+        assert outcome.cause == "classifier_plugin"
+
+    @pytest.mark.asyncio
+    async def test_plugin_reads_caller_identity_from_request_metadata(self, mock_router_instance):
+        router = _plugin_router(mock_router_instance, _TeamTierClassifier())
+        premium = await router.aclassify(
+            "hi", request_kwargs={"metadata": {"user_api_key_team_id": "team-premium"}}
+        )
+        basic = await router.aclassify(
+            "hi", request_kwargs={"litellm_metadata": {"user_api_key_team_id": "team-basic"}}
+        )
+        assert premium.tier == ComplexityTier.REASONING
+        assert basic.tier == ComplexityTier.SIMPLE
+
+    @pytest.mark.asyncio
+    async def test_plugin_context_carries_messages_and_all_tier_models(self, mock_router_instance):
+        plugin = _FixedTierClassifier("SIMPLE")
+        router = _plugin_router(mock_router_instance, plugin)
+        raw = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        resolved = [{"role": "user", "content": "hi"}]
+        await router.aclassify("hi", messages=resolved, raw_messages=raw)
+        assert plugin.seen_context.raw_messages == raw
+        assert plugin.seen_context.structured_messages == resolved
+        assert plugin.seen_context.candidate_models == [
+            "gpt-4o-mini",
+            "gpt-4o",
+            "claude-sonnet-4-20250514",
+            "o1-preview",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_plugin_decline_falls_back_to_heuristic(self, mock_router_instance):
+        router = _plugin_router(mock_router_instance, _FixedTierClassifier(None))
+        outcome = await router.aclassify("what is 2+2?")
+        assert outcome.cause == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_plugin_error_falls_back_to_heuristic(self, mock_router_instance):
+        router = _plugin_router(mock_router_instance, _RaisingClassifier())
+        outcome = await router.aclassify("what is 2+2?")
+        assert outcome.cause == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_plugin_timeout_falls_back_to_heuristic(self, mock_router_instance):
+        router = _plugin_router(mock_router_instance, _SlowClassifier(), classifier_plugin_timeout_ms=20)
+        outcome = await router.aclassify("what is 2+2?")
+        assert outcome.cause == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_plugin_unknown_tier_falls_back_to_heuristic(self, mock_router_instance):
+        router = _plugin_router(mock_router_instance, _FixedTierClassifier("galactic"))
+        outcome = await router.aclassify("what is 2+2?")
+        assert outcome.cause == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_plugin_tier_without_pool_falls_back(self, mock_router_instance):
+        """A built-in tier the operator gave no models is a decline, not a later routing error."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "classifier_type": "plugin",
+                "classifier_plugin": _FixedTierClassifier("COMPLEX"),
+            },
+        )
+        outcome = await router.aclassify("what is 2+2?")
+        assert outcome.cause == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_plugin_failure_with_default_model_fallback(self, mock_router_instance):
+        router = _plugin_router(
+            mock_router_instance,
+            _RaisingClassifier(),
+            classifier_fallback="default_model",
+            default_model="gpt-4o-mini",
+        )
+        outcome = await router.aclassify("hello")
+        assert outcome.cause == "default_model_fallback"
+
+    @pytest.mark.asyncio
+    async def test_plugin_with_custom_tiers_routes_defined_name(self, mock_router_instance):
+        router = _plugin_router(
+            mock_router_instance,
+            _FixedTierClassifier("premium"),
+            tiers={"cheap": "gpt-4o-mini", "premium": "o1-preview"},
+            tier_definitions=[
+                {"name": "cheap", "description": "routine asks"},
+                {"name": "premium", "description": "hard asks"},
+            ],
+            fallback_tier="cheap",
+        )
+        outcome = await router.aclassify("hello")
+        assert outcome.tier == "premium"
+        assert outcome.cause == "classifier_plugin"
+        assert outcome.signals == ("classifier-plugin:premium",)
+
+    @pytest.mark.asyncio
+    async def test_plugin_failure_with_custom_tiers_routes_fallback_tier(self, mock_router_instance):
+        router = _plugin_router(
+            mock_router_instance,
+            _RaisingClassifier(),
+            tiers={"cheap": "gpt-4o-mini", "premium": "o1-preview"},
+            tier_definitions=[
+                {"name": "cheap", "description": "routine asks"},
+                {"name": "premium", "description": "hard asks"},
+            ],
+            fallback_tier="cheap",
+        )
+        outcome = await router.aclassify("hello")
+        assert outcome.tier == "cheap"
+        assert outcome.cause == "classifier_fallback"
+        assert outcome.signals == ("classifier-fallback:cheap",)
+
+    @pytest.mark.asyncio
+    async def test_hook_records_plugin_cause_without_score(self, mock_router_instance):
+        router = _plugin_router(mock_router_instance, _TeamTierClassifier())
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-premium"}},
+            messages=[{"role": "user", "content": "prove P != NP"}],
+        )
+        decision = response.routing_decision
+        assert decision["cause"] == "classifier_plugin"
+        assert decision["tier"] == "REASONING"
+        assert decision["routed_model"] == "o1-preview"
+        assert response.model == "o1-preview"
+        assert "score" not in decision
+        assert "tier_boundaries" not in decision
+
+    @pytest.mark.asyncio
+    async def test_plugin_composes_with_narrowing_plugins(self, mock_router_instance):
+        class _BlockO1:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "o1-preview"]
+                return context
+
+        router = _plugin_router(
+            mock_router_instance,
+            _FixedTierClassifier("REASONING"),
+            tiers={
+                "SIMPLE": "gpt-4o-mini",
+                "MEDIUM": "gpt-4o",
+                "COMPLEX": "claude-sonnet-4-20250514",
+                "REASONING": ["o1-preview", "claude-sonnet-4-20250514"],
+            },
+            plugins=[_BlockO1()],
+        )
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "prove P != NP"}],
+        )
+        assert response.model == "claude-sonnet-4-20250514"
+        assert response.routing_decision["cause"] == "classifier_plugin"
+
+    def test_classifier_plugin_alone_keeps_tier_pinning_enabled(self, mock_router_instance):
+        """Narrowing plugins suppress session pinning (a policy verdict can change between turns);
+        a classifier plugin picks among operator-approved tiers, so pinning must stay on."""
+        pinning = _plugin_router(
+            mock_router_instance, _FixedTierClassifier("SIMPLE"), session_affinity=True
+        )
+        suppressed = _plugin_router(
+            mock_router_instance,
+            _FixedTierClassifier("SIMPLE"),
+            session_affinity=True,
+            plugins=[_DummyPlugin()],
+        )
+        assert pinning._uses_tier_pin is True
+        assert suppressed._uses_tier_pin is False
+
+
 class TestEscalationKeywords:
     """Test user-triggered escalation: a keyword in the prompt bumps the resolved tier
     one step higher so a user can force a stronger model when unhappy with results."""

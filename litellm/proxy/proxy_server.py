@@ -657,6 +657,7 @@ from litellm.types.proxy.model_deprecation import (
 )
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
+    ClassifierPlugin,
     DeploymentTypedDict,
     RouterGeneralSettings,
     RoutingPlugin,
@@ -4034,17 +4035,48 @@ def resolve_complexity_router_plugins(
 ) -> None:
     """
     Resolves `complexity_router_config["plugins"]` dotted-path strings to live
-    instances in place, via `resolve_routing_plugins`.
+    instances in place, via `resolve_routing_plugins`, and
+    `complexity_router_config["classifier_plugin"]` via `resolve_classifier_plugin`.
     """
     plugin_paths: Final = complexity_router_config.get("plugins")
-    if not isinstance(plugin_paths, list):
-        return
+    if isinstance(plugin_paths, list):
+        complexity_router_config["plugins"] = resolve_routing_plugins(
+            plugin_paths=plugin_paths,
+            config_file_path=config_file_path,
+            source_label=f"complexity_router_config.plugins on model {model_name!r}",
+        )
 
-    complexity_router_config["plugins"] = resolve_routing_plugins(
-        plugin_paths=plugin_paths,
-        config_file_path=config_file_path,
-        source_label=f"complexity_router_config.plugins on model {model_name!r}",
-    )
+    classifier_plugin_path: Final = complexity_router_config.get("classifier_plugin")
+    if isinstance(classifier_plugin_path, str):
+        resolved_classifier: Final = resolve_classifier_plugin(
+            plugin_path=classifier_plugin_path,
+            config_file_path=config_file_path,
+            source_label=f"complexity_router_config.classifier_plugin on model {model_name!r}",
+        )
+        complexity_router_config["classifier_plugin"] = resolved_classifier  # rebind-ok: out-param, resolved in place
+
+
+def resolve_classifier_plugin(
+    plugin_path: str,
+    config_file_path: str | None,
+    source_label: str,
+) -> ClassifierPlugin:
+    """
+    Resolves a classifier-plugin dotted path to a live `ClassifierPlugin` instance, with the
+    same load-time interface check `resolve_routing_plugins` applies to routing plugins: a
+    sync `def classify` passes the runtime_checkable isinstance and would only fail on the
+    first classified request, so reject it here where the error names the config key.
+    """
+    resolved: Final = get_instance_fn(value=plugin_path, config_file_path=config_file_path)
+    if not isinstance(resolved, ClassifierPlugin) or not inspect.iscoroutinefunction(
+        getattr(resolved, "classify", None)
+    ):
+        raise ValueError(
+            f"{source_label} entry {plugin_path!r} resolved to {resolved!r}, which does not "
+            "implement the ClassifierPlugin interface (an async `classify(context)` method). Fix "
+            "the referenced module before starting the proxy."
+        )
+    return resolved
 
 
 def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:

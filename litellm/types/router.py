@@ -956,6 +956,17 @@ class RoutingPlugin(Protocol):
     async def run(self, context: RoutingContext) -> RoutingContext: ...
 
 
+@runtime_checkable
+class ClassifierPlugin(Protocol):
+    """Interface a custom classifier must implement to run as the complexity router's classifier_type='plugin'.
+
+    `classify` returns the name of the tier the request belongs to (a built-in tier value or label,
+    or a tier_definitions name), or None to decline and let classifier_fallback decide.
+    """
+
+    async def classify(self, context: RoutingContext) -> str | None: ...
+
+
 class RequestType(str, enum.Enum):
     """Fixed v0 taxonomy. User-extensible types come in v1."""
 
