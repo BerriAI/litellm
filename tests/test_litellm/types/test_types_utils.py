@@ -75,6 +75,29 @@ def test_usage_dump():
     assert new_usage.prompt_tokens_details.web_search_requests == 1
 
 
+def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
+    """Regression (LIT-5757): DashScope nests the Anthropic-spelled
+    cache_creation_input_tokens inside prompt_tokens_details. It must populate
+    the canonical cache_write_tokens/cache_creation_tokens pair, without
+    overriding an explicitly provided canonical value."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    nested = PromptTokensDetailsWrapper(
+        cached_tokens=0, text_tokens=2059, cache_creation_input_tokens=2048
+    )
+    assert nested.cache_write_tokens == 2048
+    assert nested.cache_creation_tokens == 2048
+
+    explicit = PromptTokensDetailsWrapper(
+        cache_write_tokens=100, cache_creation_input_tokens=2048
+    )
+    assert explicit.cache_write_tokens == 100
+    assert explicit.cache_creation_tokens == 100
+
+    non_int = PromptTokensDetailsWrapper(cache_creation_input_tokens=None)
+    assert not hasattr(non_int, "cache_write_tokens")
+
+
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
     from litellm.types.utils import ServerToolUse, Usage
 
