@@ -339,3 +339,53 @@ describe("ToolTestPanel argument payload", () => {
     expect(onSubmit).toHaveBeenCalledWith({ ratio: 0.4, active: true, label: "seeded" });
   });
 });
+
+describe("ToolTestPanel schema changes under a stable tool name", () => {
+  const renderWith = (schema: InputSchema, onSubmit: ReturnType<typeof vi.fn>) => (
+    <ToolTestPanel
+      tool={buildTool(schema)}
+      onSubmit={onSubmit}
+      isLoading={false}
+      result={null}
+      error={null}
+      onClose={vi.fn()}
+    />
+  );
+
+  it("reseeds the fields when the same-named tool's schema changes", async () => {
+    const onSubmit = vi.fn();
+    const before: InputSchema = { type: "object", properties: { message: { type: "string" } } };
+    const after: InputSchema = {
+      type: "object",
+      properties: { query: { type: "string" }, limit: { type: "integer", default: 5 } },
+    };
+
+    const { rerender } = render(renderWith(before, onSubmit));
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("message"), "stale value");
+
+    rerender(renderWith(after, onSubmit));
+
+    expect(screen.queryByLabelText("message")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("query")).toHaveValue("");
+    expect(screen.getByLabelText("limit")).toHaveValue(5);
+
+    await user.type(screen.getByLabelText("query"), "widgets");
+    await user.click(screen.getByRole("button", { name: "Call Tool" }));
+
+    expect(onSubmit).toHaveBeenCalledWith({ query: "widgets", limit: 5 });
+  });
+
+  it("keeps what the user typed when the schema is rebuilt with identical content", async () => {
+    const onSubmit = vi.fn();
+    const schema = (): InputSchema => ({ type: "object", properties: { message: { type: "string" } } });
+
+    const { rerender } = render(renderWith(schema(), onSubmit));
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("message"), "typed by hand");
+
+    rerender(renderWith(schema(), onSubmit));
+
+    expect(screen.getByLabelText("message")).toHaveValue("typed by hand");
+  });
+});

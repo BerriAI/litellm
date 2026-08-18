@@ -7,7 +7,7 @@ import { MCPTool, InputSchema } from "@/components/mcp_tools/types";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { toast } from "@/lib/toast";
 import { ToolArgumentsForm } from "./ToolArgumentsForm";
-import { ToolArgumentField, hasNestedParamsSchema, toolArgumentFields } from "./toolCallArguments";
+import { ToolArgumentField, argumentsFormKey, hasNestedParamsSchema, toolArgumentFields } from "./toolCallArguments";
 
 export function ToolTestPanel({
   tool,
@@ -69,6 +69,7 @@ export function ToolTestPanel({
     [actualSchema],
   );
   const wrapInParams = React.useMemo(() => hasNestedParamsSchema(schema), [schema]);
+  const formKey = React.useMemo(() => `${tool.name}:${argumentsFormKey(actualSchema)}`, [tool.name, actualSchema]);
 
   const runToolCall = (args: Record<string, unknown>) => {
     setStartTime(Date.now());
@@ -149,13 +150,13 @@ export function ToolTestPanel({
             <div className="flex items-center space-x-2 mb-1">
               <h2 className="text-lg font-semibold text-foreground">Test Tool:</h2>
               <div
-                className="group inline-flex items-center space-x-1 bg-slate-50 hover:bg-slate-100 px-3 py-1 rounded-md cursor-pointer transition-colors border border-slate-200"
+                className="group inline-flex items-center space-x-1 bg-muted hover:bg-accent px-3 py-1 rounded-md cursor-pointer transition-colors border border-border"
                 onClick={handleCopyToolName}
                 title="Click to copy tool name"
               >
-                <span className="font-mono text-slate-700 font-medium text-sm">{tool.name}</span>
+                <span className="font-mono text-foreground font-medium text-sm">{tool.name}</span>
                 <svg
-                  className="w-3 h-3 text-slate-400 group-hover:text-slate-600 transition-colors"
+                  className="w-3 h-3 text-muted-foreground group-hover:text-foreground transition-colors"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -204,7 +205,7 @@ export function ToolTestPanel({
 
           <div className="p-4">
             <ToolArgumentsForm
-              key={tool.name}
+              key={formKey}
               fields={argumentFields}
               singleInputFallback={typeof tool.inputSchema === "string"}
               isLoading={isLoading}
