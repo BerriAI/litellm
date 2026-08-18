@@ -1,5 +1,6 @@
 import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
-import { Button, Text } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
 import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -68,6 +69,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   value,
   onValueChange,
   label = "Select Time Range",
+  className,
   showTimeRange = true,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -274,8 +276,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   };
 
   return (
-    <div className="flex items-center gap-3">
-      {label && <Text className="text-sm font-medium text-gray-700 whitespace-nowrap">{label}</Text>}
+    <div className={cn("flex items-center gap-3", className)}>
+      {label && <p className="text-sm font-medium text-gray-700 whitespace-nowrap">{label}</p>}
       <div className="relative" ref={dropdownRef}>
         {/* Main input display */}
         <div

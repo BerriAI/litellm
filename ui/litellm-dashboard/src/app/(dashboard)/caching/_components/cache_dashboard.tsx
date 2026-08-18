@@ -1,7 +1,7 @@
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import UsageDatePicker from "@/components/shared/usage_date_picker";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { BarChart } from "@/components/shared/charts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -251,7 +251,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 </ComboboxContent>
               </Combobox>
 
-              <UsageDatePicker
+              <AdvancedDatePicker
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
