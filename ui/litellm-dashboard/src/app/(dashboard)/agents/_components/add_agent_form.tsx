@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Form, Modal, Select, Steps, Tag } from "antd";
+import { Modal, Select, Steps, Tag } from "antd";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -679,12 +679,12 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const renderConfigureStep = () => (
     <>
-      <Form.Item
-        label={<span className="text-sm font-medium text-foreground">Agent Type</span>}
-        required
-        tooltip="Select the type of agent you want to create"
-      >
+      <Field className="gap-1">
+        <FieldLabel htmlFor="agent-type">
+          {labelWithHint("Agent Type", "Select the type of agent you want to create")}
+        </FieldLabel>
         <Select
+          id="agent-type"
           value={agentType}
           onChange={handleAgentTypeChange}
           size="large"
@@ -744,7 +744,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             </Select.Option>
           ))}
         </Select>
-      </Form.Item>
+      </Field>
 
       <div className="mt-4">
         {agentType === CUSTOM_AGENT_TYPE ? (
