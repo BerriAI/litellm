@@ -1,5 +1,5 @@
 import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { isAdminRole } from "@/utils/roles";
 import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, PlusCircleIcon } from "@heroicons/react/outline";
 import { Card } from "@/components/ui/card";
@@ -103,7 +103,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
       return true;
     } catch (error) {
       console.error("Error saving links:", error);
-      NotificationsManager.fromBackend(`Failed to save links - ${error}`);
+      toast.fromError(`Failed to save links - ${error}`);
       return false;
     }
   };
@@ -115,13 +115,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     try {
       new URL(newLink.url);
     } catch {
-      NotificationsManager.fromBackend("Please enter a valid URL");
+      toast.fromError("Please enter a valid URL");
       return;
     }
 
     // Check for duplicate display names
     if (links.some((link) => link.displayName === newLink.displayName)) {
-      NotificationsManager.fromBackend("A link with this display name already exists");
+      toast.fromError("A link with this display name already exists");
       return;
     }
 
@@ -136,7 +136,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     if (await saveLinksToBackend(updatedLinks)) {
       setLinks(updatedLinks);
       setNewLink({ url: "", displayName: "" });
-      NotificationsManager.success("Link added successfully");
+      toast.success("Link added successfully");
     }
   };
 
@@ -151,13 +151,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     try {
       new URL(editingLink.url);
     } catch {
-      NotificationsManager.fromBackend("Please enter a valid URL");
+      toast.fromError("Please enter a valid URL");
       return;
     }
 
     // Check for duplicate display names (excluding current link)
     if (links.some((link) => link.id !== editingLink.id && link.displayName === editingLink.displayName)) {
-      NotificationsManager.fromBackend("A link with this display name already exists");
+      toast.fromError("A link with this display name already exists");
       return;
     }
 
@@ -166,7 +166,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     if (await saveLinksToBackend(updatedLinks)) {
       setLinks(updatedLinks);
       setEditingLink(null);
-      NotificationsManager.success("Link updated successfully");
+      toast.success("Link updated successfully");
     }
   };
 
@@ -179,7 +179,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
 
     if (await saveLinksToBackend(updatedLinks)) {
       setLinks(updatedLinks);
-      NotificationsManager.success("Link deleted successfully");
+      toast.success("Link deleted successfully");
     }
   };
 
@@ -205,7 +205,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     if (await saveLinksToBackend(links)) {
       setIsRearranging(false);
       setOriginalLinksOrder([]);
-      NotificationsManager.success("Link order saved successfully");
+      toast.success("Link order saved successfully");
     }
   };
 

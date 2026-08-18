@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Button, Form } from "antd";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import {
   useCoordinationRedisSettings,
@@ -37,7 +37,7 @@ const CoordinationRedisSettings: React.FC = () => {
 
   useEffect(() => {
     if (isError) {
-      NotificationsManager.fromBackend("Failed to load coordination Redis settings");
+      toast.fromError("Failed to load coordination Redis settings");
     }
   }, [isError]);
 
@@ -58,14 +58,12 @@ const CoordinationRedisSettings: React.FC = () => {
     try {
       const result = await testConnection.mutateAsync(buildCoordinationPayload(redisType, values));
       if (result.status === "healthy") {
-        NotificationsManager.success("Coordination Redis connection test successful!");
+        toast.success("Coordination Redis connection test successful!");
       } else {
-        NotificationsManager.fromBackend(`Connection test failed: ${result.error ?? "Unknown error"}`);
+        toast.fromError(`Connection test failed: ${result.error ?? "Unknown error"}`);
       }
     } catch (error) {
-      NotificationsManager.fromBackend(
-        `Connection test failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-      );
+      toast.fromError(`Connection test failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     }
   };
 
@@ -77,9 +75,9 @@ const CoordinationRedisSettings: React.FC = () => {
 
     try {
       await updateSettings.mutateAsync(buildCoordinationPayload(redisType, values));
-      NotificationsManager.success("Coordination Redis settings saved. Restart the proxy to apply them.");
+      toast.success("Coordination Redis settings saved. Restart the proxy to apply them.");
     } catch {
-      NotificationsManager.fromBackend("Failed to update coordination Redis settings");
+      toast.fromError("Failed to update coordination Redis settings");
     }
   };
 

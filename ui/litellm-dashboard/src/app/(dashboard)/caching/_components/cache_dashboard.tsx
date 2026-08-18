@@ -1,6 +1,6 @@
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useEffect, useState } from "react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { BarChart } from "@/components/shared/charts";
 import { Button } from "@/components/ui/button";
@@ -104,7 +104,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
 
   const runCachingHealthCheck = async () => {
     try {
-      NotificationsManager.info("Running cache health check...");
+      toast.info("Running cache health check...");
       setHealthCheckResponse("");
       const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
       setHealthCheckResponse(response);

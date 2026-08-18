@@ -35,7 +35,7 @@ const STREAMING_ENABLED_ARG_INDEX = 25;
 
 async function openComboboxByPlaceholder(placeholder: string) {
   const user = userEvent.setup();
-  const combobox = screen.getByPlaceholderText(placeholder);
+  const combobox = await screen.findByPlaceholderText(placeholder);
   await user.click(combobox);
   return combobox;
 }
