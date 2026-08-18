@@ -26,6 +26,7 @@ import {
   buildComplexityRouterConfig,
   getKeywordTierRulesError,
   getMissingTiersError,
+  getPlanModeTierError,
   getSemanticConfigError,
   getTierLabelsError,
 } from "./build_complexity_router_config";
@@ -118,6 +119,7 @@ const getSubmitBlockedReason = (
 ): string | null =>
   getMissingTiersError(config.tiers) ??
   getTierLabelsError(config.tier_labels) ??
+  getPlanModeTierError(config.plan_mode_min_tier, config.tiers) ??
   getKeywordTierRulesError(keywordTierRules) ??
   getReferencedModelsError(referencedModelsParams, availability);
 
@@ -283,6 +285,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
     defaultModel: complexityRouterConfig.default_model,
+    planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,

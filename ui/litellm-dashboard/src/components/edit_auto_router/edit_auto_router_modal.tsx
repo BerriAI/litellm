@@ -9,6 +9,7 @@ import { isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   getKeywordTierRulesError,
   getSemanticConfigError,
+  getPlanModeTierError,
   getTierLabelsError,
   hydrateTierLabels,
   normalizeClassifierLlmConfig,
@@ -56,6 +57,7 @@ interface EditAutoRouterModalProps {
 const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
   "default_model",
+  "plan_mode_min_tier",
   "tier_labels",
   "classifier_type",
   "classifier_llm_config",
@@ -140,6 +142,7 @@ export const buildUpdatedComplexityRouterConfig = (
     ...preservedConfig,
     tiers: value.tiers,
     ...(value.default_model?.trim() && { default_model: value.default_model }),
+    ...(value.plan_mode_min_tier?.trim() && { plan_mode_min_tier: value.plan_mode_min_tier }),
     ...(serializedTierLabels && { tier_labels: serializedTierLabels }),
     classifier_type: value.classifier_type,
     ...(value.classifier_type === "llm" && value.classifier_llm_config
@@ -226,6 +229,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ? "Please select at least one model for a complexity tier"
         : null) ??
       getTierLabelsError(complexityRouterConfig.tier_labels) ??
+      getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, complexityRouterConfig.tiers) ??
       getKeywordTierRulesError(keywordTierRules);
 
   useEffect(() => {
@@ -284,6 +288,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             modelData.litellm_params?.complexity_router_default_model,
             hydratedTiers,
           ),
+          plan_mode_min_tier:
+            typeof parsedConfig.plan_mode_min_tier === "string" && parsedConfig.plan_mode_min_tier.trim() !== ""
+              ? parsedConfig.plan_mode_min_tier
+              : undefined,
           tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
           classifier_type: parsedConfig.classifier_type || "heuristic",
           classifier_llm_config: parsedConfig.classifier_llm_config,

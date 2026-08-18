@@ -6,7 +6,7 @@ import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
 import EscalationKeywords from "./EscalationKeywords";
-import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
+import KeywordTierRules, { KeywordTierRule, tierOptions } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
 
@@ -121,6 +121,8 @@ export interface ComplexityRouterConfigValue {
   classifier_fallback?: ClassifierFallback;
   session_affinity?: boolean;
   deployment_affinity?: boolean;
+  /** Tier floor for coding-agent plan-mode requests. Unset means detection is off, matching the backend. */
+  plan_mode_min_tier?: string;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -186,6 +188,10 @@ export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof Complexit
 
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
+
+/** Tiers the plan-mode floor may name: the backend rejects a floor whose tier has no models. */
+export const planModeEligibleTiers = (tiers: ComplexityTiers): Array<keyof ComplexityTiers> =>
+  TIER_KEYS.filter((tier) => (tiers[tier] ?? []).length > 0);
 
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
@@ -414,6 +420,50 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   Keeps a session on its first turn&apos;s model instead of re-classifying each turn. Also pins the
                   deployment.
                 </Text>
+              </>
+            ),
+          },
+          {
+            key: "plan-mode",
+            label: (
+              <Text strong style={{ color: "#374151" }}>
+                Advanced: Plan-Mode Override
+              </Text>
+            ),
+            children: (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <Switch
+                    checked={value.plan_mode_min_tier !== undefined}
+                    disabled={planModeEligibleTiers(value.tiers).length === 0}
+                    onChange={(enabled) =>
+                      onChange({
+                        ...value,
+                        plan_mode_min_tier: enabled ? planModeEligibleTiers(value.tiers).at(-1) : undefined,
+                      })
+                    }
+                    aria-label="Route plan-mode requests to a minimum tier"
+                  />
+                  <Text strong>Route plan-mode requests to a minimum tier</Text>
+                </div>
+                <Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 12 }}>
+                  Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier.
+                  The classifier still wins when it picks higher, and the override only lasts while plan mode is active.
+                  {planModeEligibleTiers(value.tiers).length === 0 && " Add models to a tier to enable this."}
+                </Text>
+                {value.plan_mode_min_tier !== undefined && (
+                  <div style={{ maxWidth: 320 }}>
+                    <AntdSelect
+                      aria-label="Plan-mode minimum tier"
+                      style={{ width: "100%" }}
+                      value={value.plan_mode_min_tier}
+                      options={tierOptions(value.tier_labels).filter((option) =>
+                        planModeEligibleTiers(value.tiers).some((tier) => tier === option.value),
+                      )}
+                      onChange={(tier: string) => onChange({ ...value, plan_mode_min_tier: tier })}
+                    />
+                  </div>
+                )}
               </>
             ),
           },
