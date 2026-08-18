@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CreateUserButton } from "./CreateUserButton";
 import * as networking from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("./networking", () => ({
   userCreateCall: vi.fn(),
@@ -28,7 +28,7 @@ const mockUserCreateCall = vi.mocked(networking.userCreateCall);
 const mockInvitationCreateCall = vi.mocked(networking.invitationCreateCall);
 const mockGetProxyUISettings = vi.mocked(networking.getProxyUISettings);
 const mockOrganizationMemberAddCall = vi.mocked(networking.organizationMemberAddCall);
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 
 const createQueryClient = () =>
   new QueryClient({
@@ -199,7 +199,7 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
-        expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Email already exists");
+        expect(mockToast.fromError).toHaveBeenCalledWith("Email already exists");
       });
     });
 
@@ -226,7 +226,7 @@ describe("CreateUserButton", () => {
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
-        expect(mockNotificationsManager.info).toHaveBeenCalledWith("Making API Call");
+        expect(mockToast.info).toHaveBeenCalledWith("Making API Call");
       });
     });
   });
@@ -257,7 +257,7 @@ describe("CreateUserButton", () => {
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("API user Created");
+        expect(mockToast.success).toHaveBeenCalledWith("API user Created");
       });
     });
 
@@ -289,7 +289,7 @@ describe("CreateUserButton", () => {
         expect(mockInvitationCreateCall).toHaveBeenCalledWith("token", "sso-user");
       });
       await waitFor(() => {
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("API user Created");
+        expect(mockToast.success).toHaveBeenCalledWith("API user Created");
       });
     });
   });

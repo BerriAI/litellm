@@ -1,5 +1,5 @@
 import { modelCreateCall, Model } from "../networking";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 export const handleAddAutoRouterSubmit = async (values: any, accessToken: string, form: any, callback?: () => void) => {
   try {
@@ -42,7 +42,7 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
     await modelCreateCall(accessToken, autoRouterConfig as Model);
 
     const routerTypeName = values.model_type === "complexity_router" ? "Auto Router" : "Semantic Router";
-    NotificationManager.success(`Successfully created ${routerTypeName}: ${values.auto_router_name}`);
+    toast.success(`Successfully created ${routerTypeName}: ${values.auto_router_name}`);
 
     form.resetFields();
 
@@ -51,6 +51,6 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
     }
   } catch (error) {
     console.error("Failed to add auto router:", error);
-    NotificationManager.fromBackend("Failed to add auto router: " + error);
+    toast.fromError("Failed to add auto router: " + error);
   }
 };

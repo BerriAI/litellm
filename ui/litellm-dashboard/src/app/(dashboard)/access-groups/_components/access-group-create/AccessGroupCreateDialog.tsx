@@ -8,7 +8,7 @@ import { accessGroupKeys } from "@/app/(dashboard)/hooks/accessGroups/useAccessG
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -113,12 +113,12 @@ export const AccessGroupCreateDialog = ({
   const mutation = useMutation({
     mutationFn: (body: AccessGroupCreateBody) => createAccessGroup(body),
     onSuccess: () => {
-      NotificationsManager.success("Access group created successfully");
+      toast.success("Access group created successfully");
       queryClient.invalidateQueries({ queryKey: accessGroupKeys.all });
       closeAndReset();
     },
     onError: (error: unknown) =>
-      NotificationsManager.fromBackend(error instanceof Error ? error.message : "Failed to create access group"),
+      toast.fromError(error instanceof Error ? error.message : "Failed to create access group"),
   });
 
   const handleOpenChange = (nextOpen: boolean) => {
