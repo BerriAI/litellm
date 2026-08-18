@@ -3384,7 +3384,7 @@ def test_split_quota_helpers_handle_non_mapping_inputs(rate_limiter):
     assert _call_id_from_callback_kwargs(object()) is None
     assert handler._is_embedding_request(object(), None) is False
     assert handler._get_explicit_output_cap(object(), None) is None
-    assert handler._get_output_candidate_count(object()) == 1
+    assert handler.get_output_candidate_count(object()) == 1
     assert (
         handler._get_explicit_output_cap({"max_output_tokens": []}, "responses") is None
     )
