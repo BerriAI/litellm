@@ -59,7 +59,7 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
             ]}
             help="A human-friendly name for the budget"
           >
-            <Input placeholder="" />
+            <Input />
           </Form.Item>
           <Form.Item label="Max Tokens per minute" name="tpm_limit" help="Default is model limit.">
             <InputNumber step={1} precision={2} width={200} />

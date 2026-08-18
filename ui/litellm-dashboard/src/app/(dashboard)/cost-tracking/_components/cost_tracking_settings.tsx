@@ -123,10 +123,6 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
     setNewDiscount("");
   };
 
-  const handleFormSubmit = () => {
-    handleAddProvider();
-  };
-
   const handleRemoveProvider = (provider: string, providerDisplayName: string) => {
     setPendingRemoval({ kind: "discount", provider, displayName: providerDisplayName });
   };
@@ -356,7 +352,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             Select a provider and set its discount percentage. Enter a value between 0% and 100% (e.g., 5 for a 5%
             discount).
           </p>
-          <Form form={form} onFinish={handleFormSubmit} layout="vertical" className="space-y-6">
+          <Form form={form} layout="vertical" className="space-y-6">
             <AddProviderForm
               discountConfig={discountConfig}
               selectedProvider={selectedProvider}

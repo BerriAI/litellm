@@ -177,6 +177,7 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
 
       <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
         <Button
+          type="submit"
           onClick={onAddProvider}
           disabled={
             !selectedProvider ||

@@ -55,7 +55,7 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
       >
         <>
           <Form.Item label="Budget ID" name="budget_id" help="Budget ID cannot be changed after creation">
-            <Input placeholder="" disabled={true} />
+            <Input disabled={true} />
           </Form.Item>
           <Form.Item label="Max Tokens per minute" name="tpm_limit" help="Default is model limit.">
             <InputNumber step={1} precision={2} width={200} />
