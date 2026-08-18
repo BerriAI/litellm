@@ -39,7 +39,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -3010,6 +3010,11 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     surface it as a queryable span attribute without parsing the raw
     guardrail_response blob."""
 
+    guardrail_usage: ReadOnly[Mapping[str, int] | None]
+    """Provider-reported billable usage counters for this invocation, keyed by the
+    provider's counter name (e.g. Bedrock's ``contentPolicyUnits``). Kept as a
+    sibling of guardrail_response so spend-log prompt redaction never drops it."""
+
 
 class EvalVerdict(TypedDict, total=False):
     criterion_name: str
@@ -3053,6 +3058,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     risk_score: float | None
     violation_categories: list[str] | None
     guardrail_action: str | None
+    guardrail_usage: ReadOnly[Mapping[str, int] | None]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
