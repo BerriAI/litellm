@@ -332,6 +332,21 @@ class ReplaySource:
         self._cursors[slug] = index + 1
         return interaction
 
+    def leftover_error(self, test_key: str) -> str | None:
+        """Non-None when the test consumed fewer interactions than were recorded,
+        meaning a passing replay proved less than the bundle claims."""
+        slug = slug_for_test(test_key)
+        recorded = self.bundle.interactions.get(slug, ())
+        consumed = self._cursors.get(slug, 0)
+        if consumed >= len(recorded):
+            return None
+        pending = recorded[consumed]
+        return (
+            f"replay incomplete for {test_key}: {len(recorded) - consumed} of {len(recorded)} recorded "
+            f"interactions never consumed, next is {pending.request.method} {pending.request.path}; "
+            "re-record with E2E_FIXTURE_MODE=record"
+        )
+
 
 def _expect_result(interaction: Interaction) -> RecordedResult:
     match interaction.response:
@@ -472,6 +487,15 @@ def _shared_replay_source(root: Path) -> ReplaySource:
     if isinstance(loaded, UnreadableBundle):
         raise ValueError(f"cannot replay from {root}: {loaded.reason}")
     return ReplaySource(bundle=loaded)
+
+
+def replay_leftover_error(*, mode_raw: str, bundle_dir: Path, test_key: str) -> str | None:
+    """Teardown-time completeness check: in replay mode a passed test with
+    unconsumed recorded interactions must fail instead of passing against a
+    recording it no longer matches. Inert in every other mode."""
+    if parse_fixture_mode(mode_raw) != "replay":
+        return None
+    return _shared_replay_source(bundle_dir).leftover_error(test_key)
 
 
 def select_transport(
