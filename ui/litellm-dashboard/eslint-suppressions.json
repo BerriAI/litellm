@@ -191,11 +191,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-optimization/_components/PromptCompressionTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-tracking/_components/add_margin_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -204,9 +199,6 @@
   "src/app/(dashboard)/cost-tracking/_components/add_provider_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/cost_tracking_settings.tsx": {
