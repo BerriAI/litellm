@@ -42,15 +42,12 @@ TEAM_RATE_LIMIT_METRICS = (
 )
 
 
-def _logger_with_mock_team_gauges(labels_are_real: bool = False) -> PrometheusLogger:
+def _logger_with_mock_team_gauges() -> PrometheusLogger:
     with patch("litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None):
         logger = PrometheusLogger()
     for metric_name in TEAM_RATE_LIMIT_METRICS:
         setattr(logger, metric_name, MagicMock())
-    if labels_are_real:
-        logger.get_labels_for_metric = MagicMock(side_effect=PrometheusMetricLabels.get_labels)
-    else:
-        logger.get_labels_for_metric = MagicMock(return_value=[])
+    logger.get_labels_for_metric = MagicMock(side_effect=PrometheusMetricLabels.get_labels)
     return logger
 
 
@@ -126,7 +123,7 @@ def test_sets_every_team_gauge_from_v3_headers():
 
 
 def test_labels_carry_team_and_requested_model():
-    logger = _logger_with_mock_team_gauges(labels_are_real=True)
+    logger = _logger_with_mock_team_gauges()
 
     _set_team_metrics(logger, _payload_with_headers(dict(ALL_TEAM_HEADERS)))
 
@@ -161,7 +158,7 @@ def test_drops_stale_series_when_a_team_limit_is_removed():
     so a team whose limit is removed would otherwise keep publishing the last
     values it saw and alerts would fire on a limit nobody enforces.
     """
-    logger = _logger_with_mock_team_gauges(labels_are_real=True)
+    logger = _logger_with_mock_team_gauges()
 
     _set_team_metrics(logger, _payload_with_headers(dict(ALL_TEAM_HEADERS)))
     _assert_set_once(logger, "litellm_remaining_team_requests_for_model", 42)
@@ -293,7 +290,7 @@ def test_limiter_publishes_team_headers_in_the_shape_the_gauges_read():
 
 
 def _logger_with_real_gauge(metric_name: str, gauge: Gauge) -> PrometheusLogger:
-    logger = _logger_with_mock_team_gauges(labels_are_real=True)
+    logger = _logger_with_mock_team_gauges()
     setattr(logger, metric_name, gauge)
     return logger
 
@@ -360,3 +357,68 @@ def test_noop_metric_remove_is_inert():
 
     metric.labels(**TEAM_LABELS).set(60)
     metric.remove(*TEAM_LABELS.values())
+
+
+def test_retires_the_old_series_when_a_team_is_renamed():
+    """
+    A rename changes team_alias, which starts a new series. The old one would
+    otherwise keep publishing the values it held at rename time, double
+    counting the team on any sum over `team`.
+    """
+    registry = CollectorRegistry()
+    gauge = Gauge("litellm_team_rpm_limit", "doc", labelnames=list(ORIGINAL_LABELNAMES), registry=registry)
+    logger = _logger_with_real_gauge("litellm_team_rpm_limit", gauge)
+    headers = {"x-ratelimit-model_per_team-limit-requests": 60}
+
+    _set_team_metrics(logger, _payload_with_headers(headers))
+    assert registry.get_sample_value("litellm_team_rpm_limit", TEAM_LABELS) == 60
+
+    logger._set_team_rate_limit_metrics(
+        user_api_team="team-abc",
+        user_api_team_alias="ml-research",
+        model_group="gpt-4o-mini",
+        standard_logging_payload=_payload_with_headers(headers),
+    )
+
+    renamed = {**TEAM_LABELS, "team_alias": "ml-research"}
+    assert registry.get_sample_value("litellm_team_rpm_limit", renamed) == 60
+    assert registry.get_sample_value("litellm_team_rpm_limit", TEAM_LABELS) is None
+
+
+def test_keeps_other_teams_when_one_team_is_renamed():
+    registry = CollectorRegistry()
+    gauge = Gauge("litellm_team_rpm_limit", "doc", labelnames=list(ORIGINAL_LABELNAMES), registry=registry)
+    logger = _logger_with_real_gauge("litellm_team_rpm_limit", gauge)
+    headers = {"x-ratelimit-model_per_team-limit-requests": 60}
+
+    logger._set_team_rate_limit_metrics(
+        user_api_team="team-other",
+        user_api_team_alias="platform",
+        model_group="gpt-4o-mini",
+        standard_logging_payload=_payload_with_headers(headers),
+    )
+    _set_team_metrics(logger, _payload_with_headers(headers))
+    logger._set_team_rate_limit_metrics(
+        user_api_team="team-abc",
+        user_api_team_alias="ml-research",
+        model_group="gpt-4o-mini",
+        standard_logging_payload=_payload_with_headers(headers),
+    )
+
+    other = {"team": "team-other", "team_alias": "platform", "model": "gpt-4o-mini"}
+    assert registry.get_sample_value("litellm_team_rpm_limit", other) == 60
+
+
+def test_emits_nothing_when_the_team_label_is_excluded():
+    """
+    Without a team label the gauge collapses to one sample shared by every
+    team, which attributes a limit to nobody and cannot be retired.
+    """
+    logger = _logger_with_mock_team_gauges()
+    logger.get_labels_for_metric = MagicMock(return_value=["model"])
+
+    _set_team_metrics(logger, _payload_with_headers(dict(ALL_TEAM_HEADERS)))
+
+    for metric_name in TEAM_RATE_LIMIT_METRICS:
+        getattr(logger, metric_name).labels.assert_not_called()
+        getattr(logger, metric_name).remove.assert_not_called()

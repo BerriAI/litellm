@@ -2122,21 +2122,64 @@ class PrometheusLogger(CustomLogger):
         values it ever saw, and alerts would evaluate against a number no
         longer being enforced.
         """
+        labelnames: Final = self.get_labels_for_metric(metric_name)
+        if UserAPIKeyLabelNames.TEAM.value not in labelnames:
+            # Without a team label the gauge collapses to one sample shared by
+            # every team, which cannot attribute a limit to anyone and cannot
+            # be retired. Publishing nothing beats publishing a number that
+            # silently belongs to whichever team wrote it last.
+            return
+
         labels: Final = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(metric_name),
+            supported_enum_labels=labelnames,
             enum_values=enum_values,
             label_context=label_context,
         )
         if value is not None:
+            self._drop_superseded_team_series(gauge=gauge, labelnames=labelnames, labels=labels)
             gauge.labels(**labels).set(value)
             return
 
         try:
-            gauge.remove(*(labels[name] for name in self.get_labels_for_metric(metric_name)))
+            gauge.remove(*(labels.get(name, "") for name in labelnames))
         except KeyError:
             # No child series for this labelset, which is the common case:
             # the team never had a limit for this model.
             pass
+
+    def _drop_superseded_team_series(
+        self,
+        gauge: _LabeledGauge,
+        labelnames: Sequence[str],
+        labels: Mapping[str, str],
+    ) -> None:
+        """
+        Retire child series that describe this same team and model under a
+        different alias. Renaming a team changes ``team_alias``, which starts a
+        new series, and the old one would otherwise keep publishing the values
+        it held at rename time, double counting the team on any sum over
+        ``team``.
+        """
+        collect: Final = getattr(gauge, "collect", None)
+        if collect is None:
+            return
+
+        team_label: Final = UserAPIKeyLabelNames.TEAM.value
+        alias_label: Final = UserAPIKeyLabelNames.TEAM_ALIAS.value
+        model_label: Final = UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value
+        superseded: Final = tuple(
+            tuple(sample.labels.get(name, "") for name in labelnames)
+            for metric in collect()
+            for sample in metric.samples
+            if sample.labels.get(team_label) == labels.get(team_label)
+            and sample.labels.get(model_label) == labels.get(model_label)
+            and sample.labels.get(alias_label) != labels.get(alias_label)
+        )
+        for label_values in superseded:
+            try:
+                gauge.remove(*label_values)
+            except KeyError:
+                pass
 
     def _set_latency_metrics(
         self,
