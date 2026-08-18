@@ -1491,14 +1491,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/users/_components/edit_user.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/users/_components/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1

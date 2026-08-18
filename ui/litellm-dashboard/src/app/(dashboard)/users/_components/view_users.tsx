@@ -7,18 +7,15 @@ import { CreateUserButton } from "@/components/CreateUserButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import EditUserModal from "./edit_user";
 import {
   getPossibleUserRoles,
   getProxyBaseUrl,
   invitationCreateCall,
   userListCall,
   UserListResponse,
-  userUpdateUserCall,
 } from "@/components/networking";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
-import { updateExistingKeys } from "@/utils/dataUtils";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
@@ -77,8 +74,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectedUserId, setSelectedUserId] = useQueryState("user", parseAsString.withOptions({ history: "push" }));
   const [openInEditMode, setOpenInEditMode] = useState(false);
 
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
@@ -205,39 +200,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const cancelDelete = () => {
     setIsDeleteModalOpen(false);
     setUserToDelete(null);
-  };
-
-  const handleEditCancel = async () => {
-    setSelectedUser(null);
-    setEditModalVisible(false);
-  };
-
-  const handleEditSubmit = async (editedUser: any) => {
-    if (!accessToken || !token || !userRole || !userID) {
-      return;
-    }
-
-    try {
-      const response = await userUpdateUserCall(accessToken, editedUser, null);
-      queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
-        if (previousData === undefined) return previousData;
-        const updatedUsers = previousData.users.map((user) => {
-          if (user.user_id === response.data.user_id) {
-            return updateExistingKeys(user, response.data);
-          }
-          return user;
-        });
-
-        return { ...previousData, users: updatedUsers };
-      });
-
-      toast.success(`User ${editedUser.user_id} updated successfully`);
-    } catch (error) {
-      console.error("There was an error updating the user", error);
-    }
-    setSelectedUser(null);
-    setEditModalVisible(false);
-    // Close the modal
   };
 
   const handleToggleSelectionMode = () => {
@@ -438,14 +400,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       )}
 
       {/* Existing Modals */}
-      <EditUserModal
-        visible={editModalVisible}
-        possibleUIRoles={possibleUIRoles}
-        onCancel={handleEditCancel}
-        user={selectedUser}
-        onSubmit={handleEditSubmit}
-      />
-
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
         title="Delete User?"
