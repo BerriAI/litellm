@@ -401,24 +401,12 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 5
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/guardrail_provider_fields.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 5
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -428,11 +416,6 @@
   "src/app/(dashboard)/guardrails/_components/guardrail_table.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/llm_judge/LLMJudgeFields.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/guardrails/_components/pii_components.tsx": {
