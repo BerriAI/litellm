@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import CreateVectorStore from "./CreateVectorStore";
 import * as networking from "@/components/networking";
@@ -204,17 +205,10 @@ describe("CreateVectorStore", () => {
     // Find and click the provider dropdown
     const providerSelect = screen.getByRole("combobox");
 
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await userEvent.click(providerSelect);
 
     // Wait for dropdown options to appear
-    await waitFor(() => {
-      const s3Option = screen.queryByText("AWS S3 Vectors");
-      if (s3Option) {
-        fireEvent.click(s3Option);
-      }
-    });
+    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
 
     // Check if S3-specific fields are displayed
     await waitFor(() => {
@@ -244,16 +238,9 @@ describe("CreateVectorStore", () => {
     // Select S3 Vectors provider
     const providerSelect = screen.getByRole("combobox");
 
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await userEvent.click(providerSelect);
 
-    await waitFor(() => {
-      const s3Option = screen.queryByText("AWS S3 Vectors");
-      if (s3Option) {
-        fireEvent.click(s3Option);
-      }
-    });
+    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
 
     // Try to create without filling required fields
     const createButton = screen.getByRole("button", { name: /Create Vector Store/i });
