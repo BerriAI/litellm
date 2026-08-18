@@ -29,6 +29,13 @@ const { Dragger } = Upload;
 
 const RAG_INGEST_UNSUPPORTED_PROVIDERS = new Set(["valkey"]);
 
+const providerItems = Object.entries(VectorStoreProviders)
+  .filter(([providerEnum]) => !RAG_INGEST_UNSUPPORTED_PROVIDERS.has(vectorStoreProviderMap[providerEnum]))
+  .map(([providerEnum, providerDisplayName]) => ({
+    value: vectorStoreProviderMap[providerEnum],
+    label: providerDisplayName,
+  }));
+
 const asText = (value: unknown): string => (typeof value === "string" ? value : "");
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
@@ -292,6 +299,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                   {labelWithHint("Provider", "Select the provider for embedding and vector store operations")}
                 </FieldLabel>
                 <Select
+                  items={providerItems}
                   value={selectedProvider}
                   onValueChange={(value: string | null) => value !== null && setSelectedProvider(value)}
                 >
@@ -299,20 +307,12 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                     <SelectValue placeholder="Select a provider" />
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger={false}>
-                    {Object.entries(VectorStoreProviders)
-                      .filter(
-                        ([providerEnum]) => !RAG_INGEST_UNSUPPORTED_PROVIDERS.has(vectorStoreProviderMap[providerEnum]),
-                      )
-                      .map(([providerEnum, providerDisplayName]) => (
-                        <SelectItem key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
-                          <Logo
-                            src={vectorStoreProviderLogoMap[providerDisplayName]}
-                            label={providerDisplayName}
-                            className="w-5 h-5"
-                          />
-                          <span>{providerDisplayName}</span>
-                        </SelectItem>
-                      ))}
+                    {providerItems.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        <Logo src={vectorStoreProviderLogoMap[item.label]} label={item.label} className="w-5 h-5" />
+                        <span>{item.label}</span>
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </Field>

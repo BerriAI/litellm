@@ -7,7 +7,8 @@ from typing import Final
 import anyio
 
 ANTHROPIC_PING_SSE_CHUNK: Final = 'event: ping\ndata: {"type": "ping"}\n\n'
-SSE_COMMENT_PING_BYTES: Final = b": ping\n\n"
+SSE_COMMENT_PING: Final = ": ping\n\n"
+SSE_COMMENT_PING_BYTES: Final = SSE_COMMENT_PING.encode()
 # The byte form of proxy_server._SSE_FRAME_DELIMITERS, CR-only included: SSE
 # terminates a line with CRLF, LF or CR, so a blank line is any of these three.
 _SSE_FRAME_DELIMITERS: Final = (b"\r\n\r\n", b"\n\n", b"\r\r")
@@ -42,16 +43,25 @@ def keepalive_ping_has_fired(elapsed_seconds: float, ping_interval_seconds: floa
 def wrap_sse_stream_with_keepalive_pings(
     stream: AsyncGenerator[str, None],
     ping_interval_seconds: float | str | None,
+    ping_chunk: str = ANTHROPIC_PING_SSE_CHUNK,
 ) -> AsyncGenerator[str, None]:
+    """Fill idle gaps in an SSE stream, including the one before its first chunk.
+
+    ``ping_chunk`` is what gets written into those gaps. It defaults to Anthropic's
+    own ``ping`` event because that is the protocol the first caller speaks; a
+    stream carrying anything else wants ``SSE_COMMENT_PING``, which is a comment
+    every conformant SSE client discards rather than a frame it has to understand.
+    """
     interval: Final = coerce_keepalive_interval(ping_interval_seconds)
     if interval is None:
         return stream
-    return _keepalive_ping_stream(stream=stream, ping_interval_seconds=interval)
+    return _keepalive_ping_stream(stream=stream, ping_interval_seconds=interval, ping_chunk=ping_chunk)
 
 
 async def _keepalive_ping_stream(
     stream: AsyncGenerator[str, None],
     ping_interval_seconds: float,
+    ping_chunk: str,
 ) -> AsyncGenerator[str, None]:
     pending = asyncio.ensure_future(
         stream.__anext__()
@@ -60,7 +70,7 @@ async def _keepalive_ping_stream(
         while True:
             await asyncio.wait({pending}, timeout=ping_interval_seconds)
             if not pending.done():
-                yield ANTHROPIC_PING_SSE_CHUNK
+                yield ping_chunk
                 continue
             try:
                 yield pending.result()

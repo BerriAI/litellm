@@ -214,6 +214,15 @@ if (typeof window !== "undefined") {
     document.getAnimations = () => [];
   }
 
+  // Base UI's ScrollAreaViewport calls viewport.getAnimations() from a timer, which jsdom
+  // does not implement, so the TypeError surfaces as an unhandled error and fails the run.
+  // BASE_UI_ANIMATIONS_DISABLED keeps useAnimationsFinished on the synchronous path it
+  // already took while getAnimations was missing, so popup unmount timing is unchanged.
+  (globalThis as { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true;
+  if (!Element.prototype.getAnimations) {
+    Element.prototype.getAnimations = () => [];
+  }
+
   // Stub URL.revokeObjectURL so vi.spyOn can intercept it in tests
   if (!URL.revokeObjectURL) {
     URL.revokeObjectURL = () => {};

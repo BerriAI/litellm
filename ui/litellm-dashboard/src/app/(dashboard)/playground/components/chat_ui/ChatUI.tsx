@@ -83,6 +83,11 @@ import {
   validateImageEditFile,
 } from "./uploadValidation";
 
+const SDK_ITEMS = [
+  { value: "openai", label: "OpenAI SDK" },
+  { value: "azure", label: "Azure SDK" },
+] as const;
+
 interface ChatUIProps {
   accessToken: string | null;
   token: string | null;
@@ -1314,7 +1319,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <Volume2 className="mr-2 size-4" aria-hidden="true" />
                         Voice
                       </label>
-                      <ShadcnSelect value={selectedVoice} onValueChange={handleVoiceChange}>
+                      <ShadcnSelect
+                        items={OPEN_AI_VOICE_SELECT_OPTIONS}
+                        value={selectedVoice}
+                        onValueChange={handleVoiceChange}
+                      >
                         <SelectTrigger className="w-full" size="sm" aria-label="Voice">
                           <SelectValue />
                         </SelectTrigger>
@@ -2082,13 +2091,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
           <div className="my-2 flex items-end justify-between gap-3">
             <div>
               <p className="mb-1 text-sm font-medium text-gray-700">SDK Type</p>
-              <ShadcnSelect value={selectedSdk} onValueChange={(value) => setSelectedSdk(value as "openai" | "azure")}>
+              <ShadcnSelect
+                items={SDK_ITEMS}
+                value={selectedSdk}
+                onValueChange={(value) => setSelectedSdk(value as "openai" | "azure")}
+              >
                 <SelectTrigger className="w-[150px]" size="sm" aria-label="SDK Type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="openai">OpenAI SDK</SelectItem>
-                  <SelectItem value="azure">Azure SDK</SelectItem>
+                  {SDK_ITEMS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </ShadcnSelect>
             </div>
