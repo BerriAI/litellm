@@ -3,7 +3,7 @@ import os
 import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
-from typing import Optional
+from typing import Final, Optional
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -466,6 +466,132 @@ def test_is_bedrock_agent_runtime_route():
         is False
     )
     assert _is_bedrock_agent_runtime_route("/some/random/endpoint") is False
+
+
+def test_is_bedrock_agent_control_plane_route():
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _is_bedrock_agent_control_plane_route,
+        _is_bedrock_agent_runtime_route,
+    )
+
+    direct_ingestion_endpoint: Final = (
+        "/knowledgebases/kb-123/datasources/ds-456/documents"
+    )
+
+    assert _is_bedrock_agent_control_plane_route(direct_ingestion_endpoint) is True
+    assert _is_bedrock_agent_runtime_route(direct_ingestion_endpoint) is True
+    assert (
+        _is_bedrock_agent_control_plane_route(
+            "/knowledgebases/kb-123/retrieve"
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "method", "expected_url"),
+    (
+        (
+            "knowledgebases/kb-123/retrieve",
+            "POST",
+            "https://bedrock-agent-runtime.ap-northeast-2.amazonaws.com/knowledgebases/kb-123/retrieve",
+        ),
+        (
+            "knowledgebases/kb-123/datasources/ds-456/documents",
+            "PUT",
+            "https://bedrock-agent.ap-northeast-2.amazonaws.com/knowledgebases/kb-123/datasources/ds-456/documents",
+        ),
+        (
+            "knowledgebases/kb-123/datasources/ds-456/documents",
+            "POST",
+            "https://bedrock-agent-runtime.ap-northeast-2.amazonaws.com/"
+            "knowledgebases/kb-123/datasources/ds-456/documents",
+        ),
+        (
+            "knowledgebases/kb-123/datasources/ds-456/documents",
+            "DELETE",
+            "https://bedrock-agent-runtime.ap-northeast-2.amazonaws.com/"
+            "knowledgebases/kb-123/datasources/ds-456/documents",
+        ),
+    ),
+)
+async def test_bedrock_agent_route_target_and_sigv4_method(
+    endpoint: str, method: str, expected_url: str
+):
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        bedrock_proxy_route,
+    )
+
+    body: Final = json.dumps({"documents": []}).encode()
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": f"/bedrock/{endpoint}",
+            "headers": ((b"content-type", b"application/json"),),
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "client": ("testclient", 50000),
+            "scheme": "http",
+        },
+        receive,
+    )
+    prepared_request: Final = MagicMock(
+        url=expected_url,
+        headers={"Authorization": "AWS4-HMAC-SHA256 signed"},
+        body=body,
+    )
+    upstream_response: Final = MagicMock()
+    endpoint_func: Final = AsyncMock(return_value=upstream_response)
+    credentials: Final = MagicMock()
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.litellm.utils.get_secret",
+            return_value="ap-northeast-2",
+        ),
+        patch(
+            "litellm.llms.bedrock.chat.BedrockConverseLLM.get_credentials",
+            return_value=credentials,
+        ),
+        patch("botocore.auth.SigV4Auth") as sigv4_auth,
+        patch("botocore.awsrequest.AWSRequest") as aws_request,
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=endpoint_func,
+        ) as create_route,
+    ):
+        aws_request.return_value.prepare.return_value = prepared_request
+
+        response: Final = await bedrock_proxy_route(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=fastapi.Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+
+    assert response is upstream_response
+    aws_request.assert_called_once_with(
+        method=method,
+        url=expected_url,
+        data=json.dumps({"documents": []}),
+        headers={"Content-Type": "application/json"},
+    )
+    sigv4_auth.assert_called_once_with(credentials, "bedrock", "ap-northeast-2")
+    sigv4_auth.return_value.add_auth.assert_called_once_with(aws_request.return_value)
+    create_route.assert_called_once_with(
+        endpoint=endpoint,
+        target=expected_url,
+        custom_headers=prepared_request.headers,
+        is_streaming_request=False,
+        _forward_headers=True,
+    )
+    endpoint_func.assert_awaited_once()
 
 
 def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict):

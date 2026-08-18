@@ -1016,7 +1016,9 @@ async def bedrock_proxy_route(
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
     aws_region_name: Final = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
-    if _is_bedrock_agent_runtime_route(endpoint=endpoint):  # handle bedrock agents
+    if request.method == "PUT" and _is_bedrock_agent_control_plane_route(endpoint=endpoint):
+        base_target_url: Final = f"https://bedrock-agent.{aws_region_name}.amazonaws.com"
+    elif _is_bedrock_agent_runtime_route(endpoint=endpoint):  # handle bedrock agents
         base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
     else:
         return await bedrock_llm_proxy_route(
@@ -1050,7 +1052,7 @@ async def bedrock_proxy_route(
         data: Final = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
-    _request: Final = AWSRequest(method="POST", url=str(updated_url), data=json.dumps(data), headers=headers)
+    _request: Final = AWSRequest(method=request.method, url=str(updated_url), data=json.dumps(data), headers=headers)
     sigv4.add_auth(_request)
     prepped: Final = _request.prepare()
 
@@ -1290,6 +1292,11 @@ def _is_bedrock_agent_runtime_route(endpoint: str) -> bool:
         if _route in endpoint:
             return True
     return False
+
+
+def _is_bedrock_agent_control_plane_route(endpoint: str) -> bool:
+    normalized_endpoint: Final = endpoint.strip("/")
+    return re.fullmatch(r"knowledgebases/[^/]+/datasources/[^/]+/documents", normalized_endpoint) is not None
 
 
 @router.api_route(
