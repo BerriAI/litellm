@@ -744,6 +744,10 @@ class LiteLLMParamsBody(BaseModel):
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
+    auto_router_config: str | None = None
+    auto_router_default_model: str | None = None
+    auto_router_embedding_model: str | None = None
+    tags: list[str] | None = None
     mock_response: str | None = None
     timeout: float | None = None
     tpm: int | None = None
