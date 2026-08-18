@@ -1111,7 +1111,7 @@ def _get_response_for_spend_logs_payload(
 ) -> str:
     if payload is None:
         return "{}"
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if _should_store_responses_in_spend_logs():
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
@@ -1176,6 +1176,22 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
 
     # Also check environment variable
     return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+
+
+def _should_store_responses_in_spend_logs() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+    from litellm.secret_managers.main import get_secret_bool
+
+    store_responses_value: Final = general_settings.get("store_responses_in_spend_logs")
+    if store_responses_value is not None:
+        if isinstance(store_responses_value, str):
+            return store_responses_value.lower() == "true"
+        return store_responses_value is True
+
+    store_responses_env: Final = get_secret_bool("STORE_RESPONSES_IN_SPEND_LOGS")
+    if store_responses_env is not None:
+        return store_responses_env
+    return _should_store_prompts_and_responses_in_spend_logs()
 
 
 def _get_status_for_spend_log(

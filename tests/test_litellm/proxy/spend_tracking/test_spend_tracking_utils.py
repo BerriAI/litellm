@@ -36,6 +36,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
+    _should_store_responses_in_spend_logs,
     get_logging_payload,
     get_spend_logs_id,
 )
@@ -1434,6 +1435,83 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
         assert (
             result is False
         ), "Expected False (from env var) when key missing, got True"
+
+
+@pytest.mark.parametrize(
+    ("settings", "environment", "expected"),
+    [
+        ({"store_prompts_in_spend_logs": True}, {}, True),
+        ({"store_prompts_in_spend_logs": False}, {}, False),
+        (
+            {
+                "store_prompts_in_spend_logs": True,
+                "store_responses_in_spend_logs": False,
+            },
+            {},
+            False,
+        ),
+        (
+            {
+                "store_prompts_in_spend_logs": False,
+                "store_responses_in_spend_logs": True,
+            },
+            {},
+            True,
+        ),
+        ({"store_prompts_in_spend_logs": True}, {"STORE_RESPONSES_IN_SPEND_LOGS": False}, False),
+        ({"store_prompts_in_spend_logs": False}, {"STORE_RESPONSES_IN_SPEND_LOGS": True}, True),
+        (
+            {
+                "store_prompts_in_spend_logs": True,
+                "store_responses_in_spend_logs": "FALSE",
+            },
+            {},
+            False,
+        ),
+    ],
+)
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_responses_in_spend_logs(
+    mock_get_secret_bool,
+    settings,
+    environment,
+    expected,
+):
+    mock_get_secret_bool.side_effect = environment.get
+    with patch("litellm.proxy.proxy_server.general_settings", settings):
+        assert _should_store_responses_in_spend_logs() is expected
+
+
+def test_spend_logs_can_store_request_without_response():
+    settings = {
+        "store_prompts_in_spend_logs": True,
+        "store_responses_in_spend_logs": False,
+    }
+    kwargs = {
+        "litellm_params": {
+            "proxy_server_request": {
+                "body": {
+                    "model": "gpt-5-mini",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            }
+        }
+    }
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": {"role": "assistant", "content": "Hi there!"}},
+    )
+
+    with patch("litellm.proxy.proxy_server.general_settings", settings):
+        request_result = _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params=kwargs["litellm_params"],
+            kwargs=kwargs,
+        )
+        response_result = _get_response_for_spend_logs_payload(payload=payload, kwargs=kwargs)
+
+    assert json.loads(request_result)["messages"] == [{"role": "user", "content": "Hello!"}]
+    assert response_result == "{}"
 
 
 def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
