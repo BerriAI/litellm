@@ -2473,6 +2473,30 @@ def test_completion_omits_store_and_prompt_cache_key_when_not_passed():
         assert "prompt_cache_key" not in request_body
 
 
+def test_completion_forwards_store_and_prompt_cache_key_to_mcp_gateway():
+    """
+    Regression test for the MCP gateway early-return in completion(): store and
+    prompt_cache_key are named params, so they no longer travel via **kwargs and
+    must be forwarded explicitly like safety_identifier and service_tier.
+    """
+    with patch(
+        "litellm.responses.mcp.chat_completions_handler.acompletion_with_mcp"
+    ) as mock_mcp:
+        result = litellm.completion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy"}],
+            store=False,
+            prompt_cache_key="test-cache-key",
+        )
+
+        result.close()
+        mock_mcp.assert_called_once()
+        call_kwargs = mock_mcp.call_args.kwargs
+        assert call_kwargs["store"] is False
+        assert call_kwargs["prompt_cache_key"] == "test-cache-key"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "aws_credential_kwargs",

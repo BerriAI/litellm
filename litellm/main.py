@@ -5064,6 +5064,8 @@ def completion(
                 verbosity=verbosity,
                 safety_identifier=safety_identifier,
                 service_tier=service_tier,
+                store=store,
+                prompt_cache_key=prompt_cache_key,
                 base_url=base_url,
                 api_version=api_version,
                 api_key=api_key,
