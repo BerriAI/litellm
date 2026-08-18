@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Select, Tooltip, Divider, Switch, Checkbox, Form } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 
 const { Option } = Select;
 
@@ -85,9 +85,8 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
             )}
           </label>
           <Form.Item name="duration" noStyle initialValue="">
-            <TextInput
+            <Input
               placeholder={isCreateMode ? "e.g., 30d or leave empty to never expire" : "e.g., 30d"}
-              className="w-full"
               disabled={!isCreateMode && neverExpire}
             />
           </Form.Item>
@@ -141,7 +140,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
 
                 {showCustomInput && (
                   <div className="space-y-1">
-                    <TextInput
+                    <Input
                       value={customInterval}
                       onChange={handleCustomIntervalChange}
                       placeholder="e.g., 1s, 5m, 2h, 14d"
