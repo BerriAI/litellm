@@ -1,11 +1,12 @@
 import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import { ClassifierFallback, ClassifierType, ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { DIMENSION_LABELS } from "./heuristic_scoring_knobs";
-import { SHIPPED_SCORER_DEFAULTS } from "../../../tests/mocks/complexityScorerDefaults";
+import { LOADED_SCORER_DEFAULTS_QUERY, SHIPPED_SCORER_DEFAULTS } from "../../../tests/mocks/complexityScorerDefaults";
 
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
@@ -141,5 +142,60 @@ describe("ClassificationMethodConfig scorer gating", () => {
     for (const key of Object.keys(SHIPPED_SCORER_DEFAULTS.dimension_weights)) {
       expect(screen.getByLabelText(DIMENSION_LABELS[key])).toBeInTheDocument();
     }
+  });
+});
+
+describe("HeuristicScoringConfig when the defaults request fails", () => {
+  const failing = { data: undefined, isPending: false, isError: true, refetch: vi.fn() };
+  const pending = { data: undefined, isPending: true, isError: false, refetch: vi.fn() };
+
+  const renderWithQuery = async (query: unknown, value: ComplexityRouterConfigValue) => {
+    vi.mocked(useComplexityScorerDefaults).mockReturnValue(query as never);
+    renderWithProviders(<HeuristicScoringConfig value={value} onChange={vi.fn()} />);
+    await userEvent.click(screen.getByText("Advanced scoring"));
+  };
+
+  afterEach(() => vi.mocked(useComplexityScorerDefaults).mockReturnValue(LOADED_SCORER_DEFAULTS_QUERY));
+
+  it("says so instead of claiming to still be loading", async () => {
+    await renderWithQuery(failing, BASE);
+
+    expect(screen.queryByText(/Loading the shipped defaults/)).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/Could not load the shipped defaults/);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("still shows and edits the values this router already overrides", async () => {
+    await renderWithQuery(failing, { ...BASE, token_thresholds: { simple: 25, complex: 900 } });
+
+    expect(screen.getByLabelText("Short below")).toHaveValue("25");
+    expect(screen.getByLabelText("Long above")).toHaveValue("900");
+  });
+
+  it("keeps saying loading while the request is genuinely in flight", async () => {
+    await renderWithQuery(pending, BASE);
+
+    expect(screen.getByText(/Loading the shipped defaults/)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("HeuristicScoringConfig degraded states", () => {
+  afterEach(() => vi.mocked(useComplexityScorerDefaults).mockReturnValue(LOADED_SCORER_DEFAULTS_QUERY));
+
+  it("states no weight total when the dimension set is unknown, rather than one built from overrides alone", async () => {
+    vi.mocked(useComplexityScorerDefaults).mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isError: true,
+      refetch: vi.fn(),
+    } as never);
+    renderWithProviders(
+      <HeuristicScoringConfig value={{ ...BASE, dimension_weights: { codePresence: 0.5 } }} onChange={vi.fn()} />,
+    );
+    await userEvent.click(screen.getByText("Advanced scoring"));
+
+    expect(screen.getByLabelText("Code presence")).toHaveValue("0.5");
+    expect(screen.queryByTestId("dimension-weight-total")).not.toBeInTheDocument();
   });
 });

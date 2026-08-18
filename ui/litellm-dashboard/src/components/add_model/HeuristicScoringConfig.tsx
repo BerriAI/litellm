@@ -82,7 +82,7 @@ interface HeuristicScoringConfigProps {
 const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, onChange }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [draft, setDraft] = useState<{ id: string; raw: string } | null>(null);
-  const { data: defaults } = useComplexityScorerDefaults();
+  const { data: defaults, isPending, isError, refetch } = useComplexityScorerDefaults();
 
   // The panel owns its own visibility: the scorer does not run at all when an LLM classifier
   // falls back to the default model, so there is nothing here to configure.
@@ -125,82 +125,97 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
             recalibration of them rather than staying pinned to the numbers shown here.
           </p>
 
-          {defaults === undefined ? (
+          {isPending ? (
             <p className="text-xs text-muted-foreground">Loading the shipped defaults...</p>
           ) : (
-            GROUPS.map((spec) => {
-              const shipped = defaults[spec.group];
-              const effective: Record<string, number> = { ...shipped, ...value[spec.group] };
-              const problem = warn(spec.group, effective);
-              return (
-                <section key={spec.group} className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{spec.title}</span>
-                      {spec.withSlider && (
-                        <span className="text-xs text-muted-foreground" data-testid="dimension-weight-total">
-                          total {weightTotal(effective).toFixed(2)}
-                        </span>
+            <>
+              {isError && (
+                <div className="flex items-start gap-2" role="alert">
+                  <p className="text-xs font-medium text-destructive">
+                    Could not load the shipped defaults, so only values this router already overrides are shown. Saving
+                    still works, and an untouched knob keeps following the defaults.
+                  </p>
+                  <Button type="button" variant="link" size="xs" onClick={() => void refetch()}>
+                    Retry
+                  </Button>
+                </div>
+              )}
+              {GROUPS.map((spec) => {
+                const shipped = defaults?.[spec.group] ?? {};
+                const effective: Record<string, number> = { ...shipped, ...value[spec.group] };
+                const problem = warn(spec.group, effective);
+                return (
+                  <section key={spec.group} className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{spec.title}</span>
+                        {/* Only a known dimension set has a meaningful total; summing the overrides
+                            alone would state a total that is not the router's. */}
+                        {spec.withSlider && defaults !== undefined && (
+                          <span className="text-xs text-muted-foreground" data-testid="dimension-weight-total">
+                            total {weightTotal(effective).toFixed(2)}
+                          </span>
+                        )}
+                      </div>
+                      {value[spec.group] !== undefined && (
+                        <Button
+                          type="button"
+                          variant="link"
+                          size="xs"
+                          onClick={() => onChange({ ...value, [spec.group]: undefined })}
+                        >
+                          Reset to defaults
+                        </Button>
                       )}
                     </div>
-                    {value[spec.group] !== undefined && (
-                      <Button
-                        type="button"
-                        variant="link"
-                        size="xs"
-                        onClick={() => onChange({ ...value, [spec.group]: undefined })}
-                      >
-                        Reset to defaults
-                      </Button>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">{spec.blurb}</p>
+                    <p className="text-xs text-muted-foreground">{spec.blurb}</p>
 
-                  {Object.keys(shipped).map((key) => {
-                    const id = `${spec.group}-${key}`;
-                    const label = spec.labels[key] ?? dimensionLabel(key);
-                    return (
-                      <div key={key} className="flex items-center gap-3">
-                        <Label htmlFor={id} className="w-44 text-xs font-normal">
-                          {label}
-                        </Label>
-                        {spec.withSlider && (
-                          <Slider
-                            min={spec.min}
-                            max={spec.max}
-                            step={spec.step}
-                            value={[effective[key]]}
-                            onValueChange={(next) =>
-                              commit(spec, effective, key, String(Array.isArray(next) ? next[0] : next))
-                            }
-                            className="flex-1"
-                            aria-label={`${label} weight`}
+                    {Object.keys(effective).map((key) => {
+                      const id = `${spec.group}-${key}`;
+                      const label = spec.labels[key] ?? dimensionLabel(key);
+                      return (
+                        <div key={key} className="flex items-center gap-3">
+                          <Label htmlFor={id} className="w-44 text-xs font-normal">
+                            {label}
+                          </Label>
+                          {spec.withSlider && (
+                            <Slider
+                              min={spec.min}
+                              max={spec.max}
+                              step={spec.step}
+                              value={[effective[key]]}
+                              onValueChange={(next) =>
+                                commit(spec, effective, key, String(Array.isArray(next) ? next[0] : next))
+                              }
+                              className="flex-1"
+                              aria-label={`${label} weight`}
+                            />
+                          )}
+                          <Input
+                            id={id}
+                            type="text"
+                            inputMode="decimal"
+                            className={spec.withSlider ? "w-24" : "w-28"}
+                            value={draft?.id === id ? draft.raw : String(effective[key])}
+                            onChange={(event) => {
+                              setDraft({ id, raw: event.target.value });
+                              commit(spec, effective, key, event.target.value);
+                            }}
+                            onBlur={() => setDraft(null)}
                           />
-                        )}
-                        <Input
-                          id={id}
-                          type="text"
-                          inputMode="decimal"
-                          className={spec.withSlider ? "w-24" : "w-28"}
-                          value={draft?.id === id ? draft.raw : String(effective[key])}
-                          onChange={(event) => {
-                            setDraft({ id, raw: event.target.value });
-                            commit(spec, effective, key, event.target.value);
-                          }}
-                          onBlur={() => setDraft(null)}
-                        />
-                      </div>
-                    );
-                  })}
+                        </div>
+                      );
+                    })}
 
-                  {problem && (
-                    <p className="text-xs font-medium text-destructive" role="alert">
-                      {problem}
-                    </p>
-                  )}
-                </section>
-              );
-            })
+                    {problem && (
+                      <p className="text-xs font-medium text-destructive" role="alert">
+                        {problem}
+                      </p>
+                    )}
+                  </section>
+                );
+              })}
+            </>
           )}
         </div>
       </CollapsibleContent>

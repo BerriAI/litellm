@@ -66,7 +66,7 @@ const boundaryRanges = (
 
 const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => {
   // The shipped boundaries come from the proxy, so this card cannot state ranges the router stopped using.
-  const { data: scorerDefaults } = useComplexityScorerDefaults();
+  const { data: scorerDefaults, isError } = useComplexityScorerDefaults();
   const ranges = boundaryRanges(scorerDefaults?.tier_boundaries, value.tier_boundaries);
 
   return (
@@ -95,6 +95,11 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
             (or 2+ reasoning markers)
           </li>
         </ul>
+      )}
+      {!ranges && isError && (
+        <Text type="secondary" style={{ fontSize: 13, display: "block", marginTop: 8 }}>
+          The tier score ranges could not be loaded from the proxy.
+        </Text>
       )}
     </Card>
   );
