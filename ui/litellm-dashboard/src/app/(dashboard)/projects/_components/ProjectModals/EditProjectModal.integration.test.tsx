@@ -154,6 +154,17 @@ describe("EditProjectModal submit payload", () => {
     expect(variables().params.metadata).toStrictEqual({ owner: "platform" });
   });
 
+  it("blocks the save when the project name is cleared", async () => {
+    const user = setup();
+    renderModal();
+
+    await user.clear(screen.getByLabelText("Project Name"));
+    await save(user);
+
+    expect(await screen.findByText("Please enter a project name")).toBeInTheDocument();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
   it("sends an edited project name", async () => {
     const user = setup();
     renderModal();
