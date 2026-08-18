@@ -148,6 +148,7 @@ jobs:
               tests/proxy_unit_tests/test_server_root_path.py
               tests/proxy_unit_tests/test_proxy_pass_user_config.py
               tests/proxy_unit_tests/test_proxy_token_counter.py
+              tests/proxy_unit_tests/test_strict_token_count.py
               tests/proxy_unit_tests/test_request_size_limit_middleware.py
               tests/proxy_unit_tests/test_multipart_bypass_repro.py
             workers: 4
