@@ -550,10 +550,10 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         </Form.Item>
 
         <div className="flex justify-end space-x-2 mt-4">
-          <Button variant="secondary" onClick={handleClose}>
+          <Button type="button" variant="secondary" onClick={handleClose}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} loading={isSubmitting}>
+          <Button type="button" onClick={handleSubmit} loading={isSubmitting}>
             {isEditing ? "Update Policy" : "Create Policy"}
           </Button>
         </div>
