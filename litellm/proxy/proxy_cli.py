@@ -241,6 +241,35 @@ class ProxyInitializationHelpers:
         print(completion_response)
 
     @staticmethod
+    def _run_config_lint(config_path: str | None) -> None:
+        """Check --config for production-debt gaps and print findings, without starting the server."""
+        import asyncio
+
+        from litellm.proxy.production_debt_linter import Severity, analyze, production_debt_score, validate_config
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        if config_path is None:
+            raise click.UsageError("--lint_config requires --config <path to config.yaml>")
+
+        proxy_config: Final = ProxyConfig()
+        loaded_config: Final = asyncio.run(proxy_config.get_config(config_file_path=config_path))
+        validated_config: Final = validate_config(loaded_config)
+        findings: Final = analyze(validated_config, model_cost=litellm.model_cost)
+
+        if not findings:
+            click.echo(f"\nLiteLLM: no production-debt findings in {config_path}\n")
+            return
+
+        click.echo(f"\nLiteLLM: production-debt findings in {config_path}\n")
+        for finding in findings:
+            target = finding.model_name or "<global>"
+            click.echo(f"  [{finding.severity.value.upper()}] {finding.rule} ({target}): {finding.message}")
+        click.echo(f"\nproduction_debt_score={production_debt_score(findings)}\n")
+
+        if any(f.severity is Severity.CRITICAL for f in findings):
+            sys.exit(1)
+
+    @staticmethod
     def _get_default_unvicorn_init_args(
         host: str,
         port: int,
@@ -761,6 +790,16 @@ class ProxyInitializationHelpers:
     help="Run the interactive setup wizard to configure providers and generate a config file",
 )
 @click.option(
+    "--lint_config",
+    is_flag=True,
+    default=False,
+    help=(
+        "Check --config for production-debt gaps (deployments with no fallback "
+        "coverage, retries with no cooldown, no budget cap, or a deprecated model) "
+        "and exit without starting the server"
+    ),
+)
+@click.option(
     "--version",
     "-v",
     default=False,
@@ -954,6 +993,7 @@ def run_server(
     use_queue,
     health,
     setup,
+    lint_config,
     version,
     run_gunicorn,
     run_hypercorn,
@@ -1031,6 +1071,9 @@ def run_server(
         return
     if test is True:
         ProxyInitializationHelpers._run_test_chat_completion(host, port, model, test)
+        return
+    if lint_config is True:
+        ProxyInitializationHelpers._run_config_lint(config)
         return
     else:
         if headers:
