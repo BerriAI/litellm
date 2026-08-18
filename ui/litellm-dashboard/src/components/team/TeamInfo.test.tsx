@@ -311,6 +311,8 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByText("Budget Status")).toBeInTheDocument();
       });
+      expect(screen.getByText("$250.50")).toBeInTheDocument();
+      expect(screen.getByText(/of \$1,000\.00/)).toBeInTheDocument();
     });
 
     it("should display guardrails in overview when present", async () => {
@@ -363,6 +365,7 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(screen.getByText("Budget Status")).toBeInTheDocument();
       });
+      expect(screen.getByText("Team Member Budget: $500.00")).toBeInTheDocument();
     });
 
     it("should display virtual keys information", async () => {
@@ -813,7 +816,7 @@ describe("TeamInfoView", () => {
       const secretField = await screen.findByPlaceholderText(
         '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
       );
-      expect(secretField).not.toBeDisabled();
+      expect(secretField).toBeEnabled();
     });
 
     it("should add team member when form is submitted", async () => {
@@ -955,6 +958,82 @@ describe("TeamInfoView", () => {
           }),
         );
       });
+    });
+
+    const openSettingsEditorForTeam = async (
+      user: ReturnType<typeof userEvent.setup>,
+      teamOverrides: Record<string, unknown>,
+    ) => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData(teamOverrides));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      await waitFor(() => {
+        expect(screen.getByLabelText("Team Name")).toBeInTheDocument();
+      });
+
+      return screen.getByLabelText("Reset Budget");
+    };
+
+    it("should send an explicit null budget_duration when a stored Reset Budget is cleared", async () => {
+      const user = userEvent.setup({ delay: null });
+      const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
+
+      await user.click(resetBudgetSelect);
+      await user.click(await screen.findByText("Never resets"));
+
+      await waitFor(() => {
+        expect(resetBudgetSelect).toHaveTextContent("Never resets");
+      });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      const updateArg = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+      expect(updateArg.budget_duration).toBeNull();
+      expect(JSON.stringify(updateArg)).toContain('"budget_duration":null');
+    });
+
+    it("should keep a stored Reset Budget when the form is saved untouched", async () => {
+      const user = userEvent.setup({ delay: null });
+      await openSettingsEditorForTeam(user, { budget_duration: "30d" });
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].budget_duration).toBe("30d");
+    });
+
+    it("should send the newly picked budget_duration when one is selected", async () => {
+      const user = userEvent.setup({ delay: null });
+      const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: null });
+
+      await user.click(resetBudgetSelect);
+      await user.click(await screen.findByText("weekly"));
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+
+      expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].budget_duration).toBe("7d");
     });
   });
 
@@ -1378,20 +1457,11 @@ describe("TeamInfoView", () => {
         expect(screen.getByLabelText(/^Guardrails/)).toBeInTheDocument();
       });
 
-      const dropdownsBefore = new Set(document.querySelectorAll(".ant-select-dropdown"));
-
       await user.click(screen.getByLabelText(/^Guardrails/));
 
-      return waitFor(
-        () => {
-          const opened = Array.from(document.querySelectorAll(".ant-select-dropdown")).find(
-            (el) => !dropdownsBefore.has(el),
-          );
-          expect(opened).toBeDefined();
-          return opened as HTMLElement;
-        },
-        { timeout: 5000 },
-      );
+      const listbox = await screen.findByRole("listbox", {}, { timeout: 5000 });
+      // eslint-disable-next-line local/no-antd-class-selectors -- antd renders group headers outside the listbox and its popup container exposes no role or accessible name
+      return listbox.closest(".ant-select-dropdown") as HTMLElement;
     };
 
     beforeEach(() => {
@@ -1469,18 +1539,16 @@ describe("TeamInfoView", () => {
       await user.click(screen.getByRole("tab", { name: "Settings" }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      const routesLabel = await screen.findByText("Allowed Pass Through Routes");
-      const routesFormItem = routesLabel.closest(".ant-form-item") as HTMLElement;
+      await user.click(await screen.findByRole("combobox", { name: "Select pass through routes" }));
 
-      await user.click(within(routesFormItem).getByRole("combobox"));
-
-      const option = await screen.findByTitle("POST /bedrock-passthrough");
+      const option = await screen.findByText("POST /bedrock-passthrough");
       await user.click(option);
 
-      await waitFor(() => {
-        expect(within(routesFormItem).getByText(/\/bedrock-passthrough/)).toBeInTheDocument();
-      });
+      await user.keyboard("{Escape}");
 
+      await waitFor(() => {
+        expect(screen.getByText("POST /bedrock-passthrough")).toBeInTheDocument();
+      });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

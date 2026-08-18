@@ -1,3 +1,5 @@
+from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.llms.openai.data_residency import infer_openai_data_residency
@@ -184,3 +186,19 @@ def get_litellm_params(
                 litellm_params[key] = kwargs[key]
 
     return litellm_params
+
+
+def add_trusted_model_credentials_to_litellm_params(
+    litellm_params_dict: MutableMapping[str, object], kwargs: Mapping[str, object]
+) -> None:
+    """
+    Carry the immutable server-side credential snapshot into litellm_params.
+
+    get_litellm_params has a fixed signature, so callers that need the snapshot to
+    survive into the logging object and the downstream file read have to re-add it. Only
+    a MappingProxyType is accepted, since providers resolve trusted configuration such
+    as a Bedrock file bucket from it and must not read a request-supplied mapping.
+    """
+    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
+    if isinstance(trusted_model_credentials, MappingProxyType):
+        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials

@@ -1,5 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
 
@@ -62,7 +65,18 @@ vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
 }));
 
 vi.mock("@/components/EntityUsageExport", () => ({
-  UsageExportHeader: () => <div>Usage Export Header</div>,
+  UsageExportHeader: ({ filterLabel, filterSlot }: { filterLabel?: string; filterSlot?: ReactNode }) => (
+    <div>
+      <span>Usage Export Header</span>
+      <span>{filterLabel}</span>
+      {filterSlot}
+    </div>
+  ),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
+  useInfiniteUsers: vi.fn(),
+  useUserLookup: vi.fn(() => ({ data: null })),
 }));
 
 vi.mock("@/components/common_components/team_multi_select", () => ({
@@ -85,6 +99,16 @@ describe("EntityUsage", () => {
   const mockCustomerDailyActivityCall = vi.mocked(networking.customerDailyActivityCall);
   const mockAgentDailyActivityCall = vi.mocked(networking.agentDailyActivityCall);
   const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
+  const mockUseInfiniteUsers = vi.mocked(useInfiniteUsers);
+
+  const infiniteUsersResult = (users: { user_id: string; user_alias: string | null; user_email: string | null }[]) =>
+    ({
+      data: { pages: [{ users, page: 1, total_pages: 1, total_count: users.length }], pageParams: [1] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isLoading: false,
+    }) as unknown as ReturnType<typeof useInfiniteUsers>;
 
   const mockSpendData = {
     results: [
@@ -384,6 +408,13 @@ describe("EntityUsage", () => {
     mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
     mockAgentDailyActivityCall.mockResolvedValue(mockAgentSpendData);
     mockUserDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockUseInfiniteUsers.mockClear();
+    mockUseInfiniteUsers.mockReturnValue(
+      infiniteUsersResult([
+        { user_id: "user-001", user_alias: "Alice", user_email: "alice@example.com" },
+        { user_id: "user-002", user_alias: null, user_email: "bob@example.com" },
+      ]),
+    );
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -504,18 +535,33 @@ describe("EntityUsage", () => {
     expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
   });
 
-  const selectedPanels = (container: HTMLElement) =>
-    Array.from(container.querySelectorAll("div.tremor-TabPanel-root")).filter(
-      (panel) => panel.getAttribute("aria-selected") === "true",
-    );
+  // An inactive tab panel is marked aria-selected="false" by one tab library and hidden by the
+  // other, so treat either as "not on screen" and the assertion holds whichever one is rendering.
+  const isShowing = (element: HTMLElement): boolean => {
+    for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden")) return false;
+      if (node.getAttribute("aria-selected") === "false") return false;
+    }
+    return true;
+  };
 
-  it.each([
+  const showingCount = (marker: string): number => screen.queryAllByText(marker).filter(isShowing).length;
+
+  const showingText = (text: string): HTMLElement => {
+    const [element] = screen.getAllByText(text).filter(isShowing);
+    expect(element).toBeDefined();
+    return element;
+  };
+
+  const NON_TEAM_PANELS: [string, string][] = [
     ["Cost", "Tag Spend Overview"],
     ["Model Activity", "metrics-source:model_groups"],
     ["Key Activity", "metrics-source:api_keys"],
     ["Endpoint Activity", "Endpoint Usage Panel"],
-  ])("shows only the %s panel for a non-team entity type", async (tabLabel, marker) => {
-    const { container } = render(<EntityUsage {...defaultProps} />);
+  ];
+
+  it.each(NON_TEAM_PANELS)("shows only the %s panel for a non-team entity type", async (tabLabel, marker) => {
+    render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
@@ -525,19 +571,23 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText(tabLabel));
     });
 
-    const selected = selectedPanels(container);
-    expect(selected).toHaveLength(1);
-    expect(selected[0].textContent).toContain(marker);
+    expect(showingCount(marker)).toBeGreaterThan(0);
+    for (const [otherLabel, otherMarker] of NON_TEAM_PANELS) {
+      if (otherLabel === tabLabel) continue;
+      expect(showingCount(otherMarker)).toBe(0);
+    }
   });
 
-  it.each([
+  const TEAM_PANELS: [string, string][] = [
     ["Cost", "Team Spend Overview"],
     ["Model Activity", "metrics-source:model_groups"],
     ["Agent Activity", "metrics-source:entities"],
     ["Key Activity", "metrics-source:api_keys"],
     ["Endpoint Activity", "Endpoint Usage Panel"],
-  ])("shows only the %s panel for the team entity type", async (tabLabel, marker) => {
-    const { container } = render(<EntityUsage {...defaultProps} entityType="team" />);
+  ];
+
+  it.each(TEAM_PANELS)("shows only the %s panel for the team entity type", async (tabLabel, marker) => {
+    render(<EntityUsage {...defaultProps} entityType="team" />);
 
     await waitFor(() => {
       expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
@@ -547,9 +597,11 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText(tabLabel));
     });
 
-    const selected = selectedPanels(container);
-    expect(selected).toHaveLength(1);
-    expect(selected[0].textContent).toContain(marker);
+    expect(showingCount(marker)).toBeGreaterThan(0);
+    for (const [otherLabel, otherMarker] of TEAM_PANELS) {
+      if (otherLabel === tabLabel) continue;
+      expect(showingCount(otherMarker)).toBe(0);
+    }
   });
 
   it("should handle empty data gracefully", async () => {
@@ -619,20 +671,19 @@ describe("EntityUsage", () => {
       fireEvent.click(screen.getByText("Model Activity"));
     });
 
-    const modelActivityPanel = () => selectedPanels(container)[0] as HTMLElement;
-    expect(modelActivityPanel().textContent).toContain("metrics-source:model_groups");
+    expect(showingCount("metrics-source:model_groups")).toBeGreaterThan(0);
 
     act(() => {
-      fireEvent.click(within(modelActivityPanel()).getByText("Litellm Model Name"));
+      fireEvent.click(showingText("Litellm Model Name"));
     });
 
-    expect(modelActivityPanel().textContent).toContain("metrics-source:models");
+    expect(showingCount("metrics-source:models")).toBeGreaterThan(0);
 
     act(() => {
-      fireEvent.click(within(modelActivityPanel()).getByText("Public Model Name"));
+      fireEvent.click(showingText("Public Model Name"));
     });
 
-    expect(modelActivityPanel().textContent).toContain("metrics-source:model_groups");
+    expect(showingCount("metrics-source:model_groups")).toBeGreaterThan(0);
   });
 
   it("should display Top Agents title for agent entity type", async () => {
@@ -822,7 +873,7 @@ describe("EntityUsage", () => {
 
     const sectors = container.querySelectorAll(".recharts-pie-sector path");
     expect(sectors).toHaveLength(1);
-    expect(sectors[0].getAttribute("fill")).toBe("var(--color-cyan-500, #06b6d4)");
+    expect(sectors[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
 
     const centerLabels = Array.from(container.querySelectorAll("text.fill-foreground")).map((text) => text.textContent);
     expect(centerLabels).toContain("$100.50");
@@ -867,7 +918,7 @@ describe("EntityUsage", () => {
     render(<EntityUsage {...defaultProps} />);
 
     const logo = await screen.findByAltText("openai logo");
-    expect(logo.getAttribute("src")).toContain("openai_small");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("openai_small"));
   });
 
   describe("capability gating", () => {
@@ -996,6 +1047,70 @@ describe("EntityUsage", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("$100.50").length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("user filter (LIT-5654)", () => {
+    const userDropdown = (): HTMLElement => screen.getByTestId("user-dropdown");
+    const userCombobox = (): HTMLElement => within(userDropdown()).getByRole("combobox");
+
+    const renderUserUsage = async () => {
+      render(<EntityUsage {...defaultProps} entityType="user" entityList={null} />);
+      await waitFor(() => {
+        expect(mockUserDailyActivityCall).toHaveBeenCalled();
+      });
+    };
+
+    it("offers a user filter even when the caller preloaded no user page", async () => {
+      await renderUserUsage();
+
+      expect(userCombobox()).toHaveAttribute("placeholder", "Search users by email…");
+    });
+
+    it("searches every user on the server rather than a preloaded page", async () => {
+      const user = userEvent.setup();
+      await renderUserUsage();
+
+      expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, undefined);
+
+      await user.type(userCombobox(), "alice");
+
+      await waitFor(() => {
+        expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, "alice");
+      });
+    });
+
+    it("refetches daily activity for the picked user and drops the filter when cleared", async () => {
+      const user = userEvent.setup();
+      await renderUserUsage();
+
+      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 1, null);
+
+      await user.click(userCombobox());
+      await user.click(await screen.findByText("Alice (user-001)"));
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          1,
+          "user-001",
+        );
+      });
+
+      mockUserDailyActivityCall.mockClear();
+      await user.click(userDropdown().querySelector('[data-slot="combobox-clear"]') as HTMLElement);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          1,
+          null,
+        );
+      });
     });
   });
 });

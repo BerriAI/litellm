@@ -1778,7 +1778,10 @@ def client(original_function):
                         start_time=start_time,
                         end_time=end_time,
                     )
-                    return result
+                    return _llm_caching_handler.wrap_streaming_result_for_cache(
+                        result=result,
+                        call_type=call_type,
+                    )
             elif call_type == CallTypes.arealtime.value:
                 return result
             ### POST-CALL RULES ###
@@ -7702,17 +7705,12 @@ def validate_chat_completion_tool_choice(
 
     Prevents user errors like: https://github.com/BerriAI/litellm/issues/7483
     """
-    from litellm.types.llms.openai import (
-        ChatCompletionToolChoiceObjectParam,
-        ChatCompletionToolChoiceStringValues,
-    )
-
     if tool_choice is None or isinstance(tool_choice, str):
         return tool_choice
     elif isinstance(tool_choice, dict):
-        # Handle Cursor IDE format: {"type": "auto"} -> return as-is
-        if tool_choice.get("type") in ["auto", "none", "required"] and "function" not in tool_choice:
-            return tool_choice
+        tool_choice_type = tool_choice.get("type")
+        if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
+            return tool_choice_type
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
@@ -9064,6 +9062,7 @@ class ProviderConfigManager:
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig
+        from litellm.llms.nimble.search.transformation import NimbleSearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
         )
@@ -9093,6 +9092,7 @@ class ProviderConfigManager:
             SearchProviders.YOU_COM: YouComSearchConfig,
             SearchProviders.APISERPENT: APISerpentSearchConfig,
             SearchProviders.TINYFISH: TinyfishSearchConfig,
+            SearchProviders.NIMBLE: NimbleSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

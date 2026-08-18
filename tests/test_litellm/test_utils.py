@@ -29,7 +29,8 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import all_litellm_params, bedrock_batch_litellm_params
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
@@ -1021,6 +1022,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "input_cost_per_token": {"type": "number"},
                             "output_cost_per_token": {"type": "number"},
                             "cache_read_input_token_cost": {"type": "number"},
+                            "cache_creation_input_token_cost": {"type": "number"},
                             "output_cost_per_reasoning_token": {"type": "number"},
                             "max_results_range": {
                                 "type": "array",
@@ -1877,539 +1879,6 @@ class TestProxyFunctionCalling:
             f"{proxy_model} -> {proxy_result}"
         )
 
-    @pytest.mark.parametrize(
-        "proxy_model_name,underlying_bedrock_model,expected_proxy_result,description",
-        [
-            # Bedrock Converse API mappings - these are the real-world scenarios
-            (
-                "litellm_proxy/bedrock-claude-3-haiku",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Bedrock Claude 3 Haiku via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-sonnet",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "Bedrock Claude 3 Sonnet via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "Bedrock Claude 3 Opus via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-5-sonnet",
-                "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
-                False,
-                "Bedrock Claude 3.5 Sonnet via Converse API",
-            ),
-            # Bedrock Legacy API mappings (non-converse)
-            (
-                "litellm_proxy/bedrock-claude-instant",
-                "bedrock/anthropic.claude-instant-v1",
-                False,
-                "Bedrock Claude Instant Legacy API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-v2",
-                "bedrock/anthropic.claude-v2",
-                False,
-                "Bedrock Claude v2 Legacy API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-v2-1",
-                "bedrock/anthropic.claude-v2:1",
-                False,
-                "Bedrock Claude v2.1 Legacy API",
-            ),
-            # Bedrock other model providers via Converse API
-            (
-                "litellm_proxy/bedrock-titan-text",
-                "bedrock/converse/amazon.titan-text-express-v1",
-                False,
-                "Bedrock Titan Text Express via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-titan-text-premier",
-                "bedrock/converse/amazon.titan-text-premier-v1:0",
-                False,
-                "Bedrock Titan Text Premier via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-llama3-8b",
-                "bedrock/converse/meta.llama3-8b-instruct-v1:0",
-                False,
-                "Bedrock Llama 3 8B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-llama3-70b",
-                "bedrock/converse/meta.llama3-70b-instruct-v1:0",
-                False,
-                "Bedrock Llama 3 70B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-7b",
-                "bedrock/converse/mistral.mistral-7b-instruct-v0:2",
-                False,
-                "Bedrock Mistral 7B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-8x7b",
-                "bedrock/converse/mistral.mixtral-8x7b-instruct-v0:1",
-                False,
-                "Bedrock Mistral 8x7B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-large",
-                "bedrock/converse/mistral.mistral-large-2402-v1:0",
-                False,
-                "Bedrock Mistral Large via Converse API",
-            ),
-            # Company-specific naming patterns (real-world examples)
-            (
-                "litellm_proxy/prod-claude-haiku",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Production Claude Haiku",
-            ),
-            (
-                "litellm_proxy/dev-claude-sonnet",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "Development Claude Sonnet",
-            ),
-            (
-                "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "Staging Claude Opus",
-            ),
-            (
-                "litellm_proxy/cost-optimized-claude",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Cost-optimized Claude deployment",
-            ),
-            (
-                "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "High-performance Claude deployment",
-            ),
-            # Regional deployment examples
-            (
-                "litellm_proxy/us-east-claude",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "US East Claude deployment",
-            ),
-            (
-                "litellm_proxy/eu-west-claude",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "EU West Claude deployment",
-            ),
-            (
-                "litellm_proxy/ap-south-llama",
-                "bedrock/converse/meta.llama3-70b-instruct-v1:0",
-                False,
-                "Asia Pacific Llama deployment",
-            ),
-        ],
-    )
-    def test_bedrock_converse_api_proxy_mappings(
-        self,
-        proxy_model_name,
-        underlying_bedrock_model,
-        expected_proxy_result,
-        description,
-    ):
-        """
-        Test real-world Bedrock Converse API proxy model mappings.
-
-        This test covers the specific scenario where proxy model names like
-        'bedrock-claude-3-haiku' map to underlying Bedrock Converse API models like
-        'bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0'.
-
-        These mappings are typically defined in proxy server configuration files
-        and cannot be resolved by LiteLLM without that context.
-        """
-        print(f"\nTesting: {description}")
-        print(f"  Proxy model: {proxy_model_name}")
-        print(f"  Underlying model: {underlying_bedrock_model}")
-
-        # Test the underlying model directly to verify it supports function calling
-        try:
-            underlying_result = supports_function_calling(underlying_bedrock_model)
-            print(f"  Underlying model function calling support: {underlying_result}")
-
-            # Most Bedrock Converse API models with Anthropic Claude should support function calling
-            if "anthropic.claude-3" in underlying_bedrock_model:
-                assert (
-                    underlying_result is True
-                ), f"Claude 3 models should support function calling: {underlying_bedrock_model}"
-        except Exception as e:
-            print(
-                f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}"
-            )
-
-        # Test the proxy model - should return False due to lack of configuration context
-        proxy_result = supports_function_calling(proxy_model_name)
-        print(f"  Proxy model function calling support: {proxy_result}")
-
-        assert proxy_result == expected_proxy_result, (
-            f"Proxy model {proxy_model_name} should return {expected_proxy_result} "
-            f"(without config context). Description: {description}"
-        )
-
-    def test_real_world_proxy_config_documentation(self):
-        """
-        Document how real-world proxy configurations would handle model mappings.
-
-        This test provides documentation on how the proxy server configuration
-        would typically map custom model names to underlying models.
-        """
-        print("""
-        
-        REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
-        ===============================================
-        
-        In a proxy_server_config.yaml file, you would define:
-        
-        model_list:
-          - model_name: bedrock-claude-3-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: bedrock-claude-3-sonnet
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: prod-claude-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/PROD_AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/PROD_AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-west-2
-        
-        
-        FUNCTION CALLING WITH PROXY SERVER:
-        ===================================
-        
-        When using the proxy server with this configuration:
-        
-        1. Client calls: supports_function_calling("bedrock-claude-3-haiku")
-        2. Proxy server resolves to: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-        3. LiteLLM evaluates the underlying model's capabilities
-        4. Returns: True (because Claude 3 Haiku supports function calling)
-        
-        Without the proxy server configuration context, LiteLLM cannot resolve
-        the custom model name and returns False.
-        
-        
-        BEDROCK CONVERSE API BENEFITS:
-        ==============================
-        
-        The Bedrock Converse API provides:
-        - Standardized function calling interface across providers
-        - Better tool use capabilities compared to legacy APIs
-        - Consistent request/response format
-        - Enhanced streaming support for function calls
-        
-        """)
-
-        # Verify that direct underlying models work as expected
-        bedrock_models = [
-            "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-            "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-        ]
-
-        for model in bedrock_models:
-            try:
-                result = supports_function_calling(model)
-                print(f"Direct test - {model}: {result}")
-                # Claude 3 models should support function calling
-                assert (
-                    result is True
-                ), f"Claude 3 model should support function calling: {model}"
-            except Exception as e:
-                print(f"Could not test {model}: {e}")
-
-    @pytest.mark.parametrize(
-        "proxy_model_name,underlying_bedrock_model,expected_proxy_result,description",
-        [
-            # Bedrock Converse API mappings - these are the real-world scenarios
-            (
-                "litellm_proxy/bedrock-claude-3-haiku",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Bedrock Claude 3 Haiku via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-sonnet",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "Bedrock Claude 3 Sonnet via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-opus",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "Bedrock Claude 3 Opus via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-3-5-sonnet",
-                "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
-                False,
-                "Bedrock Claude 3.5 Sonnet via Converse API",
-            ),
-            # Bedrock Legacy API mappings (non-converse)
-            (
-                "litellm_proxy/bedrock-claude-instant",
-                "bedrock/anthropic.claude-instant-v1",
-                False,
-                "Bedrock Claude Instant Legacy API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-v2",
-                "bedrock/anthropic.claude-v2",
-                False,
-                "Bedrock Claude v2 Legacy API",
-            ),
-            (
-                "litellm_proxy/bedrock-claude-v2-1",
-                "bedrock/anthropic.claude-v2:1",
-                False,
-                "Bedrock Claude v2.1 Legacy API",
-            ),
-            # Bedrock other model providers via Converse API
-            (
-                "litellm_proxy/bedrock-titan-text",
-                "bedrock/converse/amazon.titan-text-express-v1",
-                False,
-                "Bedrock Titan Text Express via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-titan-text-premier",
-                "bedrock/converse/amazon.titan-text-premier-v1:0",
-                False,
-                "Bedrock Titan Text Premier via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-llama3-8b",
-                "bedrock/converse/meta.llama3-8b-instruct-v1:0",
-                False,
-                "Bedrock Llama 3 8B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-llama3-70b",
-                "bedrock/converse/meta.llama3-70b-instruct-v1:0",
-                False,
-                "Bedrock Llama 3 70B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-7b",
-                "bedrock/converse/mistral.mistral-7b-instruct-v0:2",
-                False,
-                "Bedrock Mistral 7B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-8x7b",
-                "bedrock/converse/mistral.mixtral-8x7b-instruct-v0:1",
-                False,
-                "Bedrock Mistral 8x7B via Converse API",
-            ),
-            (
-                "litellm_proxy/bedrock-mistral-large",
-                "bedrock/converse/mistral.mistral-large-2402-v1:0",
-                False,
-                "Bedrock Mistral Large via Converse API",
-            ),
-            # Company-specific naming patterns (real-world examples)
-            (
-                "litellm_proxy/prod-claude-haiku",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Production Claude Haiku",
-            ),
-            (
-                "litellm_proxy/dev-claude-sonnet",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "Development Claude Sonnet",
-            ),
-            (
-                "litellm_proxy/staging-claude-opus",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "Staging Claude Opus",
-            ),
-            (
-                "litellm_proxy/cost-optimized-claude",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "Cost-optimized Claude deployment",
-            ),
-            (
-                "litellm_proxy/high-performance-claude",
-                "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-                False,
-                "High-performance Claude deployment",
-            ),
-            # Regional deployment examples
-            (
-                "litellm_proxy/us-east-claude",
-                "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-                False,
-                "US East Claude deployment",
-            ),
-            (
-                "litellm_proxy/eu-west-claude",
-                "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-                False,
-                "EU West Claude deployment",
-            ),
-            (
-                "litellm_proxy/ap-south-llama",
-                "bedrock/converse/meta.llama3-70b-instruct-v1:0",
-                False,
-                "Asia Pacific Llama deployment",
-            ),
-        ],
-    )
-    def test_bedrock_converse_api_proxy_mappings(
-        self,
-        proxy_model_name,
-        underlying_bedrock_model,
-        expected_proxy_result,
-        description,
-    ):
-        """
-        Test real-world Bedrock Converse API proxy model mappings.
-
-        This test covers the specific scenario where proxy model names like
-        'bedrock-claude-3-haiku' map to underlying Bedrock Converse API models like
-        'bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0'.
-
-        These mappings are typically defined in proxy server configuration files
-        and cannot be resolved by LiteLLM without that context.
-        """
-        print(f"\nTesting: {description}")
-        print(f"  Proxy model: {proxy_model_name}")
-        print(f"  Underlying model: {underlying_bedrock_model}")
-
-        # Test the underlying model directly to verify it supports function calling
-        try:
-            underlying_result = supports_function_calling(underlying_bedrock_model)
-            print(f"  Underlying model function calling support: {underlying_result}")
-
-            # Most Bedrock Converse API models with Anthropic Claude should support function calling
-            if "anthropic.claude-3" in underlying_bedrock_model:
-                assert (
-                    underlying_result is True
-                ), f"Claude 3 models should support function calling: {underlying_bedrock_model}"
-        except Exception as e:
-            print(
-                f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}"
-            )
-
-        # Test the proxy model - should return False due to lack of configuration context
-        proxy_result = supports_function_calling(proxy_model_name)
-        print(f"  Proxy model function calling support: {proxy_result}")
-
-        assert proxy_result == expected_proxy_result, (
-            f"Proxy model {proxy_model_name} should return {expected_proxy_result} "
-            f"(without config context). Description: {description}"
-        )
-
-    def test_real_world_proxy_config_documentation(self):
-        """
-        Document how real-world proxy configurations would handle model mappings.
-
-        This test provides documentation on how the proxy server configuration
-        would typically map custom model names to underlying models.
-        """
-        print("""
-        
-        REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
-        ===============================================
-        
-        In a proxy_server_config.yaml file, you would define:
-        
-        model_list:
-          - model_name: bedrock-claude-3-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: bedrock-claude-3-sonnet
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0
-              aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-east-1
-              
-          - model_name: prod-claude-haiku
-            litellm_params:
-              model: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-              aws_access_key_id: os.environ/PROD_AWS_ACCESS_KEY_ID
-              aws_secret_access_key: os.environ/PROD_AWS_SECRET_ACCESS_KEY
-              aws_region_name: us-west-2
-        
-        
-        FUNCTION CALLING WITH PROXY SERVER:
-        ===================================
-        
-        When using the proxy server with this configuration:
-        
-        1. Client calls: supports_function_calling("bedrock-claude-3-haiku")
-        2. Proxy server resolves to: bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0
-        3. LiteLLM evaluates the underlying model's capabilities
-        4. Returns: True (because Claude 3 Haiku supports function calling)
-        
-        Without the proxy server configuration context, LiteLLM cannot resolve
-        the custom model name and returns False.
-        
-        
-        BEDROCK CONVERSE API BENEFITS:
-        ==============================
-        
-        The Bedrock Converse API provides:
-        - Standardized function calling interface across providers
-        - Better tool use capabilities compared to legacy APIs
-        - Consistent request/response format
-        - Enhanced streaming support for function calls
-        
-        """)
-
-        # Verify that direct underlying models work as expected
-        bedrock_models = [
-            "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
-            "bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0",
-        ]
-
-        for model in bedrock_models:
-            try:
-                result = supports_function_calling(model)
-                print(f"Direct test - {model}: {result}")
-                # Claude 3 models should support function calling
-                assert (
-                    result is True
-                ), f"Claude 3 model should support function calling: {model}"
-            except Exception as e:
-                print(f"Could not test {model}: {e}")
 
     @pytest.mark.parametrize(
         "proxy_model_name,underlying_bedrock_model,expected_proxy_result,description",
@@ -4102,8 +3571,6 @@ class TestIsStreamingRequest:
             is True
         )
 
-    def test_non_streaming_call_type_string(self):
-        assert _is_streaming_request(kwargs={}, call_type="acompletion") is False
 
     def test_non_streaming_call_type_enum(self):
         assert (
@@ -4699,7 +4166,6 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
     assert result["aws_region_name"] == "us-east-1"
 
 
-
 class TestGetOptionalParamsTencent:
     """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
 
@@ -5287,3 +4753,91 @@ def test_websearch_interception_control_fields_never_reach_the_provider():
         f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
     )
     assert set(WEBSEARCH_INTERNAL_CONTROL_FIELDS) <= set(all_litellm_params)
+
+
+def test_bedrock_batch_params_never_reach_the_provider():
+    """A Bedrock managed-batch deployment carries aws_batch_role_arn / s3_* /
+    bedrock_tags in its litellm_params, and the same deployment also serves chat.
+    Anything the param builder does not recognize is swept into extra_body, so
+    Bedrock rejects the whole call: `aws_batch_role_arn: Extra inputs are not
+    permitted` (Anthropic models) or `extraneous key [aws_batch_role_arn] is not
+    permitted` (Nova/Llama/Titan), turning every non-batch request to that
+    deployment into a 400.
+
+    The batch path is unaffected by registering them, because GenericLiteLLMParams
+    is extra="allow" and preserves them into litellm_params for the batch and files
+    transformations that read them.
+    """
+    configured = {
+        field: ([{"key": "team", "value": "configured-value"}] if field == "bedrock_tags" else "configured-value")
+        for field in bedrock_batch_litellm_params
+    }
+    kwargs = {"a_real_provider_specific_param": 1, **configured}
+
+    non_default = get_non_default_completion_params(dict(kwargs))
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "bedrock batch params leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+    assert set(bedrock_batch_litellm_params) <= set(all_litellm_params)
+
+    batch_params = dict(GenericLiteLLMParams(**kwargs))
+    assert all(batch_params.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
+        "registering these must not strip them from the batch path: "
+        f"{sorted(f for f in bedrock_batch_litellm_params if batch_params.get(f) != configured[f])}"
+    )
+
+    normalized = CredentialLiteLLMParams.model_validate(
+        GenericLiteLLMParams(**kwargs).model_dump(exclude_none=True)
+    ).model_dump(exclude_none=True)
+    assert all(normalized.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
+        "credential normalization dropped batch params before the transformation: "
+        f"{sorted(f for f in bedrock_batch_litellm_params if normalized.get(f) != configured[f])}"
+    )
+
+
+def test_rust_flag_not_forwarded_as_provider_param():
+    forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
+    assert "rust" not in forwarded
+
+
+def test_completion_does_not_leak_rust_flag_into_provider_request_body():
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    mock_raw_response = MagicMock()
+    mock_raw_response.headers = {}
+    mock_raw_response.parse.return_value = mock_response
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
+
+    litellm.completion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        rust=True,
+        api_key="sk-test",
+        client=mock_client,
+    )
+
+    create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
+    assert "rust" not in create_kwargs
+    assert "rust" not in (create_kwargs.get("extra_body") or {})

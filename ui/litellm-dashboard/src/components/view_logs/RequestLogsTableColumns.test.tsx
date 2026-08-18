@@ -103,7 +103,7 @@ describe("sortable headers", () => {
       expect(screen.getByTestId(`sort-trigger-${field}`)).toBeInTheDocument();
     }
     for (const field of ["request_id", "session_id", "status", "type", "end_user"]) {
-      expect(screen.queryByTestId(`sort-trigger-${field}`)).toBeNull();
+      expect(screen.queryByTestId(`sort-trigger-${field}`)).not.toBeInTheDocument();
     }
   });
 });

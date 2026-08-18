@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -59,6 +59,24 @@ vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
 }));
 
+const routerSettingsMocks = vi.hoisted(() => ({
+  receivedValue: undefined as { router_settings: Record<string, unknown> } | undefined,
+  editedValue: null as Record<string, unknown> | null,
+}));
+
+vi.mock("../common_components/RouterSettingsAccordion", async () => {
+  const { forwardRef, useImperativeHandle } = await import("react");
+  return {
+    default: forwardRef(({ value }: { value?: { router_settings: Record<string, unknown> } }, ref) => {
+      routerSettingsMocks.receivedValue = value;
+      useImperativeHandle(ref, () => ({
+        getValue: () => ({ router_settings: routerSettingsMocks.editedValue ?? value?.router_settings ?? {} }),
+      }));
+      return <div data-testid="router-settings-accordion" />;
+    }),
+  };
+});
+
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: vi.fn().mockReturnValue({
     data: [
@@ -89,6 +107,25 @@ vi.mock("../common_components/AccessGroupSelector", () => ({
     />
   ),
 }));
+
+/* eslint-disable local/no-antd-class-selectors -- the "Key Type" and "Models" Form.Items wrap a noStyle nested item, so antd renders a label with no associated control and there is no accessible query for these selects */
+const antdSelectorFor = (label: HTMLElement): Element =>
+  label.closest(".ant-form-item")!.querySelector(".ant-select-selector")!;
+/* eslint-enable local/no-antd-class-selectors */
+
+const visibleOptions = (): HTMLElement[] =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd puts role="option" only on a hidden mirror list; the visible, clickable options carry no role or accessible name
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option"));
+
+const isOptionDisabled = (option: HTMLElement): boolean =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd signals option disabled state only through this class; the rendered options carry no aria-disabled
+  option.classList.contains("ant-select-item-option-disabled");
+
+const optionByContent = (label: string): HTMLElement | undefined =>
+  visibleOptions().find(
+    // eslint-disable-next-line local/no-antd-class-selectors -- the option's own label text lives in this child node, with no accessible equivalent
+    (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
+  );
 
 describe("KeyEditView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
@@ -160,6 +197,83 @@ describe("KeyEditView", () => {
     last_rotation_at: undefined,
     key_rotation_at: undefined,
   };
+  describe("router settings", () => {
+    const UNSUPPORTED_STORED_FIELD = { tag_routing_prefix: "team-" };
+    const STORED_ROUTER_SETTINGS = {
+      num_retries: 2,
+      fallbacks: [{ "gpt-4": ["gpt-4o"] }],
+      ...UNSUPPORTED_STORED_FIELD,
+    };
+
+    const renderWithRouterSettings = (onSubmit: (values: Record<string, unknown>) => Promise<void>) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, router_settings: STORED_ROUTER_SETTINGS }}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="proxy_admin"
+          premiumUser={true}
+        />,
+      );
+
+    beforeEach(() => {
+      routerSettingsMocks.receivedValue = undefined;
+      routerSettingsMocks.editedValue = null;
+    });
+
+    it("should load the fields it renders into the editor and withhold the ones it does not", async () => {
+      renderWithRouterSettings(async () => {});
+
+      await waitFor(() => {
+        expect(routerSettingsMocks.receivedValue).toStrictEqual({
+          router_settings: { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o"] }] },
+        });
+      });
+    });
+
+    it("should submit edited fallbacks alongside routing fields the editor cannot show", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithRouterSettings(onSubmit);
+      routerSettingsMocks.editedValue = { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }] };
+
+      fireEvent.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            router_settings: expect.objectContaining({
+              ...UNSUPPORTED_STORED_FIELD,
+              num_retries: 2,
+              fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }],
+            }),
+          }),
+        );
+      });
+    });
+
+    it("should submit cleared router settings so removing every fallback is persisted", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithRouterSettings(onSubmit);
+      routerSettingsMocks.editedValue = { num_retries: null, fallbacks: null };
+
+      fireEvent.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            router_settings: expect.objectContaining({
+              ...UNSUPPORTED_STORED_FIELD,
+              num_retries: null,
+              fallbacks: null,
+            }),
+          }),
+        );
+      });
+    });
+  });
+
   it("should render", async () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
@@ -784,10 +898,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item");
-    expect(resetBudgetItem).not.toBeNull();
-    const combobox = within(resetBudgetItem as HTMLElement).getByRole("combobox");
-    await userEvent.click(combobox);
+    await userEvent.click(await screen.findByLabelText("Reset Budget"));
 
     const weeklyOption = await screen.findByText("weekly");
     await userEvent.click(weeklyOption);
@@ -865,13 +976,12 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    const clearIcon = resetBudgetItem.querySelector(".ant-select-clear");
-    expect(clearIcon).not.toBeNull();
-    fireEvent.mouseDown(clearIcon as Element);
+    const resetBudget = await screen.findByLabelText("Reset Budget");
+    await userEvent.click(resetBudget);
+    await userEvent.click(await screen.findByText("Never resets"));
 
     await waitFor(() => {
-      expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
+      expect(resetBudget).toHaveTextContent("Never resets");
     });
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
@@ -899,8 +1009,8 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    fireEvent.mouseDown(resetBudgetItem.querySelector(".ant-select-clear") as Element);
+    await userEvent.click(await screen.findByLabelText("Reset Budget"));
+    await userEvent.click(await screen.findByText("Never resets"));
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1054,17 +1164,11 @@ describe("KeyEditView", () => {
     });
 
     // The selected key type label should show "AI APIs" (not "LLM API")
-    const keyTypeSection = screen.getByText("Key Type").closest(".ant-form-item")!;
-    expect(keyTypeSection).toBeInTheDocument();
-
-    // Open the dropdown to see all options
-    const selectElement = keyTypeSection.querySelector(".ant-select-selector")!;
-    await userEvent.click(selectElement);
+    await userEvent.click(antdSelectorFor(screen.getByText("Key Type")));
 
     await waitFor(() => {
       // Verify "AI APIs" appears as an option label
-      const options = document.querySelectorAll(".ant-select-item-option");
-      const optionTexts = Array.from(options).map((el) => el.textContent);
+      const optionTexts = visibleOptions().map((el) => el.textContent);
       const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
       expect(hasAIAPIs).toBe(true);
 
@@ -1156,9 +1260,9 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeTruthy();
+      await userEvent.click(screen.getByLabelText("Organization"));
+
+      expect(screen.queryByText("Engineering")).not.toBeInTheDocument();
     });
 
     it("should not disable the organization dropdown for admin users", async () => {
@@ -1178,9 +1282,9 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeFalsy();
+      await userEvent.click(screen.getByLabelText("Organization"));
+
+      expect(await screen.findByText("Engineering")).toBeInTheDocument();
     });
 
     it("should initialize organization from keyData", async () => {
@@ -1202,17 +1306,14 @@ describe("KeyEditView", () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText("Engineering")).toBeInTheDocument();
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
       });
     });
   });
 
   describe("models dropdown team gating", () => {
     const openModelsDropdown = () => {
-      const modelsFormItem = screen.getByText("Models", { selector: "label" }).closest(".ant-form-item");
-      const selector = modelsFormItem?.querySelector(".ant-select-selector");
-      expect(selector).toBeTruthy();
-      fireEvent.mouseDown(selector as Element);
+      fireEvent.mouseDown(antdSelectorFor(screen.getByText("Models", { selector: "label" })));
     };
 
     it("should offer all-proxy-models but not all-team-models for a teamless key", async () => {
@@ -1358,9 +1459,7 @@ describe("KeyEditView", () => {
 
       const clickOption = async (label: string) => {
         const option = await waitFor(() => {
-          const match = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
-            (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
-          );
+          const match = optionByContent(label);
           expect(match).toBeTruthy();
           return match as HTMLElement;
         });
@@ -1397,17 +1496,14 @@ describe("KeyEditView", () => {
 
       openModelsDropdown();
 
-      const findOption = (label: string) =>
-        Array.from(document.querySelectorAll(".ant-select-item-option")).find(
-          (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
-        ) as HTMLElement | undefined;
+      const findOption = (label: string) => optionByContent(label);
 
       const gpt4Before = await waitFor(() => {
         const match = findOption("gpt-4");
         expect(match).toBeTruthy();
         return match!;
       });
-      expect(gpt4Before.classList.contains("ant-select-item-option-disabled")).toBe(false);
+      expect(isOptionDisabled(gpt4Before)).toBe(false);
 
       fireEvent.click(
         await waitFor(() => {
@@ -1418,7 +1514,7 @@ describe("KeyEditView", () => {
       );
 
       await waitFor(() => {
-        expect(findOption("gpt-4")?.classList.contains("ant-select-item-option-disabled")).toBe(true);
+        expect(isOptionDisabled(findOption("gpt-4")!)).toBe(true);
       });
     });
   });

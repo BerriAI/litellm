@@ -24,6 +24,16 @@
 
 set -eu
 
+# Queue for one of the machine-wide heavy-work slots (see scripts/gate_slot_lock.py)
+# before anything else, so N parallel `make check` runs across worktrees execute two
+# at a time instead of thrashing the machine. The wrapper exports
+# LITELLM_GATE_SLOT_HELD, so this re-exec happens exactly once and everything this
+# script spawns (make lint, the budget gates) skips its own acquisition.
+if [ -z "${LITELLM_GATE_SLOT_HELD:-}" ]; then
+    script_dir=$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")
+    exec python3 "$script_dir/gate_slot_lock.py" "$0" "$@"
+fi
+
 if [ -z "${PRE_COMMIT_LINT_INNER:-}" ]; then
     log_file=$(git rev-parse --path-format=absolute --git-path pre_commit_lint.log)
     if : > "$log_file" 2>/dev/null; then
@@ -55,11 +65,13 @@ else
     merge_base=$(git merge-base origin/litellm_internal_staging HEAD 2>/dev/null) || {
         echo "check: cannot resolve the merge base with origin/litellm_internal_staging." >&2
         echo "  Fix: git fetch origin litellm_internal_staging" >&2
+        echo "check: FAIL"
         exit 1
     }
     scope=$(printf '%s\n' "$(git diff --name-only --diff-filter=ACMRD "$merge_base")" "$untracked" | sed '/^$/d' | sort -u)
     if [ -z "$scope" ]; then
         echo "check: nothing to check (no staged files, no working-tree changes, no branch changes vs origin/litellm_internal_staging)"
+        echo "check: PASS"
         exit 0
     fi
     echo "check: nothing staged; scoping to the working tree's diff against the merge base with origin/litellm_internal_staging:"
@@ -281,4 +293,30 @@ if [ -n "${gen_pid:-}" ]; then
     cat "$gen_log"; rm -f "$gen_log"
 fi
 
+summary_item() {
+    local check_name=$1 triggered=$2 skip_reason=$3
+    if [ -n "$triggered" ]; then
+        echo "    ran:     $check_name"
+    else
+        echo "    skipped: $check_name ($skip_reason)"
+    fi
+}
+
+echo "check: summary"
+summary_item "Python lint (make lint)" "$litellm_py_files" "no litellm/ Python files in scope"
+summary_item "tests/e2e checks (basedpyright + raw HTTP client ban)" "$e2e_py_files" "no tests/e2e Python files in scope"
+summary_item "dashboard lint (prettier + eslint + lint budgets)" "$ui_prettier_changed$ui_eslint_changed" "no dashboard files in scope"
+summary_item "dashboard API-type sync (npm run gen:api)" "$spec_files" "no litellm/proxy, litellm/types, or generator files in scope"
+
+if [ -z "$litellm_py_files$e2e_py_files$ui_prettier_changed$ui_eslint_changed$spec_files" ]; then
+    echo "check: NOTE - no gating lint check matches the files in scope, so nothing ran:" >&2
+    printf '%s\n' "$scope" | sed 's/^/    /' >&2
+    echo "  A pass here is a no-op, not a lint verdict." >&2
+fi
+
+if [ "$status" -eq 0 ]; then
+    echo "check: PASS"
+else
+    echo "check: FAIL"
+fi
 exit $status
