@@ -29,7 +29,7 @@ interface User {
 interface UserOption {
   label: string;
   value: string;
-  user: User;
+  user: User | null;
 }
 
 interface Role {
@@ -122,10 +122,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   const handleSelect = (option: UserOption | null): void => {
-    if (option === null) return;
-    const selectedUser = option.user;
-    form.setValue("user_email", selectedUser.user_email);
-    form.setValue("user_id", selectedUser.user_id);
+    if (option?.user == null) return;
+    form.setValue("user_email", option.user.user_email);
+    form.setValue("user_id", option.user.user_id);
   };
 
   const handleSubmit = async (values: FormValues): Promise<void> => {
@@ -150,7 +149,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   const optionsFor = (fieldName: "user_email" | "user_id", value: string | undefined): UserOption[] => {
     const visible = selectedField === fieldName ? userOptions : [];
     if (value == null || value === "" || visible.some((option) => option.value === value)) return visible;
-    return [{ label: value, value, user: { user_id: "", user_email: "" } }, ...visible];
+    return [{ label: value, value, user: null }, ...visible];
   };
 
   const renderUserSearch = (
