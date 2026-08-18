@@ -7670,3 +7670,62 @@ class TestPlanModeTierFloor:
             floored = router._soft_floor_pick(ComplexityTier.COMPLEX, "hi", hard_floor=ComplexityTier.COMPLEX)
         assert unfloored == "cheap"
         assert floored == "premium"
+
+    @pytest.mark.asyncio
+    async def test_at_floor_plan_mode_turn_does_not_write_the_session_pin(self, mock_router_instance, basic_config):
+        """A plan-mode turn routed at or above the floor keeps its ordinary cause, but it still
+        must not pin: on an adaptive router the hard floor shaped that pick, and any sentinel
+        turn's pin would carry plan mode past its exit."""
+        from litellm.caching.dual_cache import DualCache
+
+        mock_router_instance.cache = DualCache()
+        config = {
+            **basic_config,
+            "plan_mode_min_tier": "MEDIUM",
+            "session_affinity": True,
+            "keyword_tier_rules": [{"keywords": ["kubernetes"], "tier": "REASONING"}],
+        }
+        router = self._router(mock_router_instance, config)
+        session_kwargs = {"metadata": {"session_id": "at-floor-session"}}
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={**session_kwargs, "proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "plan the kubernetes migration"}],
+        )
+        assert first is not None and first.model == "o1-preview"
+        assert first.routing_decision is not None
+        assert first.routing_decision["cause"] == "literal_keyword_match"
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=dict(session_kwargs),
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert second is not None
+        assert second.model == "gpt-4o-mini"
+        assert second.routing_decision is not None
+        assert second.routing_decision["cause"] in ("heuristic_scorer", "reasoning_override")
+
+    @pytest.mark.asyncio
+    async def test_failure_exit_skipped_when_placeholder_tier_equals_the_floor(
+        self, mock_router_instance, basic_config
+    ):
+        """default_model outside every pool reports the MEDIUM placeholder; a MEDIUM floor then
+        leaves plan_floored False, and the exit must still not route a sentinel-carrying request
+        to a model the floor cannot vouch for."""
+        from litellm.router_strategy.complexity_router.complexity_router import ClassificationOutcome
+
+        config = {**basic_config, "plan_mode_min_tier": "MEDIUM", "default_model": "untiered-fallback"}
+        router = self._router(mock_router_instance, config)
+        failure = ClassificationOutcome(
+            tier=ComplexityTier.MEDIUM, score=None, signals=(), cause="default_model_fallback", classifier_cost=None
+        )
+        with patch.object(router, "aclassify", return_value=failure):
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+                messages=[{"role": "user", "content": "add a hello endpoint"}],
+            )
+        assert result is not None
+        assert result.model == "gpt-4o"
+        assert result.routing_decision is not None
+        assert result.routing_decision["tier"] == "MEDIUM"

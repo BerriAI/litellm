@@ -2065,7 +2065,17 @@ class ComplexityRouter(CustomLogger):
             conversation_continuing=conversation_continuing,
             resolved_messages=resolved_messages,
         )
-        if cache_key is not None and response is not None and _decision_is_pinnable(response.routing_decision):
+        # Sentinel presence, not the plan_mode cause, gates the pin write: a plan-mode turn
+        # classified at or above the floor keeps its ordinary cause, yet on an adaptive router
+        # the hard floor constrained its pick, so pinning it would carry a plan-mode-shaped
+        # choice past plan mode's exit. No sentinel turn writes the pin, whatever its cause.
+        pinnable: Final = (
+            cache_key is not None
+            and response is not None
+            and _decision_is_pinnable(response.routing_decision)
+            and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
+        )
+        if pinnable and cache_key is not None and response is not None:
             await self.litellm_router_instance.cache.async_set_cache(
                 key=cache_key,
                 value=response.model,
@@ -2224,9 +2234,12 @@ class ComplexityRouter(CustomLogger):
             signals = (*signals, "plan_mode_floor")
         score_repr: Final = f"{score:.3f}" if score is not None else "n/a"
         fallback_model: Final = self.config.default_model if not self.config.plugins else None
-        # A floored request skips the failure exit below: classification failing doesn't retract
-        # what the floor already decided, and default_model may sit below the floor's tier.
-        if outcome.cause == "default_model_fallback" and fallback_model is not None and not plan_floored:
+        # A sentinel-carrying request skips the failure exit below, whether or not the floor
+        # moved the tier: default_model carries no tier guarantee (its placeholder tier is the
+        # pool that holds it, or MEDIUM when none does), so a placeholder at or above the floor
+        # would otherwise route a plan-mode request to a model the floor cannot vouch for. The
+        # clamped tier's pool is the destination the floor can guarantee.
+        if outcome.cause == "default_model_fallback" and fallback_model is not None and plan_mode_sentinel is None:
             # Classification failed and the operator asked for default_model, so route there
             # directly. Neither the tier pool nor the adaptive bandit gets a say: both answer
             # "which model suits this tier", and no tier was decided. Escalation is skipped for
@@ -2299,7 +2312,9 @@ class ComplexityRouter(CustomLogger):
         # A floored failure still reports its tier: the floor decided it, unlike the plain
         # failure path where no tier was decided and reporting one would fabricate a
         # classification.
-        classified_pool_tier: Final = None if outcome.cause == "default_model_fallback" and not plan_floored else tier
+        classified_pool_tier: Final = (
+            None if outcome.cause == "default_model_fallback" and plan_mode_sentinel is None else tier
+        )
         decision_signals: Final = (
             (*signals, f"plugin-filtered-pool:{_tier_name(tier)}")
             if outcome.cause == "default_model_fallback" and self.config.plugins
