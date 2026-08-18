@@ -10,6 +10,7 @@ const sonner = vi.hoisted(() => ({
 }));
 
 vi.mock("sonner", () => ({ toast: sonner }));
+vi.unmock("@/lib/toast");
 
 import { toast } from "./toast";
 

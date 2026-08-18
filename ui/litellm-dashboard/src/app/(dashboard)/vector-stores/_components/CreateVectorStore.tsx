@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Upload, Button, Select, Form, Alert, Tooltip, Input } from "antd";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { InboxOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { ragIngestCall } from "@/components/networking";
@@ -15,7 +15,6 @@ import {
   VectorStoreFieldConfig,
 } from "@/components/vector_store_providers";
 import { Logo } from "@/components/molecules/logo/Logo";
-import NotificationsManager from "@/components/molecules/notifications_manager";
 import S3VectorsConfig from "./S3VectorsConfig";
 
 const { Dragger } = Upload;
@@ -49,13 +48,13 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       ].includes(file.type);
 
       if (!isValidType) {
-        MessageManager.error(`${file.name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.`);
+        toast.error(`${file.name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.`);
         return Upload.LIST_IGNORE;
       }
 
       const isLt50M = file.size / 1024 / 1024 < 50;
       if (!isLt50M) {
-        MessageManager.error(`${file.name} must be smaller than 50MB!`);
+        toast.error(`${file.name} must be smaller than 50MB!`);
         return Upload.LIST_IGNORE;
       }
 
@@ -89,12 +88,12 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
 
   const handleCreateVectorStore = async () => {
     if (documents.length === 0) {
-      MessageManager.warning("Please upload at least one document");
+      toast.warning("Please upload at least one document");
       return;
     }
 
     if (!selectedProvider) {
-      MessageManager.warning("Please select a provider");
+      toast.warning("Please select a provider");
       return;
     }
 
@@ -102,7 +101,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     const requiredFields = getProviderSpecificFields(selectedProvider).filter((field) => field.required);
     for (const field of requiredFields) {
       if (!providerParams[field.name]) {
-        MessageManager.warning(`Please provide ${field.label}`);
+        toast.warning(`Please provide ${field.label}`);
         return;
       }
     }
@@ -110,17 +109,17 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     // S3 Vectors specific validation
     if (selectedProvider === "s3_vectors") {
       if (providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3) {
-        MessageManager.warning("Vector bucket name must be at least 3 characters");
+        toast.warning("Vector bucket name must be at least 3 characters");
         return;
       }
       if (providerParams.index_name && providerParams.index_name.length > 0 && providerParams.index_name.length < 3) {
-        MessageManager.warning("Index name must be at least 3 characters if provided");
+        toast.warning("Index name must be at least 3 characters if provided");
         return;
       }
     }
 
     if (!accessToken) {
-      MessageManager.error("No access token available");
+      toast.error("No access token available");
       return;
     }
 
@@ -165,7 +164,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       }
 
       setIngestResults(results);
-      NotificationsManager.success(
+      toast.success(
         `Successfully created vector store with ${results.length} document(s). Vector Store ID: ${vectorStoreId}`,
       );
 
@@ -180,7 +179,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       }, 3000);
     } catch (error) {
       console.error("Error creating vector store:", error);
-      NotificationsManager.fromBackend(`Failed to create vector store: ${error}`);
+      toast.fromError(`Failed to create vector store: ${error}`);
     } finally {
       setIsCreating(false);
     }

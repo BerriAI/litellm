@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 interface UIThemeSettingsProps {
   userID: string | null;
@@ -66,7 +66,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
         }),
       });
       if (response.ok) {
-        NotificationsManager.success("Theme settings updated successfully!");
+        toast.success("Theme settings updated successfully!");
         setLogoUrl(logoUrlInput || null);
         setFaviconUrl(faviconUrlInput || null);
       } else {
@@ -74,7 +74,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
       }
     } catch (error) {
       console.error("Error updating theme settings:", error);
-      NotificationsManager.fromBackend("Failed to update theme settings");
+      toast.fromError("Failed to update theme settings");
     } finally {
       setLoading(false);
     }
@@ -98,13 +98,13 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
         body: JSON.stringify({ logo_url: null, favicon_url: null }),
       });
       if (response.ok) {
-        NotificationsManager.success("Theme settings reset to default!");
+        toast.success("Theme settings reset to default!");
       } else {
         throw new Error("Failed to reset");
       }
     } catch (error) {
       console.error("Error resetting theme settings:", error);
-      NotificationsManager.fromBackend("Failed to reset theme settings");
+      toast.fromError("Failed to reset theme settings");
     } finally {
       setLoading(false);
     }
