@@ -376,6 +376,28 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("keeps the edit form and its touched fields alive across a tab switch", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    const costInput = screen.getByPlaceholderText("Enter input cost") as HTMLInputElement;
+    await user.clear(costInput);
+    await user.type(costInput, "5");
+
+    await user.click(screen.getByRole("tab", { name: /raw json/i }));
+    await user.click(screen.getByRole("tab", { name: /overview/i }));
+
+    expect(screen.getByPlaceholderText("Enter input cost")).toBe(costInput);
+    expect(Number(costInput.value)).toBe(5);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+    expect(mockModelPatchUpdateCall.mock.calls[0][1].litellm_params.input_cost_per_token).toBeCloseTo(5 / 1_000_000);
+  });
+
   it("should display model information in overview tab", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {

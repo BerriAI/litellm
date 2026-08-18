@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState } from "react";
-import { Card, Title, Subtitle } from "@tremor/react";
 import { Modal, Alert } from "antd";
 import { CircleHelp, Plug } from "lucide-react";
 import { useWatch } from "react-hook-form";
@@ -18,6 +17,8 @@ import PassThroughSecuritySection from "./common_components/PassThroughSecurityS
 import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -164,11 +165,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             />
 
             <form onSubmit={form.handleSubmit(addPassThrough)} className="space-y-6">
-              <Card className="p-5">
-                <Title className="mb-2 text-lg font-semibold text-foreground">Route Configuration</Title>
-                <Subtitle className="mb-5 text-muted-foreground">
+              <Card className="block p-5">
+                <h3 className="mb-2 text-lg font-semibold text-foreground">Route Configuration</h3>
+                <p className="mb-5 text-sm text-muted-foreground">
                   Configure how requests to your domain will be forwarded to the target API
-                </Subtitle>
+                </p>
 
                 <div className="space-y-5">
                   <FormField
@@ -252,11 +253,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
 
               <RoutePreview pathValue={pathValue} targetValue={targetValue} includeSubpath={includeSubpath} />
 
-              <Card className="p-6">
-                <Title className="mb-2 text-lg font-semibold text-foreground">Headers</Title>
-                <Subtitle className="mb-6 text-muted-foreground">
+              <Card className="block p-6">
+                <h3 className="mb-2 text-lg font-semibold text-foreground">Headers</h3>
+                <p className="mb-6 text-sm text-muted-foreground">
                   Add headers that will be sent with every request to the target API
-                </Subtitle>
+                </p>
 
                 <FormField
                   control={form.control}
@@ -278,11 +279,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 </FormField>
               </Card>
 
-              <Card className="p-6">
-                <Title className="mb-2 text-lg font-semibold text-foreground">Default Query Parameters</Title>
-                <Subtitle className="mb-6 text-muted-foreground">
+              <Card className="block p-6">
+                <h3 className="mb-2 text-lg font-semibold text-foreground">Default Query Parameters</h3>
+                <p className="mb-6 text-sm text-muted-foreground">
                   Add query parameters that will be automatically sent with every request to the target API
-                </Subtitle>
+                </p>
 
                 <FormField
                   control={form.control}
@@ -318,11 +319,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
 
               <PassThroughGuardrailsSection accessToken={accessToken} value={guardrails} onChange={setGuardrails} />
 
-              <Card className="p-6">
-                <Title className="mb-2 text-lg font-semibold text-foreground">Performance</Title>
-                <Subtitle className="mb-6 text-muted-foreground">
+              <Card className="block p-6">
+                <h3 className="mb-2 text-lg font-semibold text-foreground">Performance</h3>
+                <p className="mb-6 text-sm text-muted-foreground">
                   Configure upstream request timeout for this endpoint
-                </Subtitle>
+                </p>
 
                 <FormField
                   control={form.control}
@@ -348,9 +349,9 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 </FormField>
               </Card>
 
-              <Card className="p-6">
-                <Title className="mb-2 text-lg font-semibold text-foreground">Billing</Title>
-                <Subtitle className="mb-6 text-muted-foreground">Optional cost tracking for this endpoint</Subtitle>
+              <Card className="block p-6">
+                <h3 className="mb-2 text-lg font-semibold text-foreground">Billing</h3>
+                <p className="mb-6 text-sm text-muted-foreground">Optional cost tracking for this endpoint</p>
 
                 <FormField
                   control={form.control}
@@ -377,7 +378,8 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 <Button type="button" variant="outline" onClick={handleCancel}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={isLoading}>
+                <Button type="submit" disabled={isLoading} aria-busy={isLoading}>
+                  {isLoading && <UiLoadingSpinner className="size-4" />}
                   {isLoading ? "Creating..." : "Add Pass-Through Endpoint"}
                 </Button>
               </div>
