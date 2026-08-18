@@ -4,11 +4,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/access-groups/_components/AccessGroupsModal/AccessGroupBaseForm.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/access-groups/_components/AccessGroupsModal/AccessGroupEditModal.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -33,7 +28,7 @@
       "count": 3
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
@@ -58,12 +53,6 @@
   "src/app/(dashboard)/agents/_components/agent_form_fields.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/agents/_components/agent_info.tsx": {
@@ -73,11 +62,8 @@
     "local/no-complex-jsx-arrow": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 1
-    },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/immutability": {
       "count": 1
@@ -94,19 +80,10 @@
   "src/app/(dashboard)/agents/_components/cost_config_fields.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/agents/_components/dynamic_agent_form_fields.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -115,7 +92,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/budgets/_components/budget_panel.tsx": {
@@ -128,7 +105,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/caching/_components/cache_dashboard.tsx": {
@@ -147,16 +124,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/caching/_components/cache_settings/CacheFormField.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/caching/_components/cache_settings/cacheSettingsFields.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/caching/_components/cache_settings/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -165,21 +132,8 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/caching/_components/coordination_redis_settings/CoordinationRedisFormField.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/caching/_components/coordination_redis_settings/coordinationRedisFields.ts": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/caching/_components/coordination_redis_settings/index.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -383,7 +337,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 3
@@ -1204,18 +1158,7 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/projects/_components/ProjectModals/ProjectBaseForm.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/projects/_components/ProjectModals/ProjectBaseForm.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1286,7 +1229,7 @@
       "count": 3
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
@@ -1354,12 +1297,12 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/tag-management/_components/components/CreateTagModal.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/tag-management/_components/index.tsx": {
@@ -1473,9 +1416,6 @@
   },
   "src/app/(dashboard)/users/_components/view_users/user_info_view.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
       "count": 1
     },
     "no-restricted-imports": {
@@ -1645,11 +1585,6 @@
       "count": 1
     }
   },
-  "src/components/SSOModals.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/SSOModals.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1687,11 +1622,6 @@
     }
   },
   "src/components/Settings/AdminSettings/SSOSettings/Modals/AddSSOSettingsModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm.test.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -2098,14 +2028,6 @@
       "count": 1
     }
   },
-  "src/components/common_components/KeyLifecycleSettings.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/common_components/MetadataKeyValueFields.test.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2132,11 +2054,6 @@
     }
   },
   "src/components/common_components/RateLimitTypeFormItem.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/RateLimitTypeFormItem.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
