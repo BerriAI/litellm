@@ -478,6 +478,145 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
         assert "response_cost" not in request_data
 
 
+class TestPostCallFailureHookEstimatesDispatchedInputTokens:
+    """A non-stream request that failed after dispatch (timeout, provider
+    error) consumed provider-billed input tokens but recovered no usage.
+    post_call_failure_hook must estimate the input side onto request_data so
+    the spend log's failure row records what was sent instead of zero, while
+    never charging spend for the failure (LIT-5690).
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    def _logging_obj(self, model_call_details):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = model_call_details
+        return logging_obj
+
+    @pytest.mark.asyncio
+    async def test_dispatched_failure_estimates_input_tokens_with_zero_cost(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                }
+            ),
+            "metadata": {},
+            "response_cost": 123.0,
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        assert estimated.prompt_tokens > 0
+        assert estimated.completion_tokens == 0
+        assert estimated.total_tokens == estimated.prompt_tokens
+        assert request_data["response_cost"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_failure_before_dispatch_stays_zero(self):
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "never dispatched"}],
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_proxy_only_error_never_dispatched_stays_zero(self):
+        from datetime import datetime
+
+        from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "no-such-model",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True,
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_recovered_partial_usage_wins_over_estimate(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        recovered_usage = Usage(prompt_tokens=30, completion_tokens=7, total_tokens=37)
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "mid-stream failure"}],
+                    "combined_usage_object": recovered_usage,
+                    "response_cost": 3.5e-05,
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert request_data["combined_usage_object"] is recovered_usage
+        assert request_data["response_cost"] == 3.5e-05
+
+    @pytest.mark.asyncio
+    async def test_dispatched_failure_with_text_completion_prompt(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": "a plain text-completion prompt string",
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        assert estimated.prompt_tokens > 0
+        assert estimated.completion_tokens == 0
+
+
 from typing import cast
 
 import litellm

@@ -40,7 +40,7 @@ from litellm.proxy._types import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo
+from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -401,6 +401,52 @@ def _exception_changes_request_flow(exc: BaseException) -> bool:
     generic pipeline block instead of being re-raised verbatim.
     """
     return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
+
+
+def _count_request_input_tokens(model: str, request_input: object) -> int:
+    if isinstance(request_input, str):
+        return litellm.token_counter(model=model, text=request_input)
+    if not isinstance(request_input, list) or not request_input:
+        return 0
+    text_entries: Final = tuple(entry for entry in request_input if isinstance(entry, str))
+    if len(text_entries) == len(request_input):
+        return litellm.token_counter(model=model, text="".join(text_entries))
+    return litellm.token_counter(model=model, messages=request_input)
+
+
+def _estimate_dispatched_failure_usage(model: str, request_input: object) -> Usage | None:
+    """A request that failed after dispatch consumed provider-billed input
+    tokens, but no provider usage ever came back. Estimate the input side with
+    the same tokenizer fallback interrupted streams use, so the spend log's
+    failure row records what was sent instead of zero."""
+    try:
+        input_tokens: Final = _count_request_input_tokens(model=model, request_input=request_input)
+    except Exception:
+        return None
+    if input_tokens <= 0:
+        return None
+    return Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
+
+
+def _failure_usage_to_lift(model_call_details: Mapping[str, object], dispatched: bool) -> tuple[object, object] | None:
+    """A stream that broke mid-flight still billed the provider for the chunks
+    already delivered; the streaming handler stashes that recovered usage and
+    cost in model_call_details, so prefer it. Otherwise a request that was
+    dispatched to a provider and failed without upstream usage gets an
+    estimated input-side Usage with zero cost. Returns the
+    (combined_usage_object, response_cost) pair to lift, or None."""
+    recovered_usage: Final = model_call_details.get("combined_usage_object")
+    if recovered_usage is not None:
+        return recovered_usage, model_call_details.get("response_cost")
+    if not dispatched or model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
+        return None
+    estimated_usage: Final = _estimate_dispatched_failure_usage(
+        model=str(model_call_details.get("model") or ""),
+        request_input=model_call_details.get("messages"),
+    )
+    if estimated_usage is None:
+        return None
+    return estimated_usage, 0.0
 
 
 @dataclass(frozen=True)
@@ -2190,15 +2236,18 @@ class ProxyLogging:
             if _first_handoff is not None:
                 request_data["first_api_call_start_time"] = _first_handoff
 
-            # A stream that broke mid-flight still billed the provider for the
-            # chunks already delivered; the streaming handler stashes that
-            # recovered usage and cost here. Lift them onto request_data so the
+            # Lift recovered partial-stream usage, or an estimated input-side
+            # usage for a dispatched failure, onto request_data so the
             # failure-path spend callbacks (which run after the logging object
-            # is popped) record the real partial spend instead of zero.
-            _recovered_usage: Final = _model_call_details.get("combined_usage_object")
-            if _recovered_usage is not None:
-                request_data["combined_usage_object"] = _recovered_usage
-                request_data["response_cost"] = _model_call_details.get("response_cost")
+            # is popped) record real token counts instead of zero.
+            _usage_to_lift: Final = _failure_usage_to_lift(
+                model_call_details=_model_call_details,
+                dispatched=_first_handoff is not None,
+            )
+            if _usage_to_lift is not None:
+                _lifted_usage, _lifted_cost = _usage_to_lift
+                request_data["combined_usage_object"] = _lifted_usage
+                request_data["response_cost"] = _lifted_cost
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
