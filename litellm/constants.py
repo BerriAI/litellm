@@ -1487,6 +1487,7 @@ WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
 PROMETHEUS_FALLBACK_STATS_JOB_ID: Final = "prometheus_fallback_stats_job"
 SLACK_DAILY_REPORT_LOCK_ID: Final = "slack_daily_report"
+SLACK_MODEL_DEPRECATION_LOCK_ID: Final = "slack_model_deprecation_warning"
 SPEND_LOG_RUN_LOOPS: Final = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE: Final = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(os.getenv("SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3))
