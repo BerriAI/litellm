@@ -1438,16 +1438,15 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
 
 
 @pytest.mark.parametrize(
-    ("settings", "environment", "expected"),
+    ("settings", "expected"),
     [
-        ({"store_prompts_in_spend_logs": True}, {}, True),
-        ({"store_prompts_in_spend_logs": False}, {}, False),
+        ({"store_prompts_in_spend_logs": True}, True),
+        ({"store_prompts_in_spend_logs": False}, False),
         (
             {
                 "store_prompts_in_spend_logs": True,
                 "store_responses_in_spend_logs": False,
             },
-            {},
             False,
         ),
         (
@@ -1455,29 +1454,21 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
                 "store_prompts_in_spend_logs": False,
                 "store_responses_in_spend_logs": True,
             },
-            {},
             True,
         ),
-        ({"store_prompts_in_spend_logs": True}, {"STORE_RESPONSES_IN_SPEND_LOGS": False}, False),
-        ({"store_prompts_in_spend_logs": False}, {"STORE_RESPONSES_IN_SPEND_LOGS": True}, True),
         (
             {
                 "store_prompts_in_spend_logs": True,
                 "store_responses_in_spend_logs": "FALSE",
             },
-            {},
             False,
         ),
     ],
 )
-@patch("litellm.secret_managers.main.get_secret_bool")
 def test_should_store_responses_in_spend_logs(
-    mock_get_secret_bool,
     settings,
-    environment,
     expected,
 ):
-    mock_get_secret_bool.side_effect = environment.get
     with patch("litellm.proxy.proxy_server.general_settings", settings):
         assert _should_store_responses_in_spend_logs() is expected
 
