@@ -325,9 +325,12 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   {relativeTimeOptions.map((option) => {
                     const isSelected = selectedOption === option.shortLabel;
                     return (
-                      <div
+                      <button
                         key={option.label}
-                        className={`flex items-center justify-between px-5 py-4 cursor-pointer border-b border-gray-100 transition-colors ${
+                        type="button"
+                        data-slot="advanced-date-picker-preset"
+                        aria-pressed={isSelected}
+                        className={`flex w-full items-center justify-between px-5 py-4 text-left cursor-pointer border-b border-gray-100 transition-colors ${
                           isSelected ? "bg-blue-50 hover:bg-blue-100 border-blue-200" : "hover:bg-gray-50"
                         }`}
                         onClick={() => handleRelativeTimeSelect(option)}
@@ -342,7 +345,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                         >
                           {option.shortLabel}
                         </span>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
