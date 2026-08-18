@@ -7,9 +7,7 @@ describe("ExportSummary", () => {
       from: new Date("2024-01-01"),
       to: new Date("2024-01-31"),
     };
-    const { container } = renderWithProviders(
-      <ExportSummary dateRange={dateRange} selectedFilters={[]} />
-    );
+    const { container } = renderWithProviders(<ExportSummary dateRange={dateRange} selectedFilters={[]} />);
     expect(container).not.toBeEmptyDOMElement();
   });
 
@@ -17,9 +15,7 @@ describe("ExportSummary", () => {
     const from = new Date(2024, 0, 1);
     const to = new Date(2024, 0, 31);
     const dateRange = { from, to };
-    renderWithProviders(
-      <ExportSummary dateRange={dateRange} selectedFilters={[]} />
-    );
+    renderWithProviders(<ExportSummary dateRange={dateRange} selectedFilters={[]} />);
     expect(screen.getByText(new RegExp(from.toLocaleDateString()))).toBeInTheDocument();
     expect(screen.getByText(new RegExp(to.toLocaleDateString()))).toBeInTheDocument();
   });
@@ -29,9 +25,7 @@ describe("ExportSummary", () => {
       from: new Date("2024-01-01"),
       to: new Date("2024-01-31"),
     };
-    renderWithProviders(
-      <ExportSummary dateRange={dateRange} selectedFilters={["team-a", "team-b", "team-c"]} />
-    );
+    renderWithProviders(<ExportSummary dateRange={dateRange} selectedFilters={["team-a", "team-b", "team-c"]} />);
     expect(screen.getByText(/3 filters/)).toBeInTheDocument();
   });
 
@@ -40,9 +34,7 @@ describe("ExportSummary", () => {
       from: new Date("2024-01-01"),
       to: new Date("2024-01-31"),
     };
-    renderWithProviders(
-      <ExportSummary dateRange={dateRange} selectedFilters={["team-a"]} />
-    );
+    renderWithProviders(<ExportSummary dateRange={dateRange} selectedFilters={["team-a"]} />);
     expect(screen.getByText(/1 filter$/)).toBeInTheDocument();
   });
 
@@ -51,9 +43,7 @@ describe("ExportSummary", () => {
       from: new Date("2024-01-01"),
       to: new Date("2024-01-31"),
     };
-    renderWithProviders(
-      <ExportSummary dateRange={dateRange} selectedFilters={[]} />
-    );
+    renderWithProviders(<ExportSummary dateRange={dateRange} selectedFilters={[]} />);
     expect(screen.queryByText(/filter/)).not.toBeInTheDocument();
   });
 });

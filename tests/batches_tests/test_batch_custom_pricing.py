@@ -12,8 +12,7 @@ import litellm
 import pytest
 
 from litellm.batches.batch_utils import (
-    _batch_cost_calculator,
-    _get_batch_job_cost_from_file_content,
+    _aggregate_batch_cost_usage_models,
     calculate_batch_cost_and_usage,
 )
 from litellm.cost_calculator import batch_cost_calculator
@@ -113,12 +112,12 @@ def test_batch_cost_calculator_uses_custom_model_info():
     ), f"Expected completion cost {expected_completion}, got {completion_cost}"
 
 
-def test_get_batch_job_cost_from_file_content_uses_custom_model_info():
-    """_get_batch_job_cost_from_file_content should thread model_info to completion_cost."""
+def test_aggregate_batch_cost_uses_custom_model_info():
+    """_aggregate_batch_cost_usage_models should thread model_info to batch_cost_calculator."""
     file_content = [_make_batch_output_line(prompt_tokens=10, completion_tokens=5)]
 
-    cost = _get_batch_job_cost_from_file_content(
-        file_content_dictionary=file_content,
+    cost, _, _ = _aggregate_batch_cost_usage_models(
+        entries=file_content,
         custom_llm_provider="openai",
         model_info=CUSTOM_MODEL_INFO,
     )
@@ -129,20 +128,35 @@ def test_get_batch_job_cost_from_file_content_uses_custom_model_info():
     ), f"Expected total cost {expected}, got {cost}"
 
 
-def test_batch_cost_calculator_func_uses_custom_model_info():
-    """_batch_cost_calculator should thread model_info."""
-    file_content = [_make_batch_output_line(prompt_tokens=10, completion_tokens=5)]
+@pytest.mark.parametrize("data_residency", ["eu", "us"])
+def test_batch_cost_calculator_applies_data_residency_uplift(
+    data_residency, monkeypatch
+):
+    """batch_cost_calculator should apply the regional uplift multiplier when
+    data_residency is set and the model carries a configured multiplier."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    prev_model_cost = litellm.model_cost
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
-    cost = _batch_cost_calculator(
-        file_content_dictionary=file_content,
-        custom_llm_provider="openai",
-        model_info=CUSTOM_MODEL_INFO,
-    )
+        base_prompt, base_completion = batch_cost_calculator(
+            usage=usage,
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+        )
+        regional_prompt, regional_completion = batch_cost_calculator(
+            usage=usage,
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            data_residency=data_residency,
+        )
 
-    expected = (10 * 0.00125) + (5 * 0.005)
-    assert cost == pytest.approx(
-        expected
-    ), f"Expected total cost {expected}, got {cost}"
+        assert base_prompt > 0 and base_completion > 0
+        assert regional_prompt == pytest.approx(base_prompt * 1.10, rel=1e-9)
+        assert regional_completion == pytest.approx(base_completion * 1.10, rel=1e-9)
+    finally:
+        litellm.model_cost = prev_model_cost
 
 
 @pytest.mark.asyncio

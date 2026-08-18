@@ -9,13 +9,21 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-from litellm.types.utils import ServerToolUse
+from litellm.types.utils import ServerToolUse, Usage
 
 
 def test_response_format_transformation_unit_test():
@@ -95,6 +103,108 @@ def test_calculate_usage():
     assert usage.prompt_tokens_details.cache_creation_tokens == 12304
     assert usage._cache_creation_input_tokens == 12304
     assert usage._cache_read_input_tokens == 0
+
+
+def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
+    """
+    In the iterations path each iteration can carry the 5m/1h cache_creation
+    breakdown. calculate_usage must aggregate it into cache_creation_token_details
+    so 1h writes are priced at the 1h rate instead of silently falling back to 5m.
+
+    Regression for LIT-4868.
+    """
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    config = AnthropicConfig()
+    usage_object = {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "iterations": [
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 3,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+        ],
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    details = usage.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_5m_input_tokens == 0
+    assert details.ephemeral_1h_input_tokens == 20000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 20000
+
+    info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
+    rate_1h = info["cache_creation_input_token_cost_above_1hr"]
+    assert rate_1h > rate_5m
+
+    prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
+    assert prompt_cost == pytest.approx(20000 * rate_1h)
+    assert prompt_cost != pytest.approx(20000 * rate_5m)
+
+
+def test_calculate_usage_bills_undetailed_iteration_cache_writes_at_5m_rate():
+    """
+    When only some iterations carry the cache_creation breakdown, the writes
+    without a breakdown must still be billed (at the default 5m rate) instead
+    of silently priced at zero once details exist.
+
+    Regression for the Cursor Bugbot finding on the LIT-4868 fix.
+    """
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    config = AnthropicConfig()
+    usage_object = {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "iterations": [
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 3,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10000},
+            },
+            {
+                "type": "message",
+                "input_tokens": 0,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 7000,
+                "cache_read_input_tokens": 0,
+            },
+        ],
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    details = usage.prompt_tokens_details.cache_creation_token_details
+    assert details is not None
+    assert details.ephemeral_5m_input_tokens == 7000
+    assert details.ephemeral_1h_input_tokens == 10000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 17000
+
+    info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
+    rate_5m = info["cache_creation_input_token_cost"]
+    rate_1h = info["cache_creation_input_token_cost_above_1hr"]
+
+    prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
+    assert prompt_cost == pytest.approx(7000 * rate_5m + 10000 * rate_1h)
+    assert prompt_cost != pytest.approx(10000 * rate_1h)
 
 
 def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_output():
@@ -949,15 +1059,15 @@ def test_anthropic_structured_output_beta_header():
 @pytest.mark.parametrize(
     "model_name",
     [
-        "claude-opus-4-6-20250918",
-        "claude-opus-4.6-20250918",
+        "claude-opus-4-8",
+        "claude-opus-4-6-20260205",
         "claude-opus-4-5-20251101",
         "claude-opus-4.5-20251101",
     ],
 )
 def test_opus_uses_native_structured_output(model_name):
     """
-    Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
+    Test that supported Opus models use native Anthropic structured outputs
     (output_format) rather than the tool-based workaround.
     """
     config = AnthropicConfig()
@@ -995,6 +1105,43 @@ def test_opus_uses_native_structured_output(model_name):
 
     # Should set json_mode
     assert optional_params.get("json_mode") is True
+
+
+def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = "claude-opus-4-8"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {model: {"supports_response_schema": True}},
+    )
+    litellm.get_model_info.cache_clear()
+
+    try:
+        optional_params = AnthropicConfig().map_openai_params(
+            non_default_params={
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "answer",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                        },
+                    },
+                }
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert "output_format" in optional_params
+    assert "tools" not in optional_params
 
 
 def test_non_structured_output_model_uses_tool_workaround():
@@ -1622,6 +1769,29 @@ def test_effort_output_config_preservation():
     assert result["output_config"]["effort"] == "medium"
 
 
+def test_output_config_format_preservation_and_beta_header():
+    """Test that output_config.format is preserved and treated as structured output."""
+    config = AnthropicConfig()
+    output_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+    }
+    optional_params = {"output_config": {"format": output_format, "effort": "xhigh"}}
+
+    result = config.transform_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "Test"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    headers = config.update_headers_with_optional_anthropic_beta({}, optional_params)
+
+    assert result["output_config"]["format"] == output_format
+    assert result["output_config"]["effort"] == "xhigh"
+    assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
+
+
 def test_effort_beta_header_injection():
     """Test that effort beta header is automatically added when output_config is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -1631,7 +1801,7 @@ def test_effort_beta_header_injection():
     # Test with effort parameter
     optional_params = {"output_config": {"effort": "low"}}
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params)
+    effort_used = model_info.is_effort_used(optional_params=optional_params, custom_llm_provider="anthropic")
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
@@ -1648,7 +1818,7 @@ def test_effort_validation():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    # Valid values should work
+    # Valid values should work (xhigh is Opus 4.7+ only, not 4.5)
     for effort in ["high", "medium", "low"]:
         optional_params = {"output_config": {"effort": effort}}
         result = config.transform_request(
@@ -1847,7 +2017,7 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
     ],
 )
 def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model) is True
+    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is True
 
 
 @pytest.mark.parametrize(
@@ -1860,7 +2030,90 @@ def test_anthropic_model_supports_effort_param_recognizes_supporting_models(mode
     ],
 )
 def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model) is False
+    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is False
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-4-6-20260205",
+        "claude-opus-4-7-20260416",
+    ],
+)
+def test_anthropic_model_supports_speed_param_recognizes_supporting_models(model):
+    assert AnthropicConfig._model_supports_speed_param(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "claude-fable-5",
+        "claude-3-haiku-20240307",
+        "vertex_ai/claude-opus-4-8",
+        "azure_ai/claude-opus-4-8",
+        "anthropic.claude-opus-4-8",
+    ],
+)
+def test_anthropic_model_supports_speed_param_rejects_non_supporting_models(model):
+    assert AnthropicConfig._model_supports_speed_param(model) is False
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "azure_ai", "bedrock"])
+def test_anthropic_model_supports_speed_param_rejects_non_anthropic_providers(
+    custom_llm_provider,
+):
+    """Fast mode is direct-Anthropic-only. Vertex/Azure/Bedrock strip their prefix
+    before the shared transform runs, so the bare Opus id must still be rejected."""
+    assert (
+        AnthropicConfig._model_supports_speed_param(
+            "claude-opus-4-8", custom_llm_provider
+        )
+        is False
+    )
+    assert (
+        AnthropicConfig._model_supports_speed_param("claude-opus-4-8", "anthropic")
+        is True
+    )
+
+
+def test_vertex_anthropic_drops_speed_for_opus_with_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus must drop ``speed`` even though the prefix-stripped
+    ``claude-opus-4-8`` maps to a fast-mode-capable direct-Anthropic entry."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    result = VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"speed": "fast", "max_tokens": 1024},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "speed" not in result
+
+
+def test_vertex_anthropic_raises_on_speed_without_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus raises rather than forwarding an unsupported
+    ``speed`` when neither global nor per-request drop_params is set."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        VertexAIAnthropicConfig().map_openai_params(
+            non_default_params={"speed": "fast"},
+            optional_params={},
+            model="claude-opus-4-8",
+            drop_params=False,
+        )
 
 
 def test_translate_system_message_skips_empty_string_content():
@@ -2104,7 +2357,7 @@ def test_get_config_does_not_leak_module_constants():
 )
 def test_supports_effort_level_handles_provider_prefixes(model, level, expected):
     """``_supports_effort_level`` resolves bedrock/vertex/azure-prefixed model ids."""
-    assert AnthropicConfig._supports_effort_level(model, level) is expected
+    assert AnthropicConfig._supports_effort_level(model, level, "anthropic") is expected
 
 
 @pytest.mark.parametrize(
@@ -2126,7 +2379,7 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
 def test_validate_effort_for_model_centralises_per_model_gating(
     model, effort, expect_error
 ):
-    err = AnthropicConfig._validate_effort_for_model(model, effort)
+    err = AnthropicConfig._validate_effort_for_model(model, effort, "anthropic")
     if expect_error:
         assert err is not None
         assert effort in err
@@ -2330,7 +2583,131 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert result["output_config"]["effort"] == effort_map[effort]
 
 
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
+def test_raw_adaptive_thinking_translates_to_legacy_for_pre_46_model():
+    """Clients like Claude Code send ``thinking={"type": "adaptive"}`` directly
+    (not via ``reasoning_effort``) on every request, regardless of which model
+    the request routes to. For a pre-4.6 model that doesn't understand
+    adaptive thinking, this must be translated to the legacy
+    ``thinking={type: enabled, budget_tokens}`` interface instead of being
+    forwarded raw, which Anthropic would reject."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+
+
+def test_raw_adaptive_thinking_budget_capped_below_max_tokens():
+    """Anthropic requires ``max_tokens > thinking.budget_tokens``. When the
+    default medium budget wouldn't fit, it must be capped below max_tokens
+    rather than forwarded as an invalid combination."""
+    config = AnthropicConfig()
+
+    max_tokens = DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET - 100
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": max_tokens},
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == max_tokens - 1
+
+
+def test_raw_adaptive_thinking_dropped_when_max_tokens_too_small():
+    """When max_tokens can't fit even the minimum thinking budget, thinking
+    must be dropped entirely so the request still succeeds, matching how the
+    native /v1/messages passthrough already handles this."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "max_tokens": ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+        },
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+
+    assert "thinking" not in result
+
+
+def test_raw_adaptive_thinking_untouched_for_46_plus_model():
+    """Adaptive-thinking models understand ``thinking={"type": "adaptive"}``
+    natively, so it must pass through unmodified."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}, "max_tokens": 8192},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        # explicit cost-map entries, across provider routes / separators / date suffix
+        ("claude-opus-4-8", True),
+        ("anthropic.claude-opus-4-8", True),
+        ("vertex_ai/claude-opus-4-6@default", True),
+        ("openrouter/anthropic/claude-opus-4.7", True),
+        ("us.anthropic.claude-sonnet-4-6", True),
+        ("claude-opus-4-6-20260205", True),
+        # unmapped future models -> anthropic-claude fallback rule
+        ("claude-opus-4-9", True),
+        ("claude-sonnet-5-0", True),
+        # Claude 4.0 (dated): "4-20250514" must not be read as minor 4.20250514
+        ("claude-opus-4-20250514", False),
+        ("us.anthropic.claude-opus-4-20250514-v1:0", False),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-20250514", False),
+        # sub-4.6 and legacy names
+        ("claude-opus-4-5", False),
+        ("claude-sonnet-4-5-20250929", False),
+        ("claude-3-7-sonnet", False),
+        ("claude-3-opus-20240229", False),
+        ("gpt-4o", False),
+    ],
+)
+def test_is_adaptive_thinking_model_is_sourced_from_cost_map(
+    local_model_cost_map, model, expected
+):
+    """Adaptive thinking resolves from the cost map first (an explicit
+    supports_adaptive_thinking entry, or the anthropic-claude fallback rule for unmapped
+    future Claudes), then from a date-safe opus/sonnet/haiku >= 4.6 name version as a
+    fallback for ids the cost map cannot resolve. The dated Claude 4.0 names stay
+    non-adaptive because the date suffix is not read as a minor version, while 4.8/4.9/5.x
+    are covered without a code change."""
+    assert AnthropicConfig._is_adaptive_thinking_model(model, "anthropic") is expected
+
+
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
+    local_model_cost_map,
+):
     """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
     config = AnthropicConfig()
 
@@ -2340,8 +2717,12 @@ def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
     assert "reasoning_effort" in params
 
 
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias():
-    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias(
+    local_model_cost_map,
+):
+    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported
+    params. The anthropic-claude fallback rule accepts a dotted minor (4.6) as well as
+    a dashed one, so an unmapped dotted alias still degrades to adaptive thinking."""
     config = AnthropicConfig()
 
     params = config.get_supported_openai_params(model="claude-sonnet-4.6")
@@ -2387,9 +2768,9 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
 
     # ``minimal`` floors at ANTHROPIC_MIN_THINKING_BUDGET_TOKENS (1024).
     test_cases = [
-        ("low", 1024),
-        ("medium", 2048),
-        ("high", 4096),
+        ("low", DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET),
+        ("medium", DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET),
+        ("high", DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET),
         ("minimal", 1024),
     ]
 
@@ -2513,14 +2894,14 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
     )
 
     # thinking must be set (adaptive for 4.6+)
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "adaptive"
     # output_config must carry the mapped effort
-    assert "output_config" in result, (
-        f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "output_config" in result
+    ), f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["output_config"]["effort"] == "low"
 
 
@@ -2532,7 +2913,9 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
         {"effort": "low", "summary": "concise"},
     ],
 )
-def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_effort_value):
+def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
+    reasoning_effort_value,
+):
     """
     Non-adaptive (pre-4.6) branch: dict-shape reasoning_effort must still map
     to ``thinking.type='enabled'`` + ``budget_tokens``. ``output_config`` must
@@ -2547,9 +2930,9 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_ef
         drop_params=False,
     )
 
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "enabled"
     assert "budget_tokens" in result["thinking"]
     assert result["thinking"]["budget_tokens"] > 0
@@ -2582,12 +2965,12 @@ def test_reasoning_effort_unparseable_dict_is_dropped(bad_value):
         model="claude-sonnet-4-6-20260219",
         drop_params=False,
     )
-    assert "thinking" not in result, (
-        f"thinking should not be set for bad value {bad_value!r}"
-    )
-    assert "output_config" not in result, (
-        f"output_config should not be set for bad value {bad_value!r}"
-    )
+    assert (
+        "thinking" not in result
+    ), f"thinking should not be set for bad value {bad_value!r}"
+    assert (
+        "output_config" not in result
+    ), f"output_config should not be set for bad value {bad_value!r}"
 
 
 @pytest.mark.parametrize(
@@ -2665,6 +3048,7 @@ def test_effort_beta_header_not_injected_for_46_models():
         result = model_info.is_effort_used(
             optional_params={"output_config": {"effort": "high"}},
             model=model,
+            custom_llm_provider="anthropic",
         )
         assert result is False, f"is_effort_used should return False for {model}"
 
@@ -2712,7 +3096,10 @@ def test_reasoning_effort_garbage_raises_bad_request(effort):
 
 @pytest.mark.parametrize(
     "effort,expected_budget",
-    [("xhigh", 8192), ("max", 16384)],
+    [
+        ("xhigh", DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET),
+        ("max", DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET),
+    ],
 )
 def test_reasoning_effort_xhigh_max_maps_to_budget_on_budget_model(
     effort, expected_budget
@@ -2773,6 +3160,7 @@ def test_effort_beta_header_still_injected_for_older_models():
     result = model_info.is_effort_used(
         optional_params={"output_config": {"effort": "low"}},
         model="claude-opus-4-5-20251101",
+        custom_llm_provider="anthropic",
     )
     assert result is True
 
@@ -3677,6 +4065,39 @@ def test_fast_mode_with_inference_geo():
         assert abs(completion_cost - base_completion * expected_multiplier) < 1e-10
 
 
+def test_calculate_usage_captures_service_tier():
+    """
+    Anthropic returns the assigned service tier on the response usage object
+    (e.g. ``"priority"``). It must be surfaced on the Usage object so it is
+    visible in logs and used to select tier-specific pricing.
+    """
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 410,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 585,
+        "service_tier": "priority",
+    }
+
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    assert usage.service_tier == "priority"
+
+
+def test_calculate_usage_service_tier_defaults_to_none():
+    """A response without a service tier must not invent one."""
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 10, "output_tokens": 5},
+        reasoning_content=None,
+    )
+
+    assert usage.service_tier is None
+
+
 def test_fast_mode_parameter_in_supported_params():
     """
     Test that 'speed' is in the list of supported OpenAI params.
@@ -3706,6 +4127,61 @@ def test_fast_mode_parameter_mapping():
 
     assert "speed" in result
     assert result["speed"] == "fast"
+
+
+def test_anthropic_drop_params_strips_speed_for_unsupported_models():
+    """``drop_params=True`` strips unsupported ``speed`` for non-Opus models."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-sonnet-4-6",
+            messages=messages,
+            optional_params={"speed": "fast", "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert "speed" not in result
+
+
+def test_anthropic_drop_params_keeps_speed_for_supporting_models():
+    """``drop_params=True`` must not strip ``speed`` on Opus fast-mode models."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-opus-4-6",
+            messages=messages,
+            optional_params={"speed": "fast", "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("speed") == "fast"
+
+
+def test_speed_raises_clean_error_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params={"speed": "fast"},
+            optional_params={},
+            model="claude-sonnet-4-6",
+            drop_params=False,
+        )
 
 
 def test_map_openai_params_max_tokens_normalized_to_int():
@@ -4864,3 +5340,648 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+# -----------------------------------------------------------------------------
+# Regression tests for legacy / OpenAPI $ref defs in tool input_schema.
+#
+# Anthropic only resolves `$defs` (JSON Schema 2020-12). Tools coming from MCP
+# servers (legacy `definitions`) or OpenAPI-derived gateways like AWS
+# AgentCore (`components.schemas`) used to silently lose their def blocks
+# while keeping dangling `$ref`s, causing upstream 400s. See
+# https://github.com/BerriAI/litellm/issues/26692.
+# -----------------------------------------------------------------------------
+
+
+def _assert_no_unresolved_refs(input_schema: dict) -> None:
+    import json
+
+    blob = json.dumps(input_schema)
+    assert "$ref" not in blob, f"unresolved $ref in transformed input_schema: {blob}"
+
+
+def test_map_tool_helper_inlines_components_schemas_refs():
+    """OpenAPI `components.schemas` $refs (AgentCore-style) must be inlined."""
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "slides_presentations_create",
+            "description": "Create a Google Slides presentation",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "body": {"$ref": "#/components/schemas/Presentation"},
+                },
+                "required": ["body"],
+                "components": {
+                    "schemas": {
+                        "Presentation": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "presentationId": {"type": "string"},
+                            },
+                        }
+                    }
+                },
+            },
+        },
+    }
+
+    transformed, _ = config._map_tool_helper(tool)
+
+    assert transformed is not None
+    schema = transformed["input_schema"]
+    _assert_no_unresolved_refs(schema)
+    assert schema["properties"]["body"] == {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "presentationId": {"type": "string"},
+        },
+    }
+    # The OpenAPI components block is not part of Anthropic's allow-list and
+    # must not be forwarded.
+    assert "components" not in schema
+
+
+def test_map_tool_helper_inlines_legacy_definitions_refs():
+    """Legacy draft-04 `definitions` $refs (DevRev MCP-style) must be inlined."""
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "create_thing",
+            "description": "Create a thing",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thing": {"$ref": "#/definitions/Thing"},
+                },
+                "definitions": {
+                    "Thing": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                    }
+                },
+            },
+        },
+    }
+
+    transformed, _ = config._map_tool_helper(tool)
+
+    assert transformed is not None
+    schema = transformed["input_schema"]
+    _assert_no_unresolved_refs(schema)
+    assert schema["properties"]["thing"] == {
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+    }
+    assert "definitions" not in schema
+
+
+def test_map_tool_helper_preserves_native_dollar_defs():
+    """`$defs` is JSON Schema 2020-12 native; Anthropic resolves it itself.
+
+    Re-implementation must not pop or unpack `$defs`.
+    """
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "native_defs_tool",
+            "description": "",
+            "parameters": {
+                "type": "object",
+                "properties": {"a": {"$ref": "#/$defs/A"}},
+                "$defs": {"A": {"type": "string"}},
+            },
+        },
+    }
+
+    transformed, _ = config._map_tool_helper(tool)
+
+    assert transformed is not None
+    schema = transformed["input_schema"]
+    assert schema["$defs"] == {"A": {"type": "string"}}
+    assert schema["properties"]["a"] == {"$ref": "#/$defs/A"}
+
+
+def test_map_tool_helper_does_not_mutate_caller_dict():
+    """Caller-supplied tool dict must not be mutated by the inlining step."""
+    import copy
+
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "create_thing",
+            "description": "Create a thing",
+            "parameters": {
+                "type": "object",
+                "properties": {"thing": {"$ref": "#/definitions/Thing"}},
+                "definitions": {
+                    "Thing": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                    }
+                },
+            },
+        },
+    }
+    snapshot = copy.deepcopy(tool)
+
+    config._map_tool_helper(tool)
+
+    assert tool == snapshot, "caller's tool dict was mutated in place"
+
+
+def test_map_tool_helper_collision_prefers_definitions_over_components_schemas():
+    """If both `definitions.X` and `components.schemas.X` exist with the same
+    name, prefer the `definitions` body. ``unpack_defs`` keys refs by last path
+    segment so only one body can win; pick the JSON-Schema-native one.
+
+    This locks in the residual limitation as a deliberate contract: a ref
+    written as ``#/components/schemas/X`` will *also* resolve to the
+    ``definitions`` body when both namespaces define ``X``. Cross-namespace
+    disambiguation would require teaching ``unpack_defs`` to key by full ref
+    path, which is out of scope here.
+    """
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "collision_tool",
+            "description": "",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "from_definitions": {"$ref": "#/definitions/Thing"},
+                    "from_components": {"$ref": "#/components/schemas/Thing"},
+                },
+                "definitions": {
+                    "Thing": {"type": "string", "description": "from-definitions"},
+                },
+                "components": {
+                    "schemas": {
+                        "Thing": {"type": "integer", "description": "from-components"},
+                    }
+                },
+            },
+        },
+    }
+
+    transformed, _ = config._map_tool_helper(tool)
+
+    assert transformed is not None
+    expected = {"type": "string", "description": "from-definitions"}
+    # Direct ref resolves to the `definitions` body (the documented winner).
+    assert transformed["input_schema"]["properties"]["from_definitions"] == expected
+    # Cross-namespace ref *also* resolves to the `definitions` body because
+    # ``unpack_defs`` keys by last path segment -- documented limitation.
+    assert transformed["input_schema"]["properties"]["from_components"] == expected
+
+
+BILLING_HEADER_BLOCK = {
+    "type": "text",
+    "text": "x-anthropic-billing-header: cc_version=1.0.abc; cc_entrypoint=cli; cch=00000;",
+}
+
+
+def _system_with_billing_header(real_text: str) -> list:
+    return [
+        {
+            "role": "system",
+            "content": [BILLING_HEADER_BLOCK, {"type": "text", "text": real_text}],
+        }
+    ]
+
+
+def test_translate_system_message_keeps_billing_header_for_first_party_anthropic():
+    config = AnthropicConfig()
+    assert config.should_strip_billing_metadata() is False
+
+    result = config.translate_system_message(
+        messages=_system_with_billing_header(
+            "You are Claude Code, Anthropic's official CLI for Claude."
+        )
+    )
+
+    texts = [block["text"] for block in result]
+    assert any(t.startswith("x-anthropic-billing-header:") for t in texts)
+    assert "You are Claude Code, Anthropic's official CLI for Claude." in texts
+
+
+def test_translate_system_message_strips_billing_header_for_bedrock():
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    config = BedrockClaudePlatformConfig()
+    assert config.should_strip_billing_metadata() is True
+
+    result = config.translate_system_message(
+        messages=_system_with_billing_header("real system prompt")
+    )
+
+    texts = [block["text"] for block in result]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+    assert "real system prompt" in texts
+
+
+def test_anthropic_messages_request_keeps_billing_header_for_first_party():
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = AnthropicMessagesConfig()
+    assert config.should_strip_billing_metadata() is False
+
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            BILLING_HEADER_BLOCK,
+            {"type": "text", "text": "real system prompt"},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="claude-3-5-sonnet-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    texts = [block["text"] for block in result["system"]]
+    assert any(t.startswith("x-anthropic-billing-header:") for t in texts)
+
+
+def test_anthropic_messages_request_strips_billing_header_for_minimax():
+    from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = MinimaxMessagesConfig()
+    assert config.should_strip_billing_metadata() is True
+
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            BILLING_HEADER_BLOCK,
+            {"type": "text", "text": "real system prompt"},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="MiniMax-M2",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    texts = [block["text"] for block in result.get("system", [])]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+
+
+def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeConfig,
+    )
+
+    config = AmazonAnthropicClaudeConfig()
+    assert config.should_strip_billing_metadata() is True
+
+    result = config.translate_system_message(
+        messages=_system_with_billing_header("real system prompt")
+    )
+
+    texts = [block["text"] for block in result]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+    assert "real system prompt" in texts
+
+
+@pytest.mark.parametrize(
+    "module_path, class_name, expected_strip",
+    [
+        ("litellm.llms.anthropic.chat.transformation", "AnthropicConfig", False),
+        (
+            "litellm.llms.anthropic.experimental_pass_through.messages.transformation",
+            "AnthropicMessagesConfig",
+            False,
+        ),
+        (
+            "litellm.llms.bedrock.claude_platform.transformation",
+            "BedrockClaudePlatformConfig",
+            True,
+        ),
+        (
+            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation",
+            "AmazonAnthropicClaudeConfig",
+            True,
+        ),
+        (
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation",
+            "VertexAIAnthropicConfig",
+            True,
+        ),
+        (
+            "litellm.llms.azure_ai.anthropic.transformation",
+            "AzureAnthropicConfig",
+            True,
+        ),
+        ("litellm.llms.minimax.messages.transformation", "MinimaxMessagesConfig", True),
+        (
+            "litellm.llms.azure_ai.anthropic.messages_transformation",
+            "AzureAnthropicMessagesConfig",
+            True,
+        ),
+        (
+            "litellm.llms.deepseek.messages.transformation",
+            "DeepSeekAnthropicMessagesConfig",
+            True,
+        ),
+        (
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation",
+            "VertexAIPartnerModelsAnthropicMessagesConfig",
+            True,
+        ),
+    ],
+)
+def test_should_strip_billing_metadata_by_provider(
+    module_path, class_name, expected_strip
+):
+    import importlib
+
+    config_cls = getattr(importlib.import_module(module_path), class_name)
+    assert config_cls().should_strip_billing_metadata() is expected_strip
+
+
+def test_namespace_tool_flat_nested_tools_are_extracted():
+    """Codex sends nested tools in flat format {type, name, description, parameters} with no 'function' wrapper.
+    These must be normalized and mapped without raising KeyError: 'function'."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "close_agent",
+                    "description": "Close an agent.",
+                    "strict": False,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"target": {"type": "string"}},
+                        "required": ["target"],
+                        "additionalProperties": False,
+                    },
+                },
+            ],
+        }
+    ]
+    anthropic_tools, _ = config._map_tools(tools)
+    assert len(anthropic_tools) == 1
+    assert anthropic_tools[0]["name"] == "close_agent"
+
+
+def test_namespace_tool_nested_tools_are_extracted():
+    """Codex sends type='namespace' wrapping nested tools in Anthropic format.
+    The namespace container must be dropped and its nested tools extracted individually.
+    """
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "description": "Tools for spawning and managing sub-agents.",
+            "tools": [
+                {
+                    "name": "close_agent",
+                    "type": "custom",
+                    "description": "Close an agent.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"target": {"type": "string"}},
+                        "required": ["target"],
+                    },
+                },
+                {
+                    "name": "resume_agent",
+                    "type": "custom",
+                    "description": "Resume a closed agent.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                        "required": ["id"],
+                    },
+                },
+            ],
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "exec_command",
+                "description": "Run a command.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"],
+                },
+            },
+        },
+    ]
+    anthropic_tools, mcp_servers = config._map_tools(tools)
+    names = [t["name"] for t in anthropic_tools]
+    assert "close_agent" in names
+    assert "resume_agent" in names
+    assert "exec_command" in names
+    assert "multi_agent_v1" not in names
+    assert len(anthropic_tools) == 3
+    assert mcp_servers == []
+
+
+def test_client_metadata_stripped_from_anthropic_request():
+    """client_metadata passed by codex must not reach the Anthropic (or Vertex Anthropic) payload."""
+    config = AnthropicConfig()
+    result = config.transform_request(
+        model="claude-3-5-haiku-20241022",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "client_metadata": {"originator": "codex"}},
+        litellm_params={},
+        headers={},
+    )
+    assert "client_metadata" not in result
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["claude-fable-5", "claude-opus-4-7", "claude-opus-4-8-20260120"],
+)
+def test_sampling_params_dropped_for_models_that_removed_them(model):
+    """Fable 5 / Opus 4.7 / 4.8 reject temperature != 1 and any top_p with a
+    400; with drop_params set they must be dropped, not forwarded (#30064)."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+    assert "top_p" not in result
+
+
+@pytest.mark.parametrize("params", [{"temperature": 0.5}, {"top_p": 0.9}, {"top_p": 1}])
+def test_sampling_params_raise_clean_error_without_drop_params(params, monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="claude-fable-5",
+            drop_params=False,
+        )
+
+
+def test_temperature_1_forwarded_on_models_that_removed_sampling_params():
+    """temperature=1 (the API default) is still accepted and must pass through."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 1},
+        optional_params={},
+        model="claude-fable-5",
+        drop_params=False,
+    )
+
+    assert result["temperature"] == 1
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-6", "claude-sonnet-4-6"])
+def test_sampling_params_forwarded_on_models_that_accept_them(model):
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert result["temperature"] == 0.5
+    assert result["top_p"] == 0.9
+
+
+def test_sampling_param_gating_driven_by_model_map_flag(monkeypatch):
+    """The drop/raise decision must come from ``supports_sampling_params`` in
+    the model map, not just name matching: a flagged entry gates a model whose
+    name says nothing, and an explicit ``true`` overrides the name fallback."""
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-zeta-9", {"supports_sampling_params": False}
+    )
+    monkeypatch.setitem(
+        litellm.model_cost, "claude-fable-5-test", {"supports_sampling_params": True}
+    )
+    config = AnthropicConfig()
+
+    flagged_off = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-zeta-9",
+        drop_params=True,
+    )
+    assert "top_p" not in flagged_off
+
+    flagged_on = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="claude-fable-5-test",
+        drop_params=True,
+    )
+    assert flagged_on["top_p"] == 0.9
+
+
+def test_top_k_dropped_at_transform_for_models_that_removed_it():
+    """``top_k`` is a provider-specific kwarg that bypasses
+    ``map_openai_params``, so it must be stripped at the transform_request
+    boundary shared by the direct, invoke, Vertex, and Azure paths (#30064)."""
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-fable-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert "top_k" not in result
+
+
+def test_top_k_raises_at_transform_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"max_tokens": 10, "top_k": 40},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_top_k_forwarded_at_transform_on_models_that_accept_it():
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["top_k"] == 40
+
+
+def test_is_anthropic_usage_object_distinguishes_chat_usage():
+    """Chat-shaped Usage mirrors cache_read_input_tokens alongside prompt_tokens that already
+    include the cache tokens, so treating it as Anthropic usage would re-add them and
+    double-count the prompt. Only the Anthropic shape, where input_tokens excludes cache
+    tokens, may take the Anthropic mapping."""
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 4014}
+    )
+    assert AnthropicConfig.is_anthropic_usage_object(
+        {"input_tokens": 3, "output_tokens": 5, "cache_creation_input_tokens": 10}
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        Usage(
+            prompt_tokens=4017,
+            completion_tokens=5,
+            total_tokens=4022,
+            cache_read_input_tokens=4014,
+        ).model_dump()
+    )
+    assert not AnthropicConfig.is_anthropic_usage_object({"input_tokens": 3, "output_tokens": 5})
+
+
+def test_is_anthropic_usage_object_rejects_responses_api_usage():
+    """completion_cost checks the Anthropic shape before the Responses API shape, so a
+    Responses API usage payload, whose cache reads live in nested input_tokens_details,
+    must never match; matching would route it past the converter that reads the nested
+    field and its cache reads would be billed at the full input rate."""
+    assert not AnthropicConfig.is_anthropic_usage_object(
+        {
+            "input_tokens": 4017,
+            "output_tokens": 5,
+            "total_tokens": 4022,
+            "input_tokens_details": {"cached_tokens": 4014},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
+    )

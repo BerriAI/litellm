@@ -1,4 +1,4 @@
-"""8-actor read-world seed for the authz matrix tests."""
+"""Read-world seed for the authz matrix tests: 2 orgs, 3 teams, 9 actors."""
 
 import enum
 import uuid
@@ -20,6 +20,7 @@ class Actor(str, enum.Enum):
     UNRELATED_SAME_ORG = "unrelated_same_org"
     CROSS_ORG_USER = "cross_org_user"
     SERVICE_ACCOUNT = "service_account"
+    ORG_B_ADMIN = "org_b_admin"
 
 
 PREFIX = "behavior-pin-"
@@ -27,6 +28,7 @@ ORG_A = PREFIX + "org-a"
 ORG_B = PREFIX + "org-b"
 TEAM_ALPHA = PREFIX + "team-alpha"
 TEAM_BETA = PREFIX + "team-beta"
+TEAM_GAMMA = PREFIX + "team-gamma"
 BUDGET_ID = PREFIX + "budget"
 
 
@@ -43,6 +45,7 @@ class World:
     org_b_id: str
     team_alpha_id: str
     team_beta_id: str
+    team_gamma_id: str
     keys: Dict[Actor, SeededKey]
 
 
@@ -91,6 +94,11 @@ def _actor_profile() -> Dict[Actor, Dict[str, Any]]:
             "user_role": LitellmUserRoles.INTERNAL_USER.value,
             "team_id": TEAM_ALPHA,
             "organization_id": ORG_A,
+        },
+        Actor.ORG_B_ADMIN: {
+            "user_role": LitellmUserRoles.ORG_ADMIN.value,
+            "team_id": None,
+            "organization_id": ORG_B,
         },
     }
 
@@ -195,6 +203,18 @@ async def seed_world(prisma: PrismaClient) -> World:
             ),
         }
     )
+    # TEAM_GAMMA: ORG_A team with no actor members — the "same-org,
+    # not-my-team" read target.
+    await prisma.db.litellm_teamtable.create(
+        data={
+            "team_id": TEAM_GAMMA,
+            "team_alias": "gamma-1",
+            "organization_id": ORG_A,
+            "admins": [],
+            "members": [],
+            "members_with_roles": Json([]),
+        }
+    )
 
     for actor, org_id, role in [
         (Actor.ORG_ADMIN, ORG_A, "org_admin"),
@@ -204,6 +224,7 @@ async def seed_world(prisma: PrismaClient) -> World:
         (Actor.UNRELATED_SAME_ORG, ORG_A, "internal_user"),
         (Actor.SERVICE_ACCOUNT, ORG_A, "internal_user"),
         (Actor.CROSS_ORG_USER, ORG_B, "internal_user"),
+        (Actor.ORG_B_ADMIN, ORG_B, "org_admin"),
     ]:
         await prisma.db.litellm_organizationmembership.create(
             data={
@@ -253,5 +274,6 @@ async def seed_world(prisma: PrismaClient) -> World:
         org_b_id=ORG_B,
         team_alpha_id=TEAM_ALPHA,
         team_beta_id=TEAM_BETA,
+        team_gamma_id=TEAM_GAMMA,
         keys=keys,
     )

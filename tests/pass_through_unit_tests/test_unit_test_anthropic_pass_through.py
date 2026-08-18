@@ -318,6 +318,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
     from litellm.types.utils import ModelResponse
 
     litellm_logging_obj = Mock()
+    litellm_logging_obj.model_call_details = {}
     pass_through_logging_obj = Mock()
 
     sent_args = {

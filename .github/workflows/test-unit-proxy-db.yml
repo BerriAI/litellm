@@ -1,16 +1,23 @@
 name: "Unit Tests: Proxy DB Operations"
 
-# Uses DATABASE_URL secret — only runs on trusted branches, not PRs.
 on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
   push:
-    branches: [main, "litellm_**"]
+    branches:
+      - main
+      - litellm_internal_staging
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Semantic matrix: each shard groups tests by concern (auth, server, logging, …)
 # rather than alphabetical letter ranges. Adding a new test file means adding it
@@ -21,6 +28,10 @@ concurrency:
 #     Most of a shard's time is pytest plugin load + xdist worker imports +
 #     pytest-cov instrumentation, not the tests themselves. Keeping per-shard
 #     work low and matching worker count to runner cores is what controls it.
+#   * `timeout` bounds the pytest step only. Checkout, dependency install, and
+#     Prisma client generation draw on a separate allowance in the base
+#     workflow, so slow setup shows up as a slow job rather than as a
+#     cancelled shard whose tests were passing.
 #   * workers: 4 matches the 4-core ubuntu-latest runner. -n 8 on 4 cores
 #     oversubscribes 2x and workers fight for CPU during their cold-start
 #     imports (measured ~441% CPU for -n 8 locally, i.e. ~55% effective).
@@ -30,9 +41,6 @@ concurrency:
 #     xdist balances its 188 parametrized cases across workers instead of
 #     pinning the whole file to one worker (the default --dist=loadscope
 #     behavior for single-file targets).
-#   * test_db_schema_migration.py is isolated because one test in it
-#     (test_aaaasschema_migration_check) takes ~170s — by itself it
-#     determines the shard's wall-clock floor.
 jobs:
   # Fast guard — fails the workflow if a test_*.py file under
   # tests/proxy_unit_tests/ is not referenced by any matrix entry below.
@@ -127,8 +135,6 @@ jobs:
             test-path: >-
               tests/proxy_unit_tests/test_proxy_server.py
               tests/proxy_unit_tests/test_proxy_server_keys.py
-              tests/proxy_unit_tests/test_proxy_server_caching.py
-              tests/proxy_unit_tests/test_proxy_server_langfuse.py
               tests/proxy_unit_tests/test_proxy_server_spend.py
               tests/proxy_unit_tests/test_aproxy_startup.py
             workers: 4
@@ -166,18 +172,6 @@ jobs:
             dist: loadscope
             timeout: 15
 
-          # ---- db-and-spend: isolate the 170s schema-migration test ----
-          # test_db_schema_migration.py has exactly one test, and that test
-          # is mostly waiting on `prisma migrate deploy` / `prisma migrate
-          # diff` subprocesses (~170s). It does no CPU-bound Python work
-          # inside the test. Running with workers=0 (serial, no xdist)
-          # skips the 4-worker cold-start cost we'd otherwise pay for a
-          # single test, saving ~4 minutes of wall-clock.
-          - test-group: schema-migration
-            test-path: "tests/proxy_unit_tests/test_db_schema_migration.py"
-            workers: 0
-            dist: loadscope
-            timeout: 15
           - test-group: db-and-spend
             test-path: >-
               tests/proxy_unit_tests/test_prisma_client_backoff_retry.py
@@ -232,12 +226,11 @@ jobs:
             workers: 4
             dist: loadscope
             timeout: 15
-    uses: ./.github/workflows/_test-unit-services-base.yml
+    uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: ${{ matrix.test-path }}
       workers: ${{ matrix.workers }}
       reruns: 2
       timeout-minutes: ${{ matrix.timeout }}
-      enable-postgres: true
       dist: ${{ matrix.dist }}
       artifact-name: proxy-db-${{ matrix.test-group }}

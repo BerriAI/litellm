@@ -30,6 +30,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _update_metadata_with_tags_in_header,
     HttpPassThroughEndpointHelpers,
@@ -112,6 +113,40 @@ def test_update_metadata_with_tags_in_header_with_tags(mock_request):
     result = _update_metadata_with_tags_in_header(request=request, metadata=metadata)
 
     assert result == {"existing": "value", "tags": ["tag1", "tag2", "tag3"]}
+
+
+def test_get_response_headers_filters_excluded_custom_headers():
+    """
+    Regression test:
+    Ensure excluded headers from FastAPI defaults (e.g. content-length: 0)
+    do not override passthrough response headers.
+    """
+    upstream_headers = httpx.Headers(
+        {
+            "content-type": "application/json",
+            "x-amzn-requestid": "req-123",
+            "content-length": "999",  # should be excluded
+        }
+    )
+
+    custom_headers = {
+        "x-litellm-version": "1.84.0",
+        "content-length": "0",  # should be excluded
+        "server": "uvicorn",  # should be excluded
+    }
+
+    result = HttpPassThroughEndpointHelpers.get_response_headers(
+        headers=upstream_headers,
+        litellm_call_id="call-123",
+        custom_headers=custom_headers,
+    )
+
+    assert result["content-type"] == "application/json"
+    assert result["x-amzn-requestid"] == "req-123"
+    assert result["x-litellm-version"] == "1.84.0"
+    assert result["x-litellm-call-id"] == "call-123"
+    assert "content-length" not in result
+    assert "server" not in result
 
 
 def test_init_kwargs_for_pass_through_endpoint_basic(
@@ -618,3 +653,119 @@ def test_custom_pricing_used_in_cost_calculation():
 
     print(f"Cache-aware cost: {cache_cost}")
     print("✅ Custom pricing parameters are correctly used in cost calculation")
+
+
+def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(
+    mock_request, mock_user_api_key_dict
+):
+    request = mock_request()
+    passthrough_payload = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+    authenticated_key = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-user",
+        key_alias="real-key",
+        team_alias="Real Team",
+        user_email="real@example.com",
+        org_id="real-org",
+    )
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=authenticated_key,
+        passthrough_logging_payload=passthrough_payload,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={
+            "litellm_metadata": {
+                "user_api_key_org_id": "victim-org",
+                "user_api_key_end_user_id": "victim-end-user",
+                "user_api_key_user_id": "victim-user",
+                "user_api_key_team_id": "victim-team",
+                "user_api_key_team_alias": "Victim Team",
+                "user_api_key_alias": "victim-key",
+                "user_api_key_user_email": "victim@example.com",
+            }
+        },
+    )
+
+    metadata = result["litellm_params"]["metadata"]
+    assert metadata["user_api_key_user_id"] == "test-user"
+    assert metadata["user_api_key_team_id"] == "test-team"
+    assert metadata["user_api_key_team_alias"] == "Real Team"
+    assert metadata["user_api_key_alias"] == "real-key"
+    assert metadata["user_api_key_user_email"] == "real@example.com"
+    assert metadata["user_api_key_org_id"] == "real-org"
+    assert metadata["user_api_key_end_user_id"] == "test-user"
+
+
+def test_init_kwargs_no_authenticated_identity_field_is_client_settable(
+    mock_request, mock_user_api_key_dict
+):
+    authenticated_key = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-end-user",
+        key_alias="real-key",
+        team_alias="Real Team",
+        user_email="real@example.com",
+        org_id="real-org",
+        organization_alias="Real Org",
+        project_id="real-project",
+        project_alias="Real Project",
+        spend=1.5,
+        max_budget=10.0,
+        user_spend=2.5,
+        user_max_budget=20.0,
+        team_spend=3.5,
+        team_max_budget=30.0,
+        metadata={"real": "auth-metadata"},
+    )
+    expected = dict(
+        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict=authenticated_key
+        )
+    )
+    assert len(expected) >= 20
+
+    spoofed = {key: f"SPOOFED-{key}" for key in expected}
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request(),
+        user_api_key_dict=authenticated_key,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(
+            url="https://test.com", request_body={}
+        ),
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={"litellm_metadata": dict(spoofed), "metadata": dict(spoofed)},
+    )
+
+    metadata = result["litellm_params"]["metadata"]
+    survived = {
+        key: metadata.get(key)
+        for key in expected
+        if metadata.get(key) != expected[key]
+    }
+    assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"

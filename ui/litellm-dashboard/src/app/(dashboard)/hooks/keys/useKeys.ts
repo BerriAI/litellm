@@ -1,11 +1,13 @@
-import { keepPreviousData, useQuery, UseQueryResult } from "@tanstack/react-query";
-import { createQueryKeys } from "../common/queryKeysFactory";
 import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  UseQueryResult,
+  type InfiniteData,
+  type QueryKey,
+} from "@tanstack/react-query";
+import { createQueryKeys } from "../common/queryKeysFactory";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
@@ -34,6 +36,7 @@ export interface KeyListCallOptions {
   organizationID?: string | null;
   teamID?: string | null;
   projectID?: string | null;
+  agentID?: string | null;
   selectedKeyAlias?: string | null;
   userID?: string | null;
   keyHash?: string | null;
@@ -43,22 +46,18 @@ export interface KeyListCallOptions {
   status?: string | null;
 }
 
-const keyListCall = async (
-  accessToken: string,
-  page: number,
-  pageSize: number,
-  options: KeyListCallOptions = {},
-) => {
+const keyListCall = async (accessToken: string, page: number, pageSize: number, options: KeyListCallOptions = {}) => {
   /**
    * Get all available keys on proxy
    */
   try {
     const baseUrl = getProxyBaseUrl();
-    
+
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
         project_id: options.projectID,
+        agent_id: options.agentID,
         organization_id: options.organizationID,
         key_alias: options.selectedKeyAlias,
         key_hash: options.keyHash,
@@ -72,6 +71,9 @@ const keyListCall = async (
         return_full_object: "true",
         include_team_keys: "true",
         include_created_by_keys: "true",
+        // Opt into substring matching so the admin key-list search box keeps
+        // matching partial user_id/key_alias. /key/list is exact by default.
+        substring_matching: "true",
       })
         .filter(([, value]) => value !== undefined && value !== null)
         .map(([key, value]) => [key, String(value)]),
@@ -95,7 +97,6 @@ const keyListCall = async (
     }
 
     const data = await response.json();
-    console.log("/key/list API Response:", data);
     return data;
   } catch (error) {
     console.error("Failed to list keys:", error);
@@ -119,15 +120,36 @@ export const useKeys = (
   });
 };
 
+const infiniteKeyKeys = createQueryKeys("infiniteKeys");
+
+export const useInfiniteKeys = (pageSize: number, options: KeyListCallOptions = {}) => {
+  const { accessToken } = useAuthorized();
+
+  const infiniteKeyListOptions = {
+    queryKey: infiniteKeyKeys.list({ limit: pageSize, ...options }),
+    queryFn: async ({ pageParam }: { pageParam: number }) => {
+      if (!accessToken) throw new Error("Access token required");
+      return await keyListCall(accessToken, pageParam, pageSize, options);
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage: KeysResponse) =>
+      lastPage.current_page < lastPage.total_pages ? lastPage.current_page + 1 : undefined,
+    enabled: Boolean(accessToken),
+    staleTime: 30_000,
+  };
+
+  return useInfiniteQuery<KeysResponse, Error, InfiniteData<KeysResponse>, QueryKey, number>(infiniteKeyListOptions);
+};
+
 export const deletedKeyKeys = createQueryKeys("deletedKeys");
 export const useDeletedKeys = (
   page: number,
   pageSize: number,
   options: KeyListCallOptions = {},
-): UseQueryResult<KeysResponse> => {
+): UseQueryResult<DeletedKeysResponse> => {
   const { accessToken } = useAuthorized();
 
-  return useQuery<KeysResponse>({
+  return useQuery<DeletedKeysResponse>({
     queryKey: deletedKeyKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await keyListCall(accessToken!, page, pageSize, { ...options, status: "deleted" }),
     enabled: Boolean(accessToken),

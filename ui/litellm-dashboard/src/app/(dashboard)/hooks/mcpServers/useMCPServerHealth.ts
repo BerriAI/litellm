@@ -24,32 +24,32 @@ export const useMCPServerHealth = () => {
     refetchInterval: 30000,
   });
 
-  const recheckServerHealth = useCallback(async (serverId: string) => {
-    if (!accessToken) return;
+  const recheckServerHealth = useCallback(
+    async (serverId: string) => {
+      if (!accessToken) return;
 
-    setRecheckingServerIds((prev) => new Set(prev).add(serverId));
+      setRecheckingServerIds((prev) => new Set(prev).add(serverId));
 
-    try {
-      const result: MCPServerHealth[] = await fetchMCPServerHealth(accessToken, [serverId]);
+      try {
+        const result: MCPServerHealth[] = await fetchMCPServerHealth(accessToken, [serverId]);
 
-      queryClient.setQueriesData<MCPServerHealth[]>(
-        { queryKey: mcpServerHealthKeys.lists() },
-        (oldData) => {
+        queryClient.setQueriesData<MCPServerHealth[]>({ queryKey: mcpServerHealthKeys.lists() }, (oldData) => {
           if (!oldData) return result;
           return oldData.map((h) => {
             const updated = result.find((r) => r.server_id === h.server_id);
             return updated ?? h;
           });
-        },
-      );
-    } finally {
-      setRecheckingServerIds((prev) => {
-        const next = new Set(prev);
-        next.delete(serverId);
-        return next;
-      });
-    }
-  }, [accessToken, queryClient]);
+        });
+      } finally {
+        setRecheckingServerIds((prev) => {
+          const next = new Set(prev);
+          next.delete(serverId);
+          return next;
+        });
+      }
+    },
+    [accessToken, queryClient],
+  );
 
   return {
     ...query,

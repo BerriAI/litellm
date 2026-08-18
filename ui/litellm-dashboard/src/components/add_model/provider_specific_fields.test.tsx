@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Form } from "antd";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
@@ -150,17 +150,32 @@ describe("ProviderSpecificFields", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => {
-      const apiKeyLabel = screen.getByLabelText("OpenAI API Key");
-      expect(apiKeyLabel).toBeInTheDocument();
+    const apiKeyLabel = await screen.findByLabelText("OpenAI API Key");
+    expect(apiKeyLabel).toBeInTheDocument();
 
-      const apiBaseInput = screen.getByPlaceholderText("https://api.openai.com/v1");
-      expect(apiBaseInput).toBeInTheDocument();
-      expect(apiBaseInput).toHaveAttribute("type", "text");
+    const apiBaseInput = screen.getByPlaceholderText("https://api.openai.com/v1");
+    expect(apiBaseInput).toBeInTheDocument();
+    expect(apiBaseInput).toHaveAttribute("type", "text");
 
-      const orgInput = screen.getByPlaceholderText("[OPTIONAL] my-unique-org");
-      expect(orgInput).toBeInTheDocument();
-    });
+    const orgInput = screen.getByPlaceholderText("[OPTIONAL] my-unique-org");
+    expect(orgInput).toBeInTheDocument();
+  });
+
+  it("should let the user reveal a secret field", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    const apiKeyInput = await screen.findByLabelText("OpenAI API Key");
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+
+    fireEvent.click(screen.getByLabelText("eye-invisible"));
+    expect(await screen.findByLabelText("OpenAI API Key")).toHaveAttribute("type", "text");
   });
 
   it("should render the provider specific fields for vLLM", async () => {
@@ -173,14 +188,12 @@ describe("ProviderSpecificFields", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => {
-      const apiKeyLabel = screen.getByLabelText("vLLM API Key");
-      expect(apiKeyLabel).toBeInTheDocument();
+    const apiKeyLabel = await screen.findByLabelText("vLLM API Key");
+    expect(apiKeyLabel).toBeInTheDocument();
 
-      const apiBaseInput = screen.getByPlaceholderText("https://...");
-      expect(apiBaseInput).toBeInTheDocument();
-      expect(apiBaseInput).toHaveAttribute("type", "text");
-    });
+    const apiBaseInput = screen.getByPlaceholderText("https://...");
+    expect(apiBaseInput).toBeInTheDocument();
+    expect(apiBaseInput).toHaveAttribute("type", "text");
   });
 
   it("should render the provider specific fields for Azure", async () => {
@@ -193,26 +206,154 @@ describe("ProviderSpecificFields", () => {
       </QueryClientProvider>,
     );
 
+    const apiKeyInput = await screen.findByLabelText("Azure API Key");
+    expect(apiKeyInput).toBeInTheDocument();
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+    expect(apiKeyInput).toHaveAttribute("placeholder", "Enter your Azure API Key");
+
+    const azureAdTokenInput = screen.getByLabelText("Azure AD Token");
+    expect(azureAdTokenInput).toBeInTheDocument();
+    expect(azureAdTokenInput).toHaveAttribute("type", "password");
+    expect(azureAdTokenInput).toHaveAttribute("placeholder", "Enter your Azure AD Token");
+
+    const apiBaseInput = screen.getByPlaceholderText("https://...");
+    expect(apiBaseInput).toBeInTheDocument();
+    expect(apiBaseInput).toHaveAttribute("type", "text");
+
+    const apiVersionInput = screen.getByPlaceholderText("2023-07-01-preview");
+    expect(apiVersionInput).toBeInTheDocument();
+
+    const baseModelInput = screen.getByPlaceholderText("azure/gpt-3.5-turbo");
+    expect(baseModelInput).toBeInTheDocument();
+  });
+
+  it("sets Azure API version from the API base query parameter", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.Azure} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    const apiBaseInput = await screen.findByPlaceholderText("https://...");
+    const apiVersionInput = await screen.findByPlaceholderText("2023-07-01-preview");
+
+    fireEvent.change(apiBaseInput, {
+      target: {
+        value:
+          "https://test-resource.openai.azure.com/openai/deployments/gpt-4/chat/completions?api_version=2024-10-21",
+      },
+    });
+
     await waitFor(() => {
-      const apiKeyInput = screen.getByLabelText("Azure API Key");
-      expect(apiKeyInput).toBeInTheDocument();
-      expect(apiKeyInput).toHaveAttribute("type", "password");
-      expect(apiKeyInput).toHaveAttribute("placeholder", "Enter your Azure API Key");
+      expect(apiVersionInput).toHaveValue("2024-10-21");
+    });
+  });
 
-      const azureAdTokenInput = screen.getByLabelText("Azure AD Token");
-      expect(azureAdTokenInput).toBeInTheDocument();
-      expect(azureAdTokenInput).toHaveAttribute("type", "password");
-      expect(azureAdTokenInput).toHaveAttribute("placeholder", "Enter your Azure AD Token");
+  it("sets Azure API version from the hyphenated API base query parameter", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.Azure} />
+        </Form>
+      </QueryClientProvider>,
+    );
 
-      const apiBaseInput = screen.getByPlaceholderText("https://...");
-      expect(apiBaseInput).toBeInTheDocument();
-      expect(apiBaseInput).toHaveAttribute("type", "text");
+    const apiBaseInput = await screen.findByPlaceholderText("https://...");
+    const apiVersionInput = await screen.findByPlaceholderText("2023-07-01-preview");
 
-      const apiVersionInput = screen.getByPlaceholderText("2023-07-01-preview");
-      expect(apiVersionInput).toBeInTheDocument();
+    fireEvent.change(apiBaseInput, {
+      target: {
+        value:
+          "https://test-resource.openai.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-10-21",
+      },
+    });
 
-      const baseModelInput = screen.getByPlaceholderText("azure/gpt-3.5-turbo");
-      expect(baseModelInput).toBeInTheDocument();
+    await waitFor(() => {
+      expect(apiVersionInput).toHaveValue("2024-10-21");
+    });
+  });
+
+  it("clears an inferred Azure API version when the API base has no version parameter", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.Azure} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    const apiBaseInput = await screen.findByPlaceholderText("https://...");
+    const apiVersionInput = await screen.findByPlaceholderText("2023-07-01-preview");
+
+    fireEvent.change(apiBaseInput, {
+      target: {
+        value:
+          "https://test-resource.openai.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-10-21",
+      },
+    });
+
+    await waitFor(() => {
+      expect(apiVersionInput).toHaveValue("2024-10-21");
+    });
+
+    fireEvent.change(apiBaseInput, {
+      target: {
+        value: "https://test-resource.openai.azure.com/openai/deployments/gpt-4/chat/completions",
+      },
+    });
+
+    await waitFor(() => {
+      expect(apiVersionInput).toHaveValue("");
+    });
+  });
+
+  it("preserves a manually edited Azure API version when the API base has no version parameter", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.Azure} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    const apiBaseInput = await screen.findByPlaceholderText("https://...");
+    const apiVersionInput = await screen.findByPlaceholderText("2023-07-01-preview");
+
+    fireEvent.change(apiBaseInput, {
+      target: {
+        value:
+          "https://test-resource.openai.azure.com/openai/deployments/gpt-4/chat/completions?api-version=2024-10-21",
+      },
+    });
+
+    await waitFor(() => {
+      expect(apiVersionInput).toHaveValue("2024-10-21");
+    });
+
+    fireEvent.change(apiVersionInput, {
+      target: {
+        value: "2025-01-01-preview",
+      },
+    });
+
+    await waitFor(() => {
+      expect(apiVersionInput).toHaveValue("2025-01-01-preview");
+    });
+
+    fireEvent.change(apiBaseInput, {
+      target: {
+        value: "https://test-resource.openai.azure.com/openai/deployments/gpt-4/chat/completions",
+      },
+    });
+
+    await waitFor(() => {
+      expect(apiVersionInput).toHaveValue("2025-01-01-preview");
     });
   });
 });

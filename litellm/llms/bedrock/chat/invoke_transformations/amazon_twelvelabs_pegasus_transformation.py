@@ -7,7 +7,7 @@ https://docs.twelvelabs.io/docs/models/pegasus
 
 import json
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -42,7 +42,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
     response_format, max_tokens) are translated to the TwelveLabs schema.
     """
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "max_completion_tokens",
@@ -63,9 +63,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "response_format":
-                optional_params["responseFormat"] = self._normalize_response_format(
-                    value
-                )
+                optional_params["responseFormat"] = self._normalize_response_format(value)
         return optional_params
 
     def _normalize_response_format(self, value: Any) -> Any:
@@ -88,7 +86,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         if isinstance(value, dict):
             # If it has json_schema field, extract and transform it
             if "json_schema" in value:
-                json_schema = value["json_schema"]
+                json_schema: Final = value["json_schema"]
                 # Extract the schema if nested
                 if isinstance(json_schema, dict) and "schema" in json_schema:
                     return {"jsonSchema": json_schema["schema"]}
@@ -104,15 +102,15 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        input_prompt = self._convert_messages_to_prompt(messages=messages)
-        request_data: Dict[str, Any] = {"inputPrompt": input_prompt}
+        input_prompt: Final = self._convert_messages_to_prompt(messages=messages)
+        request_data: Final[dict[str, Any]] = {"inputPrompt": input_prompt}
 
-        media_source = self._build_media_source(optional_params)
+        media_source: Final = self._build_media_source(optional_params)
         if media_source is not None:
             request_data["mediaSource"] = media_source
 
@@ -123,34 +121,30 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
 
         # Handle responseFormat - transform to TwelveLabs format
         if "responseFormat" in optional_params:
-            response_format = optional_params["responseFormat"]
-            transformed_format = self._normalize_response_format(response_format)
+            response_format: Final = optional_params["responseFormat"]
+            transformed_format: Final = self._normalize_response_format(response_format)
             if transformed_format:
                 request_data["responseFormat"] = transformed_format
 
         return request_data
 
-    def _build_media_source(self, optional_params: dict) -> Optional[dict]:
-        direct_source = optional_params.get("mediaSource") or optional_params.get(
-            "media_source"
-        )
+    def _build_media_source(self, optional_params: dict) -> dict | None:
+        direct_source: Final = optional_params.get("mediaSource") or optional_params.get("media_source")
         if isinstance(direct_source, dict):
             return direct_source
 
-        base64_input = optional_params.get("video_base64") or optional_params.get(
-            "base64_string"
-        )
+        base64_input: Final = optional_params.get("video_base64") or optional_params.get("base64_string")
         if base64_input:
             return {"base64String": get_base64_str(base64_input)}
 
-        s3_uri = (
+        s3_uri: Final = (
             optional_params.get("video_s3_uri")
             or optional_params.get("s3_uri")
             or optional_params.get("media_source_s3_uri")
         )
         if s3_uri:
-            s3_location = {"uri": s3_uri}
-            bucket_owner = (
+            s3_location: Final = {"uri": s3_uri}
+            bucket_owner: Final = (
                 optional_params.get("video_s3_bucket_owner")
                 or optional_params.get("s3_bucket_owner")
                 or optional_params.get("media_source_bucket_owner")
@@ -160,8 +154,8 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             return {"s3Location": s3_location}
         return None
 
-    def _convert_messages_to_prompt(self, messages: List[AllMessageValues]) -> str:
-        prompt_parts: List[str] = []
+    def _convert_messages_to_prompt(self, messages: list[AllMessageValues]) -> str:
+        prompt_parts: Final[list[str]] = []
         for message in messages:
             role = message.get("role", "user")
             content = message.get("content", "")
@@ -191,12 +185,12 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform TwelveLabs Pegasus response to LiteLLM format.
@@ -211,10 +205,10 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         ModelResponse with choices[0].message.content and finish_reason
         """
         try:
-            completion_response = raw_response.json()
+            completion_response: Final = raw_response.json()
         except Exception as e:
             raise BedrockError(
-                message=f"Error parsing response: {raw_response.text}, error: {str(e)}",
+                message=f"Error parsing response: {raw_response.text}, error: {e}",
                 status_code=raw_response.status_code,
             )
 
@@ -224,53 +218,46 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         )
 
         # Extract message content
-        message_content = completion_response.get("message", "")
+        message_content: Final = completion_response.get("message", "")
 
         # Extract finish reason and map to LiteLLM format
-        finish_reason_raw = completion_response.get("finishReason", "stop")
-        finish_reason = map_finish_reason(finish_reason_raw)
+        finish_reason_raw: Final = completion_response.get("finishReason", "stop")
+        finish_reason: Final = map_finish_reason(finish_reason_raw)
 
         # Set the response content
         try:
             if (
                 message_content
                 and hasattr(model_response.choices[0], "message")
-                and getattr(model_response.choices[0].message, "tool_calls", None)
-                is None
+                and getattr(model_response.choices[0].message, "tool_calls", None) is None
             ):
-                model_response.choices[0].message.content = message_content  # type: ignore
+                model_response.choices[0].message.content = message_content
                 model_response.choices[0].finish_reason = finish_reason
             else:
                 raise Exception("Unable to set message content")
         except Exception as e:
             raise BedrockError(
-                message=f"Error setting response content: {str(e)}. Response: {completion_response}",
+                message=f"Error setting response content: {e}. Response: {completion_response}",
                 status_code=raw_response.status_code,
             )
 
         # Calculate usage from headers
-        bedrock_input_tokens = raw_response.headers.get(
-            "x-amzn-bedrock-input-token-count", None
-        )
-        bedrock_output_tokens = raw_response.headers.get(
-            "x-amzn-bedrock-output-token-count", None
-        )
+        bedrock_input_tokens: Final = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
+        bedrock_output_tokens: Final = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
 
-        prompt_tokens = int(
-            bedrock_input_tokens or litellm.token_counter(messages=messages)
-        )
+        prompt_tokens: Final = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 
-        completion_tokens = int(
+        completion_tokens: Final = int(
             bedrock_output_tokens
             or litellm.token_counter(
-                text=model_response.choices[0].message.content,  # type: ignore
+                text=model_response.choices[0].message.content,
                 count_response_tokens=True,
             )
         )
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,

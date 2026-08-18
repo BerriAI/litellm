@@ -8,14 +8,13 @@ then we poll until the result is ready.
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -29,6 +28,7 @@ from ..common_utils import (
     DEFAULT_MAX_POLLING_TIME,
     DEFAULT_POLLING_INTERVAL,
     BlackForestLabsError,
+    assert_bfl_polling_url,
 )
 from .transformation import BlackForestLabsImageEditConfig
 
@@ -47,16 +47,16 @@ class BlackForestLabsImageEdit:
     def image_edit(
         self,
         model: str,
-        image: Union[FileTypes, List[FileTypes]],
-        prompt: Optional[str],
-        image_edit_optional_request_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        image: FileTypes | list[FileTypes],
+        prompt: str | None,
+        image_edit_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: dict[str, Any] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         aimage_edit: bool = False,
-    ) -> Union[ImageResponse, Any]:
+    ) -> ImageResponse | Any:
         """
         Main entry point for image edit requests.
 
@@ -105,7 +105,7 @@ class BlackForestLabsImageEdit:
             sync_client = client
 
         # Validate environment and get headers
-        headers = self.config.validate_environment(
+        headers: Final = self.config.validate_environment(
             api_key=api_key,
             headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
             model=model,
@@ -114,7 +114,7 @@ class BlackForestLabsImageEdit:
             headers.update(extra_headers)
 
         # Get complete URL
-        complete_url = self.config.get_complete_url(
+        complete_url: Final = self.config.get_complete_url(
             model=model,
             api_base=api_base,
             litellm_params=litellm_params_dict,
@@ -150,7 +150,7 @@ class BlackForestLabsImageEdit:
 
         # Make initial request
         try:
-            response = sync_client.post(
+            response: Final = sync_client.post(
                 url=complete_url,
                 headers=headers,
                 json=data,
@@ -159,11 +159,11 @@ class BlackForestLabsImageEdit:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result
-        final_response = self._poll_for_result_sync(
+        final_response: Final = self._poll_for_result_sync(
             initial_response=response,
             headers=headers,
             sync_client=sync_client,
@@ -179,14 +179,14 @@ class BlackForestLabsImageEdit:
     async def async_image_edit(
         self,
         model: str,
-        image: Union[FileTypes, List[FileTypes]],
-        prompt: Optional[str],
-        image_edit_optional_request_params: Dict,
-        litellm_params: Union[GenericLiteLLMParams, Dict],
+        image: FileTypes | list[FileTypes],
+        prompt: str | None,
+        image_edit_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
-        timeout: Optional[Union[float, httpx.Timeout]],
-        extra_headers: Optional[Dict[str, Any]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        timeout: float | httpx.Timeout | None,
+        extra_headers: dict[str, Any] | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:
         """
         Async version of image edit.
@@ -209,7 +209,7 @@ class BlackForestLabsImageEdit:
             async_client = client
 
         # Validate environment and get headers
-        headers = self.config.validate_environment(
+        headers: Final = self.config.validate_environment(
             api_key=api_key,
             headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
             model=model,
@@ -218,7 +218,7 @@ class BlackForestLabsImageEdit:
             headers.update(extra_headers)
 
         # Get complete URL
-        complete_url = self.config.get_complete_url(
+        complete_url: Final = self.config.get_complete_url(
             model=model,
             api_base=api_base,
             litellm_params=litellm_params_dict,
@@ -253,7 +253,7 @@ class BlackForestLabsImageEdit:
 
         # Make initial request
         try:
-            response = await async_client.post(
+            response: Final = await async_client.post(
                 url=complete_url,
                 headers=headers,
                 json=data,
@@ -262,11 +262,11 @@ class BlackForestLabsImageEdit:
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=500,
-                message=f"Request failed: {str(e)}",
+                message=f"Request failed: {e}",
             )
 
         # Poll for result
-        final_response = await self._poll_for_result_async(
+        final_response: Final = await self._poll_for_result_async(
             initial_response=response,
             headers=headers,
             async_client=async_client,
@@ -286,7 +286,7 @@ class BlackForestLabsImageEdit:
         sync_client: HTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         """
         Poll BFL API until result is ready (sync version).
@@ -311,7 +311,7 @@ class BlackForestLabsImageEdit:
 
         # Parse initial response to get polling URL
         try:
-            response_data = initial_response.json()
+            response_data: Final = initial_response.json()
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=initial_response.status_code,
@@ -325,29 +325,24 @@ class BlackForestLabsImageEdit:
                 message=f"BFL error: {response_data['errors']}",
             )
 
-        polling_url = response_data.get("polling_url")
+        polling_url: Final = response_data.get("polling_url")
         if not polling_url:
             raise BlackForestLabsError(
                 status_code=500,
                 message="No polling_url in BFL response",
             )
 
-        # Reject cross-origin polling URLs — the ``x-key`` auth header
-        # would otherwise leak to whatever URL the upstream returns.
-        # VERIA-51.
-        try:
-            assert_same_origin(polling_url, str(initial_response.request.url))
-        except SSRFError as ssrf_err:
-            raise BlackForestLabsError(
-                status_code=502,
-                message=f"Rejected polling URL: {ssrf_err}",
-            )
+        # Reject polling URLs that don't belong to BFL-controlled infrastructure.
+        # BFL uses regional subdomains (e.g. gateway.bfl.ai) that differ from the
+        # submission host (api.bfl.ai), so we validate against the registered
+        # domain rather than doing a strict same-origin check. VERIA-51.
+        assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
-        polling_headers = {"x-key": headers.get("x-key", "")}
+        polling_headers: Final = {"x-key": headers.get("x-key", "")}
 
-        start_time = time.time()
-        verbose_logger.debug(f"BFL starting sync polling at {polling_url}")
+        start_time: Final = time.time()
+        verbose_logger.debug("BFL starting sync polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
             response = sync_client.get(
@@ -364,7 +359,7 @@ class BlackForestLabsImageEdit:
             data = response.json()
             status = data.get("status")
 
-            verbose_logger.debug(f"BFL poll status: {status}")
+            verbose_logger.debug("BFL poll status: %s", status)
 
             if status == "Ready":
                 return response
@@ -393,7 +388,7 @@ class BlackForestLabsImageEdit:
         async_client: AsyncHTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
         """
         Poll BFL API until result is ready (async version).
@@ -407,7 +402,7 @@ class BlackForestLabsImageEdit:
 
         # Parse initial response to get polling URL
         try:
-            response_data = initial_response.json()
+            response_data: Final = initial_response.json()
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=initial_response.status_code,
@@ -421,29 +416,24 @@ class BlackForestLabsImageEdit:
                 message=f"BFL error: {response_data['errors']}",
             )
 
-        polling_url = response_data.get("polling_url")
+        polling_url: Final = response_data.get("polling_url")
         if not polling_url:
             raise BlackForestLabsError(
                 status_code=500,
                 message="No polling_url in BFL response",
             )
 
-        # Reject cross-origin polling URLs — the ``x-key`` auth header
-        # would otherwise leak to whatever URL the upstream returns.
-        # VERIA-51.
-        try:
-            assert_same_origin(polling_url, str(initial_response.request.url))
-        except SSRFError as ssrf_err:
-            raise BlackForestLabsError(
-                status_code=502,
-                message=f"Rejected polling URL: {ssrf_err}",
-            )
+        # Reject polling URLs that don't belong to BFL-controlled infrastructure.
+        # BFL uses regional subdomains (e.g. gateway.bfl.ai) that differ from the
+        # submission host (api.bfl.ai), so we validate against the registered
+        # domain rather than doing a strict same-origin check. VERIA-51.
+        assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
-        polling_headers = {"x-key": headers.get("x-key", "")}
+        polling_headers: Final = {"x-key": headers.get("x-key", "")}
 
-        start_time = time.time()
-        verbose_logger.debug(f"BFL starting async polling at {polling_url}")
+        start_time: Final = time.time()
+        verbose_logger.debug("BFL starting async polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
             response = await async_client.get(
@@ -460,7 +450,7 @@ class BlackForestLabsImageEdit:
             data = response.json()
             status = data.get("status")
 
-            verbose_logger.debug(f"BFL poll status: {status}")
+            verbose_logger.debug("BFL poll status: %s", status)
 
             if status == "Ready":
                 return response
@@ -484,4 +474,4 @@ class BlackForestLabsImageEdit:
 
 
 # Singleton instance for use in images/main.py
-bfl_image_edit = BlackForestLabsImageEdit()
+bfl_image_edit: Final = BlackForestLabsImageEdit()

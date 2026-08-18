@@ -2,21 +2,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddFallbacks, { Fallbacks } from "./AddFallbacks";
-import * as fetchModelsModule from "../../../playground/llm_calls/fetch_models";
+import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
+import { toast } from "@/lib/toast";
 
-vi.mock("../../../playground/llm_calls/fetch_models", () => ({
+vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
 }));
-
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    message: {
-      error: vi.fn(),
-    },
-  };
-});
 
 vi.mock("./FallbackSelectionForm", () => ({
   FallbackSelectionForm: ({ groups, onGroupsChange }: any) => {
@@ -122,7 +113,6 @@ describe("AddFallbacks", () => {
 
   it("should show error when saving incomplete groups", async () => {
     const user = userEvent.setup();
-    const antd = await import("antd");
     render(<AddFallbacks {...defaultProps} />);
 
     const addButton = screen.getByRole("button", { name: /add fallbacks/i });
@@ -141,13 +131,12 @@ describe("AddFallbacks", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(antd.message.error).toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalled();
     });
   });
 
   it("should show error message when saving incomplete groups", async () => {
     const user = userEvent.setup();
-    const antd = await import("antd");
     render(<AddFallbacks {...defaultProps} />);
 
     const addButton = screen.getByRole("button", { name: /add fallbacks/i });
@@ -161,7 +150,7 @@ describe("AddFallbacks", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(antd.message.error).toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalled();
     });
   });
 
@@ -189,7 +178,7 @@ describe("AddFallbacks", () => {
     });
 
     const saveButton = screen.getByRole("button", { name: /save all configurations/i });
-    expect(saveButton).not.toBeDisabled();
+    expect(saveButton).toBeEnabled();
     await user.click(saveButton);
 
     await waitFor(() => {

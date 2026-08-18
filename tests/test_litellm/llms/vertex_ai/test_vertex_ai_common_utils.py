@@ -17,8 +17,24 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_project_id_from_url,
     pop_vertex_request_labels,
     set_schema_property_ordering,
+    supports_response_json_schema,
+    validate_vertex_location,
     vertex_request_labels_from_litellm_params,
 )
+
+
+@pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
+def test_validate_vertex_location_accepts_valid(location):
+    assert validate_vertex_location(location) == location
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["attacker.example/", "evil.com#", "us.attacker.example", "us/../..", "US", "us_central1", "-us", "", None],
+)
+def test_validate_vertex_location_rejects_invalid(location):
+    with pytest.raises(ValueError):
+        validate_vertex_location(location)
 
 
 @pytest.mark.asyncio
@@ -148,6 +164,23 @@ async def test_get_supports_system_message():
         model="random-model-name", custom_llm_provider="vertex_ai"
     )
     assert result == False
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("gemini-2.0-flash", True),
+        ("gemini-1.5-pro", False),
+        ("random-model-name", False),
+        ("gemini-3-flash-preview", True),
+        ("gemini-123-pro", True),
+        ("vertex_ai/gemini-3.1-pro-preview", True),
+    ],
+)
+def test_supports_response_json_schema(model: str, expected: bool):
+    """Test supports_response_json_schema correctly detects Gemini 2.0+ model names"""
+
+    assert supports_response_json_schema(model) == expected
 
 
 def test_set_schema_property_ordering_with_excessive_nesting():
@@ -1326,6 +1359,63 @@ def test_vertex_ai_zai_is_partner_model():
     assert VertexAIPartnerModels.is_vertex_partner_model("zai-org/glm-4.7-maas")
 
 
+def test_vertex_ai_gemma_maas_is_partner_model():
+    """
+    Ensure Gemma MaaS models are detected as Vertex AI partner models so they
+    route through the OpenAI-compatible /endpoints/openapi path (not the
+    legacy non-gemini path or the vertex_ai/gemma/ predict-endpoint handler).
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.is_vertex_partner_model(
+        "google/gemma-4-26b-a4b-it-maas"
+    )
+
+
+def test_vertex_ai_gemma_maas_uses_openai_handler():
+    """
+    Ensure Gemma MaaS partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "google/gemma-4-26b-a4b-it-maas"
+    )
+
+
+def test_vertex_ai_gemma_maas_routes_to_partner_models():
+    """
+    Regression guard for owtaylor's worry that Gemma MaaS could be misrouted as
+    a gemma model. get_vertex_ai_model_route must return PARTNER_MODELS, never
+    GEMMA, MODEL_GARDEN, or NON_GEMINI.
+    """
+    from litellm.llms.vertex_ai.common_utils import (
+        VertexAIModelRoute,
+        get_vertex_ai_model_route,
+    )
+
+    route = get_vertex_ai_model_route("google/gemma-4-26b-a4b-it-maas")
+    assert route == VertexAIModelRoute.PARTNER_MODELS
+
+
+def test_vertex_ai_google_gemini_not_detected_as_gemma_maas():
+    """
+    Negative: adding the "google/gemma-" prefix must not widen detection to
+    other google/* models like google/gemini-* (which should keep flowing
+    through the gemini route, not partner_models).
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert not VertexAIPartnerModels.is_vertex_partner_model("google/gemini-1.5-pro")
+    assert not VertexAIPartnerModels.should_use_openai_handler("google/gemini-1.5-pro")
+
+
 def test_build_vertex_schema_empty_properties():
     """
     Test _build_vertex_schema handles empty properties objects correctly.
@@ -1469,11 +1559,7 @@ def test_vertex_request_labels_from_litellm_params_extracts_requester_metadata()
 
 
 def test_vertex_request_labels_from_litellm_params_accepts_litellm_metadata():
-    lp = {
-        "litellm_metadata": {
-            "requester_metadata": {"team": "platform", "count": 3}
-        }
-    }
+    lp = {"litellm_metadata": {"requester_metadata": {"team": "platform", "count": 3}}}
     assert vertex_request_labels_from_litellm_params(lp) == {"team": "platform"}
 
 

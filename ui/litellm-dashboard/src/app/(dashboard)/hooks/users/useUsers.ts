@@ -1,17 +1,15 @@
-import { userListCall, UserListResponse } from "@/components/networking";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { userListCall, UserInfo, UserListResponse } from "@/components/networking";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { all_admin_roles } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const infiniteUsersKeys = createQueryKeys("infiniteUsers");
+const userLookupKeys = createQueryKeys("userLookup");
 
 const DEFAULT_PAGE_SIZE = 50;
 
-export const useInfiniteUsers = (
-  pageSize: number = DEFAULT_PAGE_SIZE,
-  searchEmail?: string,
-) => {
+export const useInfiniteUsers = (pageSize: number = DEFAULT_PAGE_SIZE, searchEmail?: string) => {
   const { accessToken, userRole } = useAuthorized();
   return useInfiniteQuery<UserListResponse>({
     queryKey: infiniteUsersKeys.list({
@@ -23,10 +21,10 @@ export const useInfiniteUsers = (
     queryFn: async ({ pageParam }) => {
       return await userListCall(
         accessToken!,
-        null,                       // userIDs
-        pageParam as number,        // page
-        pageSize,                   // page_size
-        searchEmail || null,        // userEmail
+        null, // userIDs
+        pageParam as number, // page
+        pageSize, // page_size
+        searchEmail || null, // userEmail
       );
     },
     initialPageParam: 1,
@@ -37,5 +35,17 @@ export const useInfiniteUsers = (
       return undefined;
     },
     enabled: Boolean(accessToken) && all_admin_roles.includes(userRole!),
+  });
+};
+
+export const useUserLookup = (userId: string | null) => {
+  const { accessToken, userRole } = useAuthorized();
+  return useQuery<UserInfo | null>({
+    queryKey: userLookupKeys.detail(userId ?? ""),
+    queryFn: async () => {
+      const response = await userListCall(accessToken!, [userId!], 1, 1);
+      return response.users.find((user) => user.user_id === userId) ?? null;
+    },
+    enabled: Boolean(accessToken) && Boolean(userId) && all_admin_roles.includes(userRole!),
   });
 };

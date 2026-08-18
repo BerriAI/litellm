@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -18,7 +18,7 @@ class LiteLLM_VectorStoreConfig(TypedDict, total=False):
     """Parameters for initializing a vector store on Litellm proxy config.yaml"""
 
     vector_store_name: str
-    litellm_params: Optional[Dict[str, Any]]
+    litellm_params: dict[str, Any] | None
 
 
 class LiteLLM_ManagedVectorStore(TypedDict, total=False):
@@ -27,39 +27,39 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     vector_store_id: str
     custom_llm_provider: str
 
-    vector_store_name: Optional[str]
-    vector_store_description: Optional[str]
-    vector_store_metadata: Optional[Union[Dict[str, Any], str]]
-    created_at: Optional[datetime]
-    updated_at: Optional[datetime]
+    vector_store_name: str | None
+    vector_store_description: str | None
+    vector_store_metadata: dict[str, Any] | str | None
+    created_at: datetime | None
+    updated_at: datetime | None
 
     # credential fields
-    litellm_credential_name: Optional[str]
+    litellm_credential_name: str | None
 
     # litellm_params
-    litellm_params: Optional[Dict[str, Any]]
+    litellm_params: dict[str, Any] | None
 
     # access control fields
-    team_id: Optional[str]
-    user_id: Optional[str]
+    team_id: str | None
+    user_id: str | None
 
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
     """Response format for listing vector stores"""
 
     object: Literal["list"]  # Always "list"
-    data: List[LiteLLM_ManagedVectorStore]
-    total_count: Optional[int]
-    current_page: Optional[int]
-    total_pages: Optional[int]
+    data: list[LiteLLM_ManagedVectorStore]
+    total_count: int | None
+    current_page: int | None
+    total_pages: int | None
 
 
 class VectorStoreUpdateRequest(BaseModel):
     vector_store_id: str
-    custom_llm_provider: Optional[str] = None
-    vector_store_name: Optional[str] = None
-    vector_store_description: Optional[str] = None
-    vector_store_metadata: Optional[Dict] = None
+    custom_llm_provider: str | None = None
+    vector_store_name: str | None = None
+    vector_store_description: str | None = None
+    vector_store_metadata: dict | None = None
 
 
 class VectorStoreDeleteRequest(BaseModel):
@@ -73,52 +73,108 @@ class VectorStoreInfoRequest(BaseModel):
 class VectorStoreResultContent(TypedDict, total=False):
     """Content of a vector store result"""
 
-    text: Optional[str]
-    type: Optional[str]
+    text: str | None
+    type: str | None
 
 
 class VectorStoreSearchResult(TypedDict, total=False):
     """Result of a vector store search"""
 
-    score: Optional[float]
-    content: Optional[List[VectorStoreResultContent]]
-    file_id: Optional[str]
-    filename: Optional[str]
-    attributes: Optional[Dict]
+    score: float | None
+    content: list[VectorStoreResultContent] | None
+    file_id: str | None
+    filename: str | None
+    attributes: dict | None
 
 
 class VectorStoreSearchResponse(TypedDict, total=False):
     """Response after searching a vector store"""
 
-    object: Literal[
-        "vector_store.search_results.page"
-    ]  # Always "vector_store.search_results.page"
-    search_query: Optional[str]
-    data: Optional[List[VectorStoreSearchResult]]
+    object: Literal["vector_store.search_results.page"]  # Always "vector_store.search_results.page"
+    search_query: str | None
+    data: list[VectorStoreSearchResult] | None
 
 
 class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the vector store search API."""
 
-    filters: Optional[Dict]
-    max_num_results: Optional[int]
-    ranking_options: Optional[Dict]
-    rewrite_query: Optional[bool]
+    filters: dict | None
+    max_num_results: int | None
+    ranking_options: dict | None
+    rewrite_query: bool | None
 
 
 class VectorStoreSearchRequest(VectorStoreSearchOptionalRequestParams, total=False):
     """Request body for searching a vector store"""
 
-    query: Union[str, List[str]]
+    query: str | list[str]
+
+
+class VertexSearchDataStoreExtraBody(TypedDict, total=False):
+    """
+    Native Discovery Engine ``SearchRequest`` fields callers may forward via
+    ``extra_body`` when searching a Vertex AI Search **data store** serving
+    config (``.../dataStores/{id}/servingConfigs/default_config``).
+
+    The data store is scoped by the request URL path, so target-selecting
+    fields (``servingConfig``, ``branch``, ``entity``) are intentionally
+    omitted and rejected by the transformation layer. Engine/app-only fields
+    such as ``dataStoreSpecs`` and ``numResultsPerDataStore`` live on
+    ``VertexSearchEngineExtraBody`` instead.
+    """
+
+    query: str
+    pageSize: int
+    pageToken: str
+    offset: int
+    oneBoxPageSize: int
+    pageCategories: list[str]
+    imageQuery: dict[str, Any]
+    filter: str
+    canonicalFilter: str
+    orderBy: str
+    userInfo: dict[str, Any]
+    languageCode: str
+    facetSpecs: list[dict[str, Any]]
+    boostSpec: dict[str, Any]
+    params: dict[str, Any]
+    queryExpansionSpec: dict[str, Any]
+    spellCorrectionSpec: dict[str, Any]
+    userPseudoId: str
+    contentSearchSpec: dict[str, Any]
+    rankingExpression: str
+    rankingExpressionBackend: str
+    safeSearch: bool
+    userLabels: dict[str, str]
+    naturalLanguageQueryUnderstandingSpec: dict[str, Any]
+    searchAsYouTypeSpec: dict[str, Any]
+    displaySpec: dict[str, Any]
+    crowdingSpecs: list[dict[str, Any]]
+    relevanceThreshold: str
+    relevanceScoreSpec: dict[str, Any]
+    customRankingParams: dict[str, Any]
+
+
+class VertexSearchEngineExtraBody(VertexSearchDataStoreExtraBody, total=False):
+    """
+    Native Discovery Engine ``SearchRequest`` fields callers may forward via
+    ``extra_body`` when searching a Vertex AI Search **engine/app** serving
+    config (``.../engines/{id}/servingConfigs/default_serving_config``).
+
+    Inherits every data-store field and adds fields that only make sense when
+    an app fans out across multiple member data stores, e.g. ``dataStoreSpecs``
+    (per-store scoping/filtering) and ``numResultsPerDataStore``.
+    """
+
+    dataStoreSpecs: list[dict[str, Any]]
+    numResultsPerDataStore: int
 
 
 # Vector Store Creation Types
 class VectorStoreExpirationPolicy(TypedDict, total=False):
     """The expiration policy for a vector store"""
 
-    anchor: Literal[
-        "last_active_at"
-    ]  # Anchor timestamp after which the expiration policy applies
+    anchor: Literal["last_active_at"]  # Anchor timestamp after which the expiration policy applies
     days: int  # Number of days after anchor time that the vector store will expire
 
 
@@ -147,7 +203,7 @@ class VectorStoreChunkingStrategy(TypedDict, total=False):
 
     # This can be either auto or static
     type: Literal["auto", "static"]
-    static: Optional[VectorStoreStaticChunkingStrategyConfig]
+    static: VectorStoreStaticChunkingStrategyConfig | None
 
 
 class VectorStoreFileCounts(TypedDict, total=False):
@@ -163,21 +219,17 @@ class VectorStoreFileCounts(TypedDict, total=False):
 class VectorStoreCreateOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the vector store create API."""
 
-    name: Optional[str]  # Name of the vector store
-    file_ids: Optional[List[str]]  # List of File IDs that the vector store should use
-    expires_after: Optional[
-        VectorStoreExpirationPolicy
-    ]  # Expiration policy for the vector store
-    chunking_strategy: Optional[
-        VectorStoreChunkingStrategy
-    ]  # Chunking strategy for the files
-    metadata: Optional[Dict[str, str]]  # Set of key-value pairs for metadata
+    name: str | None  # Name of the vector store
+    file_ids: list[str] | None  # List of File IDs that the vector store should use
+    expires_after: VectorStoreExpirationPolicy | None  # Expiration policy for the vector store
+    chunking_strategy: VectorStoreChunkingStrategy | None  # Chunking strategy for the files
+    metadata: dict[str, str] | None  # Set of key-value pairs for metadata
 
 
 class VectorStoreCreateRequest(VectorStoreCreateOptionalRequestParams, total=False):
     """Request body for creating a vector store"""
 
-    pass  # All fields are optional for vector store creation
+    # All fields are optional for vector store creation
 
 
 class VectorStoreCreateResponse(TypedDict, total=False):
@@ -186,16 +238,14 @@ class VectorStoreCreateResponse(TypedDict, total=False):
     id: str  # ID of the vector store
     object: Literal["vector_store"]  # Always "vector_store"
     created_at: int  # Unix timestamp of when the vector store was created
-    name: Optional[str]  # Name of the vector store
+    name: str | None  # Name of the vector store
     bytes: int  # Size of the vector store in bytes
     file_counts: VectorStoreFileCounts  # File counts for the vector store
     status: Literal["expired", "in_progress", "completed"]  # Status of the vector store
-    expires_after: Optional[VectorStoreExpirationPolicy]  # Expiration policy
-    expires_at: Optional[int]  # Unix timestamp of when the vector store expires
-    last_active_at: Optional[
-        int
-    ]  # Unix timestamp of when the vector store was last active
-    metadata: Optional[Dict[str, str]]  # Metadata associated with the vector store
+    expires_after: VectorStoreExpirationPolicy | None  # Expiration policy
+    expires_at: int | None  # Unix timestamp of when the vector store expires
+    last_active_at: int | None  # Unix timestamp of when the vector store was last active
+    metadata: dict[str, str] | None  # Metadata associated with the vector store
 
 
 class IndexCreateLiteLLMParams(BaseModel):
@@ -206,7 +256,7 @@ class IndexCreateLiteLLMParams(BaseModel):
 class IndexCreateRequest(BaseModel):
     index_name: str
     litellm_params: IndexCreateLiteLLMParams
-    index_info: Optional[Dict[str, Any]] = None
+    index_info: dict[str, Any] | None = None
 
 
 class BaseVectorStoreAuthCredentials(TypedDict, total=False):
@@ -220,11 +270,16 @@ class LiteLLM_ManagedVectorStoreIndex(BaseModel):
     id: str
     index_name: str
     litellm_params: IndexCreateLiteLLMParams
-    index_info: Optional[Dict[str, Any]] = None
-    created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
+    index_info: dict[str, Any] | None = None
+    created_at: datetime | None = None
+    created_by: str | None = None
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+
+
+class IndexListResponse(BaseModel):
+    object: Literal["list"] = "list"
+    data: tuple[LiteLLM_ManagedVectorStoreIndex, ...]
 
 
 class VectorStoreIndexType(str, Enum):
@@ -237,11 +292,11 @@ class VectorStoreIndexType(str, Enum):
 class VectorStoreIndexEndpoints(TypedDict):
     """Endpoints for vector store index"""
 
-    read: List[
-        Tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
+    read: list[
+        tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
     ]  # endpoints for reading a vector store index
-    write: List[
-        Tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
+    write: list[
+        tuple[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], str]
     ]  # endpoints for writing a vector store index
 
 
@@ -257,11 +312,11 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
 class VectorStoreToolParams:
     """Parameters extracted from a file_search tool definition"""
 
-    filters: Optional[Dict] = None
-    max_num_results: Optional[int] = None
-    ranking_options: Optional[Dict] = None
+    filters: dict | None = None
+    max_num_results: int | None = None
+    ranking_options: dict | None = None
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Convert to dict, excluding None values"""
         return {
             k: v

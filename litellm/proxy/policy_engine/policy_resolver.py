@@ -8,7 +8,7 @@ Handles:
 - Combining guardrails from multiple matching policies
 """
 
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (
@@ -31,9 +31,9 @@ class PolicyResolver:
     @staticmethod
     def resolve_inheritance_chain(
         policy_name: str,
-        policies: Dict[str, Policy],
-        visited: Optional[Set[str]] = None,
-    ) -> List[str]:
+        policies: dict[str, Policy],
+        visited: set[str] | None = None,
+    ) -> list[str]:
         """
         Get the inheritance chain for a policy (from root to policy).
 
@@ -49,19 +49,17 @@ class PolicyResolver:
             visited = set()
 
         if policy_name in visited:
-            verbose_proxy_logger.warning(
-                f"Circular inheritance detected for policy '{policy_name}'"
-            )
+            verbose_proxy_logger.warning("Circular inheritance detected for policy '%s'", policy_name)
             return []
 
-        policy = policies.get(policy_name)
+        policy: Final = policies.get(policy_name)
         if policy is None:
             return []
 
         visited.add(policy_name)
 
         if policy.inherit:
-            parent_chain = PolicyResolver.resolve_inheritance_chain(
+            parent_chain: Final = PolicyResolver.resolve_inheritance_chain(
                 policy_name=policy.inherit, policies=policies, visited=visited
             )
             return parent_chain + [policy_name]
@@ -71,8 +69,8 @@ class PolicyResolver:
     @staticmethod
     def resolve_policy_guardrails(
         policy_name: str,
-        policies: Dict[str, Policy],
-        context: Optional[PolicyMatchContext] = None,
+        policies: dict[str, Policy],
+        context: PolicyMatchContext | None = None,
     ) -> ResolvedPolicy:
         """
         Resolve the final guardrails for a single policy, including inheritance.
@@ -92,12 +90,10 @@ class PolicyResolver:
         """
         from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
 
-        inheritance_chain = PolicyResolver.resolve_inheritance_chain(
-            policy_name=policy_name, policies=policies
-        )
+        inheritance_chain: Final = PolicyResolver.resolve_inheritance_chain(policy_name=policy_name, policies=policies)
 
         # Start with empty set of guardrails
-        guardrails: Set[str] = set()
+        guardrails: Final[set[str]] = set()
 
         # Apply each policy in the chain (from root to leaf)
         for chain_policy_name in inheritance_chain:
@@ -112,7 +108,7 @@ class PolicyResolver:
                     context=context,
                 ):
                     verbose_proxy_logger.debug(
-                        f"Policy '{chain_policy_name}' condition did not match, skipping guardrails"
+                        "Policy '%s' condition did not match, skipping guardrails", chain_policy_name
                     )
                     continue
 
@@ -133,9 +129,9 @@ class PolicyResolver:
     @staticmethod
     def resolve_guardrails_for_context(
         context: PolicyMatchContext,
-        policies: Optional[Dict[str, Policy]] = None,
-        policy_names: Optional[List[str]] = None,
-    ) -> List[str]:
+        policies: dict[str, Policy] | None = None,
+        policy_names: list[str] | None = None,
+    ) -> list[str]:
         """
         Resolve the final list of guardrails for a request context.
 
@@ -157,27 +153,27 @@ class PolicyResolver:
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         if policies is None:
-            registry = get_policy_registry()
+            registry: Final = get_policy_registry()
             if not registry.is_initialized():
                 return []
             policies = registry.get_all_policies()
 
         # Use provided policy names or get matching policies via attachments
-        matching_policy_names = (
-            policy_names
-            if policy_names is not None
-            else PolicyMatcher.get_matching_policies(context=context)
+        matching_policy_names: Final = (
+            policy_names if policy_names is not None else PolicyMatcher.get_matching_policies(context=context)
         )
 
         if not matching_policy_names:
             verbose_proxy_logger.debug(
-                f"No policies match context: team_alias={context.team_alias}, "
-                f"key_alias={context.key_alias}, model={context.model}"
+                "No policies match context: team_alias=%s, key_alias=%s, model=%s",
+                context.team_alias,
+                context.key_alias,
+                context.model,
             )
             return []
 
         # Resolve each matching policy and combine guardrails
-        all_guardrails: Set[str] = set()
+        all_guardrails: Final[set[str]] = set()
 
         for policy_name in matching_policy_names:
             resolved = PolicyResolver.resolve_policy_guardrails(
@@ -186,21 +182,19 @@ class PolicyResolver:
                 context=context,
             )
             all_guardrails.update(resolved.guardrails)
-            verbose_proxy_logger.debug(
-                f"Policy '{policy_name}' contributes guardrails: {resolved.guardrails}"
-            )
+            verbose_proxy_logger.debug("Policy '%s' contributes guardrails: %s", policy_name, resolved.guardrails)
 
-        result = list(all_guardrails)
-        verbose_proxy_logger.debug(f"Final guardrails for context: {result}")
+        result: Final = list(all_guardrails)
+        verbose_proxy_logger.debug("Final guardrails for context: %s", result)
 
         return result
 
     @staticmethod
     def resolve_pipelines_for_context(
         context: PolicyMatchContext,
-        policies: Optional[Dict[str, Policy]] = None,
-        policy_names: Optional[List[str]] = None,
-    ) -> List[Tuple[str, GuardrailPipeline]]:
+        policies: dict[str, Policy] | None = None,
+        policy_names: list[str] | None = None,
+    ) -> list[tuple[str, GuardrailPipeline]]:
         """
         Resolve pipelines from matching policies for a request context.
 
@@ -220,20 +214,18 @@ class PolicyResolver:
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         if policies is None:
-            registry = get_policy_registry()
+            registry: Final = get_policy_registry()
             if not registry.is_initialized():
                 return []
             policies = registry.get_all_policies()
 
-        matching_policy_names = (
-            policy_names
-            if policy_names is not None
-            else PolicyMatcher.get_matching_policies(context=context)
+        matching_policy_names: Final = (
+            policy_names if policy_names is not None else PolicyMatcher.get_matching_policies(context=context)
         )
         if not matching_policy_names:
             return []
 
-        pipelines: List[Tuple[str, GuardrailPipeline]] = []
+        pipelines: Final[list[tuple[str, GuardrailPipeline]]] = []
         for policy_name in matching_policy_names:
             policy = policies.get(policy_name)
             if policy is None:
@@ -241,22 +233,21 @@ class PolicyResolver:
             if policy.pipeline is not None:
                 pipelines.append((policy_name, policy.pipeline))
                 verbose_proxy_logger.debug(
-                    f"Policy '{policy_name}' has pipeline with "
-                    f"{len(policy.pipeline.steps)} steps"
+                    "Policy '%s' has pipeline with %s steps", policy_name, len(policy.pipeline.steps)
                 )
 
         return pipelines
 
     @staticmethod
     def get_pipeline_managed_guardrails(
-        pipelines: List[Tuple[str, GuardrailPipeline]],
-    ) -> Set[str]:
+        pipelines: list[tuple[str, GuardrailPipeline]],
+    ) -> set[str]:
         """
         Get the set of guardrail names managed by pipelines.
 
         These guardrails should be excluded from normal independent execution.
         """
-        managed: Set[str] = set()
+        managed: Final[set[str]] = set()
         for _policy_name, pipeline in pipelines:
             for step in pipeline.steps:
                 managed.add(step.guardrail)
@@ -264,9 +255,9 @@ class PolicyResolver:
 
     @staticmethod
     def get_all_resolved_policies(
-        policies: Optional[Dict[str, Policy]] = None,
-        context: Optional[PolicyMatchContext] = None,
-    ) -> Dict[str, ResolvedPolicy]:
+        policies: dict[str, Policy] | None = None,
+        context: PolicyMatchContext | None = None,
+    ) -> dict[str, ResolvedPolicy]:
         """
         Resolve all policies and return their final guardrails.
 
@@ -282,12 +273,12 @@ class PolicyResolver:
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         if policies is None:
-            registry = get_policy_registry()
+            registry: Final = get_policy_registry()
             if not registry.is_initialized():
                 return {}
             policies = registry.get_all_policies()
 
-        resolved: Dict[str, ResolvedPolicy] = {}
+        resolved: Final[dict[str, ResolvedPolicy]] = {}
 
         for policy_name in policies:
             resolved[policy_name] = PolicyResolver.resolve_policy_guardrails(

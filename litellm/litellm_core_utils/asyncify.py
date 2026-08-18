@@ -1,12 +1,13 @@
 import asyncio
 import functools
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
+from typing import Final
 
 import anyio
 import anyio.to_thread
 from typing_extensions import ParamSpec, TypeVar
 
-T_ParamSpec = ParamSpec("T_ParamSpec")
+T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 
 
@@ -14,7 +15,7 @@ def function_has_argument(function: Callable, arg_name: str) -> bool:
     """Helper function to check if a function has a specific argument."""
     import inspect
 
-    signature = inspect.signature(function)
+    signature: Final = inspect.signature(function)
     return arg_name in signature.parameters
 
 
@@ -22,7 +23,7 @@ def asyncify(
     function: Callable[T_ParamSpec, T_Retval],
     *,
     cancellable: bool = False,
-    limiter: Optional[anyio.CapacityLimiter] = None,
+    limiter: anyio.CapacityLimiter | None = None,
 ) -> Callable[T_ParamSpec, Awaitable[T_Retval]]:
     """
     Take a blocking function and create an async one that receives the same
@@ -45,10 +46,8 @@ def asyncify(
     and returns the result.
     """
 
-    async def wrapper(
-        *args: T_ParamSpec.args, **kwargs: T_ParamSpec.kwargs
-    ) -> T_Retval:
-        partial_f = functools.partial(function, *args, **kwargs)
+    async def wrapper(*args: T_ParamSpec.args, **kwargs: T_ParamSpec.kwargs) -> T_Retval:
+        partial_f: Final = functools.partial(function, *args, **kwargs)
 
         # In `v4.1.0` anyio added the `abandon_on_cancel` argument and deprecated the old
         # `cancellable` argument, so we need to use the new `abandon_on_cancel` to avoid
@@ -94,7 +93,7 @@ def run_async_function(async_function, *args, **kwargs):
 
     def run_in_new_loop():
         """Run the coroutine in a new event loop within this thread."""
-        new_loop = asyncio.new_event_loop()
+        new_loop: Final = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(new_loop)
             return new_loop.run_until_complete(async_function(*args, **kwargs))
@@ -108,7 +107,7 @@ def run_async_function(async_function, *args, **kwargs):
         # If we're already in an event loop, run in a separate thread
         # to avoid nested event loop issues
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(run_in_new_loop)
+            future: Final = executor.submit(run_in_new_loop)
             return future.result()
 
     except RuntimeError:

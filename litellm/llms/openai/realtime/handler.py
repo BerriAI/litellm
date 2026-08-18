@@ -4,7 +4,7 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-from typing import Any, Optional, cast
+from typing import Any, Final, cast
 
 from litellm._logging import _redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -12,6 +12,7 @@ from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import (
+    RealtimeEventNormalizer,
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
@@ -50,7 +51,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         so the legacy beta API is used. GA clients omit that header on the client
         connection and must send GA-shaped ``session.update`` payloads.
         """
-        headers: dict = {"Authorization": f"Bearer {api_key}"}
+        headers: Final[dict] = {"Authorization": f"Bearer {api_key}"}
         if openai_beta_realtime:
             headers["OpenAI-Beta"] = "realtime=v1"
         return headers
@@ -70,7 +71,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             return None
 
         # Use the shared SSL context which respects custom CA certs and SSL settings
-        ssl_config = get_shared_realtime_ssl_context()
+        ssl_config: Final = get_shared_realtime_ssl_context()
 
         # If ssl_config is False (ssl_verify=False), websockets library needs True instead
         # to establish connection without verification (False would fail)
@@ -95,18 +96,26 @@ class OpenAIRealtime(OpenAIChatCompletion):
             url = url.copy_with(params=query_params)
         return str(url)
 
+    def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:
+        """Return a per-session GA event normalizer, or None for passthrough.
+
+        Subclasses (e.g. XAIRealtime) override this to supply a provider-specific
+        normalizer instance.
+        """
+        return None
+
     async def async_realtime(
         self,
         model: str,
         websocket: Any,
         logging_obj: LiteLLMLogging,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        client: Optional[Any] = None,
-        timeout: Optional[float] = None,
-        query_params: Optional[RealtimeQueryParams] = None,
-        user_api_key_dict: Optional[Any] = None,
-        litellm_metadata: Optional[dict] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        client: Any | None = None,
+        timeout: float | None = None,
+        query_params: RealtimeQueryParams | None = None,
+        user_api_key_dict: Any | None = None,
+        litellm_metadata: dict | None = None,
         **kwargs: Any,
     ):
         import websockets
@@ -120,22 +129,20 @@ class OpenAIRealtime(OpenAIChatCompletion):
         # Use all query params if provided, else fallback to just model
         if query_params is None:
             query_params = {"model": model}
-        url = self._construct_url(api_base, query_params)
+        url: Final = self._construct_url(api_base, query_params)
 
         try:
             # Get provider-specific SSL configuration
-            ssl_config = self._get_ssl_config(url)
+            ssl_config: Final = self._get_ssl_config(url)
 
-            openai_beta_realtime = client_sent_openai_beta_realtime_header(websocket)
+            openai_beta_realtime: Final = client_sent_openai_beta_realtime_header(websocket)
             if not openai_beta_realtime:
                 verbose_logger.debug(
                     "OpenAI Realtime: connecting with GA protocol (no OpenAI-Beta header). "
                     "If your client expects beta event names, add 'OpenAI-Beta: realtime=v1' "
                     "to the WebSocket headers sent to the LiteLLM proxy."
                 )
-            headers = self._get_additional_headers(
-                api_key, openai_beta_realtime=openai_beta_realtime
-            )
+            headers: Final = self._get_additional_headers(api_key, openai_beta_realtime=openai_beta_realtime)
 
             # Log a masked request preview consistent with other endpoints.
             logging_obj.pre_call(
@@ -147,36 +154,35 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "complete_input_dict": {"query_params": query_params},
                 },
             )
-            async with websockets.connect(  # type: ignore
+            async with websockets.connect(
                 url,
-                additional_headers=headers,  # type: ignore
+                additional_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             ) as backend_ws:
-                realtime_streaming = RealTimeStreaming(
+                realtime_streaming: Final = RealTimeStreaming(
                     websocket,
                     cast(ClientConnection, backend_ws),
                     logging_obj,
+                    model=model,
                     user_api_key_dict=user_api_key_dict,
                     request_data={"litellm_metadata": litellm_metadata or {}},
+                    force_transcription_model=(
+                        model if (query_params or {}).get("intent") == "transcription" else None
+                    ),
+                    event_normalizer=self._make_event_normalizer(),
                 )
                 await realtime_streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        except websockets.exceptions.InvalidStatusCode as e:
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             try:
-                await websocket.close(
-                    code=1011, reason=_redact_string(f"Internal server error: {str(e)}")
-                )
+                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
-                if "already completed" in str(close_error) or "websocket.close" in str(
-                    close_error
-                ):
+                if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     # The WebSocket is already closed or the response is completed, so we can ignore this error
                     pass
                 else:
                     # If it's a different RuntimeError, we might want to log it or handle it differently
-                    raise Exception(
-                        f"Unexpected error while closing WebSocket: {close_error}"
-                    )
+                    raise Exception(f"Unexpected error while closing WebSocket: {close_error}")

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
@@ -11,11 +11,13 @@ if TYPE_CHECKING:
 
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("OpenAI Moderation: guardrail_name is required")
 
-    openai_moderation_guardrail = OpenAIModerationGuardrail(
+    optional_params: Final = getattr(litellm_params, "optional_params", None)
+
+    openai_moderation_guardrail: Final = OpenAIModerationGuardrail(
         guardrail_name=guardrail_name,
         **{
             **litellm_params.model_dump(exclude_none=True),
@@ -24,6 +26,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             "default_on": litellm_params.default_on,
             "event_hook": litellm_params.mode,
             "model": litellm_params.model,
+            "streaming_end_of_stream_only": _get_config_value(
+                litellm_params, optional_params, "streaming_end_of_stream_only"
+            ),
+            "streaming_sampling_rate": _get_config_value(litellm_params, optional_params, "streaming_sampling_rate"),
         },
     )
 
@@ -32,11 +38,19 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return openai_moderation_guardrail
 
 
-guardrail_initializer_registry = {
+def _get_config_value(litellm_params, optional_params, attribute_name):
+    if optional_params is not None:
+        value: Final = getattr(optional_params, attribute_name, None)
+        if value is not None:
+            return value
+    return getattr(litellm_params, attribute_name, None)
+
+
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.OPENAI_MODERATION.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.OPENAI_MODERATION.value: OpenAIModerationGuardrail,
 }

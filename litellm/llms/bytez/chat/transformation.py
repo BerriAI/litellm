@@ -1,13 +1,13 @@
 import json
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segments
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.url_utils import encode_url_path_segments
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -31,7 +31,7 @@ else:
 
 
 # 5 minute timeout (models may need to load)
-STREAMING_TIMEOUT = 60 * 5
+STREAMING_TIMEOUT: Final = 60 * 5
 
 
 class BytezChatConfig(BaseConfig):
@@ -42,7 +42,7 @@ class BytezChatConfig(BaseConfig):
     def __init__(
         self,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -77,8 +77,8 @@ class BytezChatConfig(BaseConfig):
             "web_search_options": False,
         }
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
-        supported_params = []
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        supported_params: Final = []
         for key, value in self.openai_to_bytez_param_map.items():
             if value:
                 supported_params.append(key)
@@ -92,9 +92,9 @@ class BytezChatConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        adapted_params = {}
+        adapted_params: Final = {}
 
-        all_params = {**non_default_params, **optional_params}
+        all_params: Final = {**non_default_params, **optional_params}
 
         for key, value in all_params.items():
             alias = self.openai_to_bytez_param_map.get(key)
@@ -117,11 +117,11 @@ class BytezChatConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers.update(
             {
@@ -132,9 +132,7 @@ class BytezChatConfig(BaseConfig):
         )
 
         if not messages:
-            raise Exception(
-                "kwarg `messages` must be an array of messages that follow the openai chat standard"
-            )
+            raise Exception("kwarg `messages` must be an array of messages that follow the openai chat standard")
 
         if not api_key:
             raise Exception("Missing api_key, make sure you pass in your api key")
@@ -143,33 +141,33 @@ class BytezChatConfig(BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
-        encoded_model = encode_url_path_segments(model, field_name="model")
+        encoded_model: Final = encode_url_path_segments(model, field_name="model")
         return f"{API_BASE}/{encoded_model}"
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        stream = optional_params.get("stream", False)
+        stream: Final = optional_params.get("stream", False)
 
         # we add stream not as an additional param, but as a primary prop on the request body, this is always defined if stream == True
         if optional_params.get("stream"):
             del optional_params["stream"]
 
-        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
+        messages = adapt_messages_to_bytez_standard(messages=messages)
 
-        data = {
+        data: Final = {
             "messages": messages,
             "stream": stream,
             "params": optional_params,
@@ -184,16 +182,16 @@ class BytezChatConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
-        json = raw_response.json()  # noqa: F811
+        json: Final = raw_response.json()
 
-        error = json.get("error")
+        error: Final = json.get("error")
 
         if error is not None:
             raise BytezError(
@@ -206,30 +204,30 @@ class BytezChatConfig(BaseConfig):
         model_response.model = model
 
         # Add the output
-        output = json.get("output")
+        output: Final = json.get("output")
 
-        message = model_response.choices[0].message  # type: ignore
+        message: Final = model_response.choices[0].message
 
         message.content = output["content"][0]["text"]
 
-        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
+        messages = adapt_messages_to_bytez_standard(messages=messages)
 
         # NOTE We are approximating tokens, to get the true values we will need to update our BE
-        prompt_tokens = get_tokens_from_messages(messages)  # type: ignore
+        prompt_tokens: Final = get_tokens_from_messages(messages)
 
-        output_messages = adapt_messages_to_bytez_standard(messages=[output])
+        output_messages: Final = adapt_messages_to_bytez_standard(messages=[output])
 
-        completion_tokens = get_tokens_from_messages(output_messages)
+        completion_tokens: Final = get_tokens_from_messages(output_messages)
 
-        total_tokens = prompt_tokens + completion_tokens
+        total_tokens: Final = prompt_tokens + completion_tokens
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
         )
 
-        model_response.usage = usage  # type: ignore
+        model_response.usage = usage
 
         model_response._hidden_params["additional_headers"] = raw_response.headers
         message.provider_specific_fields = {
@@ -256,15 +254,15 @@ class BytezChatConfig(BaseConfig):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
 
         try:
-            response = client.post(
+            response: Final = client.post(
                 api_base,
                 headers=headers,
                 data=json.dumps(data),
@@ -273,16 +271,14 @@ class BytezChatConfig(BaseConfig):
                 timeout=STREAMING_TIMEOUT,
             )
         except httpx.HTTPStatusError as e:
-            raise BytezError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise BytezError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise BytezError(status_code=response.status_code, message=response.text)
 
-        completion_stream = response.iter_text()
+        completion_stream: Final = response.iter_text()
 
-        streaming_response = BytezCustomStreamWrapper(
+        streaming_response: Final = BytezCustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -300,15 +296,15 @@ class BytezChatConfig(BaseConfig):
         headers: dict,
         data: dict,
         messages: list,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
-        json_mode: Optional[bool] = None,
-        signed_json_body: Optional[bytes] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        json_mode: bool | None = None,
+        signed_json_body: bytes | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
 
         try:
-            response = await client.post(
+            response: Final = await client.post(
                 api_base,
                 headers=headers,
                 data=json.dumps(data),
@@ -317,16 +313,14 @@ class BytezChatConfig(BaseConfig):
                 timeout=STREAMING_TIMEOUT,
             )
         except httpx.HTTPStatusError as e:
-            raise BytezError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise BytezError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise BytezError(status_code=response.status_code, message=response.text)
 
-        completion_stream = response.aiter_text()
+        completion_stream: Final = response.aiter_text()
 
-        streaming_response = BytezCustomStreamWrapper(
+        streaming_response: Final = BytezCustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -334,17 +328,15 @@ class BytezChatConfig(BaseConfig):
         )
         return streaming_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BytezError(status_code=status_code, message=error_message)
 
 
 class BytezCustomStreamWrapper(CustomStreamWrapper):
     def chunk_creator(self, chunk: Any):
         try:
-            model_response = self.model_response_creator()
-            response_obj: Dict[str, Any] = {}
+            model_response: Final = self.model_response_creator()
+            response_obj: dict[str, Any] = {}
 
             response_obj = {
                 "text": chunk,
@@ -352,11 +344,11 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
                 "finish_reason": "",
             }
 
-            completion_obj: Dict[str, Any] = {"content": chunk}
+            completion_obj: Final[dict[str, Any]] = {"content": chunk}
 
             return self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
-                model_response=model_response,  # type: ignore
+                model_response=model_response,
                 response_obj=response_obj,
             )
 
@@ -373,7 +365,7 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
 
 
 # litellm/types/llms/openai.py is a good reference for what is supported
-open_ai_to_bytez_content_item_map = {
+open_ai_to_bytez_content_item_map: Final = {
     "text": {"type": "text", "value_name": "text"},
     "image_url": {"type": "image", "value_name": "url"},
     "input_audio": {"type": "audio", "value_name": "url"},
@@ -383,10 +375,10 @@ open_ai_to_bytez_content_item_map = {
 }
 
 
-def adapt_messages_to_bytez_standard(messages: List[Dict]):
+def adapt_messages_to_bytez_standard(messages: list[dict]):
     messages = _adapt_string_only_content_to_lists(messages)
 
-    new_messages = []
+    new_messages: Final = []
 
     for message in messages:
         role = message["role"]
@@ -395,7 +387,7 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
         new_content = []
 
         for content_item in content:
-            type: Union[str, None] = content_item.get("type")
+            type: str | None = content_item.get("type")
 
             if not type:
                 raise Exception("Prop `type` is not a string")
@@ -409,7 +401,7 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
 
             value_name = content_item_map["value_name"]
 
-            value: Union[str, None] = content_item.get(value_name)
+            value: str | None = content_item.get(value_name)
 
             if not value:
                 raise Exception(f"Prop `{value_name}` is not a string")
@@ -424,8 +416,8 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
 # "content": "The cat ran so fast"
 # becomes
 # "content": [{"type": "text", "text": "The cat ran so fast"}]
-def _adapt_string_only_content_to_lists(messages: List[Dict]):
-    new_messages = []
+def _adapt_string_only_content_to_lists(messages: list[dict]):
+    new_messages: Final = []
 
     for message in messages:
         role = message.get("role")
@@ -447,9 +439,7 @@ def _adapt_string_only_content_to_lists(messages: List[Dict]):
                 elif isinstance(content_item, dict):
                     new_content_items.append(content_item)
                 else:
-                    raise Exception(
-                        "`content` can only contain strings or openai content dicts"
-                    )
+                    raise Exception("`content` can only contain strings or openai content dicts")
 
             new_content += new_content_items
         else:
@@ -461,11 +451,11 @@ def _adapt_string_only_content_to_lists(messages: List[Dict]):
 
 
 # TODO get this from the api instead of doing it here, will require backend work
-def get_tokens_from_messages(messages: List[dict]):
+def get_tokens_from_messages(messages: list[dict]):
     total = 0
 
     for message in messages:
-        content: List[dict] = message["content"]
+        content: list[dict] = message["content"]
 
         for content_item in content:
             type = content_item["type"]

@@ -1,5 +1,6 @@
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
@@ -27,9 +28,7 @@ else:
 
 
 class BaseVectorStoreConfig:
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+    def get_supported_openai_params(self, model: str) -> list[VECTOR_STORE_OPENAI_PARAMS]:
         return []
 
     def map_openai_params(
@@ -41,9 +40,7 @@ class BaseVectorStoreConfig:
         return optional_params
 
     @abstractmethod
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         pass
 
     @abstractmethod
@@ -54,25 +51,25 @@ class BaseVectorStoreConfig:
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         pass
 
     async def atransform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """
         Optional async version of transform_search_vector_store_request.
         If not implemented, the handler will fall back to the sync version.
@@ -100,25 +97,21 @@ class BaseVectorStoreConfig:
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         pass
 
     @abstractmethod
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         return {}
 
     @abstractmethod
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -132,9 +125,7 @@ class BaseVectorStoreConfig:
             raise ValueError("api_base is required")
         return api_base
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 
         raise BaseLLMException(
@@ -146,11 +137,11 @@ class BaseVectorStoreConfig:
     def sign_request(
         self,
         headers: dict,
-        optional_params: Dict,
-        request_data: Dict,
+        optional_params: dict,
+        request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+    ) -> tuple[dict, bytes | None]:
         """Optionally sign or modify the request before sending.
 
         Providers like AWS Bedrock require SigV4 signing. Providers that don't
@@ -162,5 +153,77 @@ class BaseVectorStoreConfig:
     def calculate_vector_store_cost(
         self,
         response: VectorStoreSearchResponse,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         return 0.0, 0.0
+
+
+class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
+    """
+    Base config for vector store providers whose datastore has no HTTP API
+    (e.g. Valkey over RESP). Instead of transforming to an httpx request, the
+    config executes the search itself via (a)execute_search_vector_store_request.
+    """
+
+    @abstractmethod
+    def execute_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
+    ) -> VectorStoreSearchResponse:
+        pass
+
+    @abstractmethod
+    async def aexecute_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
+    ) -> VectorStoreSearchResponse:
+        pass
+
+    def transform_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        extra_body: Mapping[str, object] | None = None,
+    ) -> NoReturn:
+        raise NotImplementedError("Direct vector store providers execute the search themselves; no HTTP request shape")
+
+    def transform_search_vector_store_response(
+        self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
+    ) -> NoReturn:
+        raise NotImplementedError("Direct vector store providers execute the search themselves; no HTTP response shape")
+
+    def transform_create_vector_store_request(
+        self,
+        vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
+        api_base: str,
+    ) -> NoReturn:
+        raise NotImplementedError
+
+    def transform_create_vector_store_response(self, response: httpx.Response) -> NoReturn:
+        raise NotImplementedError
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> str:
+        return api_base or ""
+
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
+        return BaseVectorStoreAuthCredentials()
+
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        return VectorStoreIndexEndpoints(read=[], write=[])  # mutable-ok: the TypedDict declares list fields

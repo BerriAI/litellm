@@ -178,6 +178,77 @@ class TestBatchEndpointTeamOverride:
         assert kwargs["output_expires_after"] == TEAM_EXPIRY
 
 
+class TestBatchEndpointPolicyMetadata:
+    """Batch create must not forward LiteLLM policy tracking via OpenAI metadata."""
+
+    def test_create_batch_does_not_forward_applied_policies_metadata(
+        self, monkeypatch, llm_router
+    ):
+        from litellm.proxy.policy_engine.attachment_registry import (
+            get_attachment_registry,
+        )
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+        from litellm.types.proxy.policy_engine import (
+            Policy,
+            PolicyAttachment,
+            PolicyGuardrails,
+        )
+
+        policy_registry = get_policy_registry()
+        policy_registry._policies = {
+            "global-baseline": Policy(
+                guardrails=PolicyGuardrails(add=["pii_blocker"]),
+            ),
+        }
+        policy_registry._initialized = True
+
+        attachment_registry = get_attachment_registry()
+        attachment_registry._attachments = [
+            PolicyAttachment(policy="global-baseline", scope="*"),
+        ]
+        attachment_registry._initialized = True
+
+        _setup_proxy(monkeypatch, llm_router)
+
+        user_key = UserAPIKeyAuth(
+            api_key="test-key",
+            team_alias="batch-team",
+            key_alias="batch-key",
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: user_key
+
+        captured_kwargs = {}
+
+        async def mock_acreate_batch(**kwargs):
+            captured_kwargs.update(kwargs)
+            return _make_batch_response()
+
+        monkeypatch.setattr(litellm, "acreate_batch", mock_acreate_batch)
+
+        try:
+            response = client.post(
+                "/v1/batches",
+                json={
+                    "input_file_id": "file-abc123",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                },
+                headers={"Authorization": "Bearer test-key"},
+            )
+            assert response.status_code == 200
+        finally:
+            app.dependency_overrides.clear()
+            policy_registry._policies = {}
+            policy_registry._initialized = False
+            attachment_registry._attachments = []
+            attachment_registry._initialized = False
+
+        assert captured_kwargs.get("metadata") in (None, {})
+        assert (
+            "global-baseline" in captured_kwargs["litellm_metadata"]["applied_policies"]
+        )
+
+
 class TestBatchEndpointTeamValidation:
     """Verify validation errors for malformed team metadata on batch endpoint."""
 

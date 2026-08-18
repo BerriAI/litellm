@@ -44,7 +44,14 @@ from litellm import (
     image_generation,
 )
 from litellm.utils import ModelResponseIterator
-from litellm.types.utils import ImageResponse, ImageObject, EmbeddingResponse
+from litellm.types.utils import (
+    ImageResponse,
+    ImageObject,
+    EmbeddingResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Delta,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
@@ -644,3 +651,82 @@ async def test_simple_aembedding():
         "embedding": [0.1, 0.2, 0.3],
         "index": 1,
     }
+
+
+# ── Tests for ModelResponseStream passthrough in custom providers (issue #27389) ──
+
+
+class ModelResponseStreamLLM(MyCustomLLM):
+    """Subclass that overrides streaming/astreaming to yield ModelResponseStream directly."""
+
+    def __init__(self, finish_reason: str = "stop"):
+        self._finish_reason = finish_reason
+
+    def streaming(self, *args, **kwargs) -> Iterator[ModelResponseStream]:  # type: ignore
+        yield ModelResponseStream(
+            id="test-stream-id",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Hello world"),
+                    finish_reason=self._finish_reason,
+                )
+            ],
+        )
+
+    async def astreaming(self, *args, **kwargs) -> AsyncIterator[ModelResponseStream]:  # type: ignore
+        yield ModelResponseStream(
+            id="test-stream-id",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Hello world"),
+                    finish_reason=self._finish_reason,
+                )
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    "finish_reason", ["stop", "tool_calls", "length", "content_filter"]
+)
+def test_custom_llm_streaming_model_response_stream(finish_reason):
+    my_custom_llm = ModelResponseStreamLLM(finish_reason=finish_reason)
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = completion(
+        model="custom_llm/my-fake-model",
+        messages=[{"role": "user", "content": "Hello world!"}],
+        stream=True,
+    )
+
+    for chunk in resp:
+        print(chunk)
+        if chunk.choices[0].finish_reason is None:
+            assert isinstance(chunk.choices[0].delta.content, str)
+        else:
+            assert chunk.choices[0].finish_reason == finish_reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "finish_reason", ["stop", "tool_calls", "length", "content_filter"]
+)
+async def test_custom_llm_astreaming_model_response_stream(finish_reason):
+    my_custom_llm = ModelResponseStreamLLM(finish_reason=finish_reason)
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = await litellm.acompletion(
+        model="custom_llm/my-fake-model",
+        messages=[{"role": "user", "content": "Hello world!"}],
+        stream=True,
+    )
+
+    async for chunk in resp:
+        print(chunk)
+        if chunk.choices[0].finish_reason is None:
+            assert isinstance(chunk.choices[0].delta.content, str)
+        else:
+            assert chunk.choices[0].finish_reason == finish_reason

@@ -3,6 +3,7 @@ Helper functions to handle images passed in messages
 """
 
 import base64
+from typing import Final
 
 from httpx import Response
 
@@ -12,9 +13,9 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 
-MAX_IMGS_IN_MEMORY = 10
+MAX_IMGS_IN_MEMORY: Final = 10
 
-in_memory_cache = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
+in_memory_cache: Final = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
 
 
 def _process_image_response(response: Response, url: str) -> str:
@@ -24,7 +25,7 @@ def _process_image_response(response: Response, url: str) -> str:
         )
 
     # Check size before downloading if Content-Length header is present
-    content_length = response.headers.get("Content-Length")
+    content_length: Final = response.headers.get("Content-Length")
     if content_length is not None:
         size_mb = int(content_length) / (1024 * 1024)
         if size_mb > MAX_IMAGE_URL_DOWNLOAD_SIZE_MB:
@@ -33,8 +34,8 @@ def _process_image_response(response: Response, url: str) -> str:
             )
 
     # Stream download with size checking to prevent downloading huge files
-    max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
-    image_bytes = bytearray()
+    max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+    image_bytes: Final = bytearray()
     bytes_downloaded = 0
 
     for chunk in response.iter_bytes(chunk_size=8192):
@@ -46,12 +47,12 @@ def _process_image_response(response: Response, url: str) -> str:
             )
         image_bytes.extend(chunk)
 
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+    base64_image: Final = base64.b64encode(image_bytes).decode("utf-8")
 
-    image_type = response.headers.get("Content-Type")
+    image_type: Final = response.headers.get("Content-Type")
     if image_type is None:
         img_type = url.split(".")[-1].lower()
-        _img_type = {
+        _img_type: Final = {
             "jpg": "image/jpeg",
             "jpeg": "image/jpeg",
             "png": "image/png",
@@ -66,23 +67,26 @@ def _process_image_response(response: Response, url: str) -> str:
     else:
         img_type = image_type
 
-    result = f"data:{img_type};base64,{base64_image}"
+    result: Final = f"data:{img_type};base64,{base64_image}"
     in_memory_cache.set_cache(url, result)
     return result
 
 
 async def async_convert_url_to_base64(url: str) -> str:
+    if url.startswith("data:") and ";base64," in url:
+        return url
+
     # If MAX_IMAGE_URL_DOWNLOAD_SIZE_MB is 0, block all image downloads
     if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
         raise litellm.ImageFetchError(
             f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )
 
-    cached_result = in_memory_cache.get_cache(url)
+    cached_result: Final = in_memory_cache.get_cache(url)
     if cached_result:
         return cached_result
 
-    client = litellm.module_level_aclient
+    client: Final = litellm.module_level_aclient
     for _ in range(3):
         try:
             response = await async_safe_get(client, url)
@@ -91,23 +95,24 @@ async def async_convert_url_to_base64(url: str) -> str:
             raise
         except Exception:
             pass
-    raise litellm.ImageFetchError(
-        f"Error: Unable to fetch image from URL after 3 attempts. url={url}"
-    )
+    raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
 
 
 def convert_url_to_base64(url: str) -> str:
+    if url.startswith("data:") and ";base64," in url:
+        return url
+
     # If MAX_IMAGE_URL_DOWNLOAD_SIZE_MB is 0, block all image downloads
     if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
         raise litellm.ImageFetchError(
             f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )
 
-    cached_result = in_memory_cache.get_cache(url)
+    cached_result: Final = in_memory_cache.get_cache(url)
     if cached_result:
         return cached_result
 
-    client = litellm.module_level_client
+    client: Final = litellm.module_level_client
     for _ in range(3):
         try:
             response = safe_get(client, url)
@@ -116,7 +121,6 @@ def convert_url_to_base64(url: str) -> str:
             raise
         except Exception as e:
             verbose_logger.exception(e)
-            pass
     raise litellm.ImageFetchError(
         f"Error: Unable to fetch image from URL after 3 attempts. url={url}",
     )

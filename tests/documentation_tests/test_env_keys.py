@@ -1,23 +1,38 @@
 import os
 import re
+from collections.abc import Iterator
 
 # Define the base directory for the litellm repository and documentation path
 repo_base = "./litellm"  # Change this to your actual path
 
-# Regular expressions to capture the keys used in os.getenv() and litellm.get_secret()
-getenv_pattern = re.compile(r'os\.getenv\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*[^)]*)?\)')
-get_secret_pattern = re.compile(
-    r'litellm\.get_secret\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*[^)]*|,\s*default_value=[^)]*)?\)'
-)
-get_secret_str_pattern = re.compile(
-    r'litellm\.get_secret_str\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*[^)]*|,\s*default_value=[^)]*)?\)'
+_GETENV_ARGS = r"""\(\s*['"]([^'"]+)['"]\s*(?:,\s*[^)]*)?\)"""
+_GET_SECRET_ARGS = r"""\(\s*['"]([^'"]+)['"]\s*(?:,\s*[^)]*|,\s*default_value=[^)]*)?\)"""
+
+ENV_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"os\.getenv" + _GETENV_ARGS),
+    re.compile(r"(?<![\w.])(?:litellm\.(?:utils\.)?)?get_secret(?:_str|_bool)?" + _GET_SECRET_ARGS),
 )
 
-# Set to store unique keys from the code
-env_keys = set()
+DOCS_BASE = "./docs/my-website/docs"
+REFERENCE_TABLE_PATH = f"{DOCS_BASE}/proxy/config_settings.md"
+DOCS_SUFFIXES = (".md", ".mdx")
+DOCUMENTED_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]*\b")
 
 # Terminal/environment detection variables that should not be documented
 # These are internal variables used for terminal detection, not user-configurable settings
+# Guard-only env vars: read solely to raise on invalid values; the only valid
+# value is the default, so there is nothing meaningful to document.
+EXCLUDED_GUARD_ONLY_VARS = {
+    "MAVVRIK_FOCUS_FREQUENCY",
+}
+
+# Temporary/internal rollout flags are intentionally not added to the public
+# environment settings docs until the feature is ready for broad use.
+EXCLUDED_ROLLOUT_FLAGS = {
+    "LITELLM_USE_RUST_OCR",
+    "LITELLM_RUST",
+}
+
 EXCLUDED_TERMINAL_VARS = {
     "TERM",
     "TERM_PROGRAM",
@@ -35,6 +50,8 @@ EXCLUDED_TERMINAL_VARS = {
     "ALACRITTY_SOCKET",
 }
 
+EXCLUDED_KEYS = frozenset(EXCLUDED_TERMINAL_VARS | EXCLUDED_GUARD_ONLY_VARS | EXCLUDED_ROLLOUT_FLAGS)
+
 # Directories to skip (dependencies, venvs, caches) - only scan litellm source
 SKIP_DIRS = {
     ".venv",
@@ -48,86 +65,66 @@ SKIP_DIRS = {
     "build",
 }
 
-# Walk through all files in the litellm repo to find references of os.getenv() and litellm.get_secret()
-for root, dirs, files in os.walk(repo_base):
-    # Skip dependency/venv directories - prevents picking up env vars from installed packages
-    dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-    for file in files:
-        if file.endswith(".py"):  # Only process Python files
-            file_path = os.path.join(root, file)
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
 
-                # Find all keys using os.getenv()
-                getenv_matches = getenv_pattern.findall(content)
-                env_keys.update(
-                    match
-                    for match in getenv_matches
-                    if match not in EXCLUDED_TERMINAL_VARS
-                )  # Extract only the key part, excluding terminal vars
-
-                # Find all keys using litellm.get_secret()
-                get_secret_matches = get_secret_pattern.findall(content)
-                env_keys.update(match for match in get_secret_matches)
-
-                # Find all keys using litellm.get_secret_str()
-                get_secret_str_matches = get_secret_str_pattern.findall(content)
-                env_keys.update(match for match in get_secret_str_matches)
-
-# Print the unique keys found
-print(env_keys)
+def extract_env_keys(source: str) -> frozenset[str]:
+    """Return every documentable env var name read by the given Python source."""
+    return frozenset(
+        match for pattern in ENV_KEY_PATTERNS for match in pattern.findall(source) if match not in EXCLUDED_KEYS
+    )
 
 
-# Parse the documentation to extract documented keys
-repo_base = "./"
-print(os.listdir(repo_base))
-docs_path = (
-    "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
-)
-documented_keys = set()
-try:
-    with open(docs_path, "r", encoding="utf-8") as docs_file:
-        content = docs_file.read()
+def collect_env_keys(base_dir: str) -> frozenset[str]:
+    """Return every documentable env var name read anywhere under ``base_dir``."""
+    return frozenset(
+        key for file_path in _files_with_suffix(base_dir, (".py",)) for key in extract_env_keys(_read_text(file_path))
+    )
 
-        print(f"content: {content}")
 
-        # Find the section titled "general_settings - Reference"
-        general_settings_section = re.search(
-            r"### environment variables - Reference(.*?)(?=\n###|\Z)",
-            content,
-            re.DOTALL | re.MULTILINE,
+def _files_with_suffix(base_dir: str, suffixes: tuple[str, ...]) -> Iterator[str]:
+    for root, dirs, files in os.walk(base_dir):
+        # Skip dependency/venv directories - prevents picking up env vars from installed packages
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        yield from (os.path.join(root, name) for name in files if name.endswith(suffixes))
+
+
+def _read_text(file_path: str) -> str:
+    with open(file_path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def extract_documented_keys(docs_content: str) -> frozenset[str]:
+    """Return every env-var-shaped name mentioned anywhere in a documentation page."""
+    return frozenset(DOCUMENTED_KEY_PATTERN.findall(docs_content))
+
+
+def collect_documented_keys(docs_dir: str) -> frozenset[str]:
+    """Return every env-var-shaped name mentioned on any page under ``docs_dir``."""
+    return frozenset(
+        key
+        for file_path in _files_with_suffix(docs_dir, DOCS_SUFFIXES)
+        for key in extract_documented_keys(_read_text(file_path))
+    )
+
+
+def undocumented_env_keys(base_dir: str, docs_dir: str) -> frozenset[str]:
+    """Return the env vars read under ``base_dir`` that no page under ``docs_dir`` mentions."""
+    return collect_env_keys(base_dir) - collect_documented_keys(docs_dir)
+
+
+def main() -> None:
+    if not os.path.isdir(DOCS_BASE):
+        raise Exception(f"No documentation found at {DOCS_BASE}; check out BerriAI/litellm-docs into docs/my-website")
+
+    undocumented_keys = undocumented_env_keys(repo_base, DOCS_BASE)
+    if undocumented_keys:
+        raise Exception(
+            f"Environment variables read under {repo_base} but mentioned nowhere in the docs: "
+            f"{sorted(undocumented_keys)}"
+            f"\nDocument each one, either on the relevant provider page or as a row in the "
+            f"'environment variables - Reference' table in {REFERENCE_TABLE_PATH}"
         )
-        print(f"general_settings_section: {general_settings_section}")
-        if general_settings_section:
-            # Extract the table rows - only first column (key name) from each row
-            table_content = general_settings_section.group(1)
-            for line in table_content.split("\n"):
-                # Match | KEY_NAME | description | - capture first column only
-                match = re.match(r"^\|\s*([A-Z_][A-Z0-9_]*)\s*\|", line)
-                if match:
-                    documented_keys.add(match.group(1).strip())
-except Exception as e:
-    raise Exception(
-        f"Error reading documentation: {e}, \n repo base - {os.listdir(repo_base)}"
-    )
+    print(f"Every environment variable read under {repo_base} is documented")
 
 
-print(f"documented_keys: {documented_keys}")
-# Compare and find undocumented keys
-undocumented_keys = env_keys - documented_keys
-
-# Print results
-print("Keys expected in 'environment settings' (found in code):")
-for key in sorted(env_keys):
-    print(key)
-
-if undocumented_keys:
-    raise Exception(
-        f"\nKeys not documented in 'environment settings - Reference': {undocumented_keys}"
-    )
-else:
-    print(
-        "\nAll keys are documented in 'environment settings - Reference'. - {}".format(
-            env_keys
-        )
-    )
+if __name__ == "__main__":
+    main()
