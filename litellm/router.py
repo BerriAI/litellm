@@ -386,8 +386,8 @@ def _model_info_nested_under_litellm_params(
     be dropped: `model_info` is a declared field on GenericLiteLLMParams, so the misplaced
     block validates and is then ignored by every cost path.
 
-    See https://github.com/BerriAI/litellm/issues/35691. Deployment-level values win, and a
-    nested `id` never displaces the generated deployment id.
+    Deployment-level values win, and a nested `id` never displaces the generated
+    deployment id.
     """
     nested: Final = litellm_params.get("model_info")
     if not isinstance(nested, dict):
@@ -7729,7 +7729,7 @@ class Router:
             _promoted_model_info: Final = _model_info_nested_under_litellm_params(_litellm_params, _model_info)
             if _promoted_model_info:
                 verbose_router_logger.warning(_NESTED_MODEL_INFO_WARNING, _model_name)
-                _model_info.update(_promoted_model_info)  # rebind-ok: this dict is populated in place below too
+                _model_info.update(_promoted_model_info)
             zeroed_pricing: Final = (
                 zeroed_ptu_pricing(_model_info, _litellm_params) if _model_info.get("db_model") is not True else None
             )
