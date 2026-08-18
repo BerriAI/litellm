@@ -3,7 +3,7 @@ import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails"
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { modelCreationScope } from "@/utils/modelPermissions";
-import { Switch, Text } from "@tremor/react";
+import { Switch } from "@/components/ui/switch";
 import type { FormInstance } from "antd";
 import { Select as AntdSelect, Button, Card, Col, Form, Modal, Row, Tooltip, Typography, Alert } from "antd";
 import type { UploadProps } from "antd/es/upload";
@@ -219,12 +219,12 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                 <Row>
                   <Col span={10}></Col>
                   <Col span={10}>
-                    <Text className="mb-5 mt-1">
+                    <p className="text-sm mb-5 mt-1">
                       <strong>Optional</strong> - LiteLLM endpoint to use when health checking this model{" "}
                       <Link href="https://docs.litellm.ai/docs/proxy/health#health" target="_blank">
                         Learn more
                       </Link>
-                    </Text>
+                    </p>
                   </Col>
                 </Row>
 
@@ -297,16 +297,19 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                       }
                       placement="top"
                     >
-                      <Switch
-                        checked={isTeamOnly}
-                        onChange={(checked) => {
-                          setIsTeamOnly(checked);
-                          if (!checked) {
-                            form.setFieldValue("team_id", undefined);
-                          }
-                        }}
-                        disabled={!premiumUser}
-                      />
+                      <span className="inline-flex">
+                        <Switch
+                          checked={isTeamOnly}
+                          onCheckedChange={(checked) => {
+                            setIsTeamOnly(checked);
+                            if (!checked) {
+                              form.setFieldValue("team_id", undefined);
+                            }
+                          }}
+                          disabled={!premiumUser}
+                          aria-label="Team-BYOK Model"
+                        />
+                      </span>
                     </Tooltip>
                   </Form.Item>
                 )}
