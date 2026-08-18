@@ -312,15 +312,6 @@ describe("AddModelForm", () => {
   });
 
   describe("cache control bindings reach the parent form store", () => {
-    const controlFor = (labelText: string, role: string): HTMLElement => {
-      const item = screen.getByText(labelText).closest(".ant-form-item");
-      const control = item?.querySelector(`[role="${role}"]`);
-      if (!(control instanceof HTMLElement)) {
-        throw new Error(`no ${role} control found for "${labelText}"`);
-      }
-      return control;
-    };
-
     const renderWithForm = async () => {
       const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
       mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
@@ -333,11 +324,11 @@ describe("AddModelForm", () => {
         user,
         openCacheControl: async () => {
           await user.click(await screen.findByText("Advanced Settings"));
-          await user.click(controlFor("Cache Control Injection Points", "switch"));
+          await user.click(screen.getByLabelText("Cache Control Injection Points"));
           await screen.findByText("Add Injection Point");
         },
         closeCacheControl: async () => {
-          await user.click(controlFor("Cache Control Injection Points", "switch"));
+          await user.click(screen.getByLabelText("Cache Control Injection Points"));
           await waitFor(() => expect(screen.queryByText("Add Injection Point")).not.toBeInTheDocument());
         },
         // AddModelPanel builds the wire payload from form.validateFields(), which reports exactly
@@ -373,7 +364,7 @@ describe("AddModelForm", () => {
       await openCacheControl();
 
       await user.click(screen.getByText("Select a role"));
-      await user.click(await screen.findByTitle("System"));
+      await user.click(await screen.findByText("System"));
       await user.type(screen.getByPlaceholderText("Optional"), "3");
 
       const values = await mountedValues();
