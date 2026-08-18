@@ -2819,7 +2819,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/team/LoggingSettings.tsx": {

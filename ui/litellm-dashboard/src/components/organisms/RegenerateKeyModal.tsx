@@ -1,19 +1,59 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
-import { Alert, Button, Col, Flex, Form, Input, InputNumber, Modal, Row, Space, Typography } from "antd";
-import { useEffect, useState } from "react";
+import { Alert, Button, Modal, Space } from "antd";
+import { CircleHelp } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useWatch } from "react-hook-form";
 import { CopyToClipboard } from "react-copy-to-clipboard";
+import { z } from "zod/v4";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
 import { regenerateKeyCall } from "../networking";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { calculateExpiryPreviewFromDuration, formatExpiresUtc, isKeyExpired } from "@/utils/keyExpiryUtils";
+import { buildRegenerateKeyPayload, type RegenerateKeyFormValues } from "./regenerateKeyPayload";
 
-const { Text } = Typography;
+const DURATION_PATTERN = /^(\d+(s|m|h|d|w|mo))?$/;
+const DURATION_MESSAGE = "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo";
+const EXPIRED_DURATION_MESSAGE = "Expiration is required for expired keys";
 
-const DURATION_RULE = {
-  pattern: /^(\d+(s|m|h|d|w|mo))?$/,
-  message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+const EMPTY_VALUES: RegenerateKeyFormValues = {
+  key_alias: undefined,
+  max_budget: undefined,
+  tpm_limit: undefined,
+  rpm_limit: undefined,
+  duration: "",
+  grace_period: "",
 };
+
+const buildSchema = (keyIsExpired: boolean): z.ZodType<RegenerateKeyFormValues, RegenerateKeyFormValues> => {
+  const shape = {
+    key_alias: z.string().optional(),
+    max_budget: z.number().nullish(),
+    tpm_limit: z.number().nullish(),
+    rpm_limit: z.number().nullish(),
+    duration: keyIsExpired
+      ? z.string().min(1, EXPIRED_DURATION_MESSAGE).regex(DURATION_PATTERN, DURATION_MESSAGE)
+      : z.string().regex(DURATION_PATTERN, DURATION_MESSAGE),
+    grace_period: z.string().regex(DURATION_PATTERN, DURATION_MESSAGE),
+  };
+
+  return z.object(shape);
+};
+
+const labelWithHint = (label: string, hint: string): React.ReactNode => (
+  <>
+    {label}
+    <Tooltip>
+      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  </>
+);
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
@@ -24,42 +64,36 @@ interface RegenerateKeyModalProps {
 
 export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdate }: RegenerateKeyModalProps) {
   const { accessToken } = useAuthorized();
-  const [form] = Form.useForm();
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const keyIsExpired = isKeyExpired(selectedToken?.expires);
-  const durationValue = Form.useWatch("duration", form);
-
-  // Expired keys must get a new duration, otherwise regeneration produces a key
-  // that inherits the old (past) expiry and is immediately unusable.
-  const durationRules = keyIsExpired
-    ? [{ required: true, message: "Expiration is required for expired keys" }, DURATION_RULE]
-    : [DURATION_RULE];
+  const schema = useMemo(() => buildSchema(keyIsExpired), [keyIsExpired]);
+  const form = useZodForm(schema, { defaultValues: EMPTY_VALUES });
+  const durationValue = useWatch({ control: form.control, name: "duration" });
 
   useEffect(() => {
     if (visible && selectedToken && accessToken) {
-      form.setFieldsValue({
+      const seededValues: RegenerateKeyFormValues = {
         key_alias: selectedToken.key_alias,
         max_budget: selectedToken.max_budget,
         tpm_limit: selectedToken.tpm_limit,
         rpm_limit: selectedToken.rpm_limit,
         duration: selectedToken.duration || "",
         grace_period: "",
-      });
+      };
+      form.reset(seededValues);
     }
   }, [visible, selectedToken, form, accessToken]);
 
   const newExpiryTime = durationValue ? calculateExpiryPreviewFromDuration(durationValue) : null;
 
-  const handleRegenerateKey = async () => {
+  const submitRegenerateKey = async (values: RegenerateKeyFormValues) => {
     if (!selectedToken || !accessToken) return;
 
-    setIsRegenerating(true);
+    const formValues = buildRegenerateKeyPayload(values);
     try {
-      const formValues = await form.validateFields();
-
       const response = await regenerateKeyCall(accessToken, selectedToken.token || selectedToken.token_id, formValues);
       setRegeneratedKey(response.key);
       NotificationManager.success("Virtual Key regenerated successfully");
@@ -88,21 +122,23 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       setIsRegenerating(false);
     } catch (error) {
       setIsRegenerating(false); // Reset regenerating state on error
-      // Ant Design form validation rejections surface inline under the field;
-      // don't also raise a backend-style toast for them.
-      if (error && typeof error === "object" && "errorFields" in error) {
-        return;
-      }
       console.error("Error regenerating key:", error);
       NotificationManager.fromBackend(error);
     }
+  };
+
+  const handleRegenerateKey = () => {
+    if (!selectedToken || !accessToken) return;
+
+    setIsRegenerating(true);
+    void form.handleSubmit(submitRegenerateKey, () => setIsRegenerating(false))();
   };
 
   const handleClose = () => {
     setRegeneratedKey(null);
     setIsRegenerating(false);
     setCopied(false);
-    form.resetFields();
+    form.reset(EMPTY_VALUES);
     onClose();
   };
 
@@ -140,100 +176,103 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       }
     >
       {regeneratedKey ? (
-        <Flex vertical gap="middle">
+        <div className="flex flex-col gap-4">
           <Alert type="warning" showIcon message="Save it now, you will not see it again" />
 
-          <Flex vertical gap={2}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Key Alias
-            </Text>
-            <Text>{selectedToken?.key_alias || "No alias set"}</Text>
-          </Flex>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-xs text-muted-foreground">Key Alias</span>
+            <span className="text-sm text-foreground">{selectedToken?.key_alias || "No alias set"}</span>
+          </div>
 
-          <Flex vertical gap={6}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Virtual Key
-            </Text>
-            <div
-              style={{
-                background: "#f5f5f5",
-                border: "1px solid #e8e8e8",
-                borderRadius: 6,
-                padding: "14px 16px",
-                fontFamily: "SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace",
-                fontSize: 16,
-                wordBreak: "break-all",
-                color: "#262626",
-              }}
-            >
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs text-muted-foreground">Virtual Key</span>
+            <div className="rounded-md border border-border bg-muted px-4 py-3.5 font-mono text-base break-all text-foreground">
               {regeneratedKey}
             </div>
-          </Flex>
-        </Flex>
+          </div>
+        </div>
       ) : (
-        <Form form={form} layout="vertical" style={{ marginTop: 4 }}>
-          <Form.Item name="key_alias" label="Key Alias">
-            <Input disabled />
-          </Form.Item>
+        <TooltipProvider>
+          <form onSubmit={(event) => event.preventDefault()} noValidate className="mt-1">
+            <FieldGroup>
+              <FormField control={form.control} name="key_alias" label="Key Alias">
+                {({ ref, value, ...field }) => <Input {...field} ref={ref} value={value ?? ""} disabled />}
+              </FormField>
 
-          <Row gutter={12}>
-            <Col span={8}>
-              <Form.Item name="max_budget" label="Max Budget (USD)">
-                <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="tpm_limit" label="TPM Limit">
-                <InputNumber style={{ width: "100%" }} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="rpm_limit" label="RPM Limit">
-                <InputNumber style={{ width: "100%" }} />
-              </Form.Item>
-            </Col>
-          </Row>
+              <div className="grid grid-cols-3 gap-3">
+                <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
+                  {({ ref, value, onChange, ...field }) => (
+                    <Input
+                      {...field}
+                      ref={ref}
+                      type="number"
+                      step={0.01}
+                      value={value ?? ""}
+                      onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                    />
+                  )}
+                </FormField>
 
-          <Row gutter={12}>
-            <Col span={12}>
-              <Form.Item
-                name="duration"
-                label="Expire Key"
-                rules={durationRules}
-                extra={
-                  <Flex vertical gap={2}>
-                    <Text type={keyIsExpired ? "danger" : "secondary"} style={{ fontSize: 12 }}>
-                      Current expiry: {selectedToken?.expires ? formatExpiresUtc(selectedToken.expires) : "Never"}
-                      {keyIsExpired && " (expired)"}
-                    </Text>
-                    {newExpiryTime && (
-                      <Text type="success" style={{ fontSize: 12 }}>
-                        New expiry: {newExpiryTime}
-                      </Text>
-                    )}
-                  </Flex>
-                }
-              >
-                <Input placeholder="e.g. 30s, 30h, 30d" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="grace_period"
-                label="Grace Period"
-                tooltip="Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke."
-                extra={
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    Recommended: 24h to 72h for production keys
-                  </Text>
-                }
-                rules={[DURATION_RULE]}
-              >
-                <Input placeholder="e.g. 24h, 2d" />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
+                <FormField control={form.control} name="tpm_limit" label="TPM Limit">
+                  {({ ref, value, onChange, ...field }) => (
+                    <Input
+                      {...field}
+                      ref={ref}
+                      type="number"
+                      value={value ?? ""}
+                      onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                    />
+                  )}
+                </FormField>
+
+                <FormField control={form.control} name="rpm_limit" label="RPM Limit">
+                  {({ ref, value, onChange, ...field }) => (
+                    <Input
+                      {...field}
+                      ref={ref}
+                      type="number"
+                      value={value ?? ""}
+                      onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                    />
+                  )}
+                </FormField>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <FormField
+                  control={form.control}
+                  name="duration"
+                  label="Expire Key"
+                  description={
+                    <span className="flex flex-col gap-0.5 text-xs">
+                      <span className={keyIsExpired ? "text-destructive" : "text-muted-foreground"}>
+                        Current expiry: {selectedToken?.expires ? formatExpiresUtc(selectedToken.expires) : "Never"}
+                        {keyIsExpired && " (expired)"}
+                      </span>
+                      {newExpiryTime && (
+                        <span className="text-green-600 dark:text-green-400">New expiry: {newExpiryTime}</span>
+                      )}
+                    </span>
+                  }
+                >
+                  {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. 30s, 30h, 30d" />}
+                </FormField>
+
+                <FormField
+                  control={form.control}
+                  name="grace_period"
+                  label={labelWithHint(
+                    "Grace Period",
+                    "Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke.",
+                  )}
+                  description={<span className="text-xs">Recommended: 24h to 72h for production keys</span>}
+                >
+                  {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. 24h, 2d" />}
+                </FormField>
+              </div>
+            </FieldGroup>
+          </form>
+        </TooltipProvider>
       )}
     </Modal>
   );
