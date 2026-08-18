@@ -1167,6 +1167,18 @@ class Router:
             or self.get_routing_group(model) is not None
         )
 
+    def _resolve_to_deployment_model_names(self, model: str) -> tuple[str, ...]:
+        """
+        The deployment `model_name`s behind a requested name: a
+        `model_group_alias` resolves to its target and a callable routing group
+        to its members, so lookups keyed by model group name reach the same
+        deployments the router would route the request to. Names that are
+        neither resolve to themselves.
+        """
+        resolved: Final = self._get_model_from_alias(model=model) or model
+        group: Final = self.get_routing_group(resolved)
+        return tuple(group.models) if group is not None else (resolved,)
+
     def routing_group_has_alternatives(self, model_group: str | None) -> bool:
         """
         True when `model_group` names a callable routing group whose member
@@ -9764,6 +9776,11 @@ class Router:
 
         Returns list of model id's.
 
+        `model_name` may be any name the router serves: a deployment
+        `model_name`, a `model_group_alias`, or a callable routing group, which
+        resolve to the deployments they route to (see
+        `_resolve_to_deployment_model_names`).
+
         Optimized with O(1) or O(k) index lookup when model_name provided,
         instead of O(n) linear scan.
         """
@@ -9771,9 +9788,8 @@ class Router:
 
         if model_name is not None:
             # O(1) lookup in model_name index, then O(k) iteration where k = deployments for this model_name
-            if model_name in self.model_name_to_deployment_indices:
-                indices: Final = self.model_name_to_deployment_indices[model_name]
-                for idx in indices:
+            for deployment_model_name in self._resolve_to_deployment_model_names(model=model_name):
+                for idx in self.model_name_to_deployment_indices.get(deployment_model_name) or ():
                     model = self.model_list[idx]
                     if "model_info" in model and "id" in model["model_info"]:
                         if exclude_team_models and model["model_info"].get("team_id"):

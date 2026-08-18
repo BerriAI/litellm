@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import Router
-from litellm.types.router import RoutingGroup, RoutingStrategy
+from litellm.types.router import RouterRateLimitError, RoutingGroup, RoutingStrategy
 
 
 def _model_list():
@@ -1068,3 +1068,47 @@ async def test_group_call_429_cools_down_member_across_retries():
     )
     cooldown_ids = await _call_and_get_cooldowns(router, "quality")
     assert "deploy-3" in cooldown_ids
+
+
+def test_get_model_ids_resolves_group_and_alias_to_member_deployments():
+    router = Router(
+        model_list=_model_list(),
+        model_group_alias={"quality-alias": "quality"},
+        routing_groups=_quality_group("simple-shuffle"),
+    )
+    assert sorted(router.get_model_ids(model_name="quality")) == ["deploy-1", "deploy-2", "deploy-3"]
+    assert sorted(router.get_model_ids(model_name="quality-alias")) == ["deploy-1", "deploy-2", "deploy-3"]
+    assert sorted(router.get_model_ids(model_name="filtered-model")) == ["deploy-1", "deploy-2"]
+    assert router.get_model_ids(model_name="not-a-model") == []
+
+
+@pytest.mark.asyncio
+async def test_group_call_reports_member_cooldown_time_when_every_member_is_cooling_down():
+    """
+    Regression: the group name has to resolve to its members' deployment ids, else the
+    429 raised for a fully cooled-down group reports the router's default cooldown
+    instead of the members' own, and the proxy sends that as `retry-after`.
+    """
+    deployment_cooldown_time = 120
+    router = Router(
+        model_list=[
+            {**deployment, "model_info": {**deployment["model_info"], "cooldown_time": deployment_cooldown_time}}
+            for deployment in _model_list()
+        ],
+        routing_groups=_quality_group("simple-shuffle"),
+        num_retries=0,
+    )
+    assert router.cooldown_cache.default_cooldown_time != deployment_cooldown_time
+
+    for deployment_id in ("deploy-1", "deploy-2", "deploy-3"):
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id=deployment_id,
+            original_exception=litellm.RateLimitError(message="rate limited", llm_provider="openai", model="gpt-4o"),
+            exception_status=429,
+            cooldown_time=deployment_cooldown_time,
+        )
+
+    with pytest.raises(RouterRateLimitError) as exc_info:
+        await router.async_get_available_deployment(model="quality", request_kwargs={})
+
+    assert exc_info.value.cooldown_time == deployment_cooldown_time
