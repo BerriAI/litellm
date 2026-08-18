@@ -31,15 +31,15 @@ pins one fixed behavior:
   its own credentials.
 
 Every deployment is registered via /model/new (stage has no static config for
-these) and ``enable_tag_filtering`` is flipped through /config/update and
-restored on teardown, mirroring TestRouterSettings in the management suite.
+these) and ``enable_tag_filtering`` is enabled through key-level
+``router_settings`` on the keys the tag tests mint, so the switch rides only
+this module's own requests and the rest of the suite is never filtered.
 The served deployment is always read back from the spend log's ``model``,
 which stores either the registered alias or the provider-prefixed form.
 """
 
 import json
 import os
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Final
@@ -48,7 +48,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import unique_marker
-from e2e_http import AnthropicHeaders, AuthHeaders, NoBody, UnauthorizedError, unwrap
+from e2e_http import AnthropicHeaders, AuthHeaders, UnauthorizedError, unwrap
 from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesBody,
@@ -58,6 +58,7 @@ from models import (
     ChatMetadata,
     KeyGenerateBody,
     LiteLLMParamsBody,
+    RouterSettingsOverride,
     SpendLogRow,
 )
 from proxy_client import ProxyClient
@@ -117,26 +118,6 @@ class ResponsesApiResponse(BaseModel):
     model: str | None = None
 
 
-class RouterSettingsPatch(BaseModel):
-    enable_tag_filtering: bool
-
-
-class ConfigUpdateBody(BaseModel):
-    router_settings: RouterSettingsPatch
-
-
-class ConfigUpdateResponse(BaseModel):
-    message: str
-
-
-class RouterCurrentValues(BaseModel):
-    enable_tag_filtering: bool | None = None
-
-
-class RouterSettingsResponse(BaseModel):
-    current_values: RouterCurrentValues
-
-
 @dataclass(frozen=True, slots=True)
 class TagSplitDeployments:
     """Scenario A mirrors the customer-shaped config from GitHub issue #36619:
@@ -191,44 +172,16 @@ def _uniform_tier_config(tier_model: str) -> dict[str, object]:
     }
 
 
-def _read_tag_filtering(proxy: ProxyClient) -> bool | None:
-    return unwrap(
-        proxy.transport.get(
-            "/router/settings",
-            headers=proxy.transport.master,
-            params=NoBody(),
-            response_type=RouterSettingsResponse,
-        )
-    ).current_values.enable_tag_filtering
-
-
-def _write_tag_filtering(proxy: ProxyClient, enabled: bool) -> None:
-    response: Final = unwrap(
-        proxy.transport.post(
-            "/config/update",
-            headers=proxy.transport.master,
-            json=ConfigUpdateBody(router_settings=RouterSettingsPatch(enable_tag_filtering=enabled)),
-            response_type=ConfigUpdateResponse,
+def _key_for(
+    proxy: ProxyClient, resources: ResourceManager, models: list[str], tag_filtering: bool = False
+) -> str:
+    key: Final = proxy.generate_key(
+        KeyGenerateBody(
+            models=models,
+            user_id="e2e-auto-router-regressions",
+            router_settings=RouterSettingsOverride(enable_tag_filtering=True) if tag_filtering else None,
         )
     )
-    assert "success" in response.message.lower(), (
-        f"/config/update reported {response.message!r}, expected a success message"
-    )
-
-
-def _await_tag_filtering(proxy: ProxyClient, expected: bool) -> None:
-    deadline: Final = time.monotonic() + proxy.poll_timeout
-    while time.monotonic() < deadline:
-        if _read_tag_filtering(proxy) is expected:
-            return
-        time.sleep(proxy.poll_interval)
-    raise AssertionError(
-        f"GET /router/settings never reported enable_tag_filtering={expected} after /config/update"
-    )
-
-
-def _key_for(proxy: ProxyClient, resources: ResourceManager, models: list[str]) -> str:
-    key: Final = proxy.generate_key(KeyGenerateBody(models=models, user_id="e2e-auto-router-regressions"))
     resources.defer(lambda: proxy.delete_key(key))
     return key
 
@@ -258,23 +211,7 @@ def _assert_served_only_by(rows: list[SpendLogRow], allowed: frozenset[str], con
 
 
 @pytest.fixture(scope="module")
-def tag_filtering(proxy: ProxyClient) -> Iterator[None]:
-    """enable_tag_filtering is what splits tagged from untagged traffic in every
-    scenario here. /config/update is the only write path for router_settings;
-    the original value is restored on teardown so the shared proxy keeps its
-    configuration for the rest of the run."""
-    original: Final = bool(_read_tag_filtering(proxy))
-    _write_tag_filtering(proxy, True)
-    _await_tag_filtering(proxy, True)
-    try:
-        yield
-    finally:
-        _write_tag_filtering(proxy, original)
-        _await_tag_filtering(proxy, original)
-
-
-@pytest.fixture(scope="module")
-def split(proxy: ProxyClient, tag_filtering: None) -> Iterator[TagSplitDeployments]:
+def split(proxy: ProxyClient) -> Iterator[TagSplitDeployments]:
     marker: Final = unique_marker()
     deployments: Final = TagSplitDeployments(
         tag_a=f"e2e-split-a-{marker}",
@@ -421,7 +358,7 @@ class TestTagSplitRouting:
         body metadata tags match the tagged marker under a shared model name is
         answered by the marker's tier deployment, not by the plain deployment
         that was registered under the name first."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a])
+        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
         chat: Final = unwrap(proxy.chat(key, _hello_chat_body(split.shared_a, tags=[split.tag_a])))
         assert chat.choices, "tagged chat through the shared name returned no choices"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
@@ -435,7 +372,7 @@ class TestTagSplitRouting:
         succeed on every call and are all served by the plain deployment; the
         tagged marker never captures them, so no intermittent auto-router
         errors and no tier hijacking."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a])
+        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
         for _ in range(5):
             chat = unwrap(proxy.chat(key, _hello_chat_body(split.shared_a)))
             assert chat.choices, "untagged chat through the shared name returned no choices"
@@ -449,7 +386,7 @@ class TestTagSplitRouting:
         """Pins GitHub issue #36620 on the /v1/messages surface: an untagged
         Anthropic-native request to the shared name is served by the plain
         deployment, not captured by the tagged marker."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a])
+        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
         answer: Final = unwrap(proxy.messages(key, _hello_messages_body(split.shared_a)))
         assert answer.content or answer.choices, "untagged /v1/messages returned neither content nor choices"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
@@ -465,7 +402,7 @@ class TestUntaggedTierDeployments:
         x-litellm-tags header selects the tagged marker, and the rewrite still
         lands on the tier deployment even though that deployment carries no
         tags, because the marker consumed the routing tags."""
-        key: Final = _key_for(proxy, resources, [split.shared_b, split.tier_b])
+        key: Final = _key_for(proxy, resources, [split.shared_b, split.tier_b], tag_filtering=True)
         headers: Final = TaggedAnthropicHeaders(authorization=f"Bearer {key}", x_litellm_tags=split.tag_b)
         answer: Final = unwrap(
             proxy.transport.post(
@@ -487,7 +424,7 @@ class TestUntaggedTierDeployments:
         tagged marker rewrites the request to its tier model, the consumed
         routing tags no longer constrain deployment selection, so the untagged
         tier deployment serves the request instead of a strict-tag denial."""
-        key: Final = _key_for(proxy, resources, [split.shared_b, split.tier_b])
+        key: Final = _key_for(proxy, resources, [split.shared_b, split.tier_b], tag_filtering=True)
         chat: Final = unwrap(proxy.chat(key, _hello_chat_body(split.shared_b, tags=[split.tag_b])))
         assert chat.choices, "body-tagged chat through the marker-first shared name returned no choices"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
@@ -500,7 +437,7 @@ class TestUntaggedTierDeployments:
         """The tag-consumption fix must not loosen strict tag semantics: a
         tagged request aimed directly at an untagged deployment (no marker
         involved) is still rejected with the 401 tags-configuration error."""
-        key: Final = _key_for(proxy, resources, [split.tier_b])
+        key: Final = _key_for(proxy, resources, [split.tier_b], tag_filtering=True)
         result: Final = proxy.chat(key, _hello_chat_body(split.tier_b, tags=[split.tag_b]))
         assert isinstance(result, UnauthorizedError), (
             f"expected the tagged direct call to an untagged deployment to be denied with 401, got {result}"
@@ -516,7 +453,7 @@ class TestResponsesApiTagRouting:
         #36620/#36621): a /v1/responses request with string input, tagged via
         the x-litellm-tags header, succeeds and routes through the tagged
         marker to its tier."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a])
+        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
         headers: Final = TaggedAuthHeaders(authorization=f"Bearer {key}", x_litellm_tags=split.tag_a)
         body: Final = ResponsesBody(
             model=split.shared_a, input=f"say hello {unique_marker()}", max_output_tokens=64
@@ -535,7 +472,7 @@ class TestResponsesApiTagRouting:
         """Pins the body-tag and list-input combination of the same split:
         /v1/responses with litellm_metadata.tags and structured input items
         routes through the tagged marker to its tier."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a])
+        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
         body: Final = ResponsesBody(
             model=split.shared_a,
             input=[ResponsesInputItem(role="user", content=f"say hello {unique_marker()}")],
@@ -561,7 +498,7 @@ class TestResponsesApiTagRouting:
         """Pins the untagged half of the /v1/responses tag split: an untagged
         request to the shared name is served by the plain deployment, matching
         the chat and messages surfaces."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a])
+        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
         body: Final = ResponsesBody(
             model=split.shared_a, input=f"say hello {unique_marker()}", max_output_tokens=64
         )
