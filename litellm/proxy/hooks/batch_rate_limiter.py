@@ -429,14 +429,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             ),
             None,
         )
-        candidate_count: Final = max(
-            (
-                v
-                for v in (body.get("n"), body.get("best_of"))
-                if isinstance(v, int) and not isinstance(v, bool) and v > 1
-            ),
-            default=1,
-        )
+        candidate_count: Final = self.parallel_request_limiter.get_output_candidate_count(body)
         if explicit_cap is not None:
             try:
                 return max(0, int(explicit_cap)) * candidate_count

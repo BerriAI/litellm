@@ -1992,9 +1992,13 @@ def _output_estimator():
     the no-`max_tokens` floor mock returns a distinctive sentinel so tests can
     tell "floor was used" apart from "an explicit cap was read"."""
     from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
 
     limiter = MagicMock()
     limiter.no_max_tokens_output_floor.return_value = 999
+    limiter.get_output_candidate_count = _PROXY_MaxParallelRequestsHandler_v3.get_output_candidate_count
     return _PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
         parallel_request_limiter=limiter,
@@ -2070,6 +2074,9 @@ def test_estimate_entry_output_tokens_prefers_max_tokens_over_max_output_tokens(
         ({"max_tokens": 40, "n": 3, "best_of": 5}, 200),
         ({"max_tokens": 40, "n": 0}, 40),
         ({"max_tokens": 40, "n": -2}, 40),
+        ({"max_tokens": 40, "n": 5.0}, 200),
+        ({"max_tokens": 40, "n": "10"}, 400),
+        ({"max_tokens": 40, "n": "not-a-number"}, 40),
         ({"n": 3}, 2997),
     ],
 )

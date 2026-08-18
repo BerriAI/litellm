@@ -750,8 +750,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return cls._get_explicit_output_cap(data, call_type) is not None
 
     @staticmethod
-    def _get_output_candidate_count(data: object, call_type: str | None = None) -> int:
-        if not isinstance(data, dict):
+    def get_output_candidate_count(data: object, call_type: str | None = None) -> int:
+        if not isinstance(data, Mapping):
             return 1
         config: Final = (
             (data.get("config") if "config" in data else data.get("generationConfig"))
@@ -951,7 +951,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else max(estimated_input_tokens, output_floor)
         )
 
-        return estimated_input_tokens, max_tokens_estimate * self._get_output_candidate_count(data, call_type)
+        return estimated_input_tokens, max_tokens_estimate * self.get_output_candidate_count(data, call_type)
 
     def _is_redis_cluster(self) -> bool:
         """
