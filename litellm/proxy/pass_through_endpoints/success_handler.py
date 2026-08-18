@@ -236,7 +236,7 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = cursor_passthrough_logging_handler_result["result"]
             kwargs = cursor_passthrough_logging_handler_result["kwargs"]
-        elif self.is_comprehend_medical_route(url_route, custom_llm_provider):
+        elif self.is_comprehend_medical_route(custom_llm_provider):
             from .llm_provider_handlers.comprehend_medical_passthrough_logging_handler import (
                 ComprehendMedicalPassthroughLoggingHandler,
             )
@@ -384,13 +384,8 @@ class PassThroughEndpointLogging:
             return True
         return False
 
-    def is_comprehend_medical_route(self, url_route: str, custom_llm_provider: str | None = None) -> bool:
-        if custom_llm_provider == "comprehendmedical":
-            return True
-        hostname: Final = urlparse(url_route).hostname
-        if hostname is None:
-            return False
-        return hostname.startswith("comprehendmedical.") and hostname.endswith(".amazonaws.com")
+    def is_comprehend_medical_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "comprehendmedical"
 
     def is_langfuse_route(self, url_route: str):
         parsed_url: Final = urlparse(url_route)
