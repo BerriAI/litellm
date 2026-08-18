@@ -419,6 +419,7 @@ class TestRuninfra:
 
         expected_models = {
             "runinfra/deepseek-ai/DeepSeek-V4-Flash-0731": (1.3e-07, 2.7e-07, 1e-08),
+            "runinfra/deepseek-ai/DeepSeek-V4-Pro-0813": (6e-07, 1.9e-06, 3e-08),
             "runinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": (
                 5e-08,
                 1.5e-07,
@@ -444,6 +445,7 @@ class TestRuninfra:
                 assert model_cost[model]["supports_prompt_caching"] is True
 
         assert model_cost["runinfra/deepseek-ai/DeepSeek-V4-Flash-0731"]["max_input_tokens"] == 1048576
+        assert model_cost["runinfra/deepseek-ai/DeepSeek-V4-Pro-0813"]["max_input_tokens"] == 1048576
         assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["max_input_tokens"] == 262144
         assert model_cost["runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4"]["supports_response_schema"] is True
         assert model_cost["runinfra/Qwen/Qwen3.8-27B"]["supports_response_schema"] is True
