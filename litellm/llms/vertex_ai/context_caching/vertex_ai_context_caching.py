@@ -1,7 +1,6 @@
-from typing import Final, Literal
-
 import time
 from datetime import datetime
+from typing import Final, Literal
 
 import httpx
 
@@ -75,7 +74,7 @@ def _parse_expire_time(expire_time: str | None) -> float | None:
             offset = tail[len(digits) :]
             normalized = f"{head}.{digits[:6]}{offset}"
         return datetime.fromisoformat(normalized).timestamp()
-    except Exception:
+    except (ValueError, TypeError, OverflowError, OSError):
         verbose_logger.debug("Vertex context caching: could not parse expireTime=%s", expire_time)
         return None
 
