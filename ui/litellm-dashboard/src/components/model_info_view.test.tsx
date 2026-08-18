@@ -1235,4 +1235,167 @@ describe("ModelInfoView", () => {
       expect(await screen.findByTestId("test-connection-button")).toBeInTheDocument();
     });
   });
+
+  describe("payload parity pins", () => {
+    const enterEditMode = async (user: ReturnType<typeof userEvent.setup>) => {
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      await waitFor(() => expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument());
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument());
+    };
+
+    const save = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+      await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
+      return mockModelPatchUpdateCall.mock.calls[0][1] as {
+        model_name: string;
+        litellm_params: Record<string, unknown>;
+        model_info: Record<string, unknown>;
+      };
+    };
+
+    it("sends the whole edit payload for an untouched save", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      const payload = await save(user);
+
+      expect(payload).toEqual({
+        model_name: "GPT-4",
+        litellm_params: {
+          model: "gpt-4",
+          api_base: "https://api.openai.com/v1",
+          custom_llm_provider: "openai",
+          litellm_credential_name: "selected-credential",
+          tags: [],
+          guardrails: [],
+        },
+        model_info: {
+          id: "123",
+          created_by: "123",
+          created_at: "2024-01-01T00:00:00Z",
+          db_model: true,
+          input_cost_per_token: 0.00003,
+          output_cost_per_token: 0.00006,
+          access_groups: [],
+        },
+      });
+    });
+
+    it("omits health_check_model for a model that is not a wildcard, whose field never renders", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      const payload = await save(user);
+
+      expect(payload.model_info).not.toHaveProperty("health_check_model");
+    });
+
+    it("routes each edited field into its own payload key", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.clear(screen.getByPlaceholderText("Enter model name"));
+      await user.type(screen.getByPlaceholderText("Enter model name"), "renamed-model");
+      await user.clear(screen.getByPlaceholderText("Enter LiteLLM model name"));
+      await user.type(screen.getByPlaceholderText("Enter LiteLLM model name"), "gpt-4o");
+      await user.clear(screen.getByPlaceholderText("Enter API base"));
+      await user.type(screen.getByPlaceholderText("Enter API base"), "https://example.test/v1");
+      await user.type(screen.getByPlaceholderText("Enter TPM"), "111");
+      await user.type(screen.getByPlaceholderText("Enter RPM"), "222");
+      await user.type(screen.getByPlaceholderText("Enter timeout"), "33");
+
+      const payload = await save(user);
+
+      expect(payload.model_name).toBe("renamed-model");
+      expect(payload.litellm_params).toMatchObject({
+        model: "gpt-4o",
+        api_base: "https://example.test/v1",
+        tpm: "111",
+        rpm: "222",
+        timeout: "33",
+      });
+    });
+
+    it("keeps a pricing field in the payload after the operator types a value and restores the original", async () => {
+      // antd marks a field touched on change and never clears it, so retyping the seeded value
+      // still ships the key. RHF's dirtyFields resets on a value returning to its default, which
+      // would silently drop input_cost_per_token here.
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      const inputCost = screen.getByPlaceholderText("Enter input cost") as HTMLInputElement;
+      const seeded = inputCost.value;
+      expect(seeded).toBe("30");
+
+      await user.clear(inputCost);
+      await user.type(inputCost, "7");
+      await user.clear(inputCost);
+      await user.type(inputCost, seeded);
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.input_cost_per_token).toBe(0.00003);
+      expect(payload.litellm_params.cache_read_input_token_cost).toBe(0.00003);
+    });
+
+    it("clears a pricing override with an explicit null once the field is emptied", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.clear(screen.getByPlaceholderText("Enter input cost"));
+      const payload = await save(user);
+
+      expect(payload.litellm_params.input_cost_per_token).toBeNull();
+      expect(payload.litellm_params).not.toHaveProperty("cache_read_input_token_cost");
+    });
+
+    describe("cache control injection points", () => {
+      const withCachePoints = (points: unknown) => {
+        const data = {
+          ...defaultModelData,
+          litellm_params: { ...defaultModelData.litellm_params, cache_control_injection_points: points },
+        };
+        mockUseModelsInfo.mockReturnValue({ data: { data: [data] }, isLoading: false, error: null });
+        mockModelInfoV1Call.mockResolvedValue({ data: [data] });
+      };
+
+      it("omits the key when the deployment has none and the operator leaves the toggle alone", async () => {
+        const user = userEvent.setup();
+        await enterEditMode(user);
+        const payload = await save(user);
+
+        expect(payload.litellm_params).not.toHaveProperty("cache_control_injection_points");
+      });
+
+      it("round-trips the stored injection points on an untouched save", async () => {
+        withCachePoints([{ location: "message", role: "user" }]);
+        const user = userEvent.setup();
+        await enterEditMode(user);
+        const payload = await save(user);
+
+        expect(payload.litellm_params.cache_control_injection_points).toEqual([{ location: "message", role: "user" }]);
+      });
+
+      it("drops the stored injection points when the operator turns the toggle off", async () => {
+        withCachePoints([{ location: "message", role: "user" }]);
+        const user = userEvent.setup();
+        await enterEditMode(user);
+
+        await user.click(screen.getByRole("switch"));
+        const payload = await save(user);
+
+        expect(payload.litellm_params).not.toHaveProperty("cache_control_injection_points");
+      });
+
+      it("adds a typed index as a string, matching what the deployment already stores", async () => {
+        withCachePoints([{ location: "message" }]);
+        const user = userEvent.setup();
+        await enterEditMode(user);
+
+        await user.type(screen.getByPlaceholderText("Optional"), "2");
+        const payload = await save(user);
+
+        expect(payload.litellm_params.cache_control_injection_points).toEqual([{ location: "message", index: "2" }]);
+      });
+    });
+  });
 });

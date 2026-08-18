@@ -1,5 +1,5 @@
 import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { Form } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import { describe, expect, it, vi } from "vitest";
@@ -309,5 +309,100 @@ describe("AddModelForm", () => {
     expect(await screen.findByText("Provider")).toBeInTheDocument();
     expect((await screen.findAllByRole("button", { name: "Test Connect" })).length).toBeGreaterThan(0);
     expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
+  });
+
+  describe("cache control bindings reach the parent form store", () => {
+    const controlFor = (labelText: string, role: string): HTMLElement => {
+      const item = screen.getByText(labelText).closest(".ant-form-item");
+      const control = item?.querySelector(`[role="${role}"]`);
+      if (!(control instanceof HTMLElement)) {
+        throw new Error(`no ${role} control found for "${labelText}"`);
+      }
+      return control;
+    };
+
+    const renderWithForm = async () => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+      const props = createTestProps();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      renderWithProviders(<AddModelForm {...props} />);
+      await screen.findByText("Provider");
+
+      return {
+        user,
+        openCacheControl: async () => {
+          await user.click(await screen.findByText("Advanced Settings"));
+          await user.click(controlFor("Cache Control Injection Points", "switch"));
+          await screen.findByText("Add Injection Point");
+        },
+        closeCacheControl: async () => {
+          await user.click(controlFor("Cache Control Injection Points", "switch"));
+          await waitFor(() => expect(screen.queryByText("Add Injection Point")).not.toBeInTheDocument());
+        },
+        // AddModelPanel builds the wire payload from form.validateFields(), which reports exactly
+        // the mounted registered set. Reading the same instance the same way keeps this on the
+        // real payload path; a rejection still carries the same `values` object.
+        mountedValues: async (): Promise<Record<string, unknown>> => {
+          try {
+            return await props.form.validateFields();
+          } catch (error) {
+            return (error as { values: Record<string, unknown> }).values;
+          }
+        },
+      };
+    };
+
+    it("omits both cache control keys while the section is untouched", async () => {
+      const { mountedValues } = await renderWithForm();
+      const values = await mountedValues();
+      expect(values).not.toHaveProperty("cache_control_injection_points");
+      expect(values.cache_control).toBeUndefined();
+    });
+
+    it("sends the seeded injection point once the toggle is on", async () => {
+      const { openCacheControl, mountedValues } = await renderWithForm();
+      await openCacheControl();
+      const values = await mountedValues();
+      expect(values.cache_control).toBe(true);
+      expect(values.cache_control_injection_points).toEqual([{ location: "message" }]);
+    });
+
+    it("carries an edited role and keeps the index a string, as the antd control did", async () => {
+      const { user, openCacheControl, mountedValues } = await renderWithForm();
+      await openCacheControl();
+
+      await user.click(screen.getByText("Select a role"));
+      await user.click(await screen.findByTitle("System"));
+      await user.type(screen.getByPlaceholderText("Optional"), "3");
+
+      const values = await mountedValues();
+      expect(values.cache_control_injection_points).toEqual([{ location: "message", role: "system", index: "3" }]);
+    });
+
+    it("adds a second injection point row", async () => {
+      const { user, openCacheControl, mountedValues } = await renderWithForm();
+      await openCacheControl();
+
+      await user.click(screen.getByText("Add Injection Point"));
+      await waitFor(() => expect(screen.getAllByPlaceholderText("Optional")).toHaveLength(2));
+      await user.type(screen.getAllByPlaceholderText("Optional")[1], "7");
+
+      const values = await mountedValues();
+      expect(values.cache_control_injection_points).toEqual([
+        { location: "message" },
+        { location: "message", index: "7" },
+      ]);
+    });
+
+    it("drops the injection points again when the toggle goes back off", async () => {
+      const { openCacheControl, closeCacheControl, mountedValues } = await renderWithForm();
+      await openCacheControl();
+      await closeCacheControl();
+
+      const values = await mountedValues();
+      expect(values.cache_control).toBe(false);
+      expect(values).not.toHaveProperty("cache_control_injection_points");
+    });
   });
 });
