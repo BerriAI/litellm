@@ -4118,6 +4118,30 @@ class TestAutoRouterClassifierDefaultPrompt:
         assert "Tiers:" in response.system_prompt
 
     @pytest.mark.asyncio
+    async def test_rubric_preset_selects_the_calibration_examples(self):
+        """A router on the chat preset must not prefill the editor with the agentic rubric, or the
+        operator edits a prompt their classifier never sends."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+        from litellm.router_strategy.complexity_router import ClassificationRubric, classification_system_prompt
+
+        for preset in ClassificationRubric:
+            response = await get_auto_router_classifier_default_prompt(context_window_size=5, classification_rubric=preset)
+            assert response.system_prompt == classification_system_prompt(5, classification_rubric=preset)
+
+        agentic = await get_auto_router_classifier_default_prompt(
+            context_window_size=5, classification_rubric=ClassificationRubric.AGENTIC
+        )
+        chat = await get_auto_router_classifier_default_prompt(context_window_size=5, classification_rubric=ClassificationRubric.CHAT)
+        unset = await get_auto_router_classifier_default_prompt(context_window_size=5)
+        assert "Calibration on engineering tasks" in agentic.system_prompt
+        assert "Calibration on engineering tasks" not in chat.system_prompt
+        assert "Calibration examples:" in chat.system_prompt
+        # An unset preset must prefill the editor with the rubric an unconfigured router still sends.
+        assert "Calibration" not in unset.system_prompt
+
+    @pytest.mark.asyncio
     async def test_context_window_size_changes_the_closing_line(self):
         """The editor must prefill the prompt matching the configured window, not a fixed one."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -4160,7 +4184,7 @@ class TestAutoRouterClassifierDefaultPrompt:
 
     @pytest.mark.asyncio
     async def test_malformed_tier_labels_are_rejected_rather_than_silently_ignored(self):
-        """An unparseable or invalid rename must not fall back to the canonical rubric: that would
+        """An unparseable or invalid rename must not fall back to the canonical classification_rubric: that would
         prefill tier names the router does not accept while looking like it worked."""
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import (

@@ -14,11 +14,11 @@ import {
   TableHeaderCell,
   TableRow,
 } from "@tremor/react";
-import { Alert, Button as Button2, Form, Input, Modal, Space, Tabs, Typography } from "antd";
+import { Alert, Modal, Space, Tabs, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import NewBadge from "@/components/common_components/NewBadge";
 import { useBaseUrl } from "@/components/constants";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "@/components/networking";
 import SCIMConfig from "@/components/SCIM";
 import LoggingSettings from "@/components/Settings/AdminSettings/LoggingSettings/LoggingSettings";
@@ -28,9 +28,43 @@ import UserBannerSettings from "@/components/Settings/AdminSettings/UserBannerSe
 import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import PluginSettings from "@/components/Settings/AdminSettings/PluginSettings/PluginSettings";
 import SSOModals from "@/components/SSOModals";
+import {
+  emptySSOSettingsFormValues,
+  useSSOSettingsForm,
+  type SSOSettingsFormValues,
+} from "@/components/Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm";
 import UIAccessControlForm from "@/components/UIAccessControlForm";
+import { z } from "zod/v4";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button as ShadcnButton } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useZodForm } from "@/lib/forms/useZodForm";
 
 const { Title, Paragraph, Text } = Typography;
+
+const allowedIPSchema = z.object({
+  ip: z.string().min(1, "Please enter an IP address"),
+});
+
+type AllowedIPFormValues = z.infer<typeof allowedIPSchema>;
+
+const AddAllowedIPForm = ({ onSubmit }: { onSubmit: (values: AllowedIPFormValues) => Promise<void> }) => {
+  const form = useZodForm(allowedIPSchema, { defaultValues: { ip: "" } });
+
+  return (
+    <form onSubmit={form.handleSubmit(onSubmit)}>
+      <FieldGroup>
+        <FormField control={form.control} name="ip">
+          {({ ref, ...field }) => <Input ref={ref} placeholder="Enter IP address" {...field} />}
+        </FormField>
+        <div>
+          <ShadcnButton type="submit">Add IP Address</ShadcnButton>
+        </div>
+      </FieldGroup>
+    </form>
+  );
+};
 
 interface AdminPanelProps {
   proxySettings?: any;
@@ -38,7 +72,7 @@ interface AdminPanelProps {
 
 const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   const { premiumUser, accessToken, userId: userID } = useAuthorized();
-  const [form] = Form.useForm();
+  const form = useSSOSettingsForm("admin-panel");
   const [isAddSSOModalVisible, setIsAddSSOModalVisible] = useState(false);
   const [isInstructionsModalVisible, setIsInstructionsModalVisible] = useState(false);
   const [isAllowedIPModalVisible, setIsAllowedIPModalVisible] = useState(false);
@@ -79,9 +113,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   const handleShowAllowedIPs = async () => {
     try {
       if (premiumUser !== true) {
-        NotificationsManager.fromBackend(
-          "This feature is only available for premium users. Please upgrade your account.",
-        );
+        toast.fromError("This feature is only available for premium users. Please upgrade your account.");
         return;
       }
       if (accessToken) {
@@ -92,7 +124,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       }
     } catch (error) {
       console.error("Error fetching allowed IPs:", error);
-      NotificationsManager.fromBackend(`Failed to fetch allowed IPs ${error}`);
+      toast.fromError(`Failed to fetch allowed IPs ${error}`);
       setAllowedIPs([all_ip_address_allowed]);
     } finally {
       if (premiumUser === true) {
@@ -108,11 +140,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         // Fetch the updated list of IPs
         const updatedIPs = await getAllowedIPs(accessToken);
         setAllowedIPs(updatedIPs);
-        NotificationsManager.success("IP address added successfully");
+        toast.success("IP address added successfully");
       }
     } catch (error) {
       console.error("Error adding IP:", error);
-      NotificationsManager.fromBackend(`Failed to add IP address ${error}`);
+      toast.fromError(`Failed to add IP address ${error}`);
     } finally {
       setIsAddIPModalVisible(false);
     }
@@ -130,10 +162,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         // Fetch the updated list of IPs
         const updatedIPs = await getAllowedIPs(accessToken);
         setAllowedIPs(updatedIPs.length > 0 ? updatedIPs : [all_ip_address_allowed]);
-        NotificationsManager.success("IP address deleted successfully");
+        toast.success("IP address deleted successfully");
       } catch (error) {
         console.error("Error deleting IP:", error);
-        NotificationsManager.fromBackend(`Failed to delete IP address ${error}`);
+        toast.fromError(`Failed to delete IP address ${error}`);
       } finally {
         setIsDeleteIPModalVisible(false);
         setIPToDelete(null);
@@ -143,7 +175,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   const handleAddSSOOk = () => {
     setIsAddSSOModalVisible(false);
-    form.resetFields();
+    form.reset(emptySSOSettingsFormValues);
     if (accessToken && premiumUser) {
       checkSSOConfiguration();
     }
@@ -151,10 +183,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   const handleAddSSOCancel = () => {
     setIsAddSSOModalVisible(false);
-    form.resetFields();
+    form.reset(emptySSOSettingsFormValues);
   };
 
-  const handleShowInstructions = (formValues: Record<string, any>) => {
+  const handleShowInstructions = (formValues: SSOSettingsFormValues) => {
     setIsAddSSOModalVisible(false);
     setIsInstructionsModalVisible(true);
   };
@@ -229,7 +261,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
                   onClick={() =>
                     premiumUser === true
                       ? setIsUIAccessControlModalVisible(true)
-                      : NotificationsManager.fromBackend("Only premium users can configure UI access control")
+                      : toast.fromError("Only premium users can configure UI access control")
                   }
                 >
                   UI Access Control
@@ -295,14 +327,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
               onCancel={() => setIsAddIPModalVisible(false)}
               footer={null}
             >
-              <Form onFinish={handleAddIP}>
-                <Form.Item name="ip" rules={[{ required: true, message: "Please enter an IP address" }]}>
-                  <Input placeholder="Enter IP address" />
-                </Form.Item>
-                <Form.Item>
-                  <Button2 htmlType="submit">Add IP Address</Button2>
-                </Form.Item>
-              </Form>
+              <AddAllowedIPForm onSubmit={handleAddIP} />
             </Modal>
 
             <Modal
@@ -335,7 +360,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
                 accessToken={accessToken}
                 onSuccess={() => {
                   handleUIAccessControlOk();
-                  NotificationsManager.success("UI Access Control settings updated successfully");
+                  toast.success("UI Access Control settings updated successfully");
                 }}
               />
             </Modal>

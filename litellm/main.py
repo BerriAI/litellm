@@ -420,6 +420,8 @@ async def acompletion(
     verbosity: Literal["low", "medium", "high"] | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
     # set api_base, api_version, api_key
     base_url: str | None = None,
     api_version: str | None = None,
@@ -585,6 +587,8 @@ async def acompletion(
         "verbosity": verbosity,
         "safety_identifier": safety_identifier,
         "service_tier": service_tier,
+        "store": store,
+        "prompt_cache_key": prompt_cache_key,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -1763,11 +1767,15 @@ def _complete_fireworks_ai(
     messages: Final = ctx.messages
     model: Final = ctx.model
     model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
     provider_config: Final = ctx.provider_config
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
+    optional_params: Final = (
+        provider_config.map_extra_body_params(optional_params=ctx.optional_params, model=model)
+        if isinstance(provider_config, litellm.FireworksAIConfig)
+        else ctx.optional_params
+    )
 
     try:
         response: Final = base_llm_http_handler.completion(
@@ -4926,6 +4934,8 @@ def completion(
     extra_headers: dict | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
     # soon to be deprecated params by OpenAI
     functions: list | None = None,
     function_call: str | None = None,
@@ -5054,6 +5064,8 @@ def completion(
                 verbosity=verbosity,
                 safety_identifier=safety_identifier,
                 service_tier=service_tier,
+                store=store,
+                prompt_cache_key=prompt_cache_key,
                 base_url=base_url,
                 api_version=api_version,
                 api_key=api_key,
@@ -5363,6 +5375,8 @@ def completion(
             ),
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
+            "store": store,
+            "prompt_cache_key": prompt_cache_key,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
             "base_model": base_model,
         }
@@ -5616,7 +5630,12 @@ def completion(
         elif custom_llm_provider == "hosted_vllm":
             response = _complete_hosted_vllm(_dispatch_ctx)
         elif (
-            model in litellm.open_ai_chat_completion_models
+            # A known OpenAI model name only decides the route when nothing else
+            # resolved a provider. get_llm_provider() already maps these names to
+            # "openai", so a different value here was asked for explicitly (or came
+            # from a register_model entry), and the provider config built for it
+            # would be handed to the OpenAI handler.
+            (model in litellm.open_ai_chat_completion_models and custom_llm_provider in (None, "openai"))
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"

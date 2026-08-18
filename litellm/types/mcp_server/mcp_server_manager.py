@@ -71,6 +71,12 @@ class MCPServer(BaseModel):
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
+    # Endpoints exactly as an admin stored them, unlike the resolved fields above which an anchored
+    # issuer empties (RFC 8414 section 3.3). Management reads serve these so the edit form does not
+    # load blanks and then save those blanks over the stored config.
+    configured_authorization_url: str | None = None
+    configured_token_url: str | None = None
+    configured_registration_url: str | None = None
     # How the gateway authenticates to the upstream token endpoint. When
     # "client_secret_basic" the credentials go in an HTTP Basic Authorization
     # header (omitted from the body); None defaults to "client_secret_post".

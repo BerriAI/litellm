@@ -291,3 +291,49 @@ describe("buildUpdatedComplexityRouterConfig tier labels", () => {
     expect(Object.keys(result.tiers as Record<string, unknown>)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
   });
 });
+
+describe("buildUpdatedComplexityRouterConfig scorer knobs", () => {
+  const BOUNDARIES = { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 };
+  const STORED_WITH_KNOBS = { ...STORED, tier_boundaries: BOUNDARIES };
+  const HYDRATED = { ...FORM_VALUE, tier_boundaries: BOUNDARIES };
+
+  it("round-trips explicit stored knobs through an untouched edit", () => {
+    // These keys are MANAGED now, so the stored copy is dropped before the rebuild and only a faithful
+    // hydration puts them back. A regression here silently resets a tuned router.
+    expect(buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, HYDRATED).tier_boundaries).toEqual(BOUNDARIES);
+  });
+
+  it("drops a stored knob when the operator resets it, instead of preserving the old value", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, FORM_VALUE);
+
+    expect(result).not.toHaveProperty("tier_boundaries");
+    expect(result.some_future_backend_key).toEqual({ nested: true });
+  });
+
+  it("never invents knobs for a router that never had them", () => {
+    expect(buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE)).not.toHaveProperty("tier_boundaries");
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig plan-mode minimum tier", () => {
+  it("round-trips a stored tier through an untouched open-and-save", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, plan_mode_min_tier: "COMPLEX" },
+      { ...FORM_VALUE, plan_mode_min_tier: "COMPLEX" },
+    );
+    expect(result.plan_mode_min_tier).toBe("COMPLEX");
+  });
+
+  it("stops a stored tier from surviving a save that turned the override off", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, plan_mode_min_tier: "COMPLEX" }, FORM_VALUE);
+    expect(result).not.toHaveProperty("plan_mode_min_tier");
+  });
+
+  it("writes a newly selected tier over the stored one", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, plan_mode_min_tier: "COMPLEX" },
+      { ...FORM_VALUE, plan_mode_min_tier: "MEDIUM" },
+    );
+    expect(result.plan_mode_min_tier).toBe("MEDIUM");
+  });
+});

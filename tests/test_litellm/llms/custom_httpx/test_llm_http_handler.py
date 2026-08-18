@@ -2071,3 +2071,90 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     retry_authorization = posts[1]["headers"]["Authorization"]
     assert retry_authorization.startswith("AWS4-HMAC-SHA256")
     assert retry_authorization != first_attempt_headers["Authorization"]
+
+
+def _make_stub_direct_vector_store_config(response):
+    from litellm.llms.base_llm.vector_store.transformation import (
+        BaseDirectVectorStoreConfig,
+    )
+
+    class StubDirectVectorStoreConfig(BaseDirectVectorStoreConfig):
+        def __init__(self):
+            super().__init__()
+            self.sync_calls = []
+            self.async_calls = []
+
+        def execute_search_vector_store_request(self, **kwargs):
+            self.sync_calls.append(kwargs)
+            return response
+
+        async def aexecute_search_vector_store_request(self, **kwargs):
+            self.async_calls.append(kwargs)
+            return response
+
+    return StubDirectVectorStoreConfig()
+
+
+def test_vector_store_search_handler_direct_config_sync_skips_http():
+    handler = BaseLLMHTTPHandler()
+    stub_response = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+    config = _make_stub_direct_vector_store_config(stub_response)
+    logging_obj = Mock()
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
+        result = handler.vector_store_search_handler(
+            vector_store_id="vs_direct",
+            query="q",
+            vector_store_search_optional_params={"max_num_results": 4},
+            vector_store_provider_config=config,
+            custom_llm_provider="valkey",
+            litellm_params=GenericLiteLLMParams(valkey_host="localhost"),
+            logging_obj=logging_obj,
+            timeout=12.5,
+            _is_async=False,
+        )
+
+    assert result is stub_response
+    mock_get_client.assert_not_called()
+    assert len(config.sync_calls) == 1
+    call = config.sync_calls[0]
+    assert call["vector_store_id"] == "vs_direct"
+    assert call["query"] == "q"
+    assert call["timeout"] == 12.5
+    assert call["vector_store_search_optional_params"] == {"max_num_results": 4}
+    assert isinstance(call["litellm_params"], dict)
+    assert call["litellm_params"]["valkey_host"] == "localhost"
+    pre_call_args = logging_obj.pre_call.call_args.kwargs["additional_args"]
+    assert pre_call_args["query"] == "q"
+    assert pre_call_args["vector_store_id"] == "vs_direct"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_search_handler_direct_config_async_skips_http():
+    handler = BaseLLMHTTPHandler()
+    stub_response = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+    config = _make_stub_direct_vector_store_config(stub_response)
+    logging_obj = Mock()
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client") as mock_get_client:
+        result = await handler.vector_store_search_handler(
+            vector_store_id="vs_direct",
+            query=["q1", "q2"],
+            vector_store_search_optional_params={},
+            vector_store_provider_config=config,
+            custom_llm_provider="valkey",
+            litellm_params=GenericLiteLLMParams(valkey_host="localhost"),
+            logging_obj=logging_obj,
+            timeout=7.0,
+            _is_async=True,
+        )
+
+    assert result is stub_response
+    mock_get_client.assert_not_called()
+    assert len(config.async_calls) == 1
+    assert config.async_calls[0]["query"] == ["q1", "q2"]
+    assert config.async_calls[0]["litellm_params"]["valkey_host"] == "localhost"
+    assert config.async_calls[0]["timeout"] == 7.0
+    pre_call_args = logging_obj.pre_call.call_args.kwargs["additional_args"]
+    assert pre_call_args["query"] == ["q1", "q2"]
+    assert pre_call_args["vector_store_id"] == "vs_direct"

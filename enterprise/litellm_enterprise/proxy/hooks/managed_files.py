@@ -41,6 +41,7 @@ from litellm.proxy._types import (
     CallTypes,
     LiteLLM_ManagedFileTable,
     LiteLLM_ManagedObjectTable,
+    ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -53,6 +54,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     map_raw_file_ids_to_unified,
     normalize_mime_type_for_provider,
     resolve_managed_output_file_model_name,
+)
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    request_tags_from_metadata,
 )
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
@@ -420,13 +424,26 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         # This is because the encoded object ids stored in the managed objects table do not contain the provider information
         # To support provider filtering, we would need to store the provider information in the encoded object ids
         if provider:
-            raise Exception("Filtering by 'provider' is not supported when using managed batches.")
+            raise ProxyException(
+                message="Filtering by 'provider' is not supported when using managed batches.",
+                type="invalid_request_error",
+                param="provider",
+                code=400,
+            )
 
         # Model name filtering is not supported for managed batches
         # This is because the encoded object ids stored in the managed objects table do not contain the model name
         # A hash of the model name + litellm_params for the model name is encoded as the model id. This is not sufficient to reliably map the target model names to the model ids.
         if target_model_names:
-            raise Exception("Filtering by 'target_model_names' is not supported when using managed batches.")
+            raise ProxyException(
+                message="Filtering by 'target_model_names' is not supported when using managed batches.",
+                type="invalid_request_error",
+                param="target_model_names",
+                code=400,
+            )
+
+        if limit == 0:
+            return build_list_page([])
 
         owner_filter = build_owner_filter(user_api_key_dict)
         if owner_filter is None:
@@ -1146,6 +1163,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             ## Check if unified_file_id is in the response
             unified_file_id = response._hidden_params.get("unified_file_id")  # managed file id
             unified_batch_id = response._hidden_params.get("unified_batch_id")  # managed batch id
+            is_batch_create: Final = unified_file_id is not None
             model_id = cast(Optional[str], response._hidden_params.get("model_id"))
             model_name = cast(Optional[str], response._hidden_params.get("model_name"))
 
@@ -1216,6 +1234,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             model_mappings={model_id: provider_file_id},
                             user_api_key_dict=user_api_key_dict,
                         )
+            request_metadata: Final = data.get("litellm_metadata")
             await self.store_unified_object_id(
                 unified_object_id=response.id,
                 file_object=response,
@@ -1223,6 +1242,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 model_object_id=original_response_id,
                 file_purpose="batch",
                 user_api_key_dict=user_api_key_dict,
+                request_tags=request_tags_from_metadata(request_metadata if isinstance(request_metadata, dict) else {}),
+                persist_attribution=is_batch_create,
             )
 
             # Only record batch creation metric on actual create (not retrieve/cancel).

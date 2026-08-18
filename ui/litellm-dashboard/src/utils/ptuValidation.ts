@@ -4,6 +4,7 @@ interface ValidatorRule {
 
 interface FormInstance {
   getFieldValue: (name: string) => unknown;
+  isFieldTouched?: (name: string) => boolean;
 }
 
 export const PTU_COUNT_FIELD = "ptu_count";
@@ -69,6 +70,25 @@ export const ptuPairRule =
       isFilled(value) === isFilled(getFieldValue(siblingField))
         ? Promise.resolve()
         : Promise.reject(new Error("PTU Count and Cost per PTU / Hour must be set together")),
+  });
+
+/**
+ * A PTU deployment is billed by the flat cost of its reserved capacity, so the backend refuses
+ * a non-zero per-token price alongside PTU config and stores 0 when none is given. Pair this
+ * with `dependencies` on the count so the error clears once the price or the PTU config goes.
+ */
+export const ptuNoUsageCostRule =
+  (countField: string, thisField?: string) =>
+  ({ getFieldValue, isFieldTouched }: FormInstance): ValidatorRule => ({
+    validator: (_, value) => {
+      // A cost the operator never typed was seeded from the rate /model/info resolved, which
+      // for an unpriced deployment is the public cost map. Refusing it would block every
+      // attempt to put an existing deployment on PTU, and the save omits it anyway.
+      const echoed = thisField !== undefined && isFieldTouched !== undefined && !isFieldTouched(thisField);
+      return echoed || !isFilled(getFieldValue(countField)) || !isFilled(value) || Number(value) === 0
+        ? Promise.resolve()
+        : Promise.reject(new Error("A PTU deployment bills by reserved capacity, so this cost must be 0 or blank"));
+    },
   });
 
 /**
