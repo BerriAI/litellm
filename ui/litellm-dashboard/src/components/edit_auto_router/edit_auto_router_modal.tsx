@@ -17,6 +17,11 @@ import {
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
 import { hydrateKeywordTierRules, serializeKeywordTierRules } from "../add_model/complexity_router_keywords";
+import {
+  hydrateDimensionWeights,
+  hydrateTierBoundaries,
+  hydrateTokenThresholds,
+} from "../add_model/heuristic_scoring_knobs";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   ComplexityTiers,
@@ -24,6 +29,7 @@ import ComplexityRouterConfig, {
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
+  heuristicScoringRole,
 } from "../add_model/ComplexityRouterConfig";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
@@ -64,6 +70,9 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tier_distance_penalty",
   "adaptive_eligible",
   "return_raw_model_name",
+  "tier_boundaries",
+  "token_thresholds",
+  "dimension_weights",
 ]);
 
 // Managed only when the caller passes the corresponding state. A caller that does not render
@@ -125,6 +134,7 @@ export const buildUpdatedComplexityRouterConfig = (
   const adaptiveEligible = value.adaptive_eligible ?? "all";
   const storedKeywordRules = keywordMatching ? serializeKeywordTierRules(keywordMatching.keywordTierRules) : [];
   const serializedTierLabels = serializeTierLabels(value.tier_labels);
+  const scorerRuns = heuristicScoringRole(value) !== "never";
 
   return {
     ...preservedConfig,
@@ -175,6 +185,9 @@ export const buildUpdatedComplexityRouterConfig = (
         match_threshold: keywordMatching.matchThreshold,
       }),
     }),
+    ...(scorerRuns && value.tier_boundaries !== undefined && { tier_boundaries: value.tier_boundaries }),
+    ...(scorerRuns && value.token_thresholds !== undefined && { token_thresholds: value.token_thresholds }),
+    ...(scorerRuns && value.dimension_weights !== undefined && { dimension_weights: value.dimension_weights }),
   };
 };
 
@@ -290,6 +303,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             parsedConfig.classifier_fallback === "default_model" || parsedConfig.classifier_fallback === "heuristic"
               ? parsedConfig.classifier_fallback
               : undefined,
+          tier_boundaries: hydrateTierBoundaries(parsedConfig.tier_boundaries),
+          token_thresholds: hydrateTokenThresholds(parsedConfig.token_thresholds),
+          dimension_weights: hydrateDimensionWeights(parsedConfig.dimension_weights),
           session_affinity:
             typeof parsedConfig.session_affinity === "boolean"
               ? parsedConfig.session_affinity

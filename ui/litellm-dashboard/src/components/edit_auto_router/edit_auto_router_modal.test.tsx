@@ -5,6 +5,10 @@ import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../te
 
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import EditAutoRouterModal from "./edit_auto_router_modal";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
 const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall } = vi.hoisted(() => ({
   modelPatchUpdateCall: vi.fn().mockResolvedValue({}),

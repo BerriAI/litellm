@@ -2,6 +2,10 @@ import { fireEvent, renderWithProviders, screen, within } from "../../../tests/t
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
 const mockModelInfo = [
   { model_group: "gpt-4", mode: "chat" },
