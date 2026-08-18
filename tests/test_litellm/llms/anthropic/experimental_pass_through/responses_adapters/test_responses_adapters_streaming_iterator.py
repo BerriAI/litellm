@@ -148,6 +148,76 @@ class TestReasoningItemWithoutSummaryText:
         assert "".join(c["delta"]["thinking"] for c in chunks[2:4]) == "Weighing options"
 
 
+class TestToolUseBlockClosedExactlyOnce:
+    """Regression for https://github.com/BerriAI/litellm/issues/37273.
+
+    With ``custom_llm_provider: openai`` + ``use_chat_completions_api: true``,
+    ``/v1/messages`` streams through ``LiteLLMCompletionStreamingIterator``,
+    which ends a tool-call turn with two ``response.output_item.done`` events:
+    one for the function_call item (id = call_id) and one for a synthetic
+    message item whose id is the upstream chatcmpl id and was never opened as a
+    content block. Resolving that unknown item id to ``_current_block_index``
+    closed the tool_use block a second time::
+
+        content_block_start[0](tool_use) -> content_block_stop[0]
+        -> content_block_stop[0] -> message_delta(stop_reason=tool_use)
+
+    Anthropic SDK clients (e.g. Claude Code) materialize one tool_use block per
+    ``content_block_stop``, so the tool executed twice. An ``output_item.done``
+    for an item that never opened a block must emit nothing.
+    """
+
+    @staticmethod
+    def _chat_completions_bridge_tool_turn() -> list:
+        return [
+            {"type": "response.created"},
+            {
+                "type": "response.output_item.added",
+                "item": {"type": "function_call", "id": "call_1", "call_id": "call_1", "name": "get_weather"},
+            },
+            {"type": "response.function_call_arguments.delta", "item_id": "call_1", "delta": '{"city": "'},
+            {"type": "response.function_call_arguments.delta", "item_id": "call_1", "delta": 'Tokyo"}'},
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": "call_1",
+                "arguments": '{"city": "Tokyo"}',
+            },
+            {
+                "type": "response.output_item.done",
+                "item": {"type": "function_call", "id": "call_1", "call_id": "call_1", "status": "completed"},
+            },
+            {
+                "type": "response.output_item.done",
+                "item": {"type": "message", "id": "chatcmpl-123", "status": "completed"},
+            },
+        ]
+
+    def test_one_content_block_stop_per_content_block_start(self):
+        chunks = _drain_async(self._chat_completions_bridge_tool_turn())
+
+        starts = [c["index"] for c in chunks if c["type"] == "content_block_start"]
+        stops = [c["index"] for c in chunks if c["type"] == "content_block_stop"]
+        assert starts == [0]
+        assert stops == [0]
+
+    def test_tool_turn_event_order(self):
+        chunks = _drain_async(self._chat_completions_bridge_tool_turn())
+
+        assert [(c["type"], c.get("index")) for c in chunks] == [
+            ("message_start", None),
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+            ("content_block_delta", 0),
+            ("content_block_stop", 0),
+        ]
+        assert chunks[1]["content_block"] == {
+            "type": "tool_use",
+            "id": "call_1",
+            "name": "get_weather",
+            "input": {},
+        }
+
+
 class TestProcessEventTextDeltaWithoutOutputItemAdded:
     """Streams that skip response.output_item.added (e.g. LMStudio) must still
     open a text block before any delta and never emit index -1."""
