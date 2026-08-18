@@ -256,6 +256,8 @@ async def test_overview_reports_usage_units_per_row_and_total():
     row = next(r for r in resp.rows if r.id == "yaml-uuid")
     assert row.usageUnits == {"topicPolicyUnits": 4, "contentPolicyUnits": 5}
     assert resp.totalUsageUnits == {"topicPolicyUnits": 11, "contentPolicyUnits": 5}
+    units_where = prisma.db.litellm_dailyguardrailusageunits.find_many.call_args.kwargs["where"]
+    assert units_where == {"date": {"gte": START, "lte": END}}
 
 
 @pytest.mark.asyncio
@@ -289,6 +291,8 @@ async def test_detail_breaks_units_down_by_day_team_and_key():
         "hash-1": {"contentPolicyUnits": 2, "topicPolicyUnits": 1},
         "hash-2": {"contentPolicyUnits": 1},
     }
+    units_where = prisma.db.litellm_dailyguardrailusageunits.find_many.call_args.kwargs["where"]
+    assert units_where == {"guardrail_id": {"in": ["yaml-pii", "yaml-1"]}, "date": {"gte": START, "lte": END}}
 
 
 # ---- logs -------------------------------------------------------------------

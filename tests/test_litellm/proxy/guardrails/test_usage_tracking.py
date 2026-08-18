@@ -122,3 +122,19 @@ async def test_zero_and_non_int_usage_counters_are_skipped():
     assert _units_upserts(prisma) == {
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_payload_without_request_id_is_skipped_like_the_metrics_path():
+    prisma = _prisma()
+    logs = [
+        {**_payload("ignored", usage={"topicPolicyUnits": 5}), "request_id": None},
+        _payload("r2", usage={"topicPolicyUnits": 1}),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert _units_upserts(prisma) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
+    }
+    assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]["requests_evaluated"] == 1

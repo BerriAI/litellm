@@ -14,7 +14,3 @@ CREATE TABLE "LiteLLM_DailyGuardrailUsageUnits" (
 
 -- CreateIndex
 CREATE INDEX "LiteLLM_DailyGuardrailUsageUnits_date_idx" ON "LiteLLM_DailyGuardrailUsageUnits"("date");
-
--- CreateIndex
-CREATE INDEX "LiteLLM_DailyGuardrailUsageUnits_guardrail_id_date_idx" ON "LiteLLM_DailyGuardrailUsageUnits"("guardrail_id", "date");
-

@@ -7,8 +7,10 @@ import json
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
+from itertools import groupby
+from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
@@ -21,8 +23,13 @@ from litellm.repositories.table_repositories import (
 if TYPE_CHECKING:
     from prisma import types as prisma_types
 
-_UsageUnitKey = tuple[str, str, str, str, str]
-"""(guardrail_id, date, team_id, api_key, usage_unit)"""
+
+class _UsageUnitKey(NamedTuple):
+    guardrail_id: str
+    date: str
+    team_id: str
+    api_key: str
+    usage_unit: str
 
 
 def _guardrail_status_to_action(status: str | None) -> str:
@@ -77,44 +84,44 @@ def _parse_payload_start_time(payload: Mapping[str, Any]) -> datetime | None:
 def _iter_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) -> Iterator[tuple[_UsageUnitKey, int]]:
     for payload in logs_to_process:
         start_time = _parse_payload_start_time(payload)
-        if start_time is None:
+        if not payload.get("request_id") or start_time is None:
             continue
         date_key = _date_str(start_time)
         team_id = str(payload.get("team_id") or "")
         api_key = str(payload.get("api_key") or "")
         for entry in _parse_guardrail_info_from_payload(payload):
-            guardrail_id = entry.get("guardrail_id") or entry.get("guardrail_name") or ""
+            guardrail_id = str(entry.get("guardrail_id") or entry.get("guardrail_name") or "")
             usage = entry.get("guardrail_usage")
             if not guardrail_id or not isinstance(usage, dict):
                 continue
             for unit_name, units in usage.items():
                 if isinstance(units, int) and not isinstance(units, bool) and units > 0:
-                    yield (guardrail_id, date_key, team_id, api_key, unit_name), units
+                    yield _UsageUnitKey(guardrail_id, date_key, team_id, api_key, str(unit_name)), units
 
 
 def _sum_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) -> Mapping[_UsageUnitKey, int]:
-    increments: Final = tuple(_iter_usage_unit_increments(logs_to_process))
-    keys: Final = frozenset(k for k, _ in increments)
-    return MappingProxyType({key: sum(u for k, u in increments if k == key) for key in keys})
+    ordered: Final = sorted(_iter_usage_unit_increments(logs_to_process), key=itemgetter(0))
+    return MappingProxyType(
+        {key: sum(units for _, units in group) for key, group in groupby(ordered, key=itemgetter(0))}
+    )
 
 
 async def _upsert_usage_unit_row(prisma_client: PrismaClient, key: _UsageUnitKey, units: int) -> None:
-    guardrail_id, date_key, team_id, api_key, usage_unit = key
     row: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsCreateInput] = {
-        "guardrail_id": guardrail_id,
-        "date": date_key,
-        "team_id": team_id,
-        "api_key": api_key,
-        "usage_unit": usage_unit,
+        "guardrail_id": key.guardrail_id,
+        "date": key.date,
+        "team_id": key.team_id,
+        "api_key": key.api_key,
+        "usage_unit": key.usage_unit,
         "units": units,
     }
     where: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsWhereUniqueInput] = {
         "guardrail_id_date_team_id_api_key_usage_unit": {
-            "guardrail_id": guardrail_id,
-            "date": date_key,
-            "team_id": team_id,
-            "api_key": api_key,
-            "usage_unit": usage_unit,
+            "guardrail_id": key.guardrail_id,
+            "date": key.date,
+            "team_id": key.team_id,
+            "api_key": key.api_key,
+            "usage_unit": key.usage_unit,
         }
     }
     data: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsUpsertInput] = {
