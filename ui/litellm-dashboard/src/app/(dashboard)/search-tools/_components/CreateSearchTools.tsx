@@ -306,7 +306,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                 <TooltipContent>Get help on our github</TooltipContent>
               </Tooltip>
               <div className="flex gap-2">
-                <Button type="button" variant="outline" onClick={handleTestConnection} disabled={isTestingConnection}>
+                <Button type="submit" variant="outline" onClick={handleTestConnection} disabled={isTestingConnection}>
                   {isTestingConnection && <UiLoadingSpinner className="size-4" />}
                   Test Connection
                 </Button>

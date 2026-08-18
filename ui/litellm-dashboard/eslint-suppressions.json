@@ -1366,9 +1366,6 @@
   },
   "src/app/(dashboard)/search-tools/_components/CreateSearchTools.tsx": {
     "no-restricted-imports": {
-      "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -1377,7 +1374,7 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/static-components": {
       "count": 1

@@ -108,6 +108,20 @@ describe("CreateSearchTools submit payload", () => {
     expect(vi.mocked(networking.createSearchTool).mock.calls[0][1]).toMatchObject({ search_tool_name: "enter-tool" });
   });
 
+  it("still creates the tool when Test Connection is clicked, as the untyped Tremor button did", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await screen.findByLabelText(/Search Tool Name/);
+
+    await user.type(screen.getByLabelText(/Search Tool Name/), "probe-tool");
+    await pickProvider(user, "Perplexity AI");
+    await user.type(screen.getByLabelText(/API Key/), "sk-secret");
+    await user.click(screen.getByRole("button", { name: "Test Connection" }));
+
+    await waitFor(() => expect(networking.createSearchTool).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.createSearchTool).mock.calls[0][1]).toMatchObject({ search_tool_name: "probe-tool" });
+  });
+
   it("blocks submit and keeps the antd validation messages when required fields are empty", async () => {
     const user = userEvent.setup();
     renderModal();
