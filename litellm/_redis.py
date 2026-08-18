@@ -456,6 +456,8 @@ def _get_redis_client_logic(**env_overrides):
         # are intentionally NOT exposed on the function to avoid leaking
         # credentials via inspection or logging.
         redis_kwargs["redis_connect_func"]._azure_redis_ad_token = True
+        redis_kwargs.pop("username", None)
+        redis_kwargs.pop("password", None)
 
     # Always remove Azure-specific kwargs that shouldn't be passed to Redis client
     redis_kwargs.pop("azure_redis_ad_token", None)

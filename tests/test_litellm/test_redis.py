@@ -12,11 +12,12 @@ from litellm._redis import (
     get_redis_connection_pool,
     get_redis_url_from_environment,
 )
-from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 from litellm._redis_credential_provider import (
+    AzureADCredentialProvider,
     GCPIAMCredentialProvider,
     _token_cache,
 )
+from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
 
 
 @pytest.fixture(autouse=True)
@@ -257,6 +258,31 @@ def test_get_redis_async_client_without_connection_pool():
         assert (
             "connection_pool" not in call_kwargs
         ), "connection_pool should not be in kwargs when not provided"
+
+
+def test_azure_ad_connection_pool_does_not_duplicate_credentials(monkeypatch):
+    credential = MagicMock()
+    credential.get_token.return_value.token = "azure-token"
+    monkeypatch.setenv("REDIS_USERNAME", "entra-user")
+    monkeypatch.setenv("REDIS_PASSWORD", "static-password")
+
+    with patch("litellm._redis._build_azure_credential", return_value=credential):
+        pool = get_redis_connection_pool(
+            host="cache.redis.azure.net",
+            port=10000,
+            ssl=True,
+            azure_redis_ad_token="true",
+        )
+
+    assert pool is not None
+    connection = pool.make_connection()
+    assert isinstance(connection.credential_provider, AzureADCredentialProvider)
+    assert connection.username is None
+    assert connection.password is None
+    assert connection.credential_provider.get_credentials() == (
+        "entra-user",
+        "azure-token",
+    )
 
 
 def test_gcp_iam_credential_provider_get_credentials():
