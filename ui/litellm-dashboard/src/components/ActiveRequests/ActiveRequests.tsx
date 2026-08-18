@@ -18,7 +18,7 @@ import {
 } from "./activeRequestsApi";
 import ActiveRequestCharts from "./ActiveRequestCharts";
 import ActiveRequestDetail from "./ActiveRequestDetail";
-import { formatAge, getActiveRequestColumns } from "./ActiveRequestColumns";
+import { activeRequestColumns, formatAge } from "./ActiveRequestColumns";
 
 const POLL_INTERVAL_MS = 5000;
 const PAGE_SIZE = 50;
@@ -163,8 +163,6 @@ export default function ActiveRequests({ accessToken }: ActiveRequestsProps) {
   const longestSeconds = useMemo(() => Math.max(0, ...items.map((item) => now / 1000 - item.started_at)), [items, now]);
   const distinctEndUsers = useMemo(() => new Set(items.map((item) => item.end_user_id).filter(Boolean)).size, [items]);
   const distinctModels = useMemo(() => new Set(items.map((item) => item.model).filter(Boolean)).size, [items]);
-  const columns = useMemo(() => getActiveRequestColumns(now), [now]);
-
   const pagination = useMemo<PaginationState>(() => ({ pageIndex: page - 1, pageSize: PAGE_SIZE }), [page]);
   const onPaginationChange = useCallback(
     (updater: PaginationState | ((old: PaginationState) => PaginationState)) => {
@@ -265,7 +263,7 @@ export default function ActiveRequests({ accessToken }: ActiveRequestsProps) {
         <CardContent>
           <DataTable
             data={items}
-            columns={columns}
+            columns={activeRequestColumns}
             getRowId={(item, index) => `${item.request_id}-${item.started_at}-${index}`}
             paginationMode="server"
             pagination={pagination}

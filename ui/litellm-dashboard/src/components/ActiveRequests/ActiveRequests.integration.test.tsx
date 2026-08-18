@@ -120,6 +120,56 @@ describe("ActiveRequests", () => {
     await waitFor(() => expect(screen.getByText("That request is no longer running")).toBeInTheDocument());
   });
 
+  it("should encode a client-provided request id in the logs link", async () => {
+    mockedActiveRequestsCall.mockResolvedValue({
+      ...page,
+      items: [{ ...page.items[0], request_id: "call-123&foo=1#fragment" }],
+    });
+
+    render(<ActiveRequests accessToken="token" />);
+    await waitFor(() => expect(screen.getByText("end-user-123")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("end-user-123"));
+
+    expect((await screen.findByText("Open in Logs")).closest("a")).toHaveAttribute(
+      "href",
+      "/ui/logs?request_id=call-123%26foo%3D1%23fragment",
+    );
+  });
+
+  it("should ask the proxy for the next page instead of paging the current one client side", async () => {
+    mockedActiveRequestsCall.mockResolvedValue({ ...page, total: 120 });
+
+    render(<ActiveRequests accessToken="token" />);
+    await waitFor(() => expect(screen.getByText("end-user-123")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
+
+    await waitFor(() =>
+      expect(mockedActiveRequestsCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 2 }),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("should fall back to the last page when the running requests no longer fill the current one", async () => {
+    vi.useFakeTimers();
+    mockedActiveRequestsCall.mockResolvedValue({ ...page, total: 120 });
+
+    render(<ActiveRequests accessToken="token" />);
+    await act(async () => vi.advanceTimersByTime(400));
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to last page" }));
+    await act(async () => vi.advanceTimersByTime(0));
+    expect(mockedActiveRequestsCall).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3 }), expect.anything());
+
+    mockedActiveRequestsCall.mockResolvedValue({ ...page, total: 1 });
+    await act(async () => vi.advanceTimersByTime(5000));
+    await act(async () => vi.advanceTimersByTime(0));
+
+    expect(mockedActiveRequestsCall).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 }), expect.anything());
+  });
+
   it("should stop polling while paused and resume afterwards", async () => {
     vi.useFakeTimers();
     mockedActiveRequestsCall.mockResolvedValue(page);

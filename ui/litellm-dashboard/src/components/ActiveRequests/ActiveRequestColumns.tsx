@@ -1,6 +1,7 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
+import { useEffect, useState } from "react";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { Badge } from "@/components/ui/badge";
 import type { ActiveRequest } from "./activeRequestsApi";
@@ -20,7 +21,26 @@ const text = (value?: string | null) => (value ? <span>{value}</span> : <Dash />
 
 const AGE_WARNING_SECONDS = 60;
 
-export const getActiveRequestColumns = (now: number): ColumnDef<ActiveRequest>[] => [
+const AgeCell = ({ startedAt }: { startedAt: number }) => {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const stale = now / 1000 - startedAt > AGE_WARNING_SECONDS;
+  return (
+    <Badge
+      variant={stale ? "outline" : "secondary"}
+      className={stale ? "border-amber-500/50 text-amber-700 dark:text-amber-400" : undefined}
+    >
+      {formatAge(startedAt, now)}
+    </Badge>
+  );
+};
+
+export const activeRequestColumns: ColumnDef<ActiveRequest>[] = [
   {
     id: "age",
     accessorKey: "started_at",
@@ -29,17 +49,7 @@ export const getActiveRequestColumns = (now: number): ColumnDef<ActiveRequest>[]
     size: 110,
     enableSorting: true,
     sortingFn: (left, right) => right.original.started_at - left.original.started_at,
-    cell: ({ row }) => {
-      const stale = now / 1000 - row.original.started_at > AGE_WARNING_SECONDS;
-      return (
-        <Badge
-          variant={stale ? "outline" : "secondary"}
-          className={stale ? "border-amber-500/50 text-amber-700 dark:text-amber-400" : undefined}
-        >
-          {formatAge(row.original.started_at, now)}
-        </Badge>
-      );
-    },
+    cell: ({ row }) => <AgeCell startedAt={row.original.started_at} />,
   },
   {
     id: "model",

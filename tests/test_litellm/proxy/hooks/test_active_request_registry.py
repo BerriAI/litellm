@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import fakeredis.aioredis
 import pytest
+from redis.crc import key_slot
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.active_request_registry import ActiveRequestRegistry
@@ -22,7 +23,7 @@ class FakePipeline:
         return False
 
     def set(self, key, value, ex=None):
-        self.operations.append(("set", key, value))
+        self.operations.append(("set", key, value, ex))
 
     def zadd(self, key, values):
         self.operations.append(("zadd", key, values))
@@ -40,6 +41,7 @@ class FakePipeline:
         for operation in self.operations:
             if operation[0] == "set":
                 self.client.values[operation[1]] = operation[2]
+                self.client.expirations[operation[1]] = operation[3]
             elif operation[0] == "zadd":
                 self.client.sorted_sets.setdefault(operation[1], {}).update(operation[2])
             elif operation[0] == "delete":
@@ -53,6 +55,8 @@ class FakeRedisClient:
     def __init__(self):
         self.values = {}
         self.sorted_sets = {}
+        self.expirations = {}
+        self.zrevrange_calls = 0
 
     def pipeline(self, transaction=False):
         return FakePipeline(self)
@@ -63,6 +67,7 @@ class FakeRedisClient:
             values.pop(member)
 
     async def zrevrange(self, key, start, end):
+        self.zrevrange_calls += 1
         values = self.sorted_sets.setdefault(key, {})
         ordered = [member for member, _ in sorted(values.items(), key=lambda pair: pair[1], reverse=True)]
         return ordered[start : None if end == -1 else end + 1]
@@ -71,6 +76,9 @@ class FakeRedisClient:
         return len(self.sorted_sets.setdefault(key, {}))
 
     async def mget(self, keys):
+        slots = {key_slot(key.encode()) for key in keys}
+        if len(slots) > 1:
+            raise RuntimeError("CROSSSLOT Keys in request don't hash to the same slot")
         return [self.values.get(key) for key in keys]
 
     async def zrem(self, key, *members):
@@ -114,6 +122,9 @@ def set_general_settings(monkeypatch, **settings):
 
 def test_should_build_identity_record_without_request_content(monkeypatch):
     monkeypatch.setenv("HOSTNAME", "proxy-1")
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "master-key", raising=False)
     auth = UserAPIKeyAuth(
         api_key="sk-test-key-value",
         user_id="user-1",
@@ -140,7 +151,7 @@ def test_should_build_identity_record_without_request_content(monkeypatch):
     assert record["organization_id"] == "org-1"
     assert record["organization_alias"] == "Example Org"
     assert record["project_alias"] == "Chat Project"
-    assert record["key_fingerprint"] == hashlib.sha256(auth.api_key.encode()).hexdigest()[:12]
+    assert record["key_fingerprint"] == hashlib.sha256(f"master-key:{auth.api_key}".encode()).hexdigest()[:12]
     assert record["pod"] == "proxy-1"
     assert "messages" not in record
 
@@ -276,17 +287,25 @@ def test_should_bound_excessive_ttl_configuration(monkeypatch):
     assert registry.ttl_seconds == registry.MAX_TTL_SECONDS
 
 
-def test_should_not_leave_unformatted_placeholders_in_redis_keys():
-    assert "{" not in ActiveRequestRegistry.INDEX_KEY
-    assert "{" not in ActiveRequestRegistry.ITEM_KEY_PREFIX
+def test_all_multi_key_operations_share_a_redis_cluster_slot():
+    registry, redis_cache = make_registry()
+    keys = (
+        registry._index_key(redis_cache),
+        registry._item_key(redis_cache, "first"),
+        registry._item_key(redis_cache, "second"),
+        registry._cancel_key(redis_cache, "first"),
+    )
+
+    assert len({key_slot(key.encode()) for key in keys}) == 1
 
 
-def test_default_ttl_should_expire_ghost_entries_within_an_hour(monkeypatch):
-    set_general_settings(monkeypatch)
+def test_default_ttl_should_expire_ghost_entries_within_half_an_hour(monkeypatch):
     """A pod killed mid-request leaves entries behind until the TTL expires."""
+    set_general_settings(monkeypatch)
+
     registry, _ = make_registry()
 
-    assert registry.ttl_seconds <= 3600
+    assert registry.ttl_seconds == 1800
 
 
 @pytest.mark.asyncio
@@ -379,6 +398,48 @@ async def test_should_not_raise_when_redis_writes_fail():
 
 
 @pytest.mark.asyncio
+async def test_should_not_raise_when_resolving_redis_fails():
+    class ExplodingDualCache:
+        @property
+        def redis_cache(self):
+            raise ConnectionError("redis unavailable")
+
+    registry = ActiveRequestRegistry(SimpleNamespace(dual_cache=ExplodingDualCache()))
+    auth = UserAPIKeyAuth(api_key="sk-test-key")
+
+    assert await registry.register(auth, {"litellm_call_id": "call-1"}, "acompletion") is None
+    await registry.remove("registry-id")
+
+
+@pytest.mark.asyncio
+async def test_registration_sets_the_only_ghost_cleanup_ttl():
+    registry, redis_cache = make_registry()
+
+    registry_id = await registry.register(
+        UserAPIKeyAuth(api_key="sk-test-key"),
+        {"litellm_call_id": "call-1"},
+        "acompletion",
+    )
+
+    assert redis_cache.client.expirations[registry._item_key(redis_cache, registry_id)] == registry.ttl_seconds
+
+
+@pytest.mark.asyncio
+async def test_remove_drops_the_local_task_even_when_cleanup_is_cancelled(monkeypatch):
+    registry, _ = make_registry()
+    registry._local_tasks["registry-id"] = asyncio.current_task()
+
+    async def cancel_cleanup(_pipeline):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(FakePipeline, "execute", cancel_cleanup)
+
+    with pytest.raises(asyncio.CancelledError):
+        await registry.remove("registry-id")
+    assert "registry-id" not in registry._local_tasks
+
+
+@pytest.mark.asyncio
 async def test_should_drop_index_members_whose_record_expired():
     registry, redis_cache = make_registry()
     auth = UserAPIKeyAuth(api_key="sk-test-key", user_id="user-1")
@@ -394,6 +455,44 @@ async def test_should_drop_index_members_whose_record_expired():
     assert [item["request_id"] for item in result["items"]] == ["call-0"]
     assert result["total"] == 1
     assert list(redis_cache.client.sorted_sets[f"test:{registry.INDEX_KEY}"]) == [kept]
+
+
+@pytest.mark.asyncio
+async def test_should_refill_a_page_after_dropping_stale_members():
+    registry, redis_cache = make_registry()
+    auth = UserAPIKeyAuth(api_key="sk-test-key")
+    started_at = time.time()
+    ids = [
+        await registry.register(
+            auth,
+            {"litellm_call_id": f"call-{index}"},
+            "acompletion",
+            started_at=started_at + index,
+        )
+        for index in range(3)
+    ]
+    redis_cache.client.values.pop(registry._item_key(redis_cache, ids[2]))
+
+    result = await registry.list_requests(page_size=2)
+
+    assert [item["request_id"] for item in result["items"]] == ["call-1", "call-0"]
+    assert result["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_filtered_queries_are_cached_for_one_second():
+    registry, redis_cache = make_registry()
+    await registry.register(
+        UserAPIKeyAuth(api_key="sk-test-key"),
+        {"litellm_call_id": "call-1", "model": "model-a"},
+        "acompletion",
+    )
+
+    await registry.list_requests(model="model-a")
+    calls_after_first_query = redis_cache.client.zrevrange_calls
+    await registry.list_requests(model="model-a")
+
+    assert redis_cache.client.zrevrange_calls == calls_after_first_query
 
 
 @pytest.mark.asyncio

@@ -1080,10 +1080,6 @@ async def _await_llm_call_cancelling_on_disconnect(
         monitor.cancel()
 
 
-WEBSOCKET_ROUTE_TYPES: Final = frozenset(("_arealtime", "_aresponses_websocket"))
-"""These routes build a synthetic http Request, so InFlightRequestsMiddleware never sees them close."""
-
-
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
@@ -1270,27 +1266,15 @@ class ProxyBaseLLMRequestProcessing:
         proxy_logging_obj: ProxyLogging,
         route_type: CallTypesLiteral,
     ) -> None:
-        from litellm.proxy.hooks.active_request_registry import ActiveRequestRegistry
+        from litellm.proxy.hooks.active_request_registry import register_http_request
 
-        if route_type in WEBSOCKET_ROUTE_TYPES:
-            return
-
-        hook: Final = proxy_logging_obj.get_proxy_hook("active_request_registry")
-        if not isinstance(hook, ActiveRequestRegistry):
-            return
-
-        request.state.active_request_registry = hook
-        started_at: Final = getattr(request.state, "active_request_started_at", time.time())
-        request.state.active_request_started_at = started_at
-        registry_id: Final = await hook.register(
+        await register_http_request(
+            request=request,
             user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
             data=self.data,
             call_type=route_type,
-            registry_id=getattr(request.state, "active_request_registry_id", None),
-            started_at=started_at,
         )
-        if registry_id is not None:
-            request.state.active_request_registry_id = registry_id
 
     async def common_processing_pre_call_logic(
         self,

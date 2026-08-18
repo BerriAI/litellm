@@ -68,7 +68,7 @@ export default function ActiveRequestDetail({ request, now, onClose, onCancel, c
           <Button
             variant="outline"
             nativeButton={false}
-            render={<Link href={`/ui/logs?request_id=${request.request_id}`} />}
+            render={<Link href={`/ui/logs?request_id=${encodeURIComponent(request.request_id)}`} />}
           >
             Open in Logs
           </Button>

@@ -121,6 +121,68 @@ def test_removes_the_active_request_even_when_the_handler_raises():
     assert get_in_flight_requests() == 0
 
 
+def test_counter_decrements_when_active_request_cleanup_raises():
+    class Registry:
+        async def remove(self, registry_id):
+            raise ConnectionError("redis down")
+
+    async def handler(request: Request) -> Response:
+        request.state.active_request_registry = Registry()
+        request.state.active_request_registry_id = "registry-id"
+        return JSONResponse({})
+
+    response = TestClient(_make_app(handler)).get("/")
+
+    assert response.status_code == 200
+    assert get_in_flight_requests() == 0
+
+
+def test_counter_decrements_when_active_request_cleanup_is_cancelled():
+    """The cleanup runs while the request task may already be cancelled, so the
+    decrement has to survive a BaseException, not only an Exception."""
+
+    class Registry:
+        async def remove(self, registry_id):
+            raise asyncio.CancelledError
+
+    async def handler(request: Request) -> Response:
+        request.state.active_request_registry = Registry()
+        request.state.active_request_registry_id = "registry-id"
+        return JSONResponse({})
+
+    response = TestClient(_make_app(handler)).get("/")
+
+    assert response.status_code == 200
+    assert get_in_flight_requests() == 0
+
+
+def test_counter_decrements_when_the_cleanup_logger_raises(monkeypatch):
+    """The decrement sits behind its own finally because the logging call above it
+    can fail too, and this counter gates graceful shutdown."""
+
+    class Registry:
+        async def remove(self, registry_id):
+            raise ConnectionError("redis down")
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("logging handler down")
+
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.in_flight_requests_middleware.verbose_proxy_logger.exception",
+        explode,
+    )
+
+    async def handler(request: Request) -> Response:
+        request.state.active_request_registry = Registry()
+        request.state.active_request_registry_id = "registry-id"
+        return JSONResponse({})
+
+    with pytest.raises(RuntimeError):
+        TestClient(_make_app(handler)).get("/")
+
+    assert get_in_flight_requests() == 0
+
+
 def test_counts_a_request_that_registered_nothing():
     async def handler(request: Request) -> Response:
         return JSONResponse({})

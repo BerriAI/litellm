@@ -3,7 +3,7 @@
 import re
 import traceback
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
 
@@ -60,6 +60,8 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
+    register_as_litellm_callback: ClassVar[bool] = True
+
     def __init__(
         self,
         turn_off_message_logging: bool = False,

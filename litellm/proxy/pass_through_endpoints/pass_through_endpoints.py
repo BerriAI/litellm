@@ -66,6 +66,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
 )
+from litellm.proxy.hooks.active_request_registry import ActiveRequestCall, register_http_request
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
@@ -892,6 +893,18 @@ async def pass_through_request(
         # Surface the requested model (when the body carries one) so logging/spans
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
         passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
+        active_request_call: Final[ActiveRequestCall] = {
+            "litellm_call_id": litellm_call_id,
+            "model": passthrough_model,
+            "stream": bool(stream),
+        }
+        await register_http_request(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            data=active_request_call,
+            call_type="pass_through_endpoint",
+        )
         start_time: Final = datetime.now()
         logging_obj = Logging(
             model=passthrough_model,
