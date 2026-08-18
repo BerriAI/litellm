@@ -434,7 +434,7 @@ class ComplexityRouterConfig(BaseModel):
             "becomes that tier's rubric bullet; entries named after a built-in tier may omit the "
             "description and inherit the built-in criteria. List order is ascending severity and "
             "decides which tier wins when several keyword_tier_rules match. Requires classifier_type "
-            "'llm' or 'plugin', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, "
+            "'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, "
             "adaptive selection, session affinity, plugins, tier_labels, and the calibration-example "
             "rubric presets are unavailable with a custom tier set: the first four are built on the "
             "built-in tier ladder, and the last two rename or exemplify tiers the set replaces."
@@ -535,7 +535,7 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "llm", "plugin"] = Field(
+    classifier_type: Literal["heuristic", "llm", "custom"] = Field(
         default="heuristic",
         description="Classification strategy: local regex/keyword scoring, an LLM call, or a custom classifier plugin",
     )
@@ -546,7 +546,7 @@ class ComplexityRouterConfig(BaseModel):
     classifier_plugin: ClassifierPlugin | None = Field(
         default=None,
         description=(
-            "Custom classifier deciding the tier; required when classifier_type is 'plugin'. In the proxy "
+            "Custom classifier deciding the tier; required when classifier_type is 'custom'. In the proxy "
             "config, a dotted path to a ClassifierPlugin instance (resolved at startup, like plugins). Its "
             "classify(context) receives the request messages and metadata (caller identity included) and "
             "returns the name of the tier to route to, or None to decline and let classifier_fallback decide."
@@ -557,7 +557,7 @@ class ComplexityRouterConfig(BaseModel):
         gt=0,
         description=(
             "Timeout budget for the classifier plugin call, in milliseconds. On expiry the fallback "
-            "path decides the tier. Only applies when classifier_type is 'plugin'."
+            "path decides the tier. Only applies when classifier_type is 'custom'."
         ),
     )
 
@@ -570,7 +570,7 @@ class ComplexityRouterConfig(BaseModel):
             "which is what a classifier on some other taxonomy wants: a prompt that grades data "
             "sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to "
             "what the operator configured. Requires default_model when set to 'default_model'. Only "
-            "applies when classifier_type is 'llm' or 'plugin'."
+            "applies when classifier_type is 'llm' or 'custom'."
         ),
     )
 
@@ -815,12 +815,12 @@ class ComplexityRouterConfig(BaseModel):
     def _validate_classifier_config(self) -> "ComplexityRouterConfig":
         if self.classifier_type == "llm" and self.classifier_llm_config is None:
             raise ValueError("classifier_llm_config is required when classifier_type is 'llm'")
-        if self.classifier_type == "plugin" and self.classifier_plugin is None:
-            raise ValueError("classifier_plugin is required when classifier_type is 'plugin'")
-        if self.classifier_plugin is not None and self.classifier_type != "plugin":
+        if self.classifier_type == "custom" and self.classifier_plugin is None:
+            raise ValueError("classifier_plugin is required when classifier_type is 'custom'")
+        if self.classifier_plugin is not None and self.classifier_type != "custom":
             raise ValueError(
                 f"classifier_plugin is set but classifier_type is {self.classifier_type!r}; "
-                "the plugin would never run. Set classifier_type 'plugin' or remove classifier_plugin"
+                "the plugin would never run. Set classifier_type 'custom' or remove classifier_plugin"
             )
         return self
 
@@ -942,7 +942,7 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
         if self.classifier_type == "heuristic":
             raise ValueError(
-                "tier_definitions requires classifier_type 'llm' or 'plugin': the heuristic scorer only "
+                "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
                 "produces the built-in tiers"
             )
         conflicts: Final = self._tier_definition_conflicts()

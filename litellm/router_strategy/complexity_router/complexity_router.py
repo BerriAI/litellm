@@ -1130,7 +1130,7 @@ class ComplexityRouter(CustomLogger):
         fallback_tier wins on a custom tier set, and classifier_fallback otherwise decides between
         the heuristic scorer and default_model. The outcome's `cause` reports which path actually ran.
         """
-        if self.config.classifier_type == "plugin":
+        if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, messages, raw_messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)

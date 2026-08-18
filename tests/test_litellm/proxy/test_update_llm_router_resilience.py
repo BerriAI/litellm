@@ -214,7 +214,7 @@ class TestDeleteDeploymentResolvesPluginConfigs:
                 "model": "auto_router/complexity_router",
                 "complexity_router_default_model": "gpt-4o-mini",
                 "complexity_router_config": {
-                    "classifier_type": "plugin",
+                    "classifier_type": "custom",
                     "classifier_plugin": "rig_classifier.classifier_instance",
                     "plugins": ["rig_classifier.narrower_instance"],
                     "tiers": {"SIMPLE": "gpt-4o-mini"},

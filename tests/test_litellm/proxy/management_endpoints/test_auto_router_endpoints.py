@@ -290,7 +290,7 @@ def test_classifier_plugin_is_not_settable_over_http():
     """classifier_plugin holds a live runtime object, closed off like `plugins`; a plugin-mode
     config is therefore unrepresentable in a request body."""
     with pytest.raises(ValidationError):
-        _request("what is 2+2", classifier_type="plugin", classifier_plugin="my_module.instance")
+        _request("what is 2+2", classifier_type="custom", classifier_plugin="my_module.instance")
 
 
 class TestAutoRouterBenchmarks:

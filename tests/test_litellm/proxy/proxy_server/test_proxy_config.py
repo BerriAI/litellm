@@ -198,7 +198,7 @@ def test_resolve_complexity_router_plugins_resolves_classifier_plugin_dotted_pat
         "my_classifier_instance = _Classifier()\n"
     )
     config: dict[str, Any] = {
-        "classifier_type": "plugin",
+        "classifier_type": "custom",
         "classifier_plugin": "my_classifier.my_classifier_instance",
     }
 

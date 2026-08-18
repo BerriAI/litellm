@@ -958,7 +958,7 @@ class RoutingPlugin(Protocol):
 
 @runtime_checkable
 class ClassifierPlugin(Protocol):
-    """Interface a custom classifier must implement to run as the complexity router's classifier_type='plugin'.
+    """Interface a custom classifier must implement to run as the complexity router's classifier_type='custom'.
 
     `classify` returns the name of the tier the request belongs to (a built-in tier value or label,
     or a tier_definitions name), or None to decline and let classifier_fallback decide.

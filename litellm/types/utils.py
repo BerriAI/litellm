@@ -2767,7 +2767,7 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
-    # The operator's classifier plugin (classifier_type 'plugin') decided the tier.
+    # The operator's classifier plugin (classifier_type 'custom') decided the tier.
     "classifier_plugin",
     # The LLM classifier or classifier plugin failed on a router with an operator-defined
     # tier set, so the request routed to the configured fallback_tier without being classified.

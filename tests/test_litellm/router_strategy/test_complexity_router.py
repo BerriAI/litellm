@@ -4164,7 +4164,7 @@ def _plugin_router(mock_router_instance, plugin, **config_overrides):
             "COMPLEX": "claude-sonnet-4-20250514",
             "REASONING": "o1-preview",
         },
-        "classifier_type": "plugin",
+        "classifier_type": "custom",
         "classifier_plugin": plugin,
         **config_overrides,
     }
@@ -4176,11 +4176,11 @@ def _plugin_router(mock_router_instance, plugin, **config_overrides):
 
 
 class TestClassifierPluginConfig:
-    """Config validation for classifier_type='plugin'."""
+    """Config validation for classifier_type='custom'."""
 
     def test_plugin_classifier_type_requires_plugin(self):
         with pytest.raises(ValidationError, match="classifier_plugin is required"):
-            ComplexityRouterConfig(classifier_type="plugin")
+            ComplexityRouterConfig(classifier_type="custom")
 
     def test_classifier_plugin_without_plugin_mode_raises(self):
         """A wired hook that would silently never run is a config error, not a no-op."""
@@ -4191,17 +4191,17 @@ class TestClassifierPluginConfig:
         """Switching classifier_type llm -> plugin must not force deleting classifier_llm_config,
         matching how classifier_type='heuristic' tolerates it."""
         config = ComplexityRouterConfig(
-            classifier_type="plugin",
+            classifier_type="custom",
             classifier_plugin=_FixedTierClassifier("SIMPLE"),
             classifier_llm_config={"model": "haiku-classifier"},
         )
-        assert config.classifier_type == "plugin"
+        assert config.classifier_type == "custom"
 
     def test_plugin_mode_composes_with_adaptive(self):
         """adaptive replaces selection, not classification, so a classifier plugin is allowed
         where narrowing `plugins` are rejected (their pools bypass the bandit)."""
         config = ComplexityRouterConfig(
-            classifier_type="plugin",
+            classifier_type="custom",
             classifier_plugin=_FixedTierClassifier("SIMPLE"),
             adaptive=True,
         )
@@ -4209,7 +4209,7 @@ class TestClassifierPluginConfig:
 
     def test_plugin_mode_composes_with_tier_definitions(self):
         config = ComplexityRouterConfig(
-            classifier_type="plugin",
+            classifier_type="custom",
             classifier_plugin=_FixedTierClassifier("cheap"),
             tiers={"cheap": "gpt-4o-mini", "premium": "o1-preview"},
             tier_definitions=[
@@ -4234,7 +4234,7 @@ class TestClassifierPluginConfig:
 
 
 class TestClassifierPlugin:
-    """classifier_type='plugin': an operator hook decides the tier."""
+    """classifier_type='custom': an operator hook decides the tier."""
 
     @pytest.mark.asyncio
     async def test_plugin_verdict_decides_tier_without_scorer_or_llm(self, mock_router_instance):
@@ -4319,7 +4319,7 @@ class TestClassifierPlugin:
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
                 "tiers": {"SIMPLE": "gpt-4o-mini"},
-                "classifier_type": "plugin",
+                "classifier_type": "custom",
                 "classifier_plugin": _FixedTierClassifier("COMPLEX"),
             },
         )
