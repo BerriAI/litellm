@@ -2914,8 +2914,10 @@ class TestUpdateDBModelClearPricing:
     `litellm_params` and `model_info` (SPECIAL_MODEL_INFO_PARAMS are mirrored
     between the two by Deployment.__init__).
 
-    Restricted to SPECIAL_MODEL_INFO_PARAMS so non-pricing fields (e.g. team_id)
-    cannot be cleared via this path.
+    The cross-blob mirror and the model_info clear path stay restricted to
+    SPECIAL_MODEL_INFO_PARAMS so a privileged model_info field (e.g. team_id)
+    cannot be nulled through this path. Clearing an ordinary litellm_params field
+    removes it from litellm_params only; see TestUpdateDBModelClearParam.
     """
 
     def test_clear_input_cost_removes_from_both_blobs(self):
@@ -2991,10 +2993,10 @@ class TestUpdateDBModelClearPricing:
         assert params["input_cost_per_token"] == 0.000001
         assert params["output_cost_per_token"] == 0.000007
 
-    def test_null_on_non_pricing_field_does_not_clear(self):
-        """Security guard: only SPECIAL_MODEL_INFO_PARAMS can be cleared via null.
-        Privileged or unrelated model_info fields (e.g. team_id) must be unaffected
-        by the null-clearing path so a team admin can't ungate a team-scoped model.
+    def test_null_litellm_param_clears_param_but_not_privileged_model_info(self):
+        """Security guard: a null on an ordinary litellm_params field clears it from
+        litellm_params, but must NOT reach into model_info to null a privileged field
+        (e.g. team_id) so a team admin can't ungate a team-scoped model through this path.
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             update_db_model,
@@ -3010,13 +3012,12 @@ class TestUpdateDBModelClearPricing:
             model_name="openai/*",
             litellm_params=LiteLLM_Params(
                 model="openai/*",
+                api_base="https://old.example",
                 input_cost_per_token=0.000001,
             ),
             model_info=ModelInfo(id="dep-pricing-1", team_id="team-keep-me"),
         )
 
-        # Patch sends a null for api_base (non-SPECIAL field). Must NOT clear team_id
-        # or any other non-pricing field from the merged dict.
         result = update_db_model(
             db_model=db_model,
             updated_patch=updateDeployment(
@@ -3024,10 +3025,13 @@ class TestUpdateDBModelClearPricing:
             ),
         )
 
+        params = json.loads(result["litellm_params"])
         info = json.loads(result["model_info"])
+        # api_base is cleared from litellm_params (the removal fix)
+        assert "api_base" not in params
         # Pricing still present (not part of this patch)
         assert "input_cost_per_token" in info
-        # team_id must survive
+        # team_id (privileged model_info) must survive — the mirror stays SPECIAL-only
         assert info.get("team_id") == "team-keep-me"
 
     def test_clear_survives_model_info_passthrough_with_old_pricing(self):
@@ -3190,6 +3194,126 @@ class TestUpdateDBModelClearPricing:
         assert info["input_cost_per_token"] == 0.000001
         assert info["output_cost_per_token"] == 0.000002
         assert info["cache_creation_input_token_cost"] == 0.000003
+
+
+class TestUpdateDBModelClearParam:
+    """Deleting an ordinary litellm_params field in the model editor sends it as an
+    explicit null. update_db_model must drop it from the stored params (the additive
+    merge alone would keep the old value), while leaving unrelated stored params and
+    omitted secrets untouched.
+    """
+
+    def _db_model(self):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        return Deployment(
+            model_name="gpt-5.6-sol",
+            litellm_params=LiteLLM_Params(
+                model="gpt-5.6-sol",
+                api_key="sk-real-secret",
+                reasoning_effort="none",
+                temperature=0.5,
+            ),
+            model_info=ModelInfo(id="dep-clear-param-0"),
+        )
+
+    def test_explicit_null_removes_the_param(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._db_model(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(reasoning_effort=None)
+            ),
+        )
+        params = json.loads(result["litellm_params"])
+        assert "reasoning_effort" not in params
+
+    def test_unrelated_params_and_omitted_secret_survive(self):
+        """The UI strips the masked api_key, so it is omitted (not nulled) and the
+        merge must keep it; only the explicitly-nulled field is removed."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._db_model(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(reasoning_effort=None)
+            ),
+        )
+        params = json.loads(result["litellm_params"])
+        assert "reasoning_effort" not in params
+        assert params.get("temperature") == 0.5
+        assert params.get("api_key") == "sk-real-secret"
+
+    def test_omitted_param_is_preserved(self):
+        """PATCH semantics unchanged: a field not in the patch keeps its stored value.
+        Only an explicit null deletes — omission still means 'leave as is'."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._db_model(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(temperature=0.9)
+            ),
+        )
+        params = json.loads(result["litellm_params"])
+        assert params.get("temperature") == 0.9
+        assert params.get("reasoning_effort") == "none"
+
+    def test_null_team_id_via_litellm_params_does_not_clear_model_info(self):
+        """The attack the SPECIAL-only mirror guards against: team_id is not a real
+        litellm_param, so a null for it in litellm_params must not reach model_info."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="gpt-5.6-sol",
+            litellm_params=LiteLLM_Params(model="gpt-5.6-sol"),
+            model_info=ModelInfo(id="dep-clear-param-1", team_id="team-keep-me"),
+        )
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(team_id=None)
+            ),
+        )
+        info = json.loads(result["model_info"])
+        assert info.get("team_id") == "team-keep-me"
+
+    def test_null_model_field_is_not_cleared(self):
+        """`model` is required to rebuild the deployment, so an explicit null for it
+        must be ignored, not persisted as a modelless (invalid) row. Other nulled
+        params in the same patch are still cleared."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=self._db_model(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(model=None, reasoning_effort=None)
+            ),
+        )
+        params = json.loads(result["litellm_params"])
+        assert params.get("model") == "gpt-5.6-sol"
+        assert "reasoning_effort" not in params
 
 
 class TestGetModelInfoWithIdBlocked:
