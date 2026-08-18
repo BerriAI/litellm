@@ -206,13 +206,13 @@ class TestInitialization:
             handler = RubrikLogger(event_hook=GuardrailEventHooks.pre_call)
             assert handler.event_hook == GuardrailEventHooks.pre_call
 
-    def test_default_on_defaults_to_false_when_none_passed(self, mock_env):
-        """Follows the standard litellm pattern: omitted ``default_on`` resolves
-        to ``False`` (off by default). Users must explicitly set
-        ``default_on: true`` to enable the guardrail for all requests."""
+    def test_default_on_defaults_to_true_when_none_passed(self, mock_env):
+        """Omitted ``default_on`` resolves to ``True`` so a globally configured
+        Rubrik guardrail cannot be bypassed by omitting it from a request's
+        guardrails list. Explicit ``default_on: false`` remains supported."""
         with patch("asyncio.create_task", Mock()):
             handler = RubrikLogger(default_on=None)
-            assert handler.default_on is False
+            assert handler.default_on is True
 
     def test_explicit_default_on_false_preserved(self, mock_env):
         """A user explicitly setting ``default_on: false`` in their guardrail

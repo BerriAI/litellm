@@ -74,11 +74,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         kwargs.setdefault("guardrail_name", "rubrik")
         # `initialize_guardrail` always passes these kwargs explicitly, with
         # value `None` when the user omits `mode` / `default_on` from the
-        # guardrail config. Follow the standard litellm convention: omitted
-        # resolves to False (off by default, user must opt in explicitly).
+        # guardrail config. Coerce None (omitted) to True so globally configured
+        # Rubrik moderation cannot be silently skipped by omitting the
+        # guardrail from a request's guardrails list. Explicit
+        # `default_on=False` is preserved for opt-out deployments.
         kwargs["event_hook"] = kwargs.get("event_hook") or GuardrailEventHooks.post_call
         if kwargs.get("default_on") is None:
-            kwargs["default_on"] = False
+            kwargs["default_on"] = True
         super().__init__(
             flush_lock=self.flush_lock,
             supported_event_hooks=list(self.get_supported_event_hooks()),
@@ -343,7 +345,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if not messages:
             return inputs
 
-        payload = self._build_prompt_moderation_payload(inputs, request_data)
+        # Ensure payload uses synthesized messages: _build_prompt_moderation_payload
+        # reads structured_messages from inputs (not the local messages var).
+        payload_inputs = dict(inputs)
+        payload_inputs["structured_messages"] = messages
+        payload = self._build_prompt_moderation_payload(payload_inputs, request_data)
         service_response = await self._post_to_prompt_moderation_endpoint(payload)
         refusal = self._extract_prompt_refusal(service_response)
         if refusal is None:
