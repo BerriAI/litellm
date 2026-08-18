@@ -26,6 +26,9 @@ pins one fixed behavior:
   request; spend logs at the routed tier deployment's own rate.
 - GitHub PR #36721: the heuristic complexity classifier scores the caller's
   current ask only, so a large agent system prompt cannot inflate the tier.
+- GitHub PR #36626: connection params on the marker alias (``api_key``,
+  ``api_base``) stay with the alias; the routed tier calls its provider with
+  its own credentials.
 
 Every deployment is registered via /model/new (stage has no static config for
 these) and ``enable_tag_filtering`` is flipped through /config/update and
@@ -169,6 +172,12 @@ class SemanticAutoRouter:
     target: str
     fallback: str
     embedding: str
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialedAlias:
+    alias: str
+    tier: str
 
 
 def _provider_key(env_var: str) -> str:
@@ -373,6 +382,27 @@ def semantic_auto_router(proxy: ProxyClient) -> Iterator[SemanticAutoRouter]:
         (named.target, LiteLLMParamsBody(model=CHEAP_MODEL, api_key=_provider_key("ANTHROPIC_API_KEY"))),
         (named.fallback, LiteLLMParamsBody(model=PLAIN_MODEL, api_key=_provider_key("ANTHROPIC_API_KEY"))),
         (named.marker, marker_params),
+    )
+    created: Final = tuple(proxy.create_model(name, params) for name, params in registrations)
+    try:
+        yield named
+    finally:
+        for model_id in created:
+            proxy.delete_model(model_id)
+
+
+@pytest.fixture(scope="module")
+def credentialed_alias(proxy: ProxyClient) -> Iterator[CredentialedAlias]:
+    marker: Final = unique_marker()
+    named: Final = CredentialedAlias(alias=f"e2e-cred-alias-{marker}", tier=f"e2e-cred-tier-{marker}")
+    alias_params: Final = LiteLLMParamsBody(
+        model="auto_router/complexity_router",
+        complexity_router_config=_uniform_tier_config(named.tier),
+        api_key=f"sk-alias-never-used-{marker}",
+    )
+    registrations: Final[tuple[tuple[str, LiteLLMParamsBody], ...]] = (
+        (named.tier, LiteLLMParamsBody(model=CHEAP_MODEL, api_key=_provider_key("ANTHROPIC_API_KEY"))),
+        (named.alias, alias_params),
     )
     created: Final = tuple(proxy.create_model(name, params) for name, params in registrations)
     try:
@@ -630,3 +660,20 @@ class TestSemanticAutoRouterResponses:
         _assert_served_only_by(
             rows, CHEAP_SERVED | {semantic_auto_router.target}, "semantic auto-router /v1/responses string input"
         )
+
+
+class TestAliasParamForwarding:
+    @pytest.mark.covers("reliability.routing.tagged_marker.alias_connection_params_stay_with_tier")
+    def test_alias_api_key_never_overrides_the_tier_credential(
+        self, proxy: ProxyClient, resources: ResourceManager, credentialed_alias: CredentialedAlias
+    ) -> None:
+        """Pins GitHub PR #36626: an api_key set on the marker alias entry is
+        never forwarded onto the routed request, so the tier deployment calls
+        its provider with its own credential. Before the fix the alias's key
+        was copied into the request, overriding the tier's credential, and
+        every routed call failed provider auth."""
+        key: Final = _key_for(proxy, resources, [credentialed_alias.alias, credentialed_alias.tier])
+        chat: Final = unwrap(proxy.chat(key, _hello_chat_body(credentialed_alias.alias)))
+        assert chat.choices, "chat through the credentialed alias returned no choices"
+        rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
+        _assert_served_only_by(rows, CHEAP_SERVED | {credentialed_alias.tier}, "chat through the credentialed alias")
