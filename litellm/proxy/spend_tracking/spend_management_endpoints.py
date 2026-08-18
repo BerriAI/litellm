@@ -3,12 +3,13 @@ import collections
 import json
 import os
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Protocol, TypedDict, TypeVar
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -40,7 +41,7 @@ router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
 LEGACY_SPEND_LOGS_MAX_PAGE_SIZE: Final = 1000
-LEGACY_SPEND_LOGS_MAX_SKIP: Final = 2_147_483_647
+LEGACY_SPEND_LOGS_MAX_SKIP: Final = SPEND_LOGS_PAGINATION_COUNT_CAP
 
 _RowT = TypeVar("_RowT")
 
@@ -142,6 +143,14 @@ class _SessionSpendRow(TypedDict):
     mcp_tool_call_spend: float
 
 
+class _LegacySpendSummaryRow(TypedDict):
+    spend_date: ReadOnly[date | datetime | str]
+    api_key: ReadOnly[str | None]
+    user: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    spend: ReadOnly[float | int | str | None]
+
+
 async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
     """Run a raw read query and return its rows as the row type the caller declares."""
     return await prisma_client.db.query_raw(sql_query, *args)
@@ -217,6 +226,119 @@ async def _find_spend_logs(
         take=take,
         skip=skip,
     )
+
+
+def _legacy_spend_log_filter_sql(
+    *,
+    start_time_gte: datetime | None = None,
+    start_time_lte: datetime | None = None,
+    api_key: str | None = None,
+    user_id: str | None = None,
+    request_id: str | None = None,
+) -> tuple[str, tuple[object, ...]]:
+    filters: Final[tuple[tuple[str, object], ...]] = (
+        (
+            (("\"startTime\" >= (${}::timestamptz AT TIME ZONE 'UTC')", start_time_gte),)
+            if start_time_gte is not None
+            else ()
+        )
+        + (
+            (("\"startTime\" <= (${}::timestamptz AT TIME ZONE 'UTC')", start_time_lte),)
+            if start_time_lte is not None
+            else ()
+        )
+        + ((("api_key = ${}", api_key),) if api_key is not None else ())
+        + ((('"user" = ${}', user_id),) if user_id is not None else ())
+        + ((("request_id = ${}", request_id),) if request_id is not None else ())
+    )
+    conditions: Final = tuple(template.format(index) for index, (template, _) in enumerate(filters, start=1))
+    return " AND ".join(conditions) or "TRUE", tuple(value for _, value in filters)
+
+
+async def _find_legacy_spend_log_page(
+    prisma_client: PrismaClient,
+    *,
+    start_time_gte: datetime | None = None,
+    start_time_lte: datetime | None = None,
+    api_key: str | None = None,
+    user_id: str | None = None,
+    take: int,
+    skip: int,
+) -> Sequence[Mapping[str, object]]:
+    where_sql, query_params = _legacy_spend_log_filter_sql(
+        start_time_gte=start_time_gte,
+        start_time_lte=start_time_lte,
+        api_key=api_key,
+        user_id=user_id,
+    )
+    limit_index: Final = len(query_params) + 1
+    sql_query: Final = f"""
+        SELECT
+            request_id, call_type, api_key, spend, total_tokens,
+            prompt_tokens, completion_tokens, "startTime", "endTime",
+            "completionStartTime", model, model_id, model_group,
+            custom_llm_provider, api_base, "user", metadata,
+            cache_hit, cache_key, request_tags, team_id,
+            organization_id, end_user, requester_ip_address,
+            session_id, status, mcp_namespaced_tool_name, agent_id,
+            request_duration_ms
+        FROM "LiteLLM_SpendLogs"
+        WHERE {where_sql}
+        ORDER BY "startTime" DESC, request_id DESC
+        LIMIT ${limit_index} OFFSET ${limit_index + 1}
+    """
+    rows: Final[Sequence[Mapping[str, object]]] = await _query_raw(
+        prisma_client,
+        sql_query,
+        *query_params,
+        take,
+        skip,
+    )
+    _hydrate_spend_log_metadata(rows)
+    _hydrate_spend_log_request_tags(rows)
+    return rows
+
+
+async def _summarize_legacy_spend_logs(
+    prisma_client: PrismaClient,
+    *,
+    start_time_gte: datetime,
+    start_time_lte: datetime,
+    api_key: str | None = None,
+    user_id: str | None = None,
+    request_id: str | None = None,
+) -> Sequence[_LegacySpendSummaryRow]:
+    where_sql, query_params = _legacy_spend_log_filter_sql(
+        start_time_gte=start_time_gte,
+        start_time_lte=start_time_lte,
+        api_key=api_key,
+        user_id=user_id,
+        request_id=request_id,
+    )
+    sql_query: Final = f"""
+        SELECT
+            date_trunc('day', "startTime")::date AS spend_date,
+            api_key,
+            "user",
+            model,
+            COALESCE(SUM(spend), 0)::double precision AS spend
+        FROM "LiteLLM_SpendLogs"
+        WHERE {where_sql}
+        GROUP BY spend_date, api_key, "user", model
+        ORDER BY spend_date ASC, api_key ASC, "user" ASC, model ASC
+    """
+    rows: Final[Sequence[_LegacySpendSummaryRow]] = await _query_raw(prisma_client, sql_query, *query_params)
+    return rows
+
+
+def _legacy_spend_log_summary_date(value: object) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    raise ValueError(f"Unexpected spend summary date: {value!r}")
 
 
 async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _SpendLogOwnershipRow | None:
@@ -2698,6 +2820,18 @@ def _hydrate_spend_log_metadata(rows: Sequence[Mapping[str, object]]) -> None:
                 row["metadata"] = {}
 
 
+def _hydrate_spend_log_request_tags(rows: Sequence[Mapping[str, object]]) -> None:
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        request_tags = row.get("request_tags")
+        if isinstance(request_tags, str):
+            try:
+                row["request_tags"] = json.loads(request_tags)
+            except (ValueError, TypeError):
+                row["request_tags"] = []
+
+
 def _cold_storage_object_key_from_metadata(
     metadata: str | dict | None,
 ) -> str | None:
@@ -2896,16 +3030,12 @@ async def view_spend_logs(
         int,
         fastapi.Query(
             description="Page number for individual spend logs",
-            ge=1,
-            le=LEGACY_SPEND_LOGS_MAX_SKIP + 1,
         ),
     ] = 1,
     page_size: Annotated[
         int,
         fastapi.Query(
             description="Number of individual spend logs per page",
-            ge=1,
-            le=LEGACY_SPEND_LOGS_MAX_PAGE_SIZE,
         ),
     ] = 50,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -2968,23 +3098,25 @@ async def view_spend_logs(
             )
         is_request_id_lookup: Final = isinstance(request_id, str)
         is_summarized_date_range: Final = isinstance(start_date, str) and isinstance(end_date, str) and bool(summarize)
-        if page < 1:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="page must be greater than or equal to 1",
-            )
-        if not 1 <= page_size <= LEGACY_SPEND_LOGS_MAX_PAGE_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"page_size must be between 1 and {LEGACY_SPEND_LOGS_MAX_PAGE_SIZE}",
-            )
-        max_page: Final = LEGACY_SPEND_LOGS_MAX_SKIP // page_size + 1
-        if not is_request_id_lookup and not is_summarized_date_range and page > max_page:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"page must be less than or equal to {max_page} when page_size is {page_size}",
-            )
-        skip: Final = 0 if is_request_id_lookup or is_summarized_date_range else (page - 1) * page_size
+        is_individual_log_page: Final = not is_request_id_lookup and not is_summarized_date_range
+        if is_individual_log_page:
+            if page < 1:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="page must be greater than or equal to 1",
+                )
+            if not 1 <= page_size <= LEGACY_SPEND_LOGS_MAX_PAGE_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"page_size must be between 1 and {LEGACY_SPEND_LOGS_MAX_PAGE_SIZE}",
+                )
+            max_page: Final = LEGACY_SPEND_LOGS_MAX_SKIP // page_size + 1
+            if page > max_page:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"page must be less than or equal to {max_page} when page_size is {page_size}",
+                )
+        skip: Final = (page - 1) * page_size if is_individual_log_page else 0
         take: Final = 1 if is_request_id_lookup else page_size
         if (
             start_date is not None
@@ -3000,70 +3132,91 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: Final = {
+            filter_query: dict[str, object] = {
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date
                 }
             }
 
+            effective_api_key: str | None = None
+            effective_request_id: str | None = None
+            effective_user_id: str | None = None
             if api_key is not None and isinstance(api_key, str):
-                if api_key.startswith("sk-"):
-                    filter_query["api_key"] = prisma_client.hash_token(token=api_key)
-                else:
-                    filter_query["api_key"] = api_key
+                effective_api_key = prisma_client.hash_token(token=api_key) if api_key.startswith("sk-") else api_key
+                filter_query["api_key"] = effective_api_key
             if request_id is not None and isinstance(request_id, str):
+                effective_request_id = request_id
                 filter_query["request_id"] = request_id
             if user_id is not None and isinstance(user_id, str):
+                effective_user_id = user_id
                 filter_query["user"] = user_id
 
             # Check if user wants unsummarized data
             if not summarize:
-                # Return filtered individual log entries (similar to UI endpoint)
-                data = await _find_spend_logs(
-                    prisma_client,
-                    where=filter_query,
-                    take=take,
-                    skip=skip,
-                )
+                if is_request_id_lookup:
+                    data = await _find_spend_logs(
+                        prisma_client,
+                        where=filter_query,
+                        take=take,
+                        skip=skip,
+                    )
+                else:
+                    data = await _find_legacy_spend_log_page(
+                        prisma_client,
+                        start_time_gte=start_date_obj,
+                        start_time_lte=end_date_obj,
+                        api_key=effective_api_key,
+                        user_id=effective_user_id,
+                        take=take,
+                        skip=skip,
+                    )
                 return data
 
-            # Legacy behavior: return summarized data (when summarize=true)
-            # SQL query
-            response: Final = await SpendLogsRepository(prisma_client).table.group_by(
-                by=["api_key", "user", "model", "startTime"],
-                where=filter_query,
-                sum={
-                    "spend": True,
-                },
+            response: Final = await _summarize_legacy_spend_logs(
+                prisma_client,
+                start_time_gte=start_date_obj,
+                start_time_lte=end_date_obj,
+                api_key=effective_api_key,
+                user_id=effective_user_id,
+                request_id=effective_request_id,
             )
 
-            if isinstance(response, list) and len(response) > 0 and isinstance(response[0], dict):
-                result: Final[dict] = {}
+            if len(response) > 0:
+                daily_spend: dict[date, float] = {}
+                daily_api_spend: dict[date, dict[str, float]] = {}
+                daily_user_spend: dict[date, dict[str | None, float]] = {}
+                daily_model_spend: dict[date, dict[str, float]] = {}
                 for record in response:
-                    dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")
-                    date = dt_object.date()
-                    if date not in result:
-                        result[date] = {"users": {}, "models": {}}
-                    api_key = record["api_key"]
-                    user_id = record["user"]
-                    model = record["model"]
-                    result[date]["spend"] = result[date].get("spend", 0) + record.get("_sum", {}).get("spend", 0)
-                    result[date][api_key] = result[date].get(api_key, 0) + record.get("_sum", {}).get("spend", 0)
-                    result[date]["users"][user_id] = result[date]["users"].get(user_id, 0) + record.get("_sum", {}).get(
-                        "spend", 0
+                    spend_date = _legacy_spend_log_summary_date(record["spend_date"])
+                    record_api_key = record["api_key"] or ""
+                    record_user_id = record["user"]
+                    record_model = record["model"] or ""
+                    raw_spend = record["spend"]
+                    record_spend = float(raw_spend) if isinstance(raw_spend, (int, float, str)) else 0.0
+                    daily_spend[spend_date] = daily_spend.get(spend_date, 0.0) + record_spend
+                    daily_api_spend.setdefault(spend_date, {})[record_api_key] = (
+                        daily_api_spend.setdefault(spend_date, {}).get(record_api_key, 0.0) + record_spend
                     )
-                    result[date]["models"][model] = result[date]["models"].get(model, 0) + record.get("_sum", {}).get(
-                        "spend", 0
+                    daily_user_spend.setdefault(spend_date, {})[record_user_id] = (
+                        daily_user_spend.setdefault(spend_date, {}).get(record_user_id, 0.0) + record_spend
                     )
-                return_list: Final = []
-                final_date = None
-                for k, v in sorted(result.items()):
-                    return_list.append({**v, "startTime": k})
-                    final_date = k
+                    daily_model_spend.setdefault(spend_date, {})[record_model] = (
+                        daily_model_spend.setdefault(spend_date, {}).get(record_model, 0.0) + record_spend
+                    )
+                return_list: list[dict[str, object]] = []
+                for spend_date in sorted(daily_spend):
+                    day_result: dict[str, object] = {
+                        "users": daily_user_spend[spend_date],
+                        "models": daily_model_spend[spend_date],
+                        "spend": daily_spend[spend_date],
+                    }
+                    day_result.update(daily_api_spend[spend_date])
+                    return_list.append({**day_result, "startTime": spend_date})
 
+                final_date: Final = max(daily_spend)
                 end_date_date: Final = end_date_obj.date()
-                if final_date is not None and final_date < end_date_date:
+                if final_date < end_date_date:
                     current_date = final_date + timedelta(days=1)
                     while current_date <= end_date_date:
                         # Represent current_date as string because original response has it this way
@@ -3094,12 +3247,21 @@ async def view_spend_logs(
             if user_id is not None and isinstance(user_id, str):
                 scoped_filter["user"] = user_id
 
-            data = await _find_spend_logs(
-                prisma_client,
-                where=scoped_filter,
-                take=take,
-                skip=skip,
-            )
+            if is_request_id_lookup:
+                data = await _find_spend_logs(
+                    prisma_client,
+                    where=scoped_filter,
+                    take=take,
+                    skip=skip,
+                )
+            else:
+                data = await _find_legacy_spend_log_page(
+                    prisma_client,
+                    api_key=scoped_filter.get("api_key"),
+                    user_id=scoped_filter.get("user"),
+                    take=take,
+                    skip=skip,
+                )
             return data
 
         return None
