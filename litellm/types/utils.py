@@ -158,6 +158,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_none_reasoning_effort: bool | None
     supports_minimal_reasoning_effort: bool | None
     supports_low_reasoning_effort: bool | None
+    supports_medium_reasoning_effort: bool | None
+    supports_high_reasoning_effort: bool | None
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
     supports_output_config: bool | None

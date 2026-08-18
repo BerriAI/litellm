@@ -2605,6 +2605,20 @@ def supports_reasoning(model: str, custom_llm_provider: str | None = None) -> bo
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning")
 
 
+def supports_medium_reasoning_effort(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model supports medium reasoning effort and return a boolean value.
+    """
+    return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_medium_reasoning_effort")
+
+
+def supports_high_reasoning_effort(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model supports high reasoning effort and return a boolean value.
+    """
+    return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_high_reasoning_effort")
+
+
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports native structured outputs and return a boolean value.
