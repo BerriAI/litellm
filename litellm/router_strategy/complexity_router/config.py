@@ -267,6 +267,16 @@ DEFAULT_TECHNICAL_KEYWORDS: Final[list[str]] = [
 
 DEFAULT_ESCALATION_KEYWORDS: Final[list[str]] = ["LITELLM ESCALATE"]
 
+# Verified against Claude Code 2.1.233 wire captures and vscode-copilot-chat source
+# (agentPrompt.tsx / planAgentProvider.ts). These are client-owned strings that drift with
+# client releases; operators extend coverage via plan_mode_patterns rather than editing these.
+PLAN_MODE_TAIL_SENTINELS: Final[tuple[str, ...]] = (
+    "Plan mode is active",
+    "Plan mode still active",
+)
+PLAN_MODE_SYSTEM_SENTINELS: Final[tuple[str, ...]] = ('You are currently running in "Plan" mode.',)
+PLAN_MODE_TOOL_NAME: Final[str] = "exit_plan_mode"
+
 
 DEFAULT_SIMPLE_KEYWORDS: Final[list[str]] = [
     "what is",
@@ -623,6 +633,31 @@ class ComplexityRouterConfig(BaseModel):
         description="Rules that force a specific tier when their keywords match the prompt",
     )
 
+    plan_mode_min_tier: str | None = Field(
+        default=None,
+        description=(
+            "When set, requests carrying a coding-agent plan-mode sentinel (Claude Code plan "
+            "mode, VS Code Copilot Plan mode, Copilot CLI's exit_plan_mode tool) are routed to "
+            "at least this tier: the classified tier still wins when it is higher, and the "
+            "floor also overrides a session-affinity pin to a lower tier for exactly the turns "
+            "carrying the sentinel, without rewriting the pin -- the first turn after plan mode "
+            "exits routes as if plan mode had never happened. Names a built-in tier, or with "
+            "tier_definitions set, one of the defined tier names (list order is ascending "
+            "severity, same as keyword_tier_rules). Unset disables detection entirely. The "
+            "sentinels ride in client-injected prompt text, so a caller who pastes one can "
+            "spend up to this tier's models -- never down, and never outside the configured "
+            "pools."
+        ),
+    )
+    plan_mode_patterns: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Additional case-sensitive literal sentinels that mark a request as plan mode, on "
+            "top of the built-in Claude Code and Copilot ones. For clients whose plan-mode "
+            "wording the built-ins don't cover, or after a client release changes its strings."
+        ),
+    )
+
     # Semantic (embedding) matching for keyword_tier_rules instead of literal text matching
     semantic_keyword_matching: bool = Field(
         default=False,
@@ -722,6 +757,42 @@ class ComplexityRouterConfig(BaseModel):
         if value is None:
             return None
         return [stripped for keyword in value if (stripped := keyword.strip())]
+
+    @field_validator("plan_mode_min_tier", mode="before")
+    @classmethod
+    def _coerce_plan_mode_min_tier(cls, value: object) -> object:
+        if isinstance(value, ComplexityTier):
+            return value.value
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("plan_mode_patterns")
+    @classmethod
+    def _normalize_plan_mode_patterns(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Blank patterns are dropped rather than kept: an empty string substring-matches every
+        request, which would silently floor all traffic (same failure mode keyword_tier_rules
+        rejects)."""
+        if value is None:
+            return None
+        return tuple(stripped for pattern in value if (stripped := pattern.strip()))
+
+    @model_validator(mode="after")
+    def _validate_plan_mode_min_tier(self) -> "ComplexityRouterConfig":
+        if self.plan_mode_min_tier is None:
+            return self
+        if self.plan_mode_min_tier not in self.tier_names():
+            raise ValueError(
+                f"plan_mode_min_tier {self.plan_mode_min_tier!r} is not an active tier: it must name "
+                f"one of {', '.join(self.tier_names())}"
+            )
+        if self.plan_mode_min_tier not in self.tiers:
+            raise ValueError(
+                f"plan_mode_min_tier {self.plan_mode_min_tier} has no model configured in tiers; "
+                "a floor pointing at an unconfigured tier would route every plan-mode request to the "
+                "default fallback instead of the premium pool the operator intended"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_llm_classifier_config(self) -> "ComplexityRouterConfig":

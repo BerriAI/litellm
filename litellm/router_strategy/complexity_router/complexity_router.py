@@ -46,6 +46,9 @@ from .config import (
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
+    PLAN_MODE_SYSTEM_SENTINELS,
+    PLAN_MODE_TAIL_SENTINELS,
+    PLAN_MODE_TOOL_NAME,
     TIER_SEVERITY_ORDER,
     ClassificationRubric,
     ComplexityRouterConfig,
@@ -421,6 +424,123 @@ def _extract_current_ask_and_system_prompt(
     return current_ask, system_prompt
 
 
+def _last_human_ask_index(
+    messages: Sequence[Mapping[str, object]],
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
+) -> int | None:
+    """Index of the newest user turn carrying a real human ask, or None when every turn is plumbing.
+
+    Tool-result carriers and reminder-only turns flatten to empty human text, so an agentic loop's
+    tail of tool traffic never counts as the ask. Plan-mode staleness detection anchors here: the
+    sentinel a client re-injects each turn lands at or after this index, while a sentinel that only
+    survives in history from an exited plan session sits before it.
+    """
+    return next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].get("role") == "user" and _human_text(messages[index].get("content"), marker_pairs)
+        ),
+        None,
+    )
+
+
+def _iter_system_scope_texts(
+    body_system: object,
+    messages: Sequence[Mapping[str, object]],
+) -> Iterator[str]:
+    """Text of the request's leading system prompt content: the top-level system param (Anthropic
+    dialect carries one alongside the messages array) plus system-role messages before the first
+    non-system turn.
+
+    Leading only, because that is the content clients rebuild on every request, so a sentinel
+    matched here is current by construction. A system message sitting later in the conversation is
+    transcript history (Claude Code's injected reminders survive there after plan mode exits) and
+    must go through the staleness-aware tail scan instead -- scanning it here would floor every
+    turn of a session that once planned, for any pattern whose client injects mid-conversation.
+    """
+    if isinstance(body_system, str):
+        yield body_system
+    elif isinstance(body_system, list):
+        yield _message_text(body_system)
+    for msg in messages:
+        if msg.get("role") != "system":
+            return
+        if text := _message_text(msg.get("content")):
+            yield text
+
+
+def _matched_plan_mode_sentinel(
+    body: Mapping[str, object] | None,
+    resolved_messages: Sequence[Mapping[str, object]] | None,
+    extra_patterns: tuple[str, ...],
+    marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
+) -> str | None:
+    """The plan-mode sentinel this request carries, or None when it carries none.
+
+    Reads the raw wire body when the proxy captured one, because the sentinels ride in
+    client-injected plumbing that the ask-extraction path deliberately strips: Claude Code injects
+    a system-role message mid-conversation (older versions a reminder block inside the user turn),
+    and both are invisible to `_extract_current_ask_and_system_prompt`. Resolved messages are only
+    the fallback for direct SDK callers with no proxy capture.
+
+    Three signals with different staleness behavior, so they scan different scopes:
+    - Copilot CLI advertises plan mode in the tools array (`exit_plan_mode`), rebuilt per request.
+    - Copilot's ``modeInstructions`` preamble rides the leading system prompt, rebuilt per
+      request, so an occurrence there is current by construction.
+    - Claude Code's injected reminders persist in transcript history after the user exits plan
+      mode, so only an occurrence at or after the newest human ask counts: while plan mode is
+      active the client re-injects the reminder with every turn, and after exit the newest ask has
+      no reminder at or after it. Matching is raw text on purpose -- the current injection style is
+      a system-role message, the older one a reminder block, and stripping would delete the latter.
+
+    Every pattern, built-in and operator-supplied, is matched in both scopes; each scope is
+    staleness-safe on its own terms, so the union cannot resurrect an exited plan session.
+
+    Matches are case-sensitive substrings, same rationale as escalation keywords: these exact
+    client-owned strings, not incidental prose. A caller can still paste one deliberately; that
+    only raises the tier within pools the operator configured, so it spends up, never sideways.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import has_tool_with_name
+
+    tools: Final = body.get("tools") if body is not None else None
+    if has_tool_with_name(tools, PLAN_MODE_TOOL_NAME):
+        return PLAN_MODE_TOOL_NAME
+
+    body_messages: Final = body.get("messages") if body is not None else None
+    messages: Final[Sequence[Mapping[str, object]]] = (
+        tuple(msg for msg in body_messages if isinstance(msg, Mapping))
+        if isinstance(body_messages, list)
+        else (resolved_messages or ())
+    )
+
+    patterns: Final = (*PLAN_MODE_SYSTEM_SENTINELS, *PLAN_MODE_TAIL_SENTINELS, *extra_patterns)
+    system_match: Final = next(
+        (
+            pattern
+            for text in _iter_system_scope_texts(body.get("system") if body is not None else None, messages)
+            for pattern in patterns
+            if pattern in text
+        ),
+        None,
+    )
+    if system_match is not None:
+        return system_match
+
+    newest_ask_index: Final = _last_human_ask_index(messages, marker_pairs)
+    tail_start: Final = 0 if newest_ask_index is None else newest_ask_index
+    return next(
+        (
+            pattern
+            for msg in islice(messages, tail_start, None)
+            if (text := _message_text(msg.get("content")))
+            for pattern in patterns
+            if pattern in text
+        ),
+        None,
+    )
+
+
 def _truncate(text: str, limit: int) -> str:
     """Cap text at limit characters, marking it so the classifier can tell the turn was cut short."""
     return text if len(text) <= limit else f"{text[:limit]}{_TRUNCATION_MARKER}"
@@ -489,8 +609,14 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
     A classifier that timed out did not decide anything, so pinning where its fallback landed
     would let one transient failure hold the session on default_model for the whole TTL. Those
     turns stay unpinned and the next one classifies again.
+
+    A plan-mode floor is transient the other way around: it describes the state the client is
+    in right now, not what the session's traffic looks like. Pinning it would hold the session
+    on the floor's premium model after the user exits plan mode; leaving it unpinned means the
+    floor re-detects while plan mode lasts and the first ordinary turn classifies and pins as
+    if plan mode had never happened.
     """
-    return decision is None or decision.get("cause") != "default_model_fallback"
+    return decision is None or decision.get("cause") not in ("default_model_fallback", "plan_mode")
 
 
 class DimensionScore:
@@ -1369,7 +1495,13 @@ class ComplexityRouter(CustomLogger):
         classified_tier: ComplexityTier | str,
         user_message: str,
         request_kwargs: dict[str, Any] | None = None,
+        hard_floor: ComplexityTier | str | None = None,
     ) -> str:
+        """hard_floor excludes every candidate whose tiers all sit below it, turning this pick's
+        soft floors (a distance penalty a high-scoring cheap model can outweigh) into a hard
+        minimum for requests that carry one, e.g. the plan-mode floor. classified_tier arrives
+        already clamped to the floor, so the cold-start pool and the classified_tier eligibility
+        mode satisfy it by construction; only the "all" eligibility mode can reach below."""
         from litellm.router_strategy.adaptive_router.bandit import (
             normalized_cost,
             thompson_sample,
@@ -1424,10 +1556,16 @@ class ComplexityRouter(CustomLogger):
         cost_weight: Final = self.config.adaptive_weights.cost
         penalty_weight: Final = self.config.tier_distance_penalty
 
+        floor_severity: Final = self._active_tier_severity(hard_floor) if hard_floor is not None else None
         best_model: str | None = None
         best_score = float("-inf")
         candidate_scores: Final[list[dict[str, Any]]] = []
         for model in candidates:
+            if floor_severity is not None and all(
+                self._active_tier_severity(model_tier) < floor_severity
+                for model_tier in self._model_tiers.get(model, (classified_tier,))
+            ):
+                continue
             cell = adaptive._cells[(request_type, model)]
             quality_sample = thompson_sample(cell)
             cost_score = normalized_cost(adaptive.model_to_cost.get(model, 0.0), all_costs)
@@ -1468,6 +1606,55 @@ class ComplexityRouter(CustomLogger):
                     "candidates": candidate_scores,
                 }
         return best_model
+
+    def _resolve_plan_mode_floor(self) -> ComplexityTier | str | None:
+        """The configured floor as an active tier: the built-in enum member, or the defined
+        name itself for a custom tier set; None when the feature is off."""
+        name: Final = self.config.plan_mode_min_tier
+        if name is None:
+            return None
+        return name if self.config.has_custom_tiers else ComplexityTier(name)
+
+    def _active_tier_severity(self, tier: ComplexityTier | str) -> int:
+        """Position of a tier in the active severity order: TIER_SEVERITY_ORDER for the built-in
+        set, tier_definitions list order (ascending) for a custom set -- the same order
+        keyword_tier_rules resolve severity against."""
+        return self.config.tier_names().index(_tier_name(tier))
+
+    def _matched_plan_mode_signal(
+        self,
+        request_kwargs: Mapping[str, object],
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+    ) -> str | None:
+        """The plan-mode sentinel on this request, or None; always None when the floor is unset,
+        so routers that never opted in pay nothing for detection."""
+        if self.config.plan_mode_min_tier is None:
+            return None
+        proxy_request: Final = request_kwargs.get("proxy_server_request")
+        body: Final = proxy_request.get("body") if isinstance(proxy_request, dict) else None
+        return _matched_plan_mode_sentinel(
+            body if isinstance(body, Mapping) else None,
+            resolved_messages,
+            tuple(self.config.plan_mode_patterns or ()),
+            self._reminder_markers,
+        )
+
+    def _apply_plan_mode_floor(self, tier: ComplexityTier | str) -> ComplexityTier | str:
+        """The higher of the decided tier and the plan-mode floor; identity when the floor is unset."""
+        floor: Final = self._resolve_plan_mode_floor()
+        if floor is None:
+            return tier
+        return tier if self._active_tier_severity(tier) >= self._active_tier_severity(floor) else floor
+
+    def _plan_mode_floor_is_top_tier(self) -> bool:
+        """Whether no configured tier outranks the plan-mode floor, i.e. the classifier's answer
+        could never rise above it and classification would be pure spend."""
+        floor: Final = self._resolve_plan_mode_floor()
+        if floor is None:
+            return False
+        configured: Final = frozenset(self.config.tiers)
+        names: Final = self.config.tier_names()
+        return all(name not in configured for name in names[self._active_tier_severity(floor) + 1 :])
 
     def _matched_escalation_keyword(self, user_message: str) -> str | None:
         """The escalation keyword the prompt contains, or None when escalation is off.
@@ -1815,11 +2002,25 @@ class ComplexityRouter(CustomLogger):
                     if pin_escalation_keyword is not None:
                         routed_model = self._escalated_pin(pinned_model)
                 if routed_model is not None:
+                    escalated: Final = routed_model != pinned_model
+                    # The floor outranks the pin because plan mode is a transient state of the
+                    # session, not a request to move it: the turns carrying the sentinel route at
+                    # the floor, and the stored pin deliberately keeps the session's own model so
+                    # the first turn after plan mode exits auto-routes exactly as it would have.
+                    # Escalation is the opposite on purpose -- an explicit ask to re-pin higher.
+                    pin_plan_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
+                    pinned_tier: Final = self._tier_for_model(routed_model) if pin_plan_sentinel is not None else None
+                    plan_floored: Final = (
+                        pinned_tier is not None and self._apply_plan_mode_floor(pinned_tier) != pinned_tier
+                    )
+                    session_model: Final = routed_model
+                    if plan_floored and pinned_tier is not None:
+                        routed_model = self.get_model_for_tier(self._apply_plan_mode_floor(pinned_tier))
                     # Refresh the TTL on every hit so an active session doesn't lose its
                     # pin mid-conversation just because it outlives the original write.
                     await self.litellm_router_instance.cache.async_set_cache(
                         key=cache_key,
-                        value=routed_model,
+                        value=session_model,
                         ttl=self.config.session_affinity_ttl_seconds,
                     )
                     if self.config.adaptive:
@@ -1830,8 +2031,11 @@ class ComplexityRouter(CustomLogger):
                         kwargs_metadata: Final = request_kwargs.setdefault("metadata", {})
                         if isinstance(kwargs_metadata, dict):
                             kwargs_metadata[ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY] = routed_model
-                    escalated: Final = routed_model != pinned_model
-                    cause: RoutingDecisionCause = "session_affinity_escalation" if escalated else "session_affinity_pin"
+                    cause: RoutingDecisionCause = (
+                        "plan_mode"
+                        if plan_floored
+                        else ("session_affinity_escalation" if escalated else "session_affinity_pin")
+                    )
                     verbose_router_logger.info(
                         "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model
                     )
@@ -1844,6 +2048,7 @@ class ComplexityRouter(CustomLogger):
                                 routed_model=routed_model,
                                 cause=cause,
                                 tier=self._tier_for_model(routed_model),
+                                matched_keyword=pin_plan_sentinel if plan_floored else None,
                                 escalation_keyword=pin_escalation_keyword,
                                 escalated=escalated,
                                 conversation_continuing=conversation_continuing,
@@ -1860,7 +2065,17 @@ class ComplexityRouter(CustomLogger):
             conversation_continuing=conversation_continuing,
             resolved_messages=resolved_messages,
         )
-        if cache_key is not None and response is not None and _decision_is_pinnable(response.routing_decision):
+        # Sentinel presence, not the plan_mode cause, gates the pin write: a plan-mode turn
+        # classified at or above the floor keeps its ordinary cause, yet on an adaptive router
+        # the hard floor constrained its pick, so pinning it would carry a plan-mode-shaped
+        # choice past plan mode's exit. No sentinel turn writes the pin, whatever its cause.
+        pinnable: Final = (
+            cache_key is not None
+            and response is not None
+            and _decision_is_pinnable(response.routing_decision)
+            and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
+        )
+        if pinnable and cache_key is not None and response is not None:
             await self.litellm_router_instance.cache.async_set_cache(
                 key=cache_key,
                 value=response.model,
@@ -1940,13 +2155,47 @@ class ComplexityRouter(CustomLogger):
         newest_ask: Final = _newest_turn_ask(resolved_messages, self._reminder_markers)
         escalation_keyword: Final = self._matched_escalation_keyword(newest_ask) if newest_ask is not None else None
 
+        plan_mode_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
+        plan_floor: Final = self._resolve_plan_mode_floor() if plan_mode_sentinel is not None else None
+        if plan_floor is not None and plan_mode_sentinel is not None and self._plan_mode_floor_is_top_tier():
+            # No configured tier outranks the floor, so neither the keyword rules nor the
+            # classifier could change the answer -- routing directly saves the classifier call
+            # on every plan-mode turn.
+            routed_model = await self._pick_model_for_tier(plan_floor, messages, resolved_messages, request_kwargs)
+            verbose_router_logger.info(
+                "ComplexityRouter: routing decision cause=plan_mode, tier=%s, routed_model=%s",
+                _tier_name(plan_floor),
+                routed_model,
+            )
+            return PreRoutingHookResponse(
+                model=routed_model,
+                messages=messages if has_original_messages else None,
+                routing_decision=self._build_routing_decision(
+                    routed_model=routed_model,
+                    conversation_continuing=conversation_continuing,
+                    cause="plan_mode",
+                    tier=plan_floor,
+                    matched_keyword=plan_mode_sentinel,
+                    escalation_keyword=escalation_keyword,
+                    escalated=False,
+                ),
+            )
+
         override: Final = await self._resolve_keyword_tier_override(user_message, request_kwargs)
         if override is not None:
-            routed_tier: Final = self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
-            keyword_escalated: Final = routed_tier != override.tier
+            escalated_tier: Final = (
+                self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
+            )
+            keyword_escalated: Final = escalated_tier != override.tier
+            routed_tier: Final = (
+                self._apply_plan_mode_floor(escalated_tier) if plan_floor is not None else escalated_tier
+            )
+            keyword_plan_floored: Final = routed_tier != escalated_tier
             routed_model = await self._pick_model_for_tier(routed_tier, messages, resolved_messages, request_kwargs)
             keyword_cause: Final[RoutingDecisionCause] = (
-                "semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match"
+                "plan_mode"
+                if keyword_plan_floored
+                else ("semantic_keyword_match" if self.config.semantic_keyword_matching else "literal_keyword_match")
             )
             verbose_router_logger.info(
                 "ComplexityRouter: routing decision cause=%s, escalated=%s, tier=%s, routed_model=%s",
@@ -1963,7 +2212,7 @@ class ComplexityRouter(CustomLogger):
                     conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
                     tier=routed_tier,
-                    matched_keyword=override.matched_keyword,
+                    matched_keyword=plan_mode_sentinel if keyword_plan_floored else override.matched_keyword,
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
                 ),
@@ -1977,9 +2226,20 @@ class ComplexityRouter(CustomLogger):
         escalated: Final = tier != classified_tier
         if escalated:
             signals = (*signals, "escalation")
+        pre_floor_tier: Final = tier
+        if plan_floor is not None:
+            tier = self._apply_plan_mode_floor(tier)
+        plan_floored: Final = tier != pre_floor_tier
+        if plan_floored:
+            signals = (*signals, "plan_mode_floor")
         score_repr: Final = f"{score:.3f}" if score is not None else "n/a"
         fallback_model: Final = self.config.default_model if not self.config.plugins else None
-        if outcome.cause == "default_model_fallback" and fallback_model is not None:
+        # A sentinel-carrying request skips the failure exit below, whether or not the floor
+        # moved the tier: default_model carries no tier guarantee (its placeholder tier is the
+        # pool that holds it, or MEDIUM when none does), so a placeholder at or above the floor
+        # would otherwise route a plan-mode request to a model the floor cannot vouch for. The
+        # clamped tier's pool is the destination the floor can guarantee.
+        if outcome.cause == "default_model_fallback" and fallback_model is not None and plan_mode_sentinel is None:
             # Classification failed and the operator asked for default_model, so route there
             # directly. Neither the tier pool nor the adaptive bandit gets a say: both answer
             # "which model suits this tier", and no tier was decided. Escalation is skipped for
@@ -2008,7 +2268,12 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
         if self.config.adaptive:
-            routed_model = self._soft_floor_pick(tier, user_message, request_kwargs)
+            # hard_floor rather than a hard pick, and passed whenever the sentinel is present
+            # rather than only when the floor moved the tier: a request classified AT the floor
+            # has plan_floored False, yet adaptive_eligible="all" scores every model and only
+            # penalizes tier distance, so without the floor the bandit could still route below
+            # it -- and a floor a bandit can slide under is not a floor.
+            routed_model = self._soft_floor_pick(tier, user_message, request_kwargs, hard_floor=plan_floor)
             adaptive: Final = self._ensure_adaptive_router()
             if adaptive is not None:
                 kwargs_metadata: Final = request_kwargs.setdefault("metadata", {})
@@ -2044,22 +2309,29 @@ class ComplexityRouter(CustomLogger):
         # short-circuited above), and there `tier` exists solely to name a pool for the plugins to
         # filter. Reporting it as the request's tier would attribute a classification to a request
         # that never got one, so the record names the pool in its signals instead.
-        classified_pool_tier: Final = None if outcome.cause == "default_model_fallback" else tier
+        # A floored failure still reports its tier: the floor decided it, unlike the plain
+        # failure path where no tier was decided and reporting one would fabricate a
+        # classification.
+        classified_pool_tier: Final = (
+            None if outcome.cause == "default_model_fallback" and plan_mode_sentinel is None else tier
+        )
         decision_signals: Final = (
             (*signals, f"plugin-filtered-pool:{_tier_name(tier)}")
-            if outcome.cause == "default_model_fallback"
+            if outcome.cause == "default_model_fallback" and self.config.plugins
             else signals
         )
+        decision_cause: Final[RoutingDecisionCause] = "plan_mode" if plan_floored else outcome.cause
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages if has_original_messages else None,
             routing_decision=self._build_routing_decision(
                 routed_model=routed_model,
                 conversation_continuing=conversation_continuing,
-                cause=outcome.cause,
+                cause=decision_cause,
                 tier=classified_pool_tier,
                 score=score,
                 signals=decision_signals,
+                matched_keyword=plan_mode_sentinel if plan_floored else None,
                 escalation_keyword=escalation_keyword,
                 escalated=escalated,
                 classifier_model=classifier_model,

@@ -129,6 +129,33 @@ describe("RoutingDecisionCard", () => {
     expect(screen.getByText('Keyword match: "deploy to k8s"')).toBeInTheDocument();
   });
 
+  it("shows the plan-mode sentinel that floored the tier", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "Plan mode is active", score: undefined }}
+      />,
+    );
+    expect(screen.getByText('Plan-mode floor: "Plan mode is active"')).toBeInTheDocument();
+  });
+
+  it("names the exit_plan_mode tool instead of quoting it as a sentinel", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "exit_plan_mode", score: undefined }}
+      />,
+    );
+    expect(screen.getByText("Plan-mode floor (exit_plan_mode tool)")).toBeInTheDocument();
+  });
+
+  it("does not claim the score chose the tier on a plan-mode floored row", () => {
+    // The score's band can name a lower tier than the floored badge; the cause suppresses it.
+    render(
+      <RoutingDecisionCard decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "Plan mode is active" }} />,
+    );
+    expect(screen.queryByText(/below|to 0|at or above/)).not.toBeInTheDocument();
+    expect(screen.getByText('Plan-mode floor: "Plan mode is active"')).toBeInTheDocument();
+  });
+
   it("shows the escalation keyword", () => {
     render(
       <RoutingDecisionCard decision={{ ...heuristic, escalated: true, escalation_keyword: "LITELLM ESCALATE" }} />,

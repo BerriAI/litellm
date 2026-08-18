@@ -29,6 +29,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     DimensionScore,
     KeywordOverride,
     _built_in_prompt,
+    _matched_plan_mode_sentinel,
     classification_system_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
@@ -7179,3 +7180,552 @@ class TestTierDefinitions:
                     "classifier_llm_config": {"model": "haiku-classifier", "system_prompt": "grade it"},
                 }
             )
+
+
+class TestPlanModeDetection:
+    """Wire-shape detection for coding-agent plan mode.
+
+    Fixture bodies are sanitized minimal replicas of real captures: Claude Code 2.1.233 via an
+    ANTHROPIC_BASE_URL logging stub (mid-conversation system-role message on the Anthropic
+    dialect), and vscode-copilot-chat source for the Copilot shapes.
+    """
+
+    CLAUDE_CODE_SENTINEL = (
+        "Plan mode is active. The user indicated that they do not want you to execute yet -- "
+        "you MUST NOT make any edits, run any non-readonly tools"
+    )
+    COPILOT_PREAMBLE = (
+        '<modeInstructions>\nYou are currently running in "Plan" mode. Below are your '
+        "instructions for this mode, they must take precedence over any instructions above.\n"
+        "You are a PLANNING AGENT.\n</modeInstructions>"
+    )
+
+    def test_claude_code_mid_conversation_system_message_matches(self):
+        body = {
+            "system": [{"type": "text", "text": "You are a coding agent."}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "add a hello endpoint"}]},
+                {"role": "system", "content": [{"type": "text", "text": self.CLAUDE_CODE_SENTINEL}]},
+            ],
+        }
+        assert _matched_plan_mode_sentinel(body, None, ()) == "Plan mode is active"
+
+    def test_claude_code_sparse_reminder_on_later_turn_matches(self):
+        body = {
+            "messages": [
+                {"role": "user", "content": "plan the refactor"},
+                {"role": "system", "content": "Plan mode still active (see full instructions earlier)."},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "file body"}]},
+            ]
+        }
+        assert _matched_plan_mode_sentinel(body, None, ()) == "Plan mode still active"
+
+    def test_claude_code_legacy_reminder_block_inside_user_turn_matches(self):
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"<system-reminder>{self.CLAUDE_CODE_SENTINEL}</system-reminder>\nplan my feature",
+                        }
+                    ],
+                }
+            ]
+        }
+        assert _matched_plan_mode_sentinel(body, None, ()) == "Plan mode is active"
+
+    def test_exited_plan_mode_history_does_not_match(self):
+        """After the user exits plan mode, the old reminder survives in history but sits before
+        the newest human ask, so it must not keep flooring the session."""
+        body = {
+            "messages": [
+                {"role": "user", "content": "plan the migration"},
+                {"role": "system", "content": self.CLAUDE_CODE_SENTINEL},
+                {"role": "assistant", "content": "Here is the plan."},
+                {"role": "user", "content": "looks good, implement it"},
+            ]
+        }
+        assert _matched_plan_mode_sentinel(body, None, ()) is None
+
+    def test_copilot_system_message_preamble_matches_regardless_of_position(self):
+        """Copilot rebuilds its system message per request, so a match anywhere in system scope is
+        current -- including the usual position before the user turns, which the tail rule alone
+        would miss."""
+        body = {
+            "messages": [
+                {"role": "system", "content": f"You are an expert.\n{self.COPILOT_PREAMBLE}"},
+                {"role": "user", "content": "refactor the auth flow"},
+                {"role": "assistant", "content": "Looking."},
+                {"role": "user", "content": "continue"},
+            ]
+        }
+        assert _matched_plan_mode_sentinel(body, None, ()) == 'You are currently running in "Plan" mode.'
+
+    def test_copilot_cli_exit_plan_mode_tool_matches_openai_and_anthropic_tool_shapes(self):
+        openai_shape = {"tools": [{"type": "function", "function": {"name": "exit_plan_mode"}}], "messages": []}
+        anthropic_shape = {"tools": [{"name": "exit_plan_mode", "input_schema": {}}], "messages": []}
+        assert _matched_plan_mode_sentinel(openai_shape, None, ()) == "exit_plan_mode"
+        assert _matched_plan_mode_sentinel(anthropic_shape, None, ()) == "exit_plan_mode"
+
+    def test_operator_extra_patterns_match_in_system_scope_and_tail(self):
+        in_system = {
+            "messages": [{"role": "system", "content": "CUSTOM AGENT PLANNING"}, {"role": "user", "content": "hi"}]
+        }
+        in_tail = {
+            "messages": [{"role": "user", "content": "hi"}, {"role": "system", "content": "CUSTOM AGENT PLANNING"}]
+        }
+        assert _matched_plan_mode_sentinel(in_system, None, ("CUSTOM AGENT PLANNING",)) == "CUSTOM AGENT PLANNING"
+        assert _matched_plan_mode_sentinel(in_tail, None, ("CUSTOM AGENT PLANNING",)) == "CUSTOM AGENT PLANNING"
+
+    def test_stale_custom_pattern_in_mid_conversation_system_message_does_not_match(self):
+        """Only the leading system prompt is staleness-exempt: a custom pattern surviving in a
+        mid-conversation system message from an exited plan session must not keep flooring."""
+        stale = {
+            "messages": [
+                {"role": "user", "content": "plan it"},
+                {"role": "system", "content": "CUSTOM AGENT PLANNING"},
+                {"role": "assistant", "content": "planned"},
+                {"role": "user", "content": "implement it"},
+            ]
+        }
+        assert _matched_plan_mode_sentinel(stale, None, ("CUSTOM AGENT PLANNING",)) is None
+
+    def test_plain_request_does_not_match(self):
+        body = {
+            "system": "You are helpful.",
+            "messages": [{"role": "user", "content": "what is the plan for dinner?"}],
+        }
+        assert _matched_plan_mode_sentinel(body, None, ()) is None
+
+    def test_sentinel_quoted_in_newest_ask_matches_by_design(self):
+        """A caller pasting the sentinel can floor their own request. Deliberate: the floor only
+        raises the tier within operator-configured pools, so this spends up, never sideways."""
+        body = {"messages": [{"role": "user", "content": "why do I see 'Plan mode is active' in my logs?"}]}
+        assert _matched_plan_mode_sentinel(body, None, ()) == "Plan mode is active"
+
+    def test_resolved_messages_fallback_when_no_proxy_body(self):
+        resolved = (
+            {"role": "user", "content": "plan it"},
+            {"role": "system", "content": self.CLAUDE_CODE_SENTINEL},
+        )
+        assert _matched_plan_mode_sentinel(None, resolved, ()) == "Plan mode is active"
+
+
+class TestPlanModeTierFloor:
+    """End-to-end plan_mode_min_tier behavior through async_pre_routing_hook."""
+
+    PLAN_BODY = {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "add a hello endpoint"}]},
+            {"role": "system", "content": [{"type": "text", "text": "Plan mode is active. Do not execute."}]},
+        ]
+    }
+
+    @pytest.fixture
+    def floor_config(self, basic_config) -> dict:
+        return {**basic_config, "plan_mode_min_tier": "COMPLEX"}
+
+    def _router(self, mock_router_instance, config: dict) -> ComplexityRouter:
+        return ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+
+    @pytest.mark.asyncio
+    async def test_floor_raises_simple_prompt_and_records_plan_mode_cause(self, mock_router_instance, floor_config):
+        router = self._router(mock_router_instance, floor_config)
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "add a hello endpoint"}],
+        )
+        assert result is not None
+        assert result.model == "claude-sonnet-4-20250514"
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == "plan_mode"
+        assert result.routing_decision["matched_keyword"] == "Plan mode is active"
+        assert "plan_mode_floor" in result.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_classifier_result_above_floor_wins(self, mock_router_instance, basic_config):
+        """The floor is a floor, not a pin: a keyword rule routing above it is untouched."""
+        config = {
+            **basic_config,
+            "plan_mode_min_tier": "MEDIUM",
+            "keyword_tier_rules": [{"keywords": ["kubernetes"], "tier": "REASONING"}],
+        }
+        router = self._router(mock_router_instance, config)
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "plan the kubernetes migration"}],
+        )
+        assert result is not None
+        assert result.model == "o1-preview"
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == "literal_keyword_match"
+
+    @pytest.mark.asyncio
+    async def test_keyword_rule_below_floor_gets_floored(self, mock_router_instance, basic_config):
+        config = {
+            **basic_config,
+            "plan_mode_min_tier": "COMPLEX",
+            "keyword_tier_rules": [{"keywords": ["hello endpoint"], "tier": "SIMPLE"}],
+        }
+        router = self._router(mock_router_instance, config)
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "add a hello endpoint"}],
+        )
+        assert result is not None
+        assert result.model == "claude-sonnet-4-20250514"
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == "plan_mode"
+
+    @pytest.mark.asyncio
+    async def test_top_tier_floor_skips_classification(self, mock_router_instance, basic_config):
+        config = {**basic_config, "plan_mode_min_tier": "REASONING"}
+        router = self._router(mock_router_instance, config)
+        with patch.object(router, "aclassify") as classify_spy:
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+                messages=[{"role": "user", "content": "add a hello endpoint"}],
+            )
+        classify_spy.assert_not_called()
+        assert result is not None
+        assert result.model == "o1-preview"
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == "plan_mode"
+
+    @pytest.mark.asyncio
+    async def test_no_sentinel_routes_normally(self, mock_router_instance, floor_config):
+        router = self._router(mock_router_instance, floor_config)
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_unset_floor_ignores_sentinel(self, mock_router_instance, basic_config):
+        router = self._router(mock_router_instance, basic_config)
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_floor_overrides_session_pin_only_while_plan_mode_lasts(self, mock_router_instance, basic_config):
+        """Mid-session shift+tab into plan mode: the plan turns route at the floor, but the
+        stored pin keeps the session's own model, so the first turn after plan mode exits
+        auto-routes back to it instead of staying premium."""
+        from litellm.caching.dual_cache import DualCache
+
+        mock_router_instance.cache = DualCache()
+        config = {**basic_config, "plan_mode_min_tier": "COMPLEX", "session_affinity": True}
+        router = self._router(mock_router_instance, config)
+        session_kwargs = {"metadata": {"session_id": "plan-session"}}
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=dict(session_kwargs),
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert first is not None and first.model == "gpt-4o-mini"
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={**session_kwargs, "proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "add a hello endpoint"}],
+        )
+        assert second is not None
+        assert second.model == "claude-sonnet-4-20250514"
+        assert second.routing_decision is not None
+        assert second.routing_decision["cause"] == "plan_mode"
+        third = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={**session_kwargs, "proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "add auth to the endpoint"}],
+        )
+        assert third is not None and third.model == "claude-sonnet-4-20250514"
+        fourth = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=dict(session_kwargs),
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert fourth is not None
+        assert fourth.model == "gpt-4o-mini"
+        assert fourth.routing_decision is not None
+        assert fourth.routing_decision["cause"] == "session_affinity_pin"
+
+    @pytest.mark.asyncio
+    async def test_plan_mode_first_turn_does_not_seed_the_session_pin(self, mock_router_instance, basic_config):
+        """A session whose first turn is already in plan mode must not pin the floored model:
+        the first ordinary turn classifies and pins as if plan mode had never happened."""
+        from litellm.caching.dual_cache import DualCache
+
+        mock_router_instance.cache = DualCache()
+        config = {**basic_config, "plan_mode_min_tier": "COMPLEX", "session_affinity": True}
+        router = self._router(mock_router_instance, config)
+        session_kwargs = {"metadata": {"session_id": "plan-first-session"}}
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={**session_kwargs, "proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "add a hello endpoint"}],
+        )
+        assert first is not None and first.model == "claude-sonnet-4-20250514"
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=dict(session_kwargs),
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert second is not None
+        assert second.model == "gpt-4o-mini"
+        assert second.routing_decision is not None
+        assert second.routing_decision["cause"] in ("heuristic_scorer", "reasoning_override")
+
+    @pytest.mark.asyncio
+    async def test_pinned_session_at_or_above_floor_keeps_pin_cause(self, mock_router_instance, basic_config):
+        from litellm.caching.dual_cache import DualCache
+
+        mock_router_instance.cache = DualCache()
+        config = {**basic_config, "plan_mode_min_tier": "MEDIUM", "session_affinity": True}
+        router = self._router(mock_router_instance, config)
+        session_kwargs = {"metadata": {"session_id": "premium-session"}}
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=dict(session_kwargs),
+            messages=[
+                {"role": "user", "content": "Let's think step by step and reason through this problem carefully."}
+            ],
+        )
+        assert first is not None and first.model == "o1-preview"
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={**session_kwargs, "proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "plan the next step"}],
+        )
+        assert second is not None
+        assert second.model == "o1-preview"
+        assert second.routing_decision is not None
+        assert second.routing_decision["cause"] == "session_affinity_pin"
+
+    @pytest.mark.asyncio
+    async def test_floor_supports_custom_tier_sets_via_list_order_severity(self, mock_router_instance):
+        """With tier_definitions, the floor names a defined tier and severity is the list order
+        (ascending), the same resolution keyword_tier_rules use."""
+        config = {
+            "tier_definitions": [
+                {"name": "LIGHT", "description": "trivial lookups"},
+                {"name": "HEAVY", "description": "multi-step engineering work"},
+            ],
+            "tiers": {"LIGHT": "gpt-4o-mini", "HEAVY": "claude-sonnet-4-20250514"},
+            "classifier_type": "llm",
+            "classifier_llm_config": {"model": "gpt-4o-mini"},
+            "fallback_tier": "LIGHT",
+            "plan_mode_min_tier": "HEAVY",
+        }
+        router = self._router(mock_router_instance, config)
+        with patch.object(router, "aclassify") as classify_spy:
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+                messages=[{"role": "user", "content": "add a hello endpoint"}],
+            )
+        classify_spy.assert_not_called()
+        assert result is not None
+        assert result.model == "claude-sonnet-4-20250514"
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == "plan_mode"
+        assert result.routing_decision["tier"] == "HEAVY"
+
+    def test_floor_must_name_an_active_tier_on_a_custom_set(self):
+        with pytest.raises(ValueError, match="plan_mode_min_tier"):
+            ComplexityRouterConfig(
+                tier_definitions=[
+                    {"name": "LIGHT", "description": "trivial lookups"},
+                    {"name": "HEAVY", "description": "multi-step engineering work"},
+                ],
+                tiers={"LIGHT": "gpt-4o-mini", "HEAVY": "claude-sonnet-4-20250514"},
+                classifier_type="llm",
+                classifier_llm_config={"model": "gpt-4o-mini"},
+                fallback_tier="LIGHT",
+                plan_mode_min_tier="COMPLEX",
+            )
+
+    def test_floor_must_point_at_a_configured_tier(self, basic_config):
+        config = {**basic_config, "plan_mode_min_tier": "REASONING"}
+        config["tiers"] = {"SIMPLE": "gpt-4o-mini"}
+        with pytest.raises(ValueError, match="plan_mode_min_tier"):
+            ComplexityRouterConfig(**config)
+
+    def test_blank_extra_patterns_are_dropped(self):
+        config = ComplexityRouterConfig(
+            tiers={"SIMPLE": "gpt-4o-mini", "COMPLEX": "claude-sonnet-4-20250514"},
+            plan_mode_min_tier="COMPLEX",
+            plan_mode_patterns=["  ", "REAL PATTERN", ""],
+        )
+        assert config.plan_mode_patterns == ("REAL PATTERN",)
+
+    @pytest.mark.asyncio
+    async def test_floored_classifier_failure_routes_floor_not_default_model(self, mock_router_instance, basic_config):
+        """A failed classification doesn't retract the floor: the request routes to the floor's
+        pool, not default_model, and no plugin-filtered-pool signal is fabricated."""
+        from litellm.router_strategy.complexity_router.complexity_router import ClassificationOutcome
+
+        config = {**basic_config, "plan_mode_min_tier": "COMPLEX", "default_model": "gpt-4o-mini"}
+        router = self._router(mock_router_instance, config)
+        failure = ClassificationOutcome(
+            tier=ComplexityTier.MEDIUM, score=None, signals=(), cause="default_model_fallback", classifier_cost=None
+        )
+        with patch.object(router, "aclassify", return_value=failure):
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+                messages=[{"role": "user", "content": "add a hello endpoint"}],
+            )
+        assert result is not None
+        assert result.model == "claude-sonnet-4-20250514"
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == "plan_mode"
+        assert result.routing_decision["tier"] == "COMPLEX"
+        assert not any(s.startswith("plugin-filtered-pool") for s in result.routing_decision.get("signals", ()))
+
+    @pytest.mark.asyncio
+    async def test_hard_floor_reaches_the_bandit_even_when_classified_at_the_floor(
+        self, mock_router_instance, basic_config
+    ):
+        """A request classified exactly AT the floor has plan_floored False, yet the bandit must
+        still receive the floor: adaptive_eligible="all" scores every model and could otherwise
+        route below it."""
+        from litellm.router_strategy.complexity_router.complexity_router import ClassificationOutcome
+
+        config = {**basic_config, "plan_mode_min_tier": "COMPLEX", "adaptive": True}
+        router = self._router(mock_router_instance, config)
+        at_floor = ClassificationOutcome(
+            tier=ComplexityTier.COMPLEX, score=None, signals=(), cause="llm_classifier", classifier_cost=None
+        )
+        with (
+            patch.object(router, "aclassify", return_value=at_floor),
+            patch.object(router, "_soft_floor_pick", return_value="claude-sonnet-4-20250514") as bandit_spy,
+            patch.object(router, "_ensure_adaptive_router", return_value=None),
+        ):
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+                messages=[{"role": "user", "content": "add a hello endpoint"}],
+            )
+        bandit_spy.assert_called_once()
+        assert bandit_spy.call_args.kwargs["hard_floor"] == ComplexityTier.COMPLEX
+        assert result is not None
+        assert result.model == "claude-sonnet-4-20250514"
+
+    def test_hard_floor_excludes_below_floor_candidates_from_the_bandit(self, mock_router_instance):
+        """With a dominant posterior on a cheap model and adaptive_eligible="all", the pick must
+        still refuse every candidate whose tiers all sit below the hard floor."""
+        from litellm.router_strategy.adaptive_router.bandit import BanditCell
+        from litellm.types.router import RequestType
+
+        adaptive_instance = MagicMock()
+        adaptive_instance.model_list = [
+            {
+                "model_name": "cheap",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "input_cost_per_token": 0.00000015},
+                "model_info": {"adaptive_router_preferences": {"quality_tier": 1, "strengths": []}},
+            },
+            {
+                "model_name": "premium",
+                "litellm_params": {"model": "openai/gpt-4o", "input_cost_per_token": 0.000005},
+                "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": []}},
+            },
+        ]
+        adaptive_instance.model_name_to_deployment_indices = {"cheap": [0], "premium": [1]}
+        router = ComplexityRouter(
+            model_name="hybrid",
+            litellm_router_instance=adaptive_instance,
+            complexity_router_config={
+                "adaptive": True,
+                "tiers": {"SIMPLE": ["cheap"], "MEDIUM": ["cheap"], "COMPLEX": ["premium"]},
+                "plan_mode_min_tier": "COMPLEX",
+            },
+        )
+        adaptive = router._ensure_adaptive_router()
+        assert adaptive is not None
+        adaptive._cells[(RequestType.GENERAL, "cheap")] = BanditCell(alpha=20.0, beta=1.0)
+        adaptive._cells[(RequestType.GENERAL, "premium")] = BanditCell(alpha=1.0, beta=20.0)
+        with patch(
+            "litellm.router_strategy.adaptive_router.bandit.thompson_sample",
+            side_effect=lambda cell, rng=None: cell.alpha / (cell.alpha + cell.beta),
+        ):
+            unfloored = router._soft_floor_pick(ComplexityTier.COMPLEX, "hi")
+            floored = router._soft_floor_pick(ComplexityTier.COMPLEX, "hi", hard_floor=ComplexityTier.COMPLEX)
+        assert unfloored == "cheap"
+        assert floored == "premium"
+
+    @pytest.mark.asyncio
+    async def test_at_floor_plan_mode_turn_does_not_write_the_session_pin(self, mock_router_instance, basic_config):
+        """A plan-mode turn routed at or above the floor keeps its ordinary cause, but it still
+        must not pin: on an adaptive router the hard floor shaped that pick, and any sentinel
+        turn's pin would carry plan mode past its exit."""
+        from litellm.caching.dual_cache import DualCache
+
+        mock_router_instance.cache = DualCache()
+        config = {
+            **basic_config,
+            "plan_mode_min_tier": "MEDIUM",
+            "session_affinity": True,
+            "keyword_tier_rules": [{"keywords": ["kubernetes"], "tier": "REASONING"}],
+        }
+        router = self._router(mock_router_instance, config)
+        session_kwargs = {"metadata": {"session_id": "at-floor-session"}}
+        first = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={**session_kwargs, "proxy_server_request": {"body": self.PLAN_BODY}},
+            messages=[{"role": "user", "content": "plan the kubernetes migration"}],
+        )
+        assert first is not None and first.model == "o1-preview"
+        assert first.routing_decision is not None
+        assert first.routing_decision["cause"] == "literal_keyword_match"
+        second = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=dict(session_kwargs),
+            messages=[{"role": "user", "content": "Hello!"}],
+        )
+        assert second is not None
+        assert second.model == "gpt-4o-mini"
+        assert second.routing_decision is not None
+        assert second.routing_decision["cause"] in ("heuristic_scorer", "reasoning_override")
+
+    @pytest.mark.asyncio
+    async def test_failure_exit_skipped_when_placeholder_tier_equals_the_floor(
+        self, mock_router_instance, basic_config
+    ):
+        """default_model outside every pool reports the MEDIUM placeholder; a MEDIUM floor then
+        leaves plan_floored False, and the exit must still not route a sentinel-carrying request
+        to a model the floor cannot vouch for."""
+        from litellm.router_strategy.complexity_router.complexity_router import ClassificationOutcome
+
+        config = {**basic_config, "plan_mode_min_tier": "MEDIUM", "default_model": "untiered-fallback"}
+        router = self._router(mock_router_instance, config)
+        failure = ClassificationOutcome(
+            tier=ComplexityTier.MEDIUM, score=None, signals=(), cause="default_model_fallback", classifier_cost=None
+        )
+        with patch.object(router, "aclassify", return_value=failure):
+            result = await router.async_pre_routing_hook(
+                model="test-model",
+                request_kwargs={"proxy_server_request": {"body": self.PLAN_BODY}},
+                messages=[{"role": "user", "content": "add a hello endpoint"}],
+            )
+        assert result is not None
+        assert result.model == "gpt-4o"
+        assert result.routing_decision is not None
+        assert result.routing_decision["tier"] == "MEDIUM"
