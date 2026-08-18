@@ -21,11 +21,9 @@ interface RateLimitTypeFormItemProps {
   showDetailedDescriptions?: boolean;
   /** Additional CSS classes */
   className?: string;
-  /** Selected rate limit type */
   value?: string | null;
   /** Custom onChange handler */
   onChange?: (value: string) => void;
-  /** Id of the trigger, so a parent label can point at it */
   id?: string;
   disabled?: boolean;
   "aria-invalid"?: true | undefined;

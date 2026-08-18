@@ -20,15 +20,12 @@ const INTERVAL_LABELS: Record<string, string> = {
 };
 
 interface KeyLifecycleSettingsProps {
-  /** Current expiry duration, supplied by the parent's form binding */
   value?: string;
-  /** Propagates the expiry duration back to the parent's form binding */
   onChange?: (value: string) => void;
   autoRotationEnabled: boolean;
   onAutoRotationChange: (enabled: boolean) => void;
   rotationInterval: string;
   onRotationIntervalChange: (interval: string) => void;
-  /** If true, shows "leave empty to never expire" instead of "-1 to never expire" */
   isCreateMode?: boolean;
   neverExpire?: boolean;
   onNeverExpireChange?: (checked: boolean) => void;
@@ -93,8 +90,8 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
           <span className="text-sm font-medium text-foreground">Key Expiry Settings</span>
 
           <div className="space-y-2">
-            <label htmlFor={durationId} className="flex items-center space-x-1 text-sm font-medium text-foreground">
-              <span>Expire Key</span>
+            <div className="flex items-center space-x-1 text-sm font-medium text-foreground">
+              <label htmlFor={durationId}>Expire Key</label>
               {hintIcon(
                 "Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Leave empty to keep the current expiry unchanged.",
               )}
@@ -110,7 +107,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
                   </label>
                 </span>
               )}
-            </label>
+            </div>
             <Input
               id={durationId}
               value={value ?? ""}

@@ -59,6 +59,12 @@ describe("KeyLifecycleSettings", () => {
     expect(getDurationInput()).toBeInTheDocument();
   });
 
+  it("gives the duration input and the Never Expire checkbox their own labels", () => {
+    renderWithProviders(<Harness isCreateMode={false} />);
+    expect(screen.getByLabelText("Expire Key")).toBe(getDurationInput(false));
+    expect(screen.getByRole("checkbox", { name: "Never Expire" })).toBeInTheDocument();
+  });
+
   it("uses the create-mode placeholder in create mode", () => {
     renderWithProviders(<Harness isCreateMode={true} />);
     expect(screen.getByPlaceholderText(CREATE_PLACEHOLDER)).toBeInTheDocument();
@@ -195,9 +201,6 @@ describe("KeyLifecycleSettings", () => {
     });
 
     it("hides the custom input and propagates the value when switching back to a predefined interval", async () => {
-      // Base UI leaves a reopened select popup at pointer-events:none under jsdom, which has no
-      // animation timeline to resolve the transition. Reproduced on a bare shadcn Select with none
-      // of this component involved, so the check is disabled rather than the assertions weakened.
       const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       renderWithProviders(<Harness />);
 
