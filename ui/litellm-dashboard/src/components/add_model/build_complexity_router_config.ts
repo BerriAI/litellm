@@ -71,6 +71,7 @@ const scorerKnobPayload = ({
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
   defaultModel: string | undefined;
+  planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
@@ -99,6 +100,7 @@ export interface BuildComplexityRouterConfigParams {
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
   default_model?: string;
+  plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -172,6 +174,16 @@ export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
   return `Select a model for the following tier(s): ${missing.join(", ")}`;
 };
 
+// The backend rejects a plan-mode floor naming a tier with no models. The create form's
+// getMissingTiersError makes this unreachable there; the edit modal allows partially filled
+// tiers, so both gates call this to keep the two forms symmetric.
+export const getPlanModeTierError = (planModeMinTier: string | undefined, tiers: ComplexityTiers): string | null => {
+  if (!planModeMinTier) return null;
+  const models = tiers[planModeMinTier as keyof ComplexityTiers] ?? [];
+  if (models.length > 0) return null;
+  return `The plan-mode minimum tier (${planModeMinTier}) has no models. Add one or turn the override off.`;
+};
+
 export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
   const emptyRows = emptyKeywordTierRuleIndexes(keywordTierRules);
   if (emptyRows.length === 0) return null;
@@ -194,6 +206,7 @@ export const getSemanticConfigError = ({
 export const buildComplexityRouterConfig = ({
   tiers,
   defaultModel,
+  planModeMinTier,
   tierLabels,
   classifierType,
   classifierLlmConfig,
@@ -227,6 +240,7 @@ export const buildComplexityRouterConfig = ({
   return {
     tiers,
     ...(defaultModel?.trim() && { default_model: defaultModel }),
+    ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...(classifierType === "llm" &&
