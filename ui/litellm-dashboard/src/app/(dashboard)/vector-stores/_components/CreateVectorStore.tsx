@@ -27,6 +27,8 @@ import S3VectorsConfig from "./S3VectorsConfig";
 
 const { Dragger } = Upload;
 
+const RAG_INGEST_UNSUPPORTED_PROVIDERS = new Set(["valkey"]);
+
 const asText = (value: unknown): string => (typeof value === "string" ? value : "");
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
@@ -297,16 +299,20 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                     <SelectValue placeholder="Select a provider" />
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger={false}>
-                    {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => (
-                      <SelectItem key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
-                        <Logo
-                          src={vectorStoreProviderLogoMap[providerDisplayName]}
-                          label={providerDisplayName}
-                          className="w-5 h-5"
-                        />
-                        <span>{providerDisplayName}</span>
-                      </SelectItem>
-                    ))}
+                    {Object.entries(VectorStoreProviders)
+                      .filter(
+                        ([providerEnum]) => !RAG_INGEST_UNSUPPORTED_PROVIDERS.has(vectorStoreProviderMap[providerEnum]),
+                      )
+                      .map(([providerEnum, providerDisplayName]) => (
+                        <SelectItem key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
+                          <Logo
+                            src={vectorStoreProviderLogoMap[providerDisplayName]}
+                            label={providerDisplayName}
+                            className="w-5 h-5"
+                          />
+                          <span>{providerDisplayName}</span>
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </Field>
