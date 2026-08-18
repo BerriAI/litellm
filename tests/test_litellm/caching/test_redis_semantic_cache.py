@@ -1167,7 +1167,7 @@ async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
 LONG_PROMPT = " ".join(f"token{i}" for i in range(300))
 
 
-def _proxy_with_router(monkeypatch, router, model_name):
+def _proxy_with_router(monkeypatch: pytest.MonkeyPatch, router: MagicMock, model_name: str) -> None:
     import sys
     import types
 
@@ -1177,7 +1177,7 @@ def _proxy_with_router(monkeypatch, router, model_name):
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
 
 
-def _token_count(model, text):
+def _token_count(model: str, text: str) -> int:
     import litellm
 
     return len(litellm.encode(model=model, text=text))
@@ -1254,7 +1254,8 @@ def test_redis_semantic_cache_init_stores_embedding_max_input_tokens(monkeypatch
         embedding_max_input_tokens=512,
     )
     assert cache.embedding_max_input_tokens == 512
-    assert RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8).embedding_max_input_tokens is None
+    default_cache = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+    assert default_cache.embedding_max_input_tokens is None
 
 
 def test_redis_init_defers_redisvl_construction(monkeypatch):
