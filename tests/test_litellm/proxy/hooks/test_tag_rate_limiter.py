@@ -2084,17 +2084,22 @@ async def test_exception_mid_batch_refunds_every_earlier_admission_before_propag
 
 
 @pytest.mark.asyncio
-async def test_a_committed_increment_whose_response_is_lost_is_also_refunded(time_controller):
+async def test_a_raising_keys_own_ambiguous_outcome_is_never_refunded(time_controller):
     """
-    Regression test: a key can commit its own increment (e.g. Redis runs
-    the INCRBY) and still have the call raise if the response back to us is
-    lost (a timeout, a dropped connection) -- the caller can't tell a lost
-    response apart from a call that never reached Redis at all. The earlier
-    fix only refunded indices *before* the one that raised, leaving this
-    key's own possibly-committed increment permanently charged. It must be
-    refunded too, not just the earlier ones in the same batch.
+    Regression test for a bug this exact fix briefly introduced: a key can
+    commit its own increment (e.g. Redis runs the INCRBY) and still have
+    the call raise if the response back to us is lost, so a raise never
+    proves that key's own attempt didn't commit. But these are shared,
+    chain-wide buckets with no per-request ownership tracking, so
+    decrementing on that guess is just as likely to erase a *different*,
+    legitimately-admitted concurrent request's charge on the same key as it
+    is to undo our own -- an attacker could repeatedly cancel requests to
+    erase other callers' charges and exceed the configured limit. The
+    raising key's own outcome must never be refunded, only strictly earlier
+    (confirmed-safe) admissions in the same batch.
     """
-    raising_key = "{tag_rl:test:lost-response-refund:a}:requests"
+    admitted_key = "{tag_rl:test:ambiguous-no-refund:a}:requests"
+    raising_key = "{tag_rl:test:ambiguous-no-refund:b}:requests"
 
     class _FlakyLimiter(_PROXY_TagRateLimiter):
         async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int):
@@ -2109,10 +2114,23 @@ async def test_a_committed_increment_whose_response_is_lost_is_also_refunded(tim
     flaky = _FlakyLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
 
     with pytest.raises(RuntimeError):
-        await flaky._atomic_check_and_increment([(flaky.internal_usage_cache, raising_key, 10.0, 1.0, 60)])
+        await flaky._atomic_check_and_increment(
+            [
+                (flaky.internal_usage_cache, admitted_key, 10.0, 1.0, 60),
+                (flaky.internal_usage_cache, raising_key, 10.0, 1.0, 60),
+            ]
+        )
 
+    # The earlier, confirmed-successful admission in this same batch is
+    # always safe to refund.
+    admitted_value = await flaky.internal_usage_cache.async_get_cache(key=admitted_key, litellm_parent_otel_span=None)
+    assert (float(admitted_value) if admitted_value is not None else 0.0) == 0.0
+
+    # The raising key's own committed increment must survive -- refunding
+    # it would be indistinguishable from erasing a different request's
+    # legitimate charge on the same shared bucket.
     raising_key_value = await flaky.internal_usage_cache.async_get_cache(key=raising_key, litellm_parent_otel_span=None)
-    assert (float(raising_key_value) if raising_key_value is not None else 0.0) == 0.0
+    assert float(raising_key_value) == 1.0
 
 
 # ---------------------------------------------------------------------------
