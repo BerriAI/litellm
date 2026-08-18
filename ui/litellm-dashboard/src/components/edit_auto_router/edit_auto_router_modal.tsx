@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Form, Button, Select as AntdSelect, Tooltip } from "antd";
-import { TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
@@ -523,7 +523,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             name="auto_router_name"
             rules={[{ required: true, message: "Auto router name is required" }]}
           >
-            <TextInput placeholder="e.g., auto_router_1, smart_routing" />
+            <Input placeholder="e.g., auto_router_1, smart_routing" />
           </Form.Item>
 
           {isComplexityRouterModel ? (

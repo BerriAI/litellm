@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import { DownOutlined, RightOutlined } from "@ant-design/icons";
-import { TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { modelAvailableCall } from "../networking";
 import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
@@ -439,7 +439,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             labelCol={{ span: 10 }}
             labelAlign="left"
           >
-            <TextInput placeholder="e.g., smart_router, auto_router_1" />
+            <Input placeholder="e.g., smart_router, auto_router_1" />
           </Form.Item>
 
           <div className="mb-6">

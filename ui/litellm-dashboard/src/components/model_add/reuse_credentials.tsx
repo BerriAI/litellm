@@ -1,6 +1,6 @@
 import React from "react";
 import { Form, Button, Tooltip, Typography, Modal } from "antd";
-import { TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { CredentialItem } from "../networking";
 const { Link } = Typography;
 
@@ -46,13 +46,13 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
           rules={[{ required: true, message: "Credential name is required" }]}
           initialValue={existingCredential?.credential_name}
         >
-          <TextInput placeholder="Enter a friendly name for these credentials" />
+          <Input placeholder="Enter a friendly name for these credentials" />
         </Form.Item>
 
         {/* Display Credential Values of existingCredential, don't allow user to edit. Credential values is a dictionary */}
         {Object.entries(existingCredential?.credential_values || {}).map(([key, value]) => (
           <Form.Item key={key} label={key} name={key} initialValue={value}>
-            <TextInput placeholder={`Enter ${key}`} disabled={true} />
+            <Input placeholder={`Enter ${key}`} disabled={true} />
           </Form.Item>
         ))}
 
