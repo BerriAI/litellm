@@ -1,7 +1,9 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, InputNumber, Collapse } from "antd";
+import { Modal, Tooltip, Form, Select, Input as AntdInput, InputNumber, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TextInput } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "@/components/networking";
 import { setToken } from "@/utils/mcpTokenStore";
 import {
@@ -663,7 +665,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 { validator: (_, value) => validateMCPServerName(value) },
               ]}
             >
-              <TextInput
+              <Input
                 placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
@@ -681,7 +683,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               name="alias"
               rules={[{ required: false }, { validator: (_, value) => validateMCPServerName(value) }]}
             >
-              <TextInput
+              <Input
                 placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 onChange={() => setAliasManuallyEdited(true)}
@@ -698,7 +700,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 },
               ]}
             >
-              <TextInput
+              <Input
                 placeholder="Brief description of what this server does"
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
@@ -710,7 +712,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
               name="source_url"
             >
-              <TextInput
+              <Input
                 placeholder="https://github.com/org/mcp-server"
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
@@ -745,7 +747,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   { validator: (_, value) => validateMCPServerUrl(value) },
                 ]}
               >
-                <Input
+                <AntdInput
                   placeholder="https://your-mcp-server.com"
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
@@ -852,8 +854,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                               },
                             ]}
                           >
-                            <TextInput
-                              type="password"
+                            <AntdInput.Password
                               placeholder="Enter token or secret"
                               className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                             />
@@ -957,7 +958,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             <Button variant="secondary" onClick={handleCancel}>
               Cancel
             </Button>
-            <Button variant="primary" loading={isLoading}>
+            <Button type="submit" disabled={isLoading} aria-busy={isLoading}>
+              {isLoading && <UiLoadingSpinner className="size-4" />}
               {isLoading ? "Creating..." : "Add MCP Server"}
             </Button>
           </div>
