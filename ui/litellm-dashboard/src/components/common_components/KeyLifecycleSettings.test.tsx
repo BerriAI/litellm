@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 // eslint-disable-next-line no-restricted-imports -- exercising KeyLifecycleSettings requires hosting it in a real antd Form (the component it's built on)
 import { Form } from "antd";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import KeyLifecycleSettings from "./KeyLifecycleSettings";
@@ -22,16 +22,17 @@ const Harness: React.FC<HarnessProps> = ({ isCreateMode = true, onFinish = () =>
 
   return (
     <Form form={form} onFinish={onFinish}>
-      <KeyLifecycleSettings
-        form={form}
-        autoRotationEnabled={autoRotationEnabled}
-        onAutoRotationChange={setAutoRotationEnabled}
-        rotationInterval={rotationInterval}
-        onRotationIntervalChange={setRotationInterval}
-        isCreateMode={isCreateMode}
-        neverExpire={neverExpire}
-        onNeverExpireChange={setNeverExpire}
-      />
+      <Form.Item name="duration" initialValue="" noStyle>
+        <KeyLifecycleSettings
+          autoRotationEnabled={autoRotationEnabled}
+          onAutoRotationChange={setAutoRotationEnabled}
+          rotationInterval={rotationInterval}
+          onRotationIntervalChange={setRotationInterval}
+          isCreateMode={isCreateMode}
+          neverExpire={neverExpire}
+          onNeverExpireChange={setNeverExpire}
+        />
+      </Form.Item>
       <button type="submit">submit</button>
       <button type="button" onClick={() => form.resetFields()}>
         reset
@@ -194,7 +195,10 @@ describe("KeyLifecycleSettings", () => {
     });
 
     it("hides the custom input and propagates the value when switching back to a predefined interval", async () => {
-      const user = userEvent.setup();
+      // Base UI leaves a reopened select popup at pointer-events:none under jsdom, which has no
+      // animation timeline to resolve the transition. Reproduced on a bare shadcn Select with none
+      // of this component involved, so the check is disabled rather than the assertions weakened.
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
