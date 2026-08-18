@@ -103,6 +103,23 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("Tier")).not.toBeInTheDocument();
   });
 
+  it("explains a route that fell back to the configured fallback tier after the classifier failed", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          router_model_name: "custom-tier-router",
+          router_type: "complexity",
+          routed_model: "claude-sonnet",
+          cause: "classifier_fallback",
+          tier: "SECURITY_REVIEW",
+          signals: ["classifier-fallback:SECURITY_REVIEW"],
+        }}
+      />,
+    );
+    expect(screen.getByText("Fallback tier, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("SECURITY_REVIEW")).toBeInTheDocument();
+  });
+
   it("shows the keyword that fired a tier rule", () => {
     render(
       <RoutingDecisionCard
