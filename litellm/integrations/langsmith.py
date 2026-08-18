@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Final
 
 import httpx
-from pydantic import BaseModel  # type: ignore
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -63,9 +63,9 @@ class LangsmithLogger(CustomBatchLogger):
             langsmith_tenant_id=langsmith_tenant_id,
         )
         self.sampling_rate: float = (
-            langsmith_sampling_rate or float(os.getenv("LANGSMITH_SAMPLING_RATE"))  # type: ignore
+            langsmith_sampling_rate or float(os.getenv("LANGSMITH_SAMPLING_RATE"))
             if os.getenv("LANGSMITH_SAMPLING_RATE") is not None
-            and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()  # type: ignore
+            and os.getenv("LANGSMITH_SAMPLING_RATE").strip().isdigit()
             else 1.0
         )
         self.langsmith_default_run_name = os.getenv("LANGSMITH_DEFAULT_RUN_NAME", "LLMRun")

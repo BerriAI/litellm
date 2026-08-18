@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
 import litellm.litellm_core_utils
@@ -58,6 +58,7 @@ from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
@@ -206,7 +207,7 @@ class AnthropicChatCompletion(BaseLLM):
         client: AsyncHTTPHandler | None,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: "LiteLLMLoggingObj",
         stream,
         _is_function_call,
         data: dict,
@@ -324,7 +325,7 @@ class AnthropicChatCompletion(BaseLLM):
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
@@ -444,7 +445,7 @@ class AnthropicChatCompletion(BaseLLM):
                 completion_stream, headers = make_sync_call(
                     client=client,
                     api_base=api_base,
-                    headers=headers,  # type: ignore
+                    headers=headers,
                     data=json.dumps(data),
                     model=model,
                     messages=messages,
@@ -587,7 +588,7 @@ class ModelResponseIterator:
 
         for block in self.content_blocks:
             if block["delta"]["type"] == "input_json_delta":
-                args += block["delta"].get("partial_json", "")  # type: ignore
+                args += block["delta"].get("partial_json", "")
 
         if len(args) == 0:
             return True
@@ -617,7 +618,7 @@ class ModelResponseIterator:
         tool_use: ChatCompletionToolCallChunk | None = None
         provider_specific_fields: Final = {}
         reasoning_content: str | None = None
-        content_block: Final = ContentBlockDelta(**chunk)  # type: ignore
+        content_block: Final = ContentBlockDelta(**chunk)
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
         self.content_blocks.append(content_block)
@@ -697,7 +698,7 @@ class ModelResponseIterator:
         thinking_blocks: Final = [
             ChatCompletionRedactedThinkingBlock(
                 type="redacted_thinking",
-                data=content_block_start["content_block"]["data"],  # type: ignore
+                data=content_block_start["content_block"]["data"],
             )
         ]
         provider_specific_fields["thinking_blocks"] = thinking_blocks
@@ -711,9 +712,9 @@ class ModelResponseIterator:
         )
 
         if chunk.get("content_block", {}).get("type") == "tool_use":
-            content_block_start = ContentBlockStartToolUse(**chunk)  # type: ignore
+            content_block_start = ContentBlockStartToolUse(**chunk)
         else:
-            content_block_start = ContentBlockStartText(**chunk)  # type: ignore
+            content_block_start = ContentBlockStartText(**chunk)
 
         return content_block_start
 
@@ -822,12 +823,12 @@ class ModelResponseIterator:
                     if "caller" in content_block_start["content_block"]:
                         caller_data: Final = content_block_start["content_block"]["caller"]
                         if caller_data:
-                            tool_use["caller"] = cast(dict[str, Any], caller_data)  # type: ignore[typeddict-item]
+                            tool_use["caller"] = cast(dict[str, Any], caller_data)
                 elif content_block_start["content_block"]["type"] == "redacted_thinking":
                     (
                         thinking_blocks,
                         provider_specific_fields,
-                    ) = self._handle_redacted_thinking_content(  # type: ignore
+                    ) = self._handle_redacted_thinking_content(
                         content_block_start=content_block_start,
                         provider_specific_fields=provider_specific_fields,
                     )
@@ -868,16 +869,16 @@ class ModelResponseIterator:
                         provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
 
             elif type_chunk == "content_block_stop":
-                ContentBlockStop(**chunk)  # type: ignore
+                ContentBlockStop(**chunk)
                 # check if tool call content block - only for tool_use and server_tool_use blocks
                 if self.current_content_block_type in ("tool_use", "server_tool_use"):
                     is_empty: Final = self.check_empty_tool_call_args()
                     if is_empty:
                         tool_use = ChatCompletionToolCallChunk(
-                            id=None,  # type: ignore[typeddict-item]
+                            id=None,
                             type="function",
                             function=ChatCompletionToolCallFunctionChunk(
-                                name=None,  # type: ignore[typeddict-item]
+                                name=None,
                                 arguments="{}",
                             ),
                             index=self.tool_index,
@@ -936,7 +937,7 @@ class ModelResponseIterator:
                     }
                 }
                 """
-                message_start_block: Final = MessageStartBlock(**chunk)  # type: ignore
+                message_start_block: Final = MessageStartBlock(**chunk)
                 if "usage" in message_start_block["message"]:
                     usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
             elif type_chunk == "error":
@@ -1031,7 +1032,7 @@ class ModelResponseIterator:
         Returns:
             Tuple of (finish_reason, usage, container)
         """
-        message_delta: Final = MessageBlockDelta(**chunk)  # type: ignore
+        message_delta: Final = MessageBlockDelta(**chunk)
         finish_reason = map_finish_reason(finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop")
         # Override finish_reason to "stop" if we converted response_format tools
         # (matches OpenAI behavior and non-streaming Anthropic implementation)

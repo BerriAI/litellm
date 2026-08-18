@@ -9,15 +9,6 @@ vi.mock("@/utils/cookieUtils", () => ({
   storeLoginToken: vi.fn(),
 }));
 
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    info: vi.fn(),
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 describe("networking - expired session handling", () => {
   const originalFetch = global.fetch;
 
@@ -31,10 +22,10 @@ describe("networking - expired session handling", () => {
 
   it("should call clearTokenCookies on expired session", async () => {
     const errorData = "Authentication Error - Expired Key";
-    const { default: NotificationsManager } = await import("./molecules/notifications_manager");
+    const { toast } = await import("@/lib/toast");
 
     if (errorData.includes("Authentication Error - Expired Key")) {
-      NotificationsManager.info("UI Session Expired. Logging out.");
+      toast.info("UI Session Expired. Logging out.");
       clearTokenCookies();
     }
 
@@ -592,5 +583,47 @@ describe("testMCPToolsListRequest auth headers", () => {
 
     const headers = sentHeaders(mockFetch);
     expect(headers["Authorization"]).toBe("Bearer sk-key");
+  });
+});
+
+describe("getAutoRouterClassifierDefaultPromptCall", () => {
+  const originalFetch = global.fetch;
+
+  const captureFetch = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: vi.fn().mockResolvedValue({ system_prompt: "rubric" }),
+      text: vi.fn().mockResolvedValue(JSON.stringify({ system_prompt: "rubric" })),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const requestedUrl = (mockFetch: ReturnType<typeof vi.fn>): string => String(mockFetch.mock.calls[0][0]);
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("sends renamed tiers as a JSON object so the rubric names them", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.getAutoRouterClassifierDefaultPromptCall("sk-key", 5, { SIMPLE: "Cheap" });
+
+    const url = requestedUrl(mockFetch);
+    expect(url).toContain("context_window_size=5");
+    expect(decodeURIComponent(url)).toContain('tier_labels={"SIMPLE":"Cheap"}');
+  });
+
+  it("omits tier_labels entirely when nothing was renamed", async () => {
+    const mockFetch = captureFetch();
+
+    await Networking.getAutoRouterClassifierDefaultPromptCall("sk-key", 5);
+    await Networking.getAutoRouterClassifierDefaultPromptCall("sk-key", 5, {});
+
+    expect(requestedUrl(mockFetch)).not.toContain("tier_labels");
+    expect(String(mockFetch.mock.calls[1][0])).not.toContain("tier_labels");
   });
 });

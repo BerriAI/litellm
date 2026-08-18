@@ -225,7 +225,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
-        parent_otel_span: Span | None = None,  # type: ignore
+        parent_otel_span: Span | None = None,
     ) -> list[dict]:
         return healthy_deployments
 

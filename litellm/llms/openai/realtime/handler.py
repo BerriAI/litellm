@@ -154,9 +154,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "complete_input_dict": {"query_params": query_params},
                 },
             )
-            async with websockets.connect(  # type: ignore
+            async with websockets.connect(
                 url,
-                additional_headers=headers,  # type: ignore
+                additional_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             ) as backend_ws:
@@ -174,7 +174,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 )
                 await realtime_streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        except websockets.exceptions.InvalidStatusCode as e:
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             try:

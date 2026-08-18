@@ -546,12 +546,19 @@ class TestTeamRepository:
 
     @pytest.mark.asyncio
     async def test_get_members_with_roles_locked_missing_row(self, repo):
+        """None, not [], so a caller can tell a deleted team from an empty one.
+
+        /team/member_add reconciles membership under this lock and has to fail,
+        and clean up the references it already wrote, when a /team/delete
+        committed underneath it. An empty list would look like a live team with
+        no members and it would carry on writing.
+        """
         tx = MagicMock()
         tx.query_raw = AsyncMock(return_value=[])
 
         members = await repo.get_members_with_roles_locked(tx, "missing")
 
-        assert members == []
+        assert members is None
 
     @pytest.mark.asyncio
     async def test_create_team_all_fields(self, repo):

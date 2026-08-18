@@ -1,0 +1,152 @@
+description: >-
+  Paths deliberately outside CI coverage, each with the reason it is exempt.
+  assert_ci_coverage.py fails when a test file or Dockerfile is neither invoked
+  by a job nor listed here, so every entry below is a decision on the record.
+
+test_paths:
+  - reason: >-
+      The end-to-end suite runs against a deployed proxy from its own in-cluster rig rather than
+      from a pull request; it needs a live gateway and provider credentials no PR job holds
+    paths:
+      - tests/e2e
+  - reason: >-
+      The documentation and code-quality workflows execute four files in this directory by name as
+      scripts and pytest never collects the directory, so these six run nowhere; listed individually
+      so a seventh cannot inherit the exemption
+    paths:
+      - tests/documentation_tests/test_exception_types.py
+      - tests/documentation_tests/test_general_setting_keys.py
+      - tests/documentation_tests/test_optional_params.py
+      - tests/documentation_tests/test_readme_providers.py
+      - tests/documentation_tests/test_requests_lib_usage.py
+      - tests/documentation_tests/test_standard_logging_payload.py
+  - reason: >-
+      Sibling files here are executed by name from the code-quality workflow; this one is referenced
+      by no job
+    paths:
+      - tests/code_coverage_tests/test_aio_http_image_conversion.py
+  - reason: >-
+      A second mirror of the package tree living beside tests/test_litellm, which is the mirror the
+      repo convention names; only test_no_hardcoded_secrets.py is invoked, from the linting
+      workflow, and whether this directory should exist at all is unresolved
+    paths:
+      - tests/litellm/a2a_protocol/providers/pydantic_ai_agents/test_pydantic_ai_agent_headers.py
+      - tests/litellm/a2a_protocol/providers/pydantic_ai_agents/test_pydantic_ai_agent_transformation.py
+      - tests/litellm/integrations/helicone/test_helicone_gemini.py
+      - tests/litellm/litellm_core_utils/test_json_schema_validation.py
+      - tests/litellm/llms/anthropic/test_anthropic_reasoning_effort.py
+      - tests/litellm/llms/anthropic/test_anthropic_schema_filter.py
+      - tests/litellm/llms/azure/test_azure_embedding.py
+      - tests/litellm/llms/bedrock/embed/test_embedding.py
+      - tests/litellm/llms/bedrock/test_nova_imported_models.py
+      - tests/litellm/llms/deepseek/chat/test_deepseek_chat_transformation.py
+      - tests/litellm/llms/gradient_ai/chat/test_gradient_ai_chat_transformation.py
+      - tests/litellm/llms/oci/chat/test_oci_chat_transformation.py
+      - tests/litellm/llms/openai_like/test_abliteration_provider.py
+      - tests/litellm/llms/openai_like/test_assemblyai_provider.py
+      - tests/litellm/llms/openai_like/test_empiriolabs_provider.py
+      - tests/litellm/llms/vertex_ai/agent_engine/test_transformation.py
+      - tests/litellm/llms/vertex_ai/gemini/test_transformation.py
+      - tests/litellm/llms/vertex_ai/text_to_speech/test_transformation.py
+      - tests/litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
+      - tests/litellm/proxy/agent_endpoints/test_agent_rbac.py
+      - tests/litellm/proxy/common_utils/test_rbac_utils.py
+      - tests/litellm/proxy/management_endpoints/test_common_utils.py
+      - tests/litellm/proxy/management_endpoints/test_cost_estimate_endpoint.py
+      - tests/litellm/proxy/test_claude_code_marketplace.py
+      - tests/litellm/proxy/test_init_litellm_callbacks.py
+      - tests/litellm/proxy/test_prisma_engine_watchdog.py
+      - tests/litellm/proxy/vector_store_endpoints/test_vector_store_rbac.py
+      - tests/litellm/test_bedrock_extended_beta_models.py
+      - tests/litellm/test_bedrock_nemotron_super.py
+      - tests/litellm/test_proxy_auth.py
+      - tests/litellm/test_router_retry_backoff_headers.py
+      - tests/litellm/test_sambanova_model_metadata.py
+      - tests/litellm/test_stream_chunk_builder_images.py
+  - reason: >-
+      Legacy proxy suite superseded by the proxy shards; no job invokes it and whether it still
+      describes supported behaviour is unresolved
+    paths:
+      - tests/old_proxy_tests/tests/test_anthropic_context_caching.py
+      - tests/old_proxy_tests/tests/test_anthropic_sdk.py
+      - tests/old_proxy_tests/tests/test_async.py
+      - tests/old_proxy_tests/tests/test_gemini_context_caching.py
+      - tests/old_proxy_tests/tests/test_langchain_embedding.py
+      - tests/old_proxy_tests/tests/test_langchain_request.py
+      - tests/old_proxy_tests/tests/test_llamaindex.py
+      - tests/old_proxy_tests/tests/test_mistral_sdk.py
+      - tests/old_proxy_tests/tests/test_openai_embedding.py
+      - tests/old_proxy_tests/tests/test_openai_exception_request.py
+      - tests/old_proxy_tests/tests/test_openai_request.py
+      - tests/old_proxy_tests/tests/test_openai_request_with_traceparent.py
+      - tests/old_proxy_tests/tests/test_openai_simple_embedding.py
+      - tests/old_proxy_tests/tests/test_openai_tts_request.py
+      - tests/old_proxy_tests/tests/test_pass_through_langfuse.py
+      - tests/old_proxy_tests/tests/test_q.py
+      - tests/old_proxy_tests/tests/test_simple_traceparent_openai.py
+      - tests/old_proxy_tests/tests/test_vertex_sdk_forward_headers.py
+      - tests/old_proxy_tests/tests/test_vtx_embedding.py
+      - tests/old_proxy_tests/tests/test_vtx_sdk_embedding.py
+  - reason: >-
+      No job invokes this suite and its files mix pure transformation tests with ones driving live
+      vendor vector stores, so assigning them needs a per-file decision
+    paths:
+      - tests/vector_store_tests/rag/test_rag_bedrock.py
+      - tests/vector_store_tests/rag/test_rag_openai.py
+      - tests/vector_store_tests/rag/test_rag_s3_vectors.py
+      - tests/vector_store_tests/rag/test_rag_vertex_ai.py
+      - tests/vector_store_tests/test_azure_ai_vector_store.py
+      - tests/vector_store_tests/test_azure_vector_store.py
+      - tests/vector_store_tests/test_bedrock_vector_store.py
+      - tests/vector_store_tests/test_gemini_vector_store.py
+      - tests/vector_store_tests/test_milvus_vector_store.py
+      - tests/vector_store_tests/test_openai_vector_store.py
+      - tests/vector_store_tests/test_ragflow_vector_store.py
+      - tests/vector_store_tests/test_s3_vectors_vector_store.py
+      - tests/vector_store_tests/test_vertex_ai_search_api_vector_store.py
+      - tests/vector_store_tests/test_vertex_ai_vector_store.py
+  - reason: >-
+      Throughput and memory-growth measurements whose runtime and variance make them unsuitable for
+      a per-pull-request job
+    paths:
+      - tests/load_tests/test_datadog_load_test.py
+      - tests/load_tests/test_langsmith_load_test.py
+      - tests/load_tests/test_linear_memory_growth.py
+      - tests/load_tests/test_memory_usage.py
+      - tests/load_tests/test_otel_load_test.py
+      - tests/load_tests/test_vertex_embeddings_load_test.py
+      - tests/load_tests/test_vertex_load_tests.py
+  - reason: >-
+      Third-party integration tests that skip themselves without OCI configuration or sandbox
+      credentials, neither of which a pull request job holds
+    paths:
+      - tests/integration/sandbox/test_e2b_sandbox.py
+      - tests/integration/test_oci_integration.py
+      - tests/integration/test_oci_proxy_integration.py
+  - reason: >-
+      Two prompt-factory tests sitting at the top level of tests/ instead of under the
+      tests/test_litellm mirror the shards enumerate; they need moving rather than a shard entry
+    paths:
+      - tests/litellm_core_utils/test_anthropic_dedup_factory.py
+      - tests/litellm_core_utils/test_bedrock_converse_dedup_factory.py
+  - reason: >-
+      A unit test for the proxy-extras package that no job invokes, while the package's other tests
+      live under tests/proxy_migration_tests
+    paths:
+      - tests/litellm-proxy-extras/test_litellm_proxy_extras_utils.py
+
+dockerfiles:
+  - reason: >-
+      The dashboard container is a static Next.js export served by nginx, and the dashboard build
+      and lint workflows already exercise that output, so building the image adds no signal about it
+    paths:
+      - ui/Dockerfile
+  - reason: >-
+      The Rust gateway ships as its own chart and package with a separate release pipeline, so its
+      image is not part of this repo's Python image set
+    paths:
+      - litellm-rust/crates/ai-gateway/Dockerfile
+  - reason: >-
+      An example image under cookbook/ that is documentation rather than a shipped artifact
+    paths:
+      - cookbook/litellm-ollama-docker-image/Dockerfile

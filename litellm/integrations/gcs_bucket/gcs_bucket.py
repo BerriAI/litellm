@@ -42,9 +42,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
         )
-        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue(  # type: ignore[assignment]
-            maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
-        )
+        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
         asyncio.create_task(self.periodic_flush())
         AdditionalLoggingUtils.__init__(self)
 

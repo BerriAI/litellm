@@ -8,6 +8,7 @@ import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
 import { SpendMetrics } from "@/components/UsagePage/types";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -82,12 +83,13 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
 
-  const toolSpendEnabled = !!accessToken && !!startTime && !!endTime;
+  const canViewProxyWideCostData = useCan("viewProxyWideCostData");
+  const toolSpendEnabled = canViewProxyWideCostData && !!accessToken && !!startTime && !!endTime;
   const rangeKey = startTime && endTime ? `${isoDay(startTime)}|${isoDay(endTime)}` : "";
   const [toolSpendState, setToolSpendState] = useState<{ key: string; data: ToolSpendResponse } | null>(null);
 
   useEffect(() => {
-    if (!accessToken || !startTime || !endTime) return;
+    if (!canViewProxyWideCostData || !accessToken || !startTime || !endTime) return;
     let cancelled = false;
     getToolSpend(accessToken, isoDay(startTime), isoDay(endTime))
       .then((res) => {
@@ -99,7 +101,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, startTime, endTime, rangeKey]);
+  }, [canViewProxyWideCostData, accessToken, startTime, endTime, rangeKey]);
 
   const toolSpend = toolSpendState?.key === rangeKey ? toolSpendState.data : null;
   const toolSpendLoading = toolSpendEnabled && toolSpend === null;
@@ -141,7 +143,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
   const savingsSubtitle = [
     accumulation === "cumulative" ? "Running total saved" : `Saved ${intervalLabel.toLowerCase()}`,
-    rangeLabel,
+    rangeLabel && `${rangeLabel} (UTC)`,
   ]
     .filter(Boolean)
     .join(" \u00b7 ");
@@ -179,6 +181,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-wrap items-center justify-end gap-4">
+        <span className="text-sm text-muted-foreground">Spend is bucketed by UTC day</span>
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
@@ -197,8 +200,8 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <SummaryCard
           label="Prompt caching savings"
           value={usd(cachingTotal)}
-          hint="Cache read discount"
-          info="Tokens the provider served from cache, priced at the discount between the input and cache-read rates."
+          hint="Cache reads, net of write premium"
+          info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. Can be negative on traffic that writes more cache than it reuses."
         />
         <SummaryCard
           label="Auto-router savings"
@@ -272,55 +275,57 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Spend by tool</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Spend on requests that invoked each tool (MCP and client-side tools); declaring a tool without invoking it
-            does not count. A request that invoked multiple tools counts its full spend toward each, so this attributes
-            rather than partitions spend.
-          </p>
-        </CardHeader>
-        <CardContent>
-          {topTools.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              {toolSpendLoading ? "Loading..." : "No tool usage in this range."}
+      {canViewProxyWideCostData && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Spend by tool</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Spend on requests that invoked each tool (MCP and client-side tools); declaring a tool without invoking it
+              does not count. A request that invoked multiple tools counts its full spend toward each, so this
+              attributes rather than partitions spend.
             </p>
-          ) : (
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <div>
-                <p className="mb-2 text-sm font-medium text-muted-foreground">Total by tool</p>
-                <BarChart
-                  data={topToolsChart}
-                  index="tool_name"
-                  categories={["spend"]}
-                  colors={toolColors}
-                  colorByDatum
-                  layout="vertical"
-                  yAxisWidth={140}
-                  maxBarSize={64}
-                  showLegend={false}
-                  valueFormatter={usd}
-                />
+          </CardHeader>
+          <CardContent>
+            {topTools.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                {toolSpendLoading ? "Loading..." : "No tool usage in this range."}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <div>
+                  <p className="mb-2 text-sm font-medium text-muted-foreground">Total by tool</p>
+                  <BarChart
+                    data={topToolsChart}
+                    index="tool_name"
+                    categories={["spend"]}
+                    colors={toolColors}
+                    colorByDatum
+                    layout="vertical"
+                    yAxisWidth={140}
+                    maxBarSize={64}
+                    showLegend={false}
+                    valueFormatter={usd}
+                  />
+                </div>
+                <div>
+                  <p className="mb-2 text-sm font-medium text-muted-foreground">Daily spend by tool</p>
+                  <CustomLegend categories={topToolNames} colors={toolColors} />
+                  <BarChart
+                    data={dailyToolSeries}
+                    index="date"
+                    categories={topToolNames}
+                    colors={toolColors}
+                    stack
+                    maxBarSize={64}
+                    valueFormatter={usd}
+                    showLegend={false}
+                  />
+                </div>
               </div>
-              <div>
-                <p className="mb-2 text-sm font-medium text-muted-foreground">Daily spend by tool</p>
-                <CustomLegend categories={topToolNames} colors={toolColors} />
-                <BarChart
-                  data={dailyToolSeries}
-                  index="date"
-                  categories={topToolNames}
-                  colors={toolColors}
-                  stack
-                  maxBarSize={64}
-                  valueFormatter={usd}
-                  showLegend={false}
-                />
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 };

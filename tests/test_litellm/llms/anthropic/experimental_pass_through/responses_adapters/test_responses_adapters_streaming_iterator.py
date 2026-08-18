@@ -6,6 +6,7 @@ Tests for AnthropicResponsesStreamWrapper
 import asyncio
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
@@ -75,6 +76,78 @@ class TestProcessEventResponseCreatedGuard:
         assert len(message_starts) == 1
 
 
+class TestReasoningItemWithoutSummaryText:
+    """Regression: a reasoning item whose summary never produces text must not
+    surface as a thinking content block.
+
+    OpenAI emits ``response.output_item.added`` with ``type: "reasoning"`` on
+    every reasoning turn, but only emits
+    ``response.reasoning_summary_text.delta`` when a summary was requested and
+    the model actually produced one. Eagerly opening the block on
+    ``output_item.added`` left ``{"type": "thinking", "thinking": ""}`` in the
+    assistant turn, which clients persist in their session transcript. Replaying
+    that transcript against an Anthropic model (what ``claude --resume`` does
+    once the resumed session falls back to the default Anthropic model) fails
+    with::
+
+        400 invalid_request_error - messages.2.content.0.thinking:
+        each thinking block must contain thinking
+
+    So the thinking block is opened on the first non-empty summary delta.
+    """
+
+    @staticmethod
+    def _gpt_turn(reasoning_summary_deltas: list) -> list:
+        return [
+            {"type": "response.created"},
+            {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
+            *(
+                {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": delta}
+                for delta in reasoning_summary_deltas
+            ),
+            {"type": "response.output_item.done", "item": {"type": "reasoning", "id": "rs_1"}},
+            {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+            {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hello"},
+            {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+        ]
+
+    def test_reasoning_without_summary_emits_no_thinking_block(self):
+        chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=[]))
+
+        assert not [
+            c for c in chunks if c["type"] == "content_block_start" and c["content_block"]["type"] == "thinking"
+        ]
+        assert [(c["type"], c.get("index")) for c in chunks[1:]] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+            ("content_block_stop", 0),
+        ]
+        assert chunks[1]["content_block"] == {"type": "text", "text": ""}
+
+    def test_reasoning_with_only_empty_summary_deltas_emits_no_thinking_block(self):
+        chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["", ""]))
+
+        assert not [c for c in chunks if c["type"] == "content_block_delta" and c["delta"]["type"] == "thinking_delta"]
+        assert not [
+            c for c in chunks if c["type"] == "content_block_start" and c["content_block"]["type"] == "thinking"
+        ]
+
+    def test_reasoning_with_summary_text_still_emits_a_thinking_block(self):
+        chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["Weigh", "ing options"]))
+
+        assert [(c["type"], c.get("index")) for c in chunks[1:]] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+            ("content_block_delta", 0),
+            ("content_block_stop", 0),
+            ("content_block_start", 1),
+            ("content_block_delta", 1),
+            ("content_block_stop", 1),
+        ]
+        assert chunks[1]["content_block"] == {"type": "thinking", "thinking": ""}
+        assert "".join(c["delta"]["thinking"] for c in chunks[2:4]) == "Weighing options"
+
+
 class TestProcessEventTextDeltaWithoutOutputItemAdded:
     """Streams that skip response.output_item.added (e.g. LMStudio) must still
     open a text block before any delta and never emit index -1."""
@@ -109,12 +182,13 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
                     "type": "response.output_item.added",
                     "item": {"type": "reasoning", "id": "rs_1"},
                 },
+                {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "hm"},
                 {"type": "response.output_text.delta", "item_id": "m1", "delta": "Hi"},
             ]
         )
-        assert chunks[1]["type"] == "content_block_start"
-        assert chunks[1]["content_block"] == {"type": "text", "text": ""}
-        assert [c["index"] for c in chunks[1:]] == [1, 1]
+        assert chunks[2]["type"] == "content_block_start"
+        assert chunks[2]["content_block"] == {"type": "text", "text": ""}
+        assert [c["index"] for c in chunks[2:]] == [1, 1]
 
     def test_process_event_registered_item_id_does_not_synthesize_start(self):
         chunks = _process_all(
@@ -130,3 +204,31 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
             ("content_block_start", 0),
             ("content_block_delta", 0),
         ]
+
+
+class TestResponseCompletedUsage:
+    """The Anthropic ``message_delta`` usage must report cache reads/writes and
+    exclude them from ``input_tokens``, so spend is not billed at the uncached
+    input rate."""
+
+    def test_response_completed_usage_carries_cache_tokens(self):
+        from litellm.types.llms.openai import ResponseAPIUsage
+
+        response = SimpleNamespace(
+            status="completed",
+            output=[],
+            usage=ResponseAPIUsage(
+                input_tokens=4017,
+                input_tokens_details={"cached_tokens": 4004, "cache_write_tokens": 10},
+                output_tokens=5,
+                total_tokens=4022,
+            ),
+        )
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        message_delta = next(c for c in chunks if c["type"] == "message_delta")
+        assert message_delta["usage"] == {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "cache_creation_input_tokens": 10,
+            "cache_read_input_tokens": 4004,
+        }

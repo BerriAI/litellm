@@ -44,7 +44,7 @@ import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import mcpLogo from "../../../../../public/assets/logos/mcp_logo.png";
@@ -222,7 +222,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         // which would persist it as server-level credentials on the created server row. Mirrors the
         // edit form's onTokenReceived early return.
         setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
-        NotificationsManager.success(
+        toast.success(
           "Token held for this browser session. Tools can now be previewed and configured; the token is not saved to LiteLLM.",
         );
         return;
@@ -255,9 +255,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // its own credential write.
       setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
 
-      NotificationsManager.success(
-        "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
-      );
+      toast.success("OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.");
     },
     onBeforeRedirect: persistCreateUiState,
     flowSource: "create",
@@ -333,7 +331,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (!pendingRestoredValues) {
       return;
     }
-    const transportReady = transportType || pendingRestoredValues.transport || "";
     if (pendingRestoredValues.transport && !transportType) {
       // wait until transportType state catches up so the URL field is mounted
       return;
@@ -399,7 +396,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       dcrClient: dcrClientRef.current,
     });
     if (built.kind !== "ok") {
-      NotificationsManager.fromBackend(payloadErrorMessage(built));
+      toast.fromError(payloadErrorMessage(built));
       return;
     }
     const payload = built.payload;
@@ -440,14 +437,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           }
         }
 
-        NotificationsManager.success(
-          isAdmin
-            ? "MCP Server created successfully"
-            : {
-                message: "MCP Server submitted for admin review",
-                description: "Once an admin approves it, the server will appear in your MCP Servers list.",
-              },
-        );
+        if (isAdmin) {
+          toast.success("MCP Server created successfully");
+        } else {
+          toast.success("MCP Server submitted for admin review", {
+            description: "Once an admin approves it, the server will appear in your MCP Servers list.",
+          });
+        }
         form.resetFields();
         setCostConfig({});
         clearTools();
@@ -460,9 +456,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      NotificationsManager.fromBackend(
-        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`,
-      );
+      toast.fromError(isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`);
     } finally {
       setIsLoading(false);
     }

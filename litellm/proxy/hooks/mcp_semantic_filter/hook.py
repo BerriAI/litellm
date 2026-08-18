@@ -5,6 +5,7 @@ Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from fastapi import HTTPException
@@ -164,7 +165,7 @@ class SemanticToolFilterHook(CustomLogger):
         return [name for name in names if name]
 
     @staticmethod
-    def _narrow_mcp_references(tools: list[Any], selected_tool_names: list[str]) -> list[Any]:
+    def _narrow_mcp_references(tools: Sequence[Mapping[str, object]], selected_tool_names: list[str]) -> list[object]:
         """
         Restrict each litellm_proxy MCP reference to the semantically selected tools.
 
@@ -376,7 +377,7 @@ class SemanticToolFilterHook(CustomLogger):
             if mcp_tools:
                 filtered_mcp_tools = await self.filter.filter_tools(
                     query=user_query,
-                    available_tools=mcp_tools,  # type: ignore
+                    available_tools=mcp_tools,
                 )
             else:
                 filtered_mcp_tools = []

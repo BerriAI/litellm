@@ -115,11 +115,11 @@ def build_signature_string(method: str, path: str, headers: dict, signed_headers
 
 def load_private_key_from_str(key_str: str) -> Any:
     _require_cryptography()
-    key: Final = serialization.load_pem_private_key(  # type: ignore[union-attr]
+    key: Final = serialization.load_pem_private_key(
         key_str.encode("utf-8"),
         password=None,
     )
-    if not isinstance(key, rsa.RSAPrivateKey):  # type: ignore[union-attr]
+    if not isinstance(key, rsa.RSAPrivateKey):
         raise TypeError("The provided private key is not an RSA key, which is required for OCI signing.")
     return key
 
@@ -329,8 +329,8 @@ def sign_with_manual_credentials(
 
     signature: Final = private_key.sign(
         signing_string.encode("utf-8"),
-        padding.PKCS1v15(),  # type: ignore[union-attr]
-        hashes.SHA256(),  # type: ignore[union-attr]
+        padding.PKCS1v15(),
+        hashes.SHA256(),
     )
     signature_b64: Final = base64.b64encode(signature).decode()
 

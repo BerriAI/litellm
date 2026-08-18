@@ -3,7 +3,7 @@ import { Modal, Form, Input, Button, Alert, Spin, Tag, Typography } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { MCPServer, MCPUserEnvVarsStatus } from "@/components/mcp_tools/types";
 import { getMCPUserEnvVars, storeMCPUserEnvVars } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 const { Text, Title } = Typography;
 
@@ -38,12 +38,12 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
   const saveMutation = useMutation({
     mutationFn: (values: Record<string, string>) => storeMCPUserEnvVars(accessToken!, server!.server_id, values),
     onSuccess: (saved) => {
-      NotificationsManager.success("Credentials saved");
+      toast.success("Credentials saved");
       onSaved?.(saved);
       onClose();
     },
     onError: (err) => {
-      NotificationsManager.fromBackend(`Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`);
+      toast.fromError(`Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`);
     },
   });
 

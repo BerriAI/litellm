@@ -576,5 +576,5 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
-                tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
+                tracing_detail=GuardrailTracingDetail(**tracing_kw),
             )

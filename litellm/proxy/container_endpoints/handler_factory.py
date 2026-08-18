@@ -328,7 +328,7 @@ async def _process_multipart_upload_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            route_type=route_type,  # type: ignore[arg-type]
+            route_type=route_type,
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,
@@ -411,7 +411,7 @@ async def _process_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            route_type=route_type,  # type: ignore[arg-type]
+            route_type=route_type,
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,

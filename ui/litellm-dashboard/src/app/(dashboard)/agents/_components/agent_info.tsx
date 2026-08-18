@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { Form, Input, InputNumber, Button as AntButton, Spin, Descriptions, Divider } from "antd";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "@/components/networking";
 import { Agent } from "@/components/agents/types";
@@ -80,7 +80,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       }
     } catch (error) {
       console.error("Error fetching agent info:", error);
-      MessageManager.error("Failed to load agent information");
+      toast.error("Failed to load agent information");
     } finally {
       setIsLoading(false);
     }
@@ -160,12 +160,12 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       }
 
       await patchAgentCall(accessToken, agentId, updateData);
-      MessageManager.success("Agent updated successfully");
+      toast.success("Agent updated successfully");
       setIsEditing(false);
       fetchAgentInfo();
     } catch (error) {
       console.error("Error updating agent:", error);
-      MessageManager.error("Failed to update agent");
+      toast.error("Failed to update agent");
     } finally {
       setIsSaving(false);
     }

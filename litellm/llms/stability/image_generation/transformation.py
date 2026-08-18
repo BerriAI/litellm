@@ -192,7 +192,7 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
                 "strength",
                 "style_preset",
             ]:
-                stability_request[key] = value  # type: ignore
+                stability_request[key] = value
 
         return dict(stability_request)
 

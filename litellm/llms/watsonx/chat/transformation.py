@@ -74,7 +74,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")  # type: ignore
+        api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
         dynamic_api_key = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
 

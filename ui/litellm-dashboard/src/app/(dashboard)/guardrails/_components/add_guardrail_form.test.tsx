@@ -26,6 +26,7 @@ describe("AddGuardrailForm close behavior", () => {
     const { onClose } = renderForm();
     expect(screen.getByText("Create guardrail")).toBeInTheDocument();
 
+    // eslint-disable-next-line local/no-antd-class-selectors -- exercises antd Modal mask dismissal; the mask has no role and is not reachable by an accessible query
     const wrap = document.querySelector(".ant-modal-wrap") as HTMLElement;
     expect(wrap).toBeTruthy();
     fireEvent.mouseDown(wrap);
@@ -52,6 +53,6 @@ describe("AddGuardrailForm provider options", () => {
     fireEvent.mouseDown(screen.getByLabelText("Guardrail Provider"));
 
     const logo = await screen.findByAltText("Presidio PII logo");
-    expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("microsoft_azure.svg"));
   });
 });

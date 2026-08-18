@@ -111,7 +111,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             )
 
         for k, v in inference_params.items():
-            transformed_request[k] = v  # type: ignore
+            transformed_request[k] = v
 
         return transformed_request
 

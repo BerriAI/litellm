@@ -1,7 +1,9 @@
 from typing import Any, Final
+from urllib.parse import unquote
 
 from litellm._uuid import uuid
 from litellm.llms.vertex_ai.common_utils import (
+    VertexAIError,
     _convert_vertex_datetime_to_openai_datetime,
 )
 from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
@@ -199,15 +201,39 @@ class VertexAIBatchTransformation:
 
         gcs_file_uri format: gs://litellm-testing-bucket/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/e9412502-2c91-42a6-8e61-f5c294cc0fc8
         returns: "publishers/google/models/gemini-1.5-flash-001"
+
+        Raises a 400 `VertexAIError` when the uri carries no parseable model path.
         """
-        from urllib.parse import unquote
-
-        decoded_uri: Final = unquote(gcs_file_uri)
-
-        model_path: Final = decoded_uri.split("publishers/")[1]
-        parts: Final = model_path.split("/")
-        model: Final = f"publishers/{'/'.join(parts[:3])}"
+        model: Final = cls._parse_model_from_gcs_file(gcs_file_uri)
+        if model is None:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    "Vertex AI batch creation requires the model to be part of `input_file_id`, but "
+                    f"'{gcs_file_uri}' contains no 'publishers/<publisher>/models/<model>' path segment. "
+                    "Either upload the input file through LiteLLM (POST /v1/files with "
+                    "custom_llm_provider=vertex_ai), which encodes the model into the returned file id, or "
+                    "pass a uri of the form "
+                    "gs://<bucket>/<prefix>/publishers/<publisher>/models/<model>/<file>"
+                ),
+            )
         return model
+
+    @classmethod
+    def _parse_model_from_gcs_file(cls, gcs_file_uri: str) -> str | None:
+        """
+        Returns the `publishers/<publisher>/models/<model>` path from a gcs uri, or None if the uri
+        does not contain one.
+        """
+        _, separator, model_path = unquote(gcs_file_uri).partition("publishers/")
+        if not separator:
+            return None
+
+        parts: Final = model_path.split("/")
+        if len(parts) < 3 or parts[1] != "models" or not parts[2]:
+            return None
+
+        return f"publishers/{'/'.join(parts[:3])}"
 
     @classmethod
     def is_unmanaged_gcs_batch_input_file_id(cls, input_file_id: str | None) -> bool:
@@ -216,7 +242,11 @@ class VertexAIBatchTransformation:
         LiteLLM-managed unified file id) with a `publishers/` model path that
         `_get_model_from_gcs_file` can parse.
         """
-        return input_file_id is not None and input_file_id.startswith("gs://") and "publishers/" in input_file_id
+        return (
+            input_file_id is not None
+            and input_file_id.startswith("gs://")
+            and cls._parse_model_from_gcs_file(input_file_id) is not None
+        )
 
     @classmethod
     def get_bare_model_name_from_gcs_file(cls, gcs_file_uri: str) -> str:

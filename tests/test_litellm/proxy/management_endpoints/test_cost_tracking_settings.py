@@ -322,9 +322,9 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             mock_router,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-5.3-codex")
+            resolved = _resolve_model_for_cost_lookup("gpt-5.3-codex")
 
-        assert resolved_model == "azure/gpt-4o"
+        assert resolved.model == "azure/gpt-4o"
         mock_router.get_model_list.assert_called_once_with(model_name="gpt-5.3-codex")
 
     def test_falls_back_to_litellm_params_model_when_no_base_model(self):
@@ -352,9 +352,9 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             mock_router,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-4")
+            resolved = _resolve_model_for_cost_lookup("gpt-4")
 
-        assert resolved_model == "openai/gpt-4"
+        assert resolved.model == "openai/gpt-4"
 
     def test_resolves_base_model_from_litellm_params(self):
         """
@@ -383,9 +383,9 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             mock_router,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup("my-azure-model")
+            resolved = _resolve_model_for_cost_lookup("my-azure-model")
 
-        assert resolved_model == "azure/gpt-4o-mini"
+        assert resolved.model == "azure/gpt-4o-mini"
 
     def test_returns_original_model_when_no_router(self):
         """
@@ -399,12 +399,10 @@ class TestResolveModelForCostLookup:
             "litellm.proxy.proxy_server.llm_router",
             None,
         ):
-            resolved_model, provider = _resolve_model_for_cost_lookup(
-                "azure/openai/gpt-5.3-codex"
-            )
+            resolved = _resolve_model_for_cost_lookup("azure/openai/gpt-5.3-codex")
 
-        assert resolved_model == "azure/openai/gpt-5.3-codex"
-        assert provider is None
+        assert resolved.model == "azure/openai/gpt-5.3-codex"
+        assert resolved.provider is None
 
     def test_returns_custom_llm_provider_on_base_model_path(self):
         """base_model path: the custom_llm_provider from litellm_params is
@@ -427,10 +425,10 @@ class TestResolveModelForCostLookup:
         ]
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            resolved_model, provider = _resolve_model_for_cost_lookup("my-azure-model")
+            resolved = _resolve_model_for_cost_lookup("my-azure-model")
 
-        assert resolved_model == "azure/gpt-4o"
-        assert provider == "azure"
+        assert resolved.model == "azure/gpt-4o"
+        assert resolved.provider == "azure"
 
     def test_returns_custom_llm_provider_on_resolved_model_path(self):
         """resolved-model path (no base_model): the custom_llm_provider from
@@ -452,10 +450,10 @@ class TestResolveModelForCostLookup:
         ]
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-4")
+            resolved = _resolve_model_for_cost_lookup("gpt-4")
 
-        assert resolved_model == "openai/gpt-4"
-        assert provider == "openai"
+        assert resolved.model == "openai/gpt-4"
+        assert resolved.provider == "openai"
 
     def test_resolves_base_model_when_deployment_has_no_litellm_params(self):
         """A deployment can omit litellm_params entirely; base_model from
@@ -474,10 +472,10 @@ class TestResolveModelForCostLookup:
         ]
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            resolved_model, provider = _resolve_model_for_cost_lookup("my-azure-model")
+            resolved = _resolve_model_for_cost_lookup("my-azure-model")
 
-        assert resolved_model == "azure/gpt-4o"
-        assert provider is None
+        assert resolved.model == "azure/gpt-4o"
+        assert resolved.provider is None
 
     def test_resolves_model_when_deployment_has_no_model_info(self):
         """A deployment can omit model_info entirely; litellm_params.model must
@@ -496,7 +494,192 @@ class TestResolveModelForCostLookup:
         ]
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-4")
+            resolved = _resolve_model_for_cost_lookup("gpt-4")
 
-        assert resolved_model == "openai/gpt-4"
-        assert provider is None
+        assert resolved.model == "openai/gpt-4"
+        assert resolved.provider is None
+
+
+class TestEstimateCostOnPremProvider:
+    """Regression tests for LIT-5210: /cost/estimate on on-prem deployment aliases."""
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_onprem_model_without_pricing(self):
+        """
+        On-prem deployments (custom_llm_provider set, model absent from the cost map)
+        must not 500 with "LLM Provider NOT provided". The resolved provider has to be
+        forwarded to completion_cost so provider inference doesn't run on the bare model.
+
+        completion_cost is intentionally NOT mocked.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                },
+                "model_info": {},
+            }
+        ]
+
+        saved_model_cost = dict(litellm.model_cost)
+        litellm.register_model(
+            {
+                "openai/zai-org/GLM-5.2": {
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                }
+            }
+        )
+        try:
+            with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+                response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+        finally:
+            litellm.model_cost = saved_model_cost
+
+        assert response.model == "nvidia/zai-org/glm-5.2"
+        assert response.provider == "openai"
+        assert response.cost_per_request == 0.0
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_onprem_model_with_configured_pricing(self):
+        """
+        On-prem deployments with input/output_cost_per_token configured must estimate a
+        real cost using that pricing, not fall back to 0.0.
+
+        completion_cost is intentionally NOT mocked.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+            num_requests_per_day=100,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+                "model_info": {},
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+
+        assert response.provider == "openai"
+        assert response.cost_per_request == pytest.approx(0.002)
+        assert response.input_cost_per_request == pytest.approx(0.001)
+        assert response.output_cost_per_request == pytest.approx(0.001)
+        assert response.daily_cost == pytest.approx(0.2)
+        assert response.input_cost_per_token == pytest.approx(0.000001)
+        assert response.output_cost_per_token == pytest.approx(0.000002)
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_onprem_model_with_model_info_pricing(self):
+        """
+        Custom pricing configured under model_info (how DB / Admin UI added
+        deployments store it) must be honored, not just litellm_params pricing.
+
+        completion_cost is intentionally NOT mocked.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.000003,
+                    "output_cost_per_token": 0.000004,
+                },
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+
+        assert response.provider == "openai"
+        assert response.cost_per_request == pytest.approx(0.005)
+        assert response.input_cost_per_token == pytest.approx(0.000003)
+        assert response.output_cost_per_token == pytest.approx(0.000004)
+
+    @pytest.mark.asyncio
+    async def test_estimate_cost_litellm_params_pricing_overrides_model_info(self):
+        """
+        When pricing is set in both places, litellm_params wins, matching the
+        router's cost-map registration precedence.
+        """
+        from litellm.proxy._types import CostEstimateRequest
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            estimate_cost,
+        )
+
+        request = CostEstimateRequest(
+            model="nvidia/zai-org/glm-5.2",
+            input_tokens=1000,
+            output_tokens=500,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "nvidia/zai-org/glm-5.2",
+                "litellm_params": {
+                    "model": "zai-org/GLM-5.2",
+                    "custom_llm_provider": "openai",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.000003,
+                    "output_cost_per_token": 0.000004,
+                },
+            }
+        ]
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+            response = await estimate_cost(request=request, user_api_key_dict=MagicMock())
+
+        assert response.cost_per_request == pytest.approx(0.002)
+        assert response.input_cost_per_token == pytest.approx(0.000001)
+        assert response.output_cost_per_token == pytest.approx(0.000002)

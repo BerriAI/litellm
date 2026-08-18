@@ -227,3 +227,90 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
     expect(result.session_affinity).toBe(false);
   });
 });
+
+describe("buildUpdatedComplexityRouterConfig deployment affinity", () => {
+  it("writes deployment_affinity=false when the toggle is off", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, deployment_affinity: false });
+    expect(result.deployment_affinity).toBe(false);
+  });
+
+  it("writes deployment_affinity=true when the toggle is on", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, deployment_affinity: true });
+    expect(result.deployment_affinity).toBe(true);
+  });
+
+  it("re-asserts the backend's on-by-default when the form value is absent, rather than dropping the key", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, deployment_affinity: false }, FORM_VALUE);
+    expect(result.deployment_affinity).toBe(true);
+  });
+
+  it("stops a stored deployment_affinity=false from surviving a save that turned the toggle back on", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, deployment_affinity: false },
+      { ...FORM_VALUE, deployment_affinity: true },
+    );
+    expect(result.deployment_affinity).toBe(true);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig tier labels", () => {
+  const RENAMED = { ...STORED, tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" } };
+
+  it("round-trips stored labels through an untouched edit", () => {
+    const result = buildUpdatedComplexityRouterConfig(RENAMED, {
+      ...FORM_VALUE,
+      tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" },
+    });
+    expect(result.tier_labels).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
+  });
+
+  it("persists a renamed tier", () => {
+    const result = buildUpdatedComplexityRouterConfig(RENAMED, {
+      ...FORM_VALUE,
+      tier_labels: { SIMPLE: "Budget", REASONING: "Deep" },
+    });
+    expect(result.tier_labels).toEqual({ SIMPLE: "Budget", REASONING: "Deep" });
+  });
+
+  it("drops the key when every label is cleared back to the default", () => {
+    const result = buildUpdatedComplexityRouterConfig(RENAMED, { ...FORM_VALUE, tier_labels: {} });
+    expect(result.tier_labels).toBeUndefined();
+    expect("tier_labels" in result).toBe(false);
+  });
+
+  it("leaves an unrenamed router without the key", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE);
+    expect("tier_labels" in result).toBe(false);
+  });
+
+  it("keeps the tiers keys canonical alongside a rename", () => {
+    const result = buildUpdatedComplexityRouterConfig(RENAMED, {
+      ...FORM_VALUE,
+      tier_labels: { SIMPLE: "Cheap" },
+    });
+    expect(Object.keys(result.tiers as Record<string, unknown>)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig scorer knobs", () => {
+  const BOUNDARIES = { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 };
+  const STORED_WITH_KNOBS = { ...STORED, tier_boundaries: BOUNDARIES };
+  const HYDRATED = { ...FORM_VALUE, tier_boundaries: BOUNDARIES };
+
+  it("round-trips explicit stored knobs through an untouched edit", () => {
+    // These keys are MANAGED now, so the stored copy is dropped before the rebuild and only a faithful
+    // hydration puts them back. A regression here silently resets a tuned router.
+    expect(buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, HYDRATED).tier_boundaries).toEqual(BOUNDARIES);
+  });
+
+  it("drops a stored knob when the operator resets it, instead of preserving the old value", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, FORM_VALUE);
+
+    expect(result).not.toHaveProperty("tier_boundaries");
+    expect(result.some_future_backend_key).toEqual({ nested: true });
+  });
+
+  it("never invents knobs for a router that never had them", () => {
+    expect(buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE)).not.toHaveProperty("tier_boundaries");
+  });
+});

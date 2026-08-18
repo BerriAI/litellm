@@ -442,12 +442,12 @@ class QualifireGuardrail(CustomGuardrail):
             # If no structured messages available, construct from texts
             if not messages and texts:
                 # Create a simple message structure for the output
-                messages = [{"role": "assistant", "content": output or ""}]  # type: ignore
+                messages = [{"role": "assistant", "content": output or ""}]
 
         if not messages:
             # For pre_call with no messages, try to construct from texts
             if texts:
-                messages = [{"role": "user", "content": texts[-1] if texts else ""}]  # type: ignore
+                messages = [{"role": "user", "content": texts[-1] if texts else ""}]
             else:
                 verbose_proxy_logger.debug("Qualifire Guardrail: No messages or texts found, skipping")
                 return inputs
@@ -465,7 +465,7 @@ class QualifireGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:  # type: ignore
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
             QualifireGuardrailConfigModel,
         )

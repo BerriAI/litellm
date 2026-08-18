@@ -23,6 +23,7 @@ const SUMMABLE_METADATA_KEYS = [
   "total_failed_requests",
   "total_cache_read_input_tokens",
   "total_cache_creation_input_tokens",
+  "total_flat_cost",
 ] as const;
 
 interface DailyActivityResponse {
@@ -39,6 +40,13 @@ interface UsePaginatedDailyActivityParams {
   args: any[];
   /** Whether the hook should fetch. Set to false to disable. */
   enabled: boolean;
+  /**
+   * Optional single-shot endpoint returning the whole range at once (e.g.
+   * teamDailyActivityAggregatedCall). Called with `args` as-is (no page).
+   * On success pagination is skipped entirely; on failure the hook falls
+   * back to the paginated flow.
+   */
+  aggregatedFetchFn?: (...args: any[]) => Promise<DailyActivityResponse>;
 }
 
 interface UsePaginatedDailyActivityReturn {
@@ -68,7 +76,12 @@ const EMPTY_DATA: DailyActivityResponse = {
   },
 };
 
-function sumMetadata(a: Record<string, any>, b: Record<string, any>): Record<string, any> {
+/**
+ * Combine two pages of metadata. Only keys in SUMMABLE_METADATA_KEYS are added; anything
+ * else keeps the first page's value, so a total the backend adds later is silently frozen
+ * at page 1 until it is listed above. Exported so that contract can be tested directly.
+ */
+export function sumMetadata(a: Record<string, any>, b: Record<string, any>): Record<string, any> {
   const result = { ...a };
   for (const key of SUMMABLE_METADATA_KEYS) {
     result[key] = (a[key] || 0) + (b[key] || 0);
@@ -90,6 +103,7 @@ export function usePaginatedDailyActivity({
   fetchFn,
   args,
   enabled,
+  aggregatedFetchFn,
 }: UsePaginatedDailyActivityParams): UsePaginatedDailyActivityReturn {
   const [data, setData] = useState<DailyActivityResponse>(EMPTY_DATA);
   const [loading, setLoading] = useState(false);
@@ -152,6 +166,20 @@ export function usePaginatedDailyActivity({
       setLoading(true);
       setIsFetchingMore(false);
       setProgress({ currentPage: 1, totalPages: 1 });
+
+      if (aggregatedFetchFn) {
+        try {
+          const aggregated = await aggregatedFetchFn(...currentArgs);
+          if (isStale()) return;
+          setData(aggregated);
+          setProgress({ currentPage: 1, totalPages: 1 });
+          setLoading(false);
+          return;
+        } catch (error) {
+          if (isStale()) return;
+          console.error("Aggregated daily activity failed, falling back to pagination:", error);
+        }
+      }
 
       try {
         // Inject page=1 as the 4th argument.
@@ -233,7 +261,7 @@ export function usePaginatedDailyActivity({
     };
     // argsKey is a stable JSON string so the effect only re-fires when arg values change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, fetchFn, argsKey]);
+  }, [enabled, fetchFn, aggregatedFetchFn, argsKey]);
 
   return { data, loading, isFetchingMore, progress, cancelled, cancel };
 }

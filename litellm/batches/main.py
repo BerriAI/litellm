@@ -22,6 +22,7 @@ from openai.types.batch import BatchRequestCounts
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -104,7 +105,7 @@ def _resolve_timeout(
 @client
 async def acreate_batch(
     completion_window: Literal["24h"],
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"],
     input_file_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     metadata: dict[str, str] | None = None,
@@ -154,7 +155,7 @@ async def acreate_batch(
 @client
 def create_batch(
     completion_window: Literal["24h"],
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
+    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses"],
     input_file_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
     metadata: dict[str, str] | None = None,
@@ -287,7 +288,7 @@ def create_batch(
             if extra_body is not None:
                 extra_body.pop("azure_ad_token", None)
             else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+                get_secret_str("AZURE_AD_TOKEN")
 
             response = azure_batches_instance.create_batch(
                 _is_async=_is_async,
@@ -327,7 +328,7 @@ def create_batch(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_batch", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="create_batch", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -370,7 +371,7 @@ async def aretrieve_batch(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         return response
     except Exception as e:
@@ -436,7 +437,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
         if extra_body is not None:
             extra_body.pop("azure_ad_token", None)
         else:
-            get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+            get_secret_str("AZURE_AD_TOKEN")
 
         response = azure_batches_instance.retrieve_batch(
             _is_async=_is_async,
@@ -498,7 +499,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="retrieve_batch", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="retrieve_batch", url="https://github.com/BerriAI/litellm"),
             ),
         )
     return response
@@ -527,6 +528,7 @@ def retrieve_batch(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
+        add_trusted_model_credentials_to_litellm_params(litellm_params, kwargs)
         if litellm_logging_obj is not None:
             litellm_logging_obj.update_from_kwargs(
                 kwargs=kwargs,
@@ -545,7 +547,7 @@ def retrieve_batch(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -677,7 +679,7 @@ async def alist_batches(
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            response = init_response  # type: ignore
+            response = init_response
 
         return response
     except Exception as e:
@@ -723,7 +725,7 @@ def list_batches(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -755,7 +757,7 @@ def list_batches(
                 max_retries=optional_params.max_retries,
             )
         elif custom_llm_provider == "azure":
-            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
             api_version = optional_params.api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
 
             api_key = (
@@ -770,7 +772,7 @@ def list_batches(
             if extra_body is not None:
                 extra_body.pop("azure_ad_token", None)
             else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+                get_secret_str("AZURE_AD_TOKEN")
 
             response = azure_batches_instance.list_batches(
                 _is_async=_is_async,
@@ -813,7 +815,7 @@ def list_batches(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -824,7 +826,7 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -870,7 +872,7 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] | str = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] | str = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -909,7 +911,7 @@ def cancel_batch(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+            timeout = float(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -959,7 +961,7 @@ def cancel_batch(
             if extra_body is not None:
                 extra_body.pop("azure_ad_token", None)
             else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+                get_secret_str("AZURE_AD_TOKEN")
 
             response = azure_batches_instance.cancel_batch(
                 _is_async=_is_async,
@@ -991,15 +993,20 @@ def cancel_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "bedrock":
+            response = BedrockBatchesHandler.cancel_batch(
+                batch_id=batch_id,
+                **kwargs,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. Only 'openai', 'azure', and 'vertex_ai' are supported.",
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. Only 'openai', 'azure', 'vertex_ai', and 'bedrock' are supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="cancel_batch", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="cancel_batch", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response

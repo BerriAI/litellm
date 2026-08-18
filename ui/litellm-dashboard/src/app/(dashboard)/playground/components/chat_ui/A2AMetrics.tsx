@@ -1,17 +1,19 @@
 import React, { useState } from "react";
-import { Tooltip, Button } from "antd";
 import {
-  CheckCircleOutlined,
-  ClockCircleOutlined,
-  LoadingOutlined,
-  ExclamationCircleOutlined,
-  CopyOutlined,
-  DownOutlined,
-  RightOutlined,
-  LinkOutlined,
-  FileTextOutlined,
-  RobotOutlined,
-} from "@ant-design/icons";
+  Bot,
+  CheckCircle,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  Clock,
+  Copy,
+  FileText,
+  Link,
+  LoaderCircle,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface A2ATaskMetadata {
   taskId?: string;
@@ -21,7 +23,7 @@ export interface A2ATaskMetadata {
     timestamp?: string;
     message?: string;
   };
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 interface A2AMetricsProps {
@@ -33,15 +35,15 @@ interface A2AMetricsProps {
 const getStatusIcon = (state?: string) => {
   switch (state) {
     case "completed":
-      return <CheckCircleOutlined className="text-green-500" />;
+      return <CheckCircle className="size-3 text-green-500" />;
     case "working":
     case "submitted":
-      return <LoadingOutlined className="text-blue-500" />;
+      return <LoaderCircle className="size-3 animate-spin text-blue-500" />;
     case "failed":
     case "canceled":
-      return <ExclamationCircleOutlined className="text-red-500" />;
+      return <CircleAlert className="size-3 text-red-500" />;
     default:
-      return <ClockCircleOutlined className="text-gray-500" />;
+      return <Clock className="size-3 text-gray-500" />;
   }
 };
 
@@ -91,7 +93,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
     <div className="a2a-metrics mt-3 pt-2 border-t border-gray-200 text-xs">
       {/* A2A Metadata Header */}
       <div className="flex items-center mb-2 text-gray-600">
-        <RobotOutlined className="mr-1.5 text-blue-500" />
+        <Bot className="mr-1.5 size-4 text-blue-500" />
         <span className="font-medium text-gray-700">A2A Metadata</span>
       </div>
 
@@ -109,28 +111,33 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
 
         {/* Timestamp */}
         {formattedTime && (
-          <Tooltip title={status?.timestamp}>
-            <span className="flex items-center">
-              <ClockCircleOutlined className="mr-1" />
+          <Tooltip>
+            <TooltipTrigger render={<span className="flex items-center" />}>
+              <Clock className="mr-1 size-3" />
               {formattedTime}
-            </span>
+            </TooltipTrigger>
+            <TooltipContent>{status?.timestamp}</TooltipContent>
           </Tooltip>
         )}
 
         {/* Latency */}
         {totalLatency !== undefined && (
-          <Tooltip title="Total latency">
-            <span className="flex items-center text-blue-600">
-              <ClockCircleOutlined className="mr-1" />
+          <Tooltip>
+            <TooltipTrigger render={<span className="flex items-center text-blue-600" />}>
+              <Clock className="mr-1 size-3" />
               {(totalLatency / 1000).toFixed(2)}s
-            </span>
+            </TooltipTrigger>
+            <TooltipContent>Total latency</TooltipContent>
           </Tooltip>
         )}
 
         {/* Time to first token */}
         {timeToFirstToken !== undefined && (
-          <Tooltip title="Time to first token">
-            <span className="flex items-center text-green-600">TTFT: {(timeToFirstToken / 1000).toFixed(2)}s</span>
+          <Tooltip>
+            <TooltipTrigger render={<span className="flex items-center text-green-600" />}>
+              TTFT: {(timeToFirstToken / 1000).toFixed(2)}s
+            </TooltipTrigger>
+            <TooltipContent>Time to first token</TooltipContent>
           </Tooltip>
         )}
       </div>
@@ -139,95 +146,133 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
       <div className="flex flex-wrap items-center gap-3 text-gray-500 ml-4 mt-1.5">
         {/* Task ID */}
         {taskId && (
-          <Tooltip title={`Click to copy: ${taskId}`}>
-            <span
-              className="flex items-center cursor-pointer hover:text-gray-700"
-              onClick={() => copyToClipboard(taskId)}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  className="h-auto p-0 font-normal text-gray-500 hover:bg-transparent hover:text-gray-700"
+                  onClick={() => copyToClipboard(taskId)}
+                  aria-label={`Copy task ID ${taskId}`}
+                />
+              }
             >
-              <FileTextOutlined className="mr-1" />
+              <FileText className="size-3" />
               Task: {truncateId(taskId)}
-              <CopyOutlined className="ml-1 text-gray-400 hover:text-gray-600" />
-            </span>
+              <Copy className="size-3 text-gray-400" />
+            </TooltipTrigger>
+            <TooltipContent>Click to copy: {taskId}</TooltipContent>
           </Tooltip>
         )}
 
         {/* Context/Session ID */}
         {contextId && (
-          <Tooltip title={`Click to copy: ${contextId}`}>
-            <span
-              className="flex items-center cursor-pointer hover:text-gray-700"
-              onClick={() => copyToClipboard(contextId)}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  className="h-auto p-0 font-normal text-gray-500 hover:bg-transparent hover:text-gray-700"
+                  onClick={() => copyToClipboard(contextId)}
+                  aria-label={`Copy session ID ${contextId}`}
+                />
+              }
             >
-              <LinkOutlined className="mr-1" />
+              <Link className="size-3" />
               Session: {truncateId(contextId)}
-              <CopyOutlined className="ml-1 text-gray-400 hover:text-gray-600" />
-            </span>
+              <Copy className="size-3 text-gray-400" />
+            </TooltipTrigger>
+            <TooltipContent>Click to copy: {contextId}</TooltipContent>
           </Tooltip>
         )}
 
         {/* Details toggle */}
         {(metadata || status?.message) && (
-          <Button
-            type="text"
-            size="small"
-            className="text-xs text-blue-500 hover:text-blue-700 p-0 h-auto"
-            onClick={() => setShowDetails(!showDetails)}
-          >
-            {showDetails ? <DownOutlined /> : <RightOutlined />}
-            <span className="ml-1">Details</span>
-          </Button>
+          <Collapsible open={showDetails} onOpenChange={setShowDetails}>
+            <CollapsibleTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  className="h-auto p-0 text-xs text-blue-500 hover:bg-transparent hover:text-blue-700"
+                />
+              }
+            >
+              {showDetails ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+              Details
+            </CollapsibleTrigger>
+          </Collapsible>
         )}
       </div>
 
       {/* Expandable details panel */}
-      {showDetails && (
-        <div className="mt-2 ml-4 p-3 bg-gray-50 rounded-md text-gray-600 border border-gray-200">
-          {/* Status message */}
-          {status?.message && (
-            <div className="mb-2">
-              <span className="font-medium text-gray-700">Status Message:</span>
-              <span className="ml-2">{status.message}</span>
-            </div>
-          )}
+      <Collapsible open={showDetails} onOpenChange={setShowDetails}>
+        <CollapsibleContent>
+          <div className="mt-2 ml-4 p-3 bg-gray-50 rounded-md text-gray-600 border border-gray-200">
+            {/* Status message */}
+            {status?.message && (
+              <div className="mb-2">
+                <span className="font-medium text-gray-700">Status Message:</span>
+                <span className="ml-2">{status.message}</span>
+              </div>
+            )}
 
-          {/* Full IDs */}
-          {taskId && (
-            <div className="mb-1.5 flex items-center">
-              <span className="font-medium text-gray-700 w-24">Task ID:</span>
-              <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded-sm text-xs font-mono">
-                {taskId}
-              </code>
-              <CopyOutlined
-                className="ml-2 cursor-pointer text-gray-400 hover:text-blue-500"
-                onClick={() => copyToClipboard(taskId)}
-              />
-            </div>
-          )}
+            {/* Full IDs */}
+            {taskId && (
+              <div className="mb-1.5 flex items-center">
+                <span className="font-medium text-gray-700 w-24">Task ID:</span>
+                <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded-sm text-xs font-mono">
+                  {taskId}
+                </code>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="ml-2 text-gray-400 hover:text-blue-500"
+                  onClick={() => copyToClipboard(taskId)}
+                  aria-label={`Copy task ID ${taskId}`}
+                >
+                  <Copy className="size-3" />
+                </Button>
+              </div>
+            )}
 
-          {contextId && (
-            <div className="mb-1.5 flex items-center">
-              <span className="font-medium text-gray-700 w-24">Session ID:</span>
-              <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded-sm text-xs font-mono">
-                {contextId}
-              </code>
-              <CopyOutlined
-                className="ml-2 cursor-pointer text-gray-400 hover:text-blue-500"
-                onClick={() => copyToClipboard(contextId)}
-              />
-            </div>
-          )}
+            {contextId && (
+              <div className="mb-1.5 flex items-center">
+                <span className="font-medium text-gray-700 w-24">Session ID:</span>
+                <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded-sm text-xs font-mono">
+                  {contextId}
+                </code>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="ml-2 text-gray-400 hover:text-blue-500"
+                  onClick={() => copyToClipboard(contextId)}
+                  aria-label={`Copy session ID ${contextId}`}
+                >
+                  <Copy className="size-3" />
+                </Button>
+              </div>
+            )}
 
-          {/* Metadata fields */}
-          {metadata && Object.keys(metadata).length > 0 && (
-            <div className="mt-3">
-              <span className="font-medium text-gray-700">Custom Metadata:</span>
-              <pre className="mt-1.5 p-2 bg-white border border-gray-200 rounded-sm text-xs font-mono overflow-x-auto whitespace-pre-wrap">
-                {JSON.stringify(metadata, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
+            {/* Metadata fields */}
+            {metadata && Object.keys(metadata).length > 0 && (
+              <div className="mt-3">
+                <span className="font-medium text-gray-700">Custom Metadata:</span>
+                <pre className="mt-1.5 p-2 bg-white border border-gray-200 rounded-sm text-xs font-mono overflow-x-auto whitespace-pre-wrap">
+                  {JSON.stringify(metadata, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 };

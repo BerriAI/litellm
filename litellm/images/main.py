@@ -28,7 +28,7 @@ from litellm.utils import exception_type, get_litellm_params
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
-from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
+from openai.types.audio.transcription_create_params import FileTypes
 
 # BFL handlers
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
@@ -112,7 +112,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         elif isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            response = await init_response  # type: ignore
+            response = await init_response
 
         if response is None:
             raise ValueError("Unable to get Image Response. Please pass a valid llm_provider.")
@@ -207,12 +207,12 @@ def image_generation(
         aimg_generation: Final = kwargs.get("aimg_generation", False)
         litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         logger_fn: Final = kwargs.get("logger_fn", None)
-        mock_response: Final[str | None] = kwargs.get("mock_response", None)  # type: ignore
+        mock_response: Final[str | None] = kwargs.get("mock_response", None)
         proxy_server_request: Final = kwargs.get("proxy_server_request", None)
         azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
         model_info: Final = kwargs.get("model_info", None)
         metadata: Final = kwargs.get("metadata", {})
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         client: Final = kwargs.get("client", None)
         extra_headers: Final = kwargs.get("extra_headers", None)
         headers: Final[dict] = kwargs.get("headers", None) or {}
@@ -223,7 +223,7 @@ def image_generation(
         dynamic_api_key: str | None = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-                model=model,  # type: ignore
+                model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
             )
@@ -315,7 +315,12 @@ def image_generation(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            azure_ad_token: Final = optional_params.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
+            azure_ad_token_param: Final = optional_params.pop("azure_ad_token", None)
+            azure_ad_token: Final = (
+                azure_ad_token_param
+                if isinstance(azure_ad_token_param, str) and azure_ad_token_param
+                else get_secret_str("AZURE_AD_TOKEN")
+            )
 
             # Create azure_ad_token_provider from tenant_id, client_id, client_secret if not already provided
             if azure_ad_token_provider is None:
@@ -479,7 +484,7 @@ def image_generation(
         elif custom_llm_provider == "bedrock":
             if model is None:
                 raise Exception("Model needs to be set for bedrock")
-            model_response = bedrock_image_generation.image_generation(  # type: ignore
+            model_response = bedrock_image_generation.image_generation(
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
@@ -508,7 +513,7 @@ def image_generation(
                     async_custom_client = client
 
                 ## CALL FUNCTION
-                model_response = custom_handler.aimage_generation(  # type: ignore
+                model_response = custom_handler.aimage_generation(
                     model=model,
                     prompt=prompt,
                     api_key=api_key,
@@ -584,7 +589,7 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
                 init_response = ImageResponse(**init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            response = await init_response  # type: ignore
+            response = await init_response
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
@@ -745,7 +750,7 @@ def image_edit(
         non_default_params: Final = {
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         model_info: Final = kwargs.get("model_info", None)
         metadata: Final = kwargs.get("metadata", {})
@@ -860,7 +865,7 @@ def image_edit(
             if model is None:
                 raise Exception("Model needs to be set for bedrock")
             image_edit_request_params.update(non_default_params)
-            return bedrock_image_edit.image_edit(  # type: ignore
+            return bedrock_image_edit.image_edit(
                 model=model,
                 image=images,
                 prompt=prompt,

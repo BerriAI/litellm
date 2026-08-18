@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Form, Select, Input, Steps, Radio, Tag, Divider, Switch, InputNumber, Collapse } from "antd";
-import MessageManager from "@/components/molecules/message_manager";
+import { Modal, Form, Select, Input, Steps, Radio, Tag, Divider, Switch, InputNumber } from "antd";
+import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { Button } from "@tremor/react";
 import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined, InfoCircleOutlined } from "@ant-design/icons";
@@ -47,7 +47,6 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [agentType, setAgentType] = useState<string>("a2a");
   const [agentTypeMetadata, setAgentTypeMetadata] = useState<AgentCreateInfo[]>([]);
-  const [loadingMetadata, setLoadingMetadata] = useState(false);
 
   // Step 3: key assignment state
   const [keyAssignOption, setKeyAssignOption] = useState<"create_new" | "existing_key" | "skip">("create_new");
@@ -82,14 +81,11 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
   // Fetch agent type metadata on mount
   useEffect(() => {
     const fetchMetadata = async () => {
-      setLoadingMetadata(true);
       try {
         const metadata = await getAgentCreateMetadata();
         setAgentTypeMetadata(metadata);
       } catch (error) {
         console.error("Error fetching agent metadata:", error);
-      } finally {
-        setLoadingMetadata(false);
       }
     };
     fetchMetadata();
@@ -245,7 +241,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const handleCreateAgent = async () => {
     if (!accessToken) {
-      MessageManager.error("No access token available");
+      toast.error("No access token available");
       return;
     }
 
@@ -255,7 +251,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       const values = { ...form.getFieldsValue(true) };
       const agentData = buildAgentData(values);
       if (!agentData) {
-        MessageManager.error("Failed to build agent data");
+        toast.error("Failed to build agent data");
         setIsSubmitting(false);
         return;
       }
@@ -331,7 +327,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         setCreatedKeyValue(keyResponse.key || null);
       } else if (keyAssignOption === "existing_key") {
         if (!selectedExistingKey) {
-          MessageManager.error("Please select an existing key to assign");
+          toast.error("Please select an existing key to assign");
           setIsSubmitting(false);
           return;
         }
@@ -348,7 +344,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
     } catch (error) {
       console.error("Error creating agent:", error);
       const errorMessage = error instanceof Error ? error.message : String(error);
-      MessageManager.error(errorMessage ? `Failed to create agent: ${errorMessage}` : "Failed to create agent");
+      toast.error(errorMessage ? `Failed to create agent: ${errorMessage}` : "Failed to create agent");
     } finally {
       setIsSubmitting(false);
     }

@@ -15,8 +15,8 @@ import os
 from collections.abc import Callable
 from typing import Final
 
-import redis  # type: ignore
-import redis.asyncio as async_redis  # type: ignore
+import redis
+import redis.asyncio as async_redis
 
 from litellm import get_secret, get_secret_str
 from litellm._redis_credential_provider import (
@@ -67,12 +67,20 @@ def _init_arg_names(cls: type) -> frozenset[str]:
 
     Keyword-only parameters are included, and the MRO is walked because redis-py splits a
     connection's parameters between ``AbstractConnection`` and its concrete subclasses.
+
+    Each ``__init__`` is unwrapped before introspection: redis-py >= 7.4 decorates
+    ``AbstractConnection.__init__`` with ``@deprecated_args``, whose wrapper is declared
+    ``(self, *args, **kwargs)`` — introspecting the wrapper directly loses every real
+    parameter (``socket_timeout`` included), which silently emptied this allowlist and
+    dropped the socket timeouts from url-configured connections. ``inspect.unwrap``
+    follows the ``__wrapped__`` chain to the true signature and is a no-op on
+    undecorated ``__init__``s.
     """
     return frozenset(
         name
         for klass in inspect.getmro(cls)
         if klass is not object
-        for spec in (inspect.getfullargspec(klass.__init__),)
+        for spec in (inspect.getfullargspec(inspect.unwrap(klass.__init__)),)
         for name in spec.args + spec.kwonlyargs
     )
 
@@ -153,7 +161,7 @@ def _redis_kwargs_from_environment():
 
     return_dict: Final = {}
     for k, v in mapping.items():
-        value = get_secret(k, default_value=None)  # type: ignore
+        value = get_secret(k, default_value=None)
         if value is not None:
             return_dict[v] = value
     return return_dict
@@ -317,7 +325,7 @@ def create_azure_ad_redis_connect_func(
     # AzureADCredentialProvider for refresh-aware token retrieval. The raw
     # client_id/tenant_id/secret are intentionally NOT exposed here — the
     # credential closure already holds them.
-    ad_connect._azure_credential = credential  # type: ignore[attr-defined]
+    ad_connect._azure_credential = credential
     return ad_connect
 
 
@@ -351,7 +359,7 @@ def _get_redis_client_logic(**env_overrides):
     for k, v in env_overrides.items():
         if isinstance(v, str) and v.startswith("os.environ/"):
             v = v.replace("os.environ/", "")
-            value = get_secret(v)  # type: ignore
+            value = get_secret(v)
             env_overrides[k] = value
 
     environment_kwargs: Final = _redis_kwargs_from_environment()
@@ -370,7 +378,7 @@ def _get_redis_client_logic(**env_overrides):
         **env_overrides,
     }
 
-    _startup_nodes: Final[str | list | None] = redis_kwargs.get("startup_nodes", None) or get_secret(  # type: ignore
+    _startup_nodes: Final[str | list | None] = redis_kwargs.get("startup_nodes", None) or get_secret(
         "REDIS_CLUSTER_NODES"
     )
 
@@ -381,7 +389,7 @@ def _get_redis_client_logic(**env_overrides):
     elif _startup_nodes is None:
         redis_kwargs.pop("startup_nodes", None)
 
-    _sentinel_nodes: Final[str | list | None] = redis_kwargs.get("sentinel_nodes", None) or get_secret(  # type: ignore
+    _sentinel_nodes: Final[str | list | None] = redis_kwargs.get("sentinel_nodes", None) or get_secret(
         "REDIS_SENTINEL_NODES"
     )
 
@@ -395,9 +403,7 @@ def _get_redis_client_logic(**env_overrides):
     if _sentinel_password is not None:
         redis_kwargs["sentinel_password"] = _sentinel_password
 
-    _service_name: Final[str | None] = redis_kwargs.get("service_name", None) or get_secret(  # type: ignore
-        "REDIS_SERVICE_NAME"
-    )
+    _service_name: Final[str | None] = redis_kwargs.get("service_name", None) or get_secret("REDIS_SERVICE_NAME")
 
     if _service_name is not None:
         redis_kwargs["service_name"] = _service_name
@@ -412,7 +418,7 @@ def _get_redis_client_logic(**env_overrides):
             service_account=_gcp_service_account, ssl_ca_certs=_gcp_ssl_ca_certs
         )
         # Store GCP service account in redis_connect_func for async cluster access
-        redis_kwargs["redis_connect_func"]._gcp_service_account = _gcp_service_account  # type: ignore[attr-defined]
+        redis_kwargs["redis_connect_func"]._gcp_service_account = _gcp_service_account
 
         # Remove GCP-specific kwargs that shouldn't be passed to Redis client
         redis_kwargs.pop("gcp_service_account", None)
@@ -449,7 +455,7 @@ def _get_redis_client_logic(**env_overrides):
         # `create_azure_ad_redis_connect_func`; the raw client_id/tenant_id/secret
         # are intentionally NOT exposed on the function to avoid leaking
         # credentials via inspection or logging.
-        redis_kwargs["redis_connect_func"]._azure_redis_ad_token = True  # type: ignore[attr-defined]
+        redis_kwargs["redis_connect_func"]._azure_redis_ad_token = True
 
     # Always remove Azure-specific kwargs that shouldn't be passed to Redis client
     redis_kwargs.pop("azure_redis_ad_token", None)
@@ -481,7 +487,7 @@ def _get_redis_client_logic(**env_overrides):
 
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
-    _redis_cluster_nodes_in_env: Final[str | None] = get_secret("REDIS_CLUSTER_NODES")  # type: ignore
+    _redis_cluster_nodes_in_env: Final[str | None] = get_secret("REDIS_CLUSTER_NODES")
     if _redis_cluster_nodes_in_env is not None:
         try:
             redis_kwargs["startup_nodes"] = json.loads(_redis_cluster_nodes_in_env)
@@ -505,7 +511,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
         new_startup_nodes.append(ClusterNode(**item))
 
     cluster_kwargs.pop("startup_nodes", None)
-    return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)  # type: ignore
+    return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)
 
 
 def _get_redis_sentinel_connection_kwargs(redis_kwargs: dict) -> dict:
@@ -638,7 +644,7 @@ def get_redis_async_client(
         # Create async RedisCluster with IAM token as password if available
         cluster_client: Final = async_redis.RedisCluster(
             startup_nodes=new_startup_nodes,
-            **cluster_kwargs,  # type: ignore
+            **cluster_kwargs,
         )
 
         return cluster_client

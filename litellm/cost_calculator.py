@@ -26,11 +26,11 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _generic_cost_per_character,
     _get_regional_uplift_multiplier,
     _get_service_tier_cost_key,
-    _parse_prompt_tokens_details,
     calculate_cost_component,
     generic_cost_per_token,
     get_billable_input_tokens,
     get_token_type_cost_breakdown,
+    parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
 from litellm.llms.anthropic.cost_calculation import (
@@ -329,7 +329,7 @@ def cost_per_token(
     response: Any | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
-) -> tuple[float, float]:  # type: ignore
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -645,7 +645,11 @@ def cost_per_token(
     else:
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
 
-        if (model_info.get("input_cost_per_token") or 0.0) > 0 or (model_info.get("output_cost_per_token") or 0.0) > 0:
+        if (
+            (model_info.get("input_cost_per_token") or 0.0) > 0
+            or (model_info.get("output_cost_per_token") or 0.0) > 0
+            or model_info.get("tiered_pricing") is not None
+        ):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
@@ -878,6 +882,8 @@ def _get_usage_object(
         return None
     if isinstance(usage_obj, Usage):
         return usage_obj
+    elif isinstance(usage_obj, dict) and litellm.AnthropicConfig.is_anthropic_usage_object(usage_obj):
+        return litellm.AnthropicConfig().calculate_usage(usage_object=usage_obj, reasoning_content=None)
     elif (
         usage_obj is not None
         and (isinstance(usage_obj, dict) or isinstance(usage_obj, ResponseAPIUsage))
@@ -1249,7 +1255,13 @@ def completion_cost(
                     else:
                         _usage = usage_obj
 
-                    if ResponseAPILoggingUtils._is_response_api_usage(_usage):
+                    if litellm.AnthropicConfig.is_anthropic_usage_object(_usage):
+                        _usage = (
+                            litellm.AnthropicConfig()
+                            .calculate_usage(usage_object=_usage, reasoning_content=None)
+                            .model_dump()
+                        )
+                    elif ResponseAPILoggingUtils._is_response_api_usage(_usage):
                         _usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
                             _usage
                         ).model_dump()
@@ -1514,7 +1526,7 @@ def completion_cost(
                 # see https://replicate.com/pricing
                 elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
                     # for unmapped replicate model, default to replicate's time tracking logic
-                    return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
+                    return get_replicate_completion_pricing(completion_response, total_time)
 
                 if model is None:
                     raise ValueError(
@@ -2148,10 +2160,10 @@ def batch_cost_calculator(
     output_cost_per_token: Final = model_info.get("output_cost_per_token")
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
-    if input_cost_per_token_batches:
+    if input_cost_per_token_batches is not None:
         total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
     elif input_cost_per_token:
-        details: Final = _parse_prompt_tokens_details(usage)
+        details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
         cache_creation_tokens: Final = details["cache_creation_tokens"]
 
@@ -2168,7 +2180,7 @@ def batch_cost_calculator(
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
-    if output_cost_per_token_batches:
+    if output_cost_per_token_batches is not None:
         total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
     elif output_cost_per_token:
         total_completion_cost = (

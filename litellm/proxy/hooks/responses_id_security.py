@@ -256,7 +256,7 @@ class ResponsesIDSecurity(CustomLogger):
             )
         return response
 
-    async def async_post_call_streaming_iterator_hook(  # type: ignore
+    async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
     ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
         from litellm.proxy.proxy_server import general_settings

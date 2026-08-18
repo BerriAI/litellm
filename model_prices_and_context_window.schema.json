@@ -671,6 +671,9 @@
         "supports_tool_choice": {
           "type": "boolean"
         },
+        "supports_tool_search": {
+          "type": "boolean"
+        },
         "supports_url_context": {
           "type": "boolean"
         },
@@ -725,6 +728,10 @@
                 "minimum": 0
               },
               "cache_read_input_token_cost": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cache_creation_input_token_cost": {
                 "type": "number",
                 "minimum": 0
               },

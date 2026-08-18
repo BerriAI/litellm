@@ -1,8 +1,18 @@
-import { Form, Modal, Input } from "antd";
-import MessageManager from "@/components/molecules/message_manager";
+import { Modal } from "antd";
 import { useEffect } from "react";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { z } from "zod/v4";
+
 import { useCloudZeroCreate } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroCreate";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Input } from "@/components/ui/input";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toast } from "@/lib/toast";
+
+import { CloudZeroApiKeyInput, labelWithHint } from "./CloudZeroFormControls";
+import { buildCloudZeroPayload, EMPTY_CLOUDZERO_FORM_VALUES, type CloudZeroFormValues } from "./cloudZeroPayload";
 
 interface CloudZeroCreationModalProps {
   open: boolean;
@@ -10,50 +20,38 @@ interface CloudZeroCreationModalProps {
   onCancel: () => void;
 }
 
+const createSchema = z.object({
+  api_key: z.string().min(1, "Please enter your CloudZero API key"),
+  connection_id: z.string().min(1, "Please enter your CloudZero connection ID"),
+  timezone: z.string(),
+});
+
 export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZeroCreationModalProps) {
   const { accessToken } = useAuthorized();
-  const [form] = Form.useForm();
+  const form = useZodForm(createSchema, { defaultValues: EMPTY_CLOUDZERO_FORM_VALUES });
   const createMutation = useCloudZeroCreate(accessToken || "");
 
   useEffect(() => {
     if (open) {
-      form.resetFields();
+      form.reset(EMPTY_CLOUDZERO_FORM_VALUES);
     }
   }, [open, form]);
 
-  const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields();
-      createMutation.mutate(
-        {
-          connection_id: values.connection_id,
-          timezone: values.timezone || "UTC",
-          ...(values.api_key && { api_key: values.api_key }),
-        },
-        {
-          onSuccess: () => {
-            MessageManager.success("CloudZero integration created successfully");
-            form.resetFields();
-            onOk();
-          },
-          onError: (error: any) => {
-            if (error?.errorFields) {
-              return;
-            }
-            MessageManager.error(error?.message || "Failed to create CloudZero integration");
-          },
-        },
-      );
-    } catch (error: any) {
-      if (error?.errorFields) {
-        return;
-      }
-      MessageManager.error(error?.message || "Failed to create CloudZero integration");
-    }
+  const handleSubmit = (values: CloudZeroFormValues) => {
+    createMutation.mutate(buildCloudZeroPayload(values), {
+      onSuccess: () => {
+        toast.success("CloudZero integration created successfully");
+        form.reset(EMPTY_CLOUDZERO_FORM_VALUES);
+        onOk();
+      },
+      onError: (error: Error) => {
+        toast.error(error.message || "Failed to create CloudZero integration");
+      },
+    });
   };
 
   const handleCancel = () => {
-    form.resetFields();
+    form.reset(EMPTY_CLOUDZERO_FORM_VALUES);
     onCancel();
   };
 
@@ -61,7 +59,7 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
     <Modal
       title="Create CloudZero Integration"
       open={open}
-      onOk={handleSubmit}
+      onOk={() => void form.handleSubmit(handleSubmit)()}
       onCancel={handleCancel}
       confirmLoading={createMutation.isPending}
       okText={createMutation.isPending ? "Creating..." : "Create"}
@@ -73,29 +71,27 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
         disabled: createMutation.isPending,
       }}
     >
-      <Form form={form} layout="vertical" onFinish={handleSubmit}>
-        <Form.Item
-          label="CloudZero API Key"
-          name="api_key"
-          rules={[{ required: true, message: "Please enter your CloudZero API key" }]}
-        >
-          <Input.Password placeholder="Enter your CloudZero API key" />
-        </Form.Item>
-        <Form.Item
-          label="Connection ID"
-          name="connection_id"
-          rules={[{ required: true, message: "Please enter your CloudZero connection ID" }]}
-        >
-          <Input placeholder="Enter your CloudZero connection ID" />
-        </Form.Item>
-        <Form.Item
-          label="Timezone"
-          name="timezone"
-          tooltip="Timezone for date handling (defaults to UTC if not provided)"
-        >
-          <Input placeholder="UTC" />
-        </Form.Item>
-      </Form>
+      <TooltipProvider>
+        <form onSubmit={(event) => event.preventDefault()} noValidate>
+          <FieldGroup>
+            <FormField control={form.control} name="api_key" label="CloudZero API Key">
+              {({ ref, ...field }) => (
+                <CloudZeroApiKeyInput {...field} ref={ref} placeholder="Enter your CloudZero API key" />
+              )}
+            </FormField>
+            <FormField control={form.control} name="connection_id" label="Connection ID">
+              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="Enter your CloudZero connection ID" />}
+            </FormField>
+            <FormField
+              control={form.control}
+              name="timezone"
+              label={labelWithHint("Timezone", "Timezone for date handling (defaults to UTC if not provided)")}
+            >
+              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="UTC" />}
+            </FormField>
+          </FieldGroup>
+        </form>
+      </TooltipProvider>
     </Modal>
   );
 }

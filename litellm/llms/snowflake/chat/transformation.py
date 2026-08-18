@@ -172,11 +172,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                     system_parts.append("\n".join(b.get("text", "") for b in content if b.get("type") == "text"))
             elif role == "assistant":
                 tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
-                if tool_calls:  # type: ignore[truthy-bool]
+                if tool_calls:
                     content_blocks: list[dict[str, Any]] = []
                     if content:
                         content_blocks.append({"type": "text", "text": content})
-                    for tc in tool_calls:  # type: ignore[attr-defined]
+                    for tc in tool_calls:
                         func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
                         tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
                         func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")
@@ -436,7 +436,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         )
 
         model_response.choices = [choice]
-        model_response.usage = usage  # type: ignore[attr-defined]
+        model_response.usage = usage
         model_response.model = "snowflake/" + response_json.get("model", model)
         model_response.id = response_json.get("id", "")
 
