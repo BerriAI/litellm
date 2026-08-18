@@ -608,6 +608,42 @@ describe("UserEditView", () => {
       expect(onSubmit.mock.calls[0][0].max_budget).toBe("42.57");
     });
 
+    it("should still submit when the loaded user has null instead of missing optional fields", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(
+        <UserEditView
+          {...defaultProps}
+          onSubmit={onSubmit}
+          userData={{
+            user_id: "user-null",
+            user_info: {
+              user_email: "null@example.com",
+              user_alias: null,
+              user_role: null,
+              models: null,
+              max_budget: null,
+              budget_duration: null,
+              metadata: null,
+            },
+          }}
+        />,
+      );
+
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        user_id: "user-null",
+        user_email: "null@example.com",
+        user_alias: null,
+        user_role: null,
+        budget_duration: null,
+        max_budget: null,
+      });
+    });
+
     it("should keep the budget input's native step constraint armed", async () => {
       renderWithProviders(<UserEditView {...defaultProps} />);
 

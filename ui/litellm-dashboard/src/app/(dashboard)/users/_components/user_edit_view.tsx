@@ -38,14 +38,17 @@ const MCP_SELECTION_SHAPE = z.object({
   toolsets: z.array(z.string()),
 });
 
+// The proxy stores unset user fields as null rather than leaving them out, and
+// antd forwarded whatever it was handed, so nullish is what keeps a loaded user
+// editable at all.
 const userEditShape = {
-  user_id: z.string().optional(),
-  user_email: z.string().optional(),
-  user_alias: z.string().optional(),
-  user_role: z.string().optional(),
+  user_id: z.string().nullish(),
+  user_email: z.string().nullish(),
+  user_alias: z.string().nullish(),
+  user_role: z.string().nullish(),
   models: z.array(z.string()),
-  budget_duration: z.string().optional(),
-  metadata: z.string().optional(),
+  budget_duration: z.string().nullish(),
+  metadata: z.string().nullish(),
   mcp_servers_and_groups: MCP_SELECTION_SHAPE.optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
 };
@@ -98,7 +101,7 @@ const toFormValues = (
 
 type ParsedMetadata = { ok: true; value: unknown } | { ok: false };
 
-const parseMetadata = (metadata: string | undefined): ParsedMetadata => {
+const parseMetadata = (metadata: string | null | undefined): ParsedMetadata => {
   if (!metadata) {
     return { ok: true, value: metadata };
   }
