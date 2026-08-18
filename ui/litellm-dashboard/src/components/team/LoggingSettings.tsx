@@ -66,12 +66,6 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
   disabledCallbacks = [],
   onDisabledCallbacksChange,
 }) => {
-  // Get callbacks that support team and key logging
-  const supportedCallbacks = Object.entries(callbackInfo)
-    .filter(([_, info]) => info.supports_key_team_logging)
-    .map(([name, _]) => name);
-
-  // Get all available callbacks for disabled selection
   const allCallbacks = Object.keys(callbackInfo);
 
   const handleChange = (newValue: LoggingConfig[]) => {
@@ -139,7 +133,14 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
 
     const dynamicParams = callbackInfo[callbackDisplayName]?.dynamic_params || {};
 
-    if (Object.keys(dynamicParams).length === 0) return null;
+    if (Object.keys(dynamicParams).length === 0) {
+      return (
+        <div className="mt-6 pt-4 border-t border-gray-100 text-xs text-gray-500">
+          {callbackDisplayName} reads its credentials from the proxy environment/config, so there is nothing to fill in
+          here.
+        </div>
+      );
+    }
 
     return (
       <div className="mt-6 pt-4 border-t border-gray-100">
@@ -302,7 +303,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                       className="w-full"
                       optionLabelProp="label"
                     >
-                      {supportedCallbacks.map((callbackName) => {
+                      {allCallbacks.map((callbackName) => {
                         const description = callbackInfo[callbackName]?.description;
                         return (
                           <Option key={callbackName} value={callbackName} label={callbackName}>

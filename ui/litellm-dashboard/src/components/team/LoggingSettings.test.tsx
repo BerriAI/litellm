@@ -1,12 +1,108 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, fireEvent } from "../../../tests/test-utils";
+import { renderWithProviders, screen, fireEvent, within } from "../../../tests/test-utils";
+import { CALLBACK_CONFIGS } from "../callback_info_helpers";
 import LoggingSettings from "./LoggingSettings";
+
+const STANDARD_CALLBACK_DYNAMIC_PARAMS_ACCEPTED_BY_PROXY = [
+  "langfuse_public_key",
+  "langfuse_secret",
+  "langfuse_secret_key",
+  "langfuse_host",
+  "langfuse_prompt_version",
+  "gcs_bucket_name",
+  "gcs_path_service_account",
+  "langsmith_api_key",
+  "langsmith_project",
+  "langsmith_base_url",
+  "langsmith_sampling_rate",
+  "langsmith_tenant_id",
+  "humanloop_api_key",
+  "arize_api_key",
+  "arize_space_key",
+  "arize_space_id",
+  "posthog_api_key",
+  "posthog_api_url",
+  "wandb_api_key",
+  "weave_project_id",
+  "dd_api_key",
+  "dd_site",
+  "dd_agent_host",
+  "dd_agent_port",
+  "turn_off_message_logging",
+  "litellm_disabled_callbacks",
+];
+
+const openIntegrationTypeDropdown = () => {
+  const integrationTypeLabel = screen.getByText("Integration Type");
+  const select = within(integrationTypeLabel.parentElement as HTMLElement).getByRole("combobox");
+  fireEvent.mouseDown(select);
+};
+
+const integrationOption = (displayName: string): HTMLElement => {
+  const options = Array.from(document.querySelectorAll(".ant-select-item-option"));
+  const option = options.find((element) => element.textContent?.endsWith(displayName));
+  if (!option) {
+    throw new Error(`No integration option for ${displayName} in [${options.map((o) => o.textContent).join(", ")}]`);
+  }
+  return option as HTMLElement;
+};
 
 describe("LoggingSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("only declares callback vars the proxy accepts for key/team logging", () => {
+    const declaredParams = CALLBACK_CONFIGS.flatMap((config) => Object.keys(config.dynamic_params));
+
+    expect(declaredParams.length).toBeGreaterThan(0);
+    expect(
+      declaredParams.filter((param) => !STANDARD_CALLBACK_DYNAMIC_PARAMS_ACCEPTED_BY_PROXY.includes(param)),
+    ).toEqual([]);
+  });
+
+  it("offers integrations whose credentials only come from the proxy config", () => {
+    const initialValue = [{ callback_name: "", callback_type: "success", callback_vars: {} }];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+    openIntegrationTypeDropdown();
+
+    for (const displayName of ["Arize Phoenix", "Azure Blob Storage", "Datadog", "Datadog LLM Observability"]) {
+      expect(integrationOption(displayName)).toBeInTheDocument();
+    }
+  });
+
+  it("stores the internal callback name when a newly added integration is selected", () => {
+    const mockOnChange = vi.fn();
+    const initialValue = [{ callback_name: "", callback_type: "success", callback_vars: {} }];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
+    openIntegrationTypeDropdown();
+    fireEvent.click(integrationOption("Arize Phoenix"));
+
+    expect(mockOnChange).toHaveBeenCalledWith([
+      { callback_name: "arize_phoenix", callback_type: "success", callback_vars: {} },
+    ]);
+  });
+
+  it("renders per-key credential inputs for an integration that supports them", () => {
+    const initialValue = [{ callback_name: "gcs_bucket", callback_type: "success", callback_vars: {} }];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    expect(screen.getByPlaceholderText("os.environ/GCS_BUCKET_NAME")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("os.environ/GCS_PATH_SERVICE_ACCOUNT")).toBeInTheDocument();
+  });
+
+  it("explains where credentials come from for an integration without per-key credentials", () => {
+    const initialValue = [{ callback_name: "arize_phoenix", callback_type: "success", callback_vars: {} }];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    expect(screen.queryByText("Integration Parameters")).toBeNull();
+    expect(screen.getByText(/reads its credentials from the proxy environment\/config/)).toBeInTheDocument();
   });
 
   it("passes a number to updateCallbackVar when user inputs a number in NumericalInput", async () => {
