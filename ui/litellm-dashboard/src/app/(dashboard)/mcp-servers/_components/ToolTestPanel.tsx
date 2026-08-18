@@ -7,7 +7,7 @@ import { resolveLogoSrc } from "@/lib/assetPaths";
 import { Form, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { X } from "lucide-react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 const isPlainObject = (value: unknown): value is Record<string, any> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -282,18 +282,18 @@ export function ToolTestPanel({
   const handleCopyResult = async () => {
     const success = await copyToClipboard(JSON.stringify(result, null, 2));
     if (success) {
-      NotificationsManager.success("Result copied to clipboard");
+      toast.success("Result copied to clipboard");
     } else {
-      NotificationsManager.fromBackend("Failed to copy result");
+      toast.fromError("Failed to copy result");
     }
   };
 
   const handleCopyToolName = async () => {
     const success = await copyToClipboard(tool.name);
     if (success) {
-      NotificationsManager.success("Tool name copied to clipboard");
+      toast.success("Tool name copied to clipboard");
     } else {
-      NotificationsManager.fromBackend("Failed to copy tool name");
+      toast.fromError("Failed to copy tool name");
     }
   };
 

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { setSecureItem } from "@/utils/secureStorage";
 import * as networking from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { selectAntOption } from "./testUtils";
 
 vi.mock("@/components/networking", () => ({
@@ -13,13 +13,6 @@ vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
   storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
-}));
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 const mockOauth: {
@@ -1390,10 +1383,8 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     await waitFor(() => {
       expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalled();
     });
-    expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-      "MCP Server updated, but failed to persist OAuth token: write failed",
-    );
-    expect(NotificationsManager.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
+    expect(toast.fromError).toHaveBeenCalledWith("MCP Server updated, but failed to persist OAuth token: write failed");
+    expect(toast.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
     expect(onSuccess).not.toHaveBeenCalled();
   });
 

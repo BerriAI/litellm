@@ -19,6 +19,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import HTTPException
+from prisma.errors import TableNotFoundError
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
@@ -293,6 +294,44 @@ async def test_detail_breaks_units_down_by_day_team_and_key():
     }
     units_where = prisma.db.litellm_dailyguardrailusageunits.find_many.call_args.kwargs["where"]
     assert units_where == {"guardrail_id": {"in": ["yaml-pii", "yaml-1"]}, "date": {"gte": START, "lte": END}}
+
+
+def _units_table_missing() -> TableNotFoundError:
+    return TableNotFoundError(
+        data={"user_facing_error": {"meta": {"table": "public.LiteLLM_DailyGuardrailUsageUnits"}}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_overview_degrades_units_to_empty_when_units_table_is_missing():
+    prisma = _prisma(metrics=[_metric("yaml-pii", requests=4, passed=3, blocked=1)])
+    prisma.db.litellm_dailyguardrailusageunits.find_many = AsyncMock(side_effect=_units_table_missing())
+    handler = _config_handler(_yaml_guardrail(guardrail_id="yaml-uuid", name="yaml-pii"))
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_overview(start_date=START, end_date=END, user_api_key_dict=ADMIN)
+    row = next(r for r in resp.rows if r.id == "yaml-uuid")
+    assert (row.requestsEvaluated, row.usageUnits) == (4, {})
+    assert (resp.totalRequests, resp.totalBlocked, resp.totalUsageUnits) == (4, 1, {})
+
+
+@pytest.mark.asyncio
+async def test_detail_degrades_units_to_empty_when_units_table_is_missing():
+    prisma = _prisma(metrics=[_metric("yaml-pii", requests=4, passed=3, blocked=1)])
+    prisma.db.litellm_dailyguardrailusageunits.find_many = AsyncMock(side_effect=_units_table_missing())
+    handler = _config_handler(_yaml_guardrail())
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_detail(
+            guardrail_id="yaml-1", start_date=START, end_date=END, user_api_key_dict=ADMIN
+        )
+    assert (resp.requestsEvaluated, resp.failRate) == (4, 25.0)
+    assert (resp.usage_units, list(resp.usage_units_daily), resp.usage_units_by_team, resp.usage_units_by_key) == (
+        {},
+        [],
+        {},
+        {},
+    )
 
 
 # ---- logs -------------------------------------------------------------------
