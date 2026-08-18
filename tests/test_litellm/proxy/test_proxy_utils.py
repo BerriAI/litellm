@@ -616,6 +616,74 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         assert estimated.prompt_tokens > 0
         assert estimated.completion_tokens == 0
 
+    def _dispatched_request_data(self, messages, optional_params):
+        from datetime import datetime
+
+        return {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": messages,
+                    "optional_params": optional_params,
+                }
+            ),
+            "metadata": {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_anthropic_system_prompt_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        system_prompt = "You are a verbose historian who narrates every fact in exhaustive detail."
+        messages = [{"role": "user", "content": "write a short essay"}]
+        request_data = self._dispatched_request_data(messages, {"system": system_prompt, "max_tokens": 100})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", messages=messages) + litellm_module.token_counter(
+            model="gpt-3.5-turbo", text=system_prompt
+        )
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_anthropic_system_text_blocks_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        system_blocks = [
+            {"type": "text", "text": "part one of the system prompt. "},
+            {"type": "text", "text": "part two of the system prompt."},
+        ]
+        messages = [{"role": "user", "content": "write a short essay"}]
+        request_data = self._dispatched_request_data(messages, {"system": system_blocks})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", messages=messages) + litellm_module.token_counter(
+            model="gpt-3.5-turbo", text="part one of the system prompt. part two of the system prompt."
+        )
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_responses_instructions_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        instructions = "Answer every question as a meticulous archivist."
+        request_data = self._dispatched_request_data("summarize the archive", {"instructions": instructions})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", text="summarize the archive"
+        ) + litellm_module.token_counter(model="gpt-3.5-turbo", text=instructions)
+        assert estimated.prompt_tokens == expected
+
 
 from typing import cast
 
