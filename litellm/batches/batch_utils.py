@@ -86,7 +86,7 @@ async def _handle_completed_batch(
         return BatchCostUsageResult(
             cost=0.0,
             usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
-            models=[],
+            models=[],  # mutable-ok: no output file means no model was ever priced; BatchCostUsageResult.models requires list[str]
             successful_requests=0,
             failed_requests=await _count_error_file_failed_requests(
                 batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params

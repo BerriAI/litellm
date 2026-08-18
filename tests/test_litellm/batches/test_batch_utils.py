@@ -1501,24 +1501,24 @@ async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monke
 
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
 
-    cost, usage, _ = await bu._handle_completed_batch(
+    result = await bu._handle_completed_batch(
         _batch("of"),
         custom_llm_provider="bedrock",
         model_name="bedrock/global.anthropic.claude-sonnet-4-6",
     )
 
-    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (1800, 1000, 2800)
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (1800, 1000, 2800)
     # 3e-06 / 1.5e-05 on-demand, halved for batch.
-    assert cost == pytest.approx(1800 * 3e-06 / 2 + 1000 * 1.5e-05 / 2)
+    assert result.cost == pytest.approx(1800 * 3e-06 / 2 + 1000 * 1.5e-05 / 2)
 
     # The response model alone cannot price a bedrock batch: this is the $0 bug.
-    zero_cost, zero_usage, _ = await bu._handle_completed_batch(
+    zero_result = await bu._handle_completed_batch(
         _batch("of"),
         custom_llm_provider="bedrock",
         model_name=None,
     )
-    assert zero_cost == 0.0
-    assert zero_usage.total_tokens == 2800
+    assert zero_result.cost == 0.0
+    assert zero_result.usage.total_tokens == 2800
 
 
 @pytest.mark.asyncio
@@ -1531,7 +1531,7 @@ async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch) -> 
 
     monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
 
-    free_cost, _, _ = await bu._handle_completed_batch(
+    free_result = await bu._handle_completed_batch(
         _batch("of"),
         custom_llm_provider="vertex_ai",
         model_name="vertex_ai/gemini-2.5-flash",
@@ -1542,15 +1542,15 @@ async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch) -> 
             "output_cost_per_token_batches": 0.0,
         },
     )
-    assert free_cost == 0.0
+    assert free_result.cost == 0.0
 
-    billed_cost, _, _ = await bu._handle_completed_batch(
+    billed_result = await bu._handle_completed_batch(
         _batch("of"),
         custom_llm_provider="vertex_ai",
         model_name="vertex_ai/gemini-2.5-flash",
         model_info=None,
     )
-    assert billed_cost > 0.0
+    assert billed_result.cost > 0.0
 
 
 # =========================================================================== #
