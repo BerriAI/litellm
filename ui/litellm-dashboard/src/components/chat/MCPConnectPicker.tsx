@@ -2,7 +2,8 @@ import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
+import { Logo } from "@/components/molecules/logo/Logo";
 import { fetchMCPServers, listMCPTools } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
 
@@ -55,12 +56,12 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
     try {
       const result = await listMCPTools(accessToken, serverName);
       if (result?.error) {
-        MessageManager.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
+        toast.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
         return;
       }
       onChange([...selectedServers, serverName]);
     } catch {
-      MessageManager.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
+      toast.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
     } finally {
       setTogglingOn((prev) => {
         const next = new Set(prev);
@@ -98,13 +99,10 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
           return (
             <div key={server.server_id} className="flex items-start justify-between px-3 py-2 gap-3">
               {server.mcp_info?.logo_url && (
-                <img
+                <Logo
                   src={server.mcp_info.logo_url}
-                  alt={`${name} logo`}
+                  label={name}
                   className="w-6 h-6 rounded-md object-contain shrink-0 mt-0.5"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = "none";
-                  }}
                 />
               )}
               <div className="flex-1 min-w-0">

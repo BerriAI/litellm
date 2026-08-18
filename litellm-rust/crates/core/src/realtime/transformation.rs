@@ -1,5 +1,5 @@
-use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
 use crate::CoreResult;
+use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
 
 pub trait RealtimeProviderConfig {
     /// Build the upstream WebSocket URL (e.g. `wss://api.openai.com/v1/realtime?model=…`).

@@ -3,12 +3,13 @@ import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBounci
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { useWorker } from "@/hooks/useWorker";
 import { getProxyBaseUrl } from "@/components/networking";
+import { migratedHref } from "@/utils/migratedPages";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
+import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
-import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
-import { Tag } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
 import React from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
@@ -56,7 +57,7 @@ const Navbar: React.FC<NavbarProps> = ({
     clearStoredReturnUrl();
     localStorage.removeItem("litellm_selected_worker_id");
     localStorage.removeItem("litellm_worker_url");
-    window.location.href = `/ui/login?worker=${encodeURIComponent(workerId)}`;
+    window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
   };
 
   return (
@@ -70,12 +71,18 @@ const Navbar: React.FC<NavbarProps> = ({
                 className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
                 title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
-                <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
+                <span className="text-lg">
+                  {sidebarCollapsed ? (
+                    <PanelLeftOpen className="size-[18px]" />
+                  ) : (
+                    <PanelLeftClose className="size-[18px]" />
+                  )}
+                </span>
               </button>
             )}
 
             <div className="flex items-center gap-2">
-              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
+              <Link href={migratedHref("")} className="flex items-center">
                 <div className="relative">
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
                     <img
@@ -97,7 +104,7 @@ const Navbar: React.FC<NavbarProps> = ({
                       🌑
                     </span>
                   )}
-                  <Tag className="relative z-10 cursor-pointer text-xs font-medium">
+                  <Badge variant="outline" className="relative z-10 cursor-pointer text-xs font-medium">
                     <a
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"
@@ -106,7 +113,7 @@ const Navbar: React.FC<NavbarProps> = ({
                     >
                       v{version}
                     </a>
-                  </Tag>
+                  </Badge>
                 </div>
               )}
             </div>
@@ -137,7 +144,7 @@ const Navbar: React.FC<NavbarProps> = ({
               >
                 Docs
                 {/* Layout parity with Blog chevron — intentional single-level link */}
-                <DownOutlined className="pointer-events-none text-[10px] opacity-0" aria-hidden />
+                <ChevronDown className="pointer-events-none size-2.5 opacity-0" aria-hidden />
               </a>
               <BlogDropdown />
             </nav>

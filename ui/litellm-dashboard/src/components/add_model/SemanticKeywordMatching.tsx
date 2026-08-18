@@ -1,5 +1,5 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Card, InputNumber, Select as AntdSelect, Switch, Tooltip, Typography } from "antd";
+import { InputNumber, Select as AntdSelect, Switch, Tooltip, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 
@@ -15,6 +15,7 @@ interface SemanticKeywordMatchingProps {
   matchThreshold: number;
   onMatchThresholdChange: (threshold: number) => void;
   modelInfo: ModelGroup[];
+  showValidationErrors?: boolean;
 }
 
 const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
@@ -25,14 +26,17 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
   matchThreshold,
   onMatchThresholdChange,
   modelInfo,
+  showValidationErrors = false,
 }) => {
-  const modelOptions = Array.from(new Set(modelInfo.map((model) => model.model_group))).map((model_group) => ({
+  const embeddingModels = modelInfo.filter((model) => model.mode === "embedding");
+  const modelOptions = Array.from(new Set(embeddingModels.map((model) => model.model_group))).map((model_group) => ({
     value: model_group,
     label: model_group,
   }));
+  const embeddingModelMissing = showValidationErrors && !embeddingModel;
 
   return (
-    <Card className="mb-4">
+    <div>
       <div className="flex items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -60,7 +64,13 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
               showSearch
               style={{ width: "100%" }}
               options={modelOptions}
+              status={embeddingModelMissing ? "error" : undefined}
             />
+            {embeddingModelMissing && (
+              <Text type="danger" style={{ fontSize: 12 }}>
+                An embedding model is required
+              </Text>
+            )}
           </div>
           <div>
             <Text className="text-sm font-medium mb-1 block">Minimum match score</Text>
@@ -76,7 +86,7 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
           </div>
         </div>
       )}
-    </Card>
+    </div>
   );
 };
 

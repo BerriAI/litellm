@@ -1,11 +1,10 @@
 import { isAdminRole } from "@/utils/roles";
-import { LoadingOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Text, Title } from "@tremor/react";
-import { Form, Input, Modal, Select, Spin, Table } from "antd";
+import { Form, Input, Modal, Select } from "antd";
 import React, { useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   deleteSearchTool,
   fetchAvailableSearchProviders,
@@ -13,7 +12,7 @@ import {
   updateSearchTool,
 } from "@/components/networking";
 import CreateSearchTool from "./CreateSearchTools";
-import { searchToolColumns } from "./SearchToolColumn";
+import SearchToolTable from "./SearchToolTable";
 import { SearchToolView } from "./SearchToolView";
 import { AvailableSearchProvider, SearchTool } from "./types";
 
@@ -58,34 +57,29 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   const [isEditModalVisible, setEditModalVisible] = useState(false);
   const [form] = Form.useForm();
 
-  const columns = React.useMemo(
-    () =>
-      searchToolColumns(
-        (toolId: string) => {
-          setSelectedToolId(toolId);
-          setEditTool(false);
-        },
-        (toolId: string) => {
-          const tool = searchTools?.find((t) => t.search_tool_id === toolId);
-          if (tool) {
-            form.setFieldsValue({
-              search_tool_name: tool.search_tool_name,
-              search_provider: tool.litellm_params.search_provider,
-              api_key: tool.litellm_params.api_key,
-              api_base: tool.litellm_params.api_base,
-              timeout: tool.litellm_params.timeout,
-              max_retries: tool.litellm_params.max_retries,
-              description: tool.search_tool_info?.description,
-            });
-            setSelectedToolId(toolId);
-            setEditModalVisible(true);
-          }
-        },
-        handleDelete,
-        availableProviders,
-      ),
-    [availableProviders, searchTools, form],
-  );
+  const handleView = (toolId: string) => {
+    setSelectedToolId(toolId);
+    setEditTool(false);
+  };
+
+  const handleEditOpen = (toolId: string) => {
+    const tool = searchTools?.find((t) => t.search_tool_id === toolId);
+    if (!tool) {
+      return;
+    }
+    const editFormValues = {
+      search_tool_name: tool.search_tool_name,
+      search_provider: tool.litellm_params.search_provider,
+      api_key: tool.litellm_params.api_key,
+      api_base: tool.litellm_params.api_base,
+      timeout: tool.litellm_params.timeout,
+      max_retries: tool.litellm_params.max_retries,
+      description: tool.search_tool_info?.description,
+    };
+    form.setFieldsValue(editFormValues);
+    setSelectedToolId(toolId);
+    setEditModalVisible(true);
+  };
 
   function handleDelete(toolId: string) {
     setToolToDelete(toolId);
@@ -99,13 +93,13 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     setIsDeleting(true);
     try {
       await deleteSearchTool(accessToken, toolIdToDelete);
-      NotificationsManager.success("Deleted search tool successfully");
+      toast.success("Deleted search tool successfully");
       setIsDeleteModalOpen(false);
       setToolToDelete(null);
       refetch();
     } catch (error) {
       console.error("Error deleting the search tool:", error);
-      NotificationsManager.error("Failed to delete search tool");
+      toast.error("Failed to delete search tool");
     } finally {
       setIsDeleting(false);
     }
@@ -148,14 +142,14 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       };
 
       await updateSearchTool(accessToken, selectedToolId, searchToolData);
-      NotificationsManager.success("Search tool updated successfully");
+      toast.success("Search tool updated successfully");
       setEditModalVisible(false);
       form.resetFields();
       setSelectedToolId(null);
       refetch();
     } catch (error) {
       console.error("Failed to update search tool:", error);
-      NotificationsManager.error("Failed to update search tool");
+      toast.error("Failed to update search tool");
     }
   };
 
@@ -220,19 +214,14 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       />
     ) : (
       <div className="w-full h-full">
-        <Spin spinning={isLoadingTools} indicator={<LoadingOutlined spin />} size="large">
-          <Table
-            bordered
-            dataSource={searchTools || []}
-            columns={columns}
-            rowKey={(record) => record.search_tool_id || record.search_tool_name}
-            pagination={false}
-            locale={{
-              emptyText: "No search tools configured",
-            }}
-            size="small"
-          />
-        </Spin>
+        <SearchToolTable
+          searchTools={searchTools || []}
+          isLoading={isLoadingTools}
+          availableProviders={availableProviders}
+          onView={handleView}
+          onEdit={handleEditOpen}
+          onDelete={handleDelete}
+        />
       </div>
     );
 

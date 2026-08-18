@@ -142,6 +142,9 @@ spec:
             {{- with .Values.extraEnvVars }}
               {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{- if .Values.billingMetrics.enabled }}
+            {{- include "litellm.billingMetricsEnv" . | nindent 12 }}
+            {{- end }}
             {{- if .Values.migrationJob.enabled }}
             # Schema updates are owned by the dedicated migrations Job; skip
             # the proxy's startup `prisma db push` so N replicas don't race
@@ -220,6 +223,9 @@ spec:
             - name: npm
               mountPath: /.npm
           {{- end }}
+          {{- if .Values.billingMetrics.enabled }}
+            {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
+          {{- end }}
           {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -252,6 +258,9 @@ spec:
             items:
               - key: {{ .Values.proxyConfigMap.key | default "config.yaml" }}
                 path: "config.yaml"
+        {{- if .Values.billingMetrics.enabled }}
+        {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
+        {{- end }}
       {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
       {{- end }}

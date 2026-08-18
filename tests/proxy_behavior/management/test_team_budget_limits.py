@@ -10,14 +10,14 @@ Pins the five helpers
 
 Driven through /team/new + /team/update.
 
-Structural finding pinned here, identical in shape to F1's org aggregate:
-both call sites (lines 985 + 1751) load the org via `get_org_object`
-WITHOUT `include_budget_table=True`, so `org_table.litellm_budget_table`
-is `None` and the org max_budget / org tpm / org rpm guards inside
-`_check_org_team_limits` (lines 641–694, 670–694) silently no-op. The
-`models` subset guard (lines 654–667) IS reachable because it reads
-`org_table.models` directly. The `_check_user_team_limits` guards reach
-all branches through `user_api_key_dict`, no relation include needed.
+Structural finding, updated: /team/new loads the org via `get_org_object`
+WITH `include_budget_table=True`, so the org max_budget / org tpm / org rpm
+guards inside `_check_org_team_limits` are live there and are pinned as
+enforced below. /team/update still loads the org without the budget
+relation, so its budget guards remain no-ops. The `models` subset guard IS
+reachable on both because it reads `org_table.models` directly. The
+`_check_user_team_limits` guards reach all branches through
+`user_api_key_dict`, no relation include needed.
 """
 
 import uuid
@@ -132,48 +132,67 @@ async def test_check_org_team_limits_models_subset(
         headers={"Authorization": f"Bearer {seeder}"},
         json=body,
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"{body!r} → {resp.status_code}: {resp.text}"
+    assert resp.status_code == expected_status, f"{body!r} → {resp.status_code}: {resp.text}"
 
     rows = await prisma.db.litellm_teamtable.find_many(where={"team_id": team_id})
     assert len(rows) == (1 if expected_status == 200 else 0)
 
 
 # ---------------------------------------------------------------------------
-# _check_org_team_limits — budget / tpm / rpm structurally unreachable
-# (org_table.litellm_budget_table is None at guard time). Pin the
-# no-op behavior so a future change that flips include_budget_table=True
-# turns these into reds.
+# _check_org_team_limits — budget / tpm / rpm live on /team/new since its
+# get_org_object call passes include_budget_table=True. (/team/update still
+# loads the org without the budget relation, so its guards remain no-ops.)
 # ---------------------------------------------------------------------------
 
-_ORG_BUDGET_DEAD_SCENARIOS = [
+_ORG_BUDGET_ENFORCED_SCENARIOS = [
     (
-        "org_budget/over_max_budget_unenforced",
+        "org_budget/over_max_budget_rejected",
         {"max_budget": 100, "tpm_limit": None, "rpm_limit": None},
         {"max_budget": 999_999},
+        400,
     ),
     (
-        "org_tpm/over_unenforced",
+        "org_budget/within_max_budget_accepted",
+        {"max_budget": 100, "tpm_limit": None, "rpm_limit": None},
+        {"max_budget": 50},
+        200,
+    ),
+    (
+        "org_tpm/over_rejected",
         {"max_budget": None, "tpm_limit": 100, "rpm_limit": None},
         {"tpm_limit": 999_999},
+        400,
     ),
     (
-        "org_rpm/over_unenforced",
+        "org_tpm/within_accepted",
+        {"max_budget": None, "tpm_limit": 100, "rpm_limit": None},
+        {"tpm_limit": 50},
+        200,
+    ),
+    (
+        "org_rpm/over_rejected",
         {"max_budget": None, "tpm_limit": None, "rpm_limit": 100},
         {"rpm_limit": 999_999},
+        400,
+    ),
+    (
+        "org_rpm/within_accepted",
+        {"max_budget": None, "tpm_limit": None, "rpm_limit": 100},
+        {"rpm_limit": 50},
+        200,
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "org_budget,body_extras",
-    [(b, c) for (_id, b, c) in _ORG_BUDGET_DEAD_SCENARIOS],
-    ids=[s[0] for s in _ORG_BUDGET_DEAD_SCENARIOS],
+    "org_budget,body_extras,expected_status",
+    [(b, c, d) for (_id, b, c, d) in _ORG_BUDGET_ENFORCED_SCENARIOS],
+    ids=[s[0] for s in _ORG_BUDGET_ENFORCED_SCENARIOS],
 )
-async def test_check_org_team_limits_budget_dead_code_pin(
+async def test_check_org_team_limits_budget_enforced(
     org_budget,
     body_extras: Dict[str, Any],
+    expected_status: int,
     proxy_client,
     prisma,
     scratch,
@@ -192,9 +211,9 @@ async def test_check_org_team_limits_budget_dead_code_pin(
             **body_extras,
         },
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == expected_status, f"{body_extras!r} → {resp.status_code}: {resp.text}"
     rows = await prisma.db.litellm_teamtable.find_many(where={"team_id": team_id})
-    assert len(rows) == 1
+    assert len(rows) == (1 if expected_status == 200 else 0)
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +298,9 @@ async def test_check_user_team_limits(
             **body_extras,
         },
     )
-    assert (
-        resp.status_code == expected_status
-    ), f"caps={actor_caps} body={body_extras} → {resp.status_code}: {resp.text}"
+    assert resp.status_code == expected_status, (
+        f"caps={actor_caps} body={body_extras} → {resp.status_code}: {resp.text}"
+    )
 
     rows = await prisma.db.litellm_teamtable.find_many(where={"team_id": team_id})
     assert len(rows) == (1 if expected_status == 200 else 0)
@@ -376,9 +395,7 @@ async def test_proxy_admin_raise_budget_allowed(proxy_client, prisma, scratch):
 async def test_team_admin_remove_budget_cap_blocked(proxy_client, prisma, scratch):
     """A team admin cannot strip the team's cap (max_budget=null); removing the
     ceiling is the strongest possible raise -> proxy-admin only."""
-    caller_cleartext = await _seed_scratch_actor_with_caps(
-        prisma, scratch.prefix, max_budget=100000.0
-    )
+    caller_cleartext = await _seed_scratch_actor_with_caps(prisma, scratch.prefix, max_budget=100000.0)
     team_id = await create_scratch_team(
         prisma,
         team_id=scratch.tag("team"),

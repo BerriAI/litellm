@@ -6,7 +6,14 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import OrganizationInfoView from "./organization_view";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 
-// Mock networking calls used by the component's mutation handlers
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/organizations",
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+
+// Mock networking calls used by the component's mutation handlers. entityLinks -> migratedPages
+// imports serverRootPath from the same module, so the mock must export it too.
 vi.mock("../networking", () => {
   return {
     __esModule: true,
@@ -14,6 +21,7 @@ vi.mock("../networking", () => {
     organizationMemberUpdateCall: vi.fn(),
     organizationMemberDeleteCall: vi.fn(),
     organizationUpdateCall: vi.fn(),
+    serverRootPath: "",
   };
 });
 
@@ -35,10 +43,6 @@ const mockUseOrganization = vi.mocked(useOrganization);
 vi.mock("../object_permissions_view", () => ({
   __esModule: true,
   default: () => <div data-testid="object-permissions-view" />,
-}));
-vi.mock("../molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
 }));
 vi.mock("../team/edit_membership", () => ({
   __esModule: true,
@@ -73,6 +77,7 @@ const mockUseTeams = vi.fn(() => mockUseTeamsData);
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
+  useTeam: () => ({ data: undefined }),
 }));
 
 const mockOrg = {
@@ -115,9 +120,8 @@ test("renders organization view after loading data", async () => {
     />,
   );
 
-  await waitFor(() => {
-    expect(findAllByText("Acme Corp")).toBeTruthy();
-  });
+  const [orgName] = await findAllByText("Acme Corp");
+  expect(orgName).toBeInTheDocument();
 });
 
 test("should display empty state when organization has no members", async () => {
@@ -203,4 +207,86 @@ test("should display team ID as fallback when alias is not found", async () => {
   await waitFor(() => {
     expect(screen.getByText("team_999")).toBeInTheDocument();
   });
+});
+
+test("links each team badge to that team's detail page", async () => {
+  const orgWithTeams = {
+    ...mockOrg,
+    teams: [{ team_id: "team_123" }, { team_id: "team_456" }],
+  };
+  mockUseOrganization.mockReturnValue({ data: orgWithTeams, isLoading: false } as any);
+
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByRole("link", { name: "Engineering Team" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/teams?team=team_123"),
+    );
+    expect(screen.getByRole("link", { name: "Marketing Team" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/teams?team=team_456"),
+    );
+  });
+});
+
+test("model badges stay non-clickable", async () => {
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByText("gpt-4o-mini")).toBeInTheDocument();
+  });
+  expect(screen.queryByRole("link", { name: "gpt-4o-mini" })).not.toBeInTheDocument();
+});
+
+test("should keep unsaved settings edits when switching tabs and back", async () => {
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
+
+  const user = userEvent.setup();
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={true}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await user.click(screen.getByRole("tab", { name: "Settings" }));
+  await user.click(await screen.findByRole("button", { name: /Edit Settings/i }));
+
+  const alias = await screen.findByLabelText(/Organization Name/i);
+  await user.clear(alias);
+  await user.type(alias, "Renamed Org");
+  expect(alias).toHaveValue("Renamed Org");
+
+  await user.click(screen.getByRole("tab", { name: "Overview" }));
+  await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+  expect(screen.getByLabelText(/Organization Name/i)).toHaveValue("Renamed Org");
 });

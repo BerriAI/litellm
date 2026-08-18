@@ -34,13 +34,19 @@ import {
 } from "@/components/networking";
 import { Button as AntdButton, Modal, Select as AntdSelect, Form, Tooltip } from "antd";
 import { rolesWithWriteAccess } from "@/utils/roles";
+import { teamDetailHref } from "@/utils/entityLinks";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CopyIcon, CheckIcon } from "lucide-react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import MCPServerPermissions from "@/components/permissions/MCPServerPermissions";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
+import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 
 interface UserInfoViewProps {
   userId: string;
@@ -91,6 +97,8 @@ export default function UserInfoView({
   const [selectedTeamId, setSelectedTeamId] = useState<string>("");
   const [selectedRole, setSelectedRole] = useState<string>("user");
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
+  const { data: allMcpServers = [] } = useMCPServers();
+  const { data: allMcpToolsets = [] } = useMCPToolsets();
 
   React.useEffect(() => {
     setBaseUrl(getProxyBaseUrl());
@@ -131,7 +139,7 @@ export default function UserInfoView({
         setUserModels(availableModels);
       } catch (error) {
         console.error("Error fetching user data:", error);
-        NotificationsManager.fromBackend("Failed to fetch user data");
+        toast.fromError("Failed to fetch user data");
       } finally {
         setIsLoading(false);
       }
@@ -176,7 +184,7 @@ export default function UserInfoView({
         user_id: userId,
       };
       await teamMemberAddCall(accessToken, selectedTeamId, member);
-      NotificationsManager.success("User added to team successfully");
+      toast.success("User added to team successfully");
       setIsAddTeamModalOpen(false);
       // Re-fetch user data to refresh teams
       const data = await userGetInfoV2(accessToken, userId);
@@ -196,7 +204,7 @@ export default function UserInfoView({
       }
     } catch (error: any) {
       console.error("Error adding user to team:", error);
-      NotificationsManager.fromBackend(error?.message || "Failed to add user to team");
+      toast.fromError(error?.message || "Failed to add user to team");
     } finally {
       setIsAddingTeam(false);
     }
@@ -216,7 +224,7 @@ export default function UserInfoView({
         user_id: userId,
       };
       await teamMemberDeleteCall(accessToken, teamToRemove.team_id, member);
-      NotificationsManager.success("User removed from team successfully");
+      toast.success("User removed from team successfully");
       setIsRemoveTeamModalOpen(false);
       setTeamToRemove(null);
       // Re-fetch user data to refresh teams
@@ -237,7 +245,7 @@ export default function UserInfoView({
       }
     } catch (error: any) {
       console.error("Error removing user from team:", error);
-      NotificationsManager.fromBackend(error?.message || "Failed to remove user from team");
+      toast.fromError(error?.message || "Failed to remove user from team");
     } finally {
       setIsRemovingTeam(false);
     }
@@ -252,16 +260,16 @@ export default function UserInfoView({
 
   const handleResetPassword = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("Access token not found");
+      toast.fromError("Access token not found");
       return;
     }
     try {
-      NotificationsManager.success("Generating password reset link...");
+      toast.success("Generating password reset link...");
       const data = await invitationCreateCall(accessToken, userId);
       setInvitationLinkData(data);
       setIsInvitationLinkModalVisible(true);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to generate password reset link");
+      toast.fromError("Failed to generate password reset link");
     }
   };
 
@@ -270,14 +278,14 @@ export default function UserInfoView({
       if (!accessToken) return;
       setIsDeletingUser(true);
       await userDeleteCall(accessToken, [userId]);
-      NotificationsManager.success("User deleted successfully");
+      toast.success("User deleted successfully");
       if (onDelete) {
         onDelete();
       }
       onClose();
     } catch (error) {
       console.error("Error deleting user:", error);
-      NotificationsManager.fromBackend("Failed to delete user");
+      toast.fromError("Failed to delete user");
     } finally {
       setIsDeleteModalOpen(false);
       setIsDeletingUser(false);
@@ -292,7 +300,18 @@ export default function UserInfoView({
     try {
       if (!accessToken || !userData) return;
 
-      const response = await userUpdateUserCall(accessToken, formValues, null);
+      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers, allMcpToolsets);
+      const userFields = Object.fromEntries(
+        Object.entries(formValues).filter(
+          ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions",
+        ),
+      );
+
+      await userUpdateUserCall(
+        accessToken,
+        mcpEntitlement ? { ...userFields, object_permission: mcpEntitlement } : userFields,
+        null,
+      );
 
       // Update local state with new values
       setUserData({
@@ -303,13 +322,16 @@ export default function UserInfoView({
         max_budget: formValues.max_budget ?? userData.max_budget,
         budget_duration: formValues.budget_duration ?? userData.budget_duration,
         metadata: formValues.metadata ?? userData.metadata,
+        object_permission: mcpEntitlement
+          ? { ...userData.object_permission, ...mcpEntitlement }
+          : userData.object_permission,
       });
 
-      NotificationsManager.success("User updated successfully");
+      toast.success("User updated successfully");
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating user:", error);
-      NotificationsManager.fromBackend("Failed to update user");
+      toast.fromError("Failed to update user");
     }
   };
 
@@ -434,10 +456,10 @@ export default function UserInfoView({
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${formatNumberWithCommas(userData.spend || 0, 4)}</Title>
+                  <Title>${formatNumberWithCommas(userData.spend || 0, 2)}</Title>
                   <Text>
                     of{" "}
-                    {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 4)}` : "Unlimited"}
+                    {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : "Unlimited"}
                   </Text>
                 </div>
               </Card>
@@ -464,7 +486,11 @@ export default function UserInfoView({
                         <TableBody>
                           {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
                             <TableRow key={team.team_id}>
-                              <TableCell>{team.team_alias || team.team_id}</TableCell>
+                              <TableCell>
+                                <BadgeLink href={teamDetailHref(team.team_id)}>
+                                  {team.team_alias || team.team_id}
+                                </BadgeLink>
+                              </TableCell>
                               {isProxyAdmin && (
                                 <TableCell className="text-right">
                                   <Button
@@ -531,6 +557,7 @@ export default function UserInfoView({
                   userRole={userRole}
                   userModels={userModels}
                   possibleUIRoles={possibleUIRoles}
+                  objectPermission={userData.object_permission}
                 />
               ) : (
                 <div className="space-y-4">
@@ -611,6 +638,17 @@ export default function UserInfoView({
                     <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
                       {JSON.stringify(userData.metadata || {}, null, 2)}
                     </pre>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium mb-2">MCP Permissions</Text>
+                    <MCPServerPermissions
+                      mcpServers={userData.object_permission?.mcp_servers || []}
+                      mcpAccessGroups={userData.object_permission?.mcp_access_groups || []}
+                      mcpToolPermissions={userData.object_permission?.mcp_tool_permissions || {}}
+                      mcpToolsets={userData.object_permission?.mcp_toolsets || []}
+                      accessToken={accessToken}
+                    />
                   </div>
                 </div>
               )}

@@ -4,44 +4,39 @@ import { useQuery } from "@tanstack/react-query";
 import { Button, TextInput } from "@tremor/react";
 import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useState } from "react";
-import { resolveLogoSrc } from "@/lib/assetPaths";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { Logo } from "@/components/molecules/logo/Logo";
+import { toast } from "@/lib/toast";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
 import SearchConnectionTest from "./SearchConnectionTest";
 import { AvailableSearchProvider, SearchTool } from "./types";
+import dataforseoLogo from "../../../../../public/assets/logos/dataforseo.png";
+import exaAiLogo from "../../../../../public/assets/logos/exa_ai.png";
+import googlePseLogo from "../../../../../public/assets/logos/google_pse.png";
+import nimbleLogo from "../../../../../public/assets/logos/nimble.png";
+import parallelAiLogo from "../../../../../public/assets/logos/parallel_ai.png";
+import perplexityLogo from "../../../../../public/assets/logos/perplexity.png";
+import tavilyLogo from "../../../../../public/assets/logos/tavily.png";
 
 const { TextArea } = Input;
 
-// Search provider logos folder path (matches existing provider logo pattern)
-const searchProviderLogosFolder = "/ui/assets/logos/";
-
-// Helper function to get logo path for a search provider
-const getSearchProviderLogo = (providerName: string): string => {
-  return `${searchProviderLogosFolder}${providerName}.png`;
+const searchProviderLogoMap: Record<string, string> = {
+  perplexity: perplexityLogo.src,
+  tavily: tavilyLogo.src,
+  parallel_ai: parallelAiLogo.src,
+  exa_ai: exaAiLogo.src,
+  google_pse: googlePseLogo.src,
+  dataforseo: dataforseoLogo.src,
+  nimble: nimbleLogo.src,
 };
 
-// Component to display search provider logo and name
 interface SearchProviderLabelProps {
   providerName: string;
   displayName: string;
 }
 
-const SearchProviderLabel: React.FC<SearchProviderLabelProps> = ({ providerName, displayName }) => (
-  <div style={{ display: "flex", alignItems: "center" }}>
-    {/* eslint-disable-next-line @next/next/no-img-element */}
-    <img
-      src={resolveLogoSrc(getSearchProviderLogo(providerName))}
-      alt=""
-      style={{
-        width: "20px",
-        height: "20px",
-        marginRight: "8px",
-        objectFit: "contain",
-      }}
-      onError={(e) => {
-        e.currentTarget.style.display = "none";
-      }}
-    />
+export const SearchProviderLabel: React.FC<SearchProviderLabelProps> = ({ providerName, displayName }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+    <Logo src={searchProviderLogoMap[providerName]} label={displayName} className="w-5 h-5 object-contain" />
     <span>{displayName}</span>
   </div>
 );
@@ -103,14 +98,14 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
       if (accessToken != null) {
         const response = await createSearchTool(accessToken, payload);
 
-        NotificationsManager.success("Search tool created successfully");
+        toast.success("Search tool created successfully");
         form.resetFields();
         setFormValues({});
         setModalVisible(false);
         onCreateSuccess(response);
       }
     } catch (error) {
-      NotificationsManager.error("Error creating search tool: " + error);
+      toast.error("Error creating search tool: " + error);
     } finally {
       setIsLoading(false);
     }
@@ -133,7 +128,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
       // Show the modal with the fresh test
       setIsTestModalVisible(true);
     } catch (error) {
-      NotificationsManager.error("Please fill in Search Provider and API Key before testing");
+      toast.error("Please fill in Search Provider and API Key before testing");
     }
   };
 

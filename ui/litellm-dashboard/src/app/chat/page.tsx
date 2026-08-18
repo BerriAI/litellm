@@ -7,14 +7,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { useRouter } from "next/navigation";
 import { useChatShell } from "@/contexts/ChatShellContext";
-import { CHAT_ROUTES } from "@/components/chat/ChatShell";
+import { getChatRoutes } from "@/components/chat/ChatShell";
 import ChatMessages from "@/components/chat/ChatMessages";
 import MCPConnectPicker from "@/components/chat/MCPConnectPicker";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
+import type { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import type { MCPEvent } from "@/components/chat/types";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 
@@ -65,7 +66,6 @@ export default function ChatConversationPage() {
     updateLastAssistantMessage,
     truncateFromMessage,
   } = useChatShell();
-  const hadActiveConversationOnMountRef = useRef(activeConversationId !== null);
 
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [models, setModels] = useState<string[]>([]);
@@ -87,7 +87,7 @@ export default function ChatConversationPage() {
   const streamScrollLock = useRef<number | null>(null);
 
   useEffect(() => {
-    if (staleId) router.replace(CHAT_ROUTES.chats);
+    if (staleId) router.replace(getChatRoutes().chats);
   }, [staleId, router]);
 
   // Load models
@@ -111,7 +111,7 @@ export default function ChatConversationPage() {
           localStorage.setItem(LOCALSTORAGE_MODEL_KEY, names[0]);
         }
       })
-      .catch(() => MessageManager.error("Could not load models"))
+      .catch(() => toast.error("Could not load models"))
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 
@@ -140,7 +140,7 @@ export default function ChatConversationPage() {
       if (!convId) {
         convId = createConversation(model);
         setResponsesSessionId(null); // new conversation starts a fresh session
-        router.push(`${CHAT_ROUTES.chats}?id=${convId}`);
+        window.history.pushState(null, "", `${window.location.pathname}?id=${convId}`);
       }
 
       appendMessage(convId, { role: "user", content: trimmed });
@@ -203,8 +203,8 @@ export default function ChatConversationPage() {
             accumulatedReasoning += rc;
             updateLastAssistantMessage(convId!, { reasoningContent: accumulatedReasoning });
           },
-          undefined,
-          undefined,
+          (timeToFirstToken: number) => updateLastAssistantMessage(convId!, { timeToFirstToken }),
+          (usage: TokenUsage) => updateLastAssistantMessage(convId!, { usage }),
           undefined,
           undefined,
           undefined,
@@ -217,6 +217,14 @@ export default function ChatConversationPage() {
             // one full localStorage write per MCP event during streaming.
             accumulatedMCPEvents.push(event);
           },
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          true,
+          (totalLatency: number) => updateLastAssistantMessage(convId!, { totalLatency }),
         );
         streamCompletedCleanly = true;
       } catch (err: unknown) {
@@ -248,7 +256,6 @@ export default function ChatConversationPage() {
       createConversation,
       appendMessage,
       updateLastAssistantMessage,
-      router,
       isStreaming,
       responsesSessionId,
     ],
@@ -529,7 +536,7 @@ export default function ChatConversationPage() {
               Chat with 100+ LLMs + MCP tools; authenticate once, use them here.{" "}
               <Button
                 variant="link"
-                onClick={() => router.push(CHAT_ROUTES.integrations)}
+                onClick={() => router.push(getChatRoutes().integrations)}
                 className="h-auto p-0 text-sm font-medium"
               >
                 Open Integrations -&gt;

@@ -18,12 +18,13 @@ import { Alert, Button as Button2, Form, Input, Modal, Space, Tabs, Typography }
 import React, { useEffect, useState } from "react";
 import NewBadge from "@/components/common_components/NewBadge";
 import { useBaseUrl } from "@/components/constants";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "@/components/networking";
 import SCIMConfig from "@/components/SCIM";
 import LoggingSettings from "@/components/Settings/AdminSettings/LoggingSettings/LoggingSettings";
 import SSOSettings from "@/components/Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "@/components/Settings/AdminSettings/UISettings/UISettings";
+import UserBannerSettings from "@/components/Settings/AdminSettings/UserBannerSettings/UserBannerSettings";
 import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import PluginSettings from "@/components/Settings/AdminSettings/PluginSettings/PluginSettings";
 import SSOModals from "@/components/SSOModals";
@@ -78,9 +79,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   const handleShowAllowedIPs = async () => {
     try {
       if (premiumUser !== true) {
-        NotificationsManager.fromBackend(
-          "This feature is only available for premium users. Please upgrade your account.",
-        );
+        toast.fromError("This feature is only available for premium users. Please upgrade your account.");
         return;
       }
       if (accessToken) {
@@ -91,7 +90,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       }
     } catch (error) {
       console.error("Error fetching allowed IPs:", error);
-      NotificationsManager.fromBackend(`Failed to fetch allowed IPs ${error}`);
+      toast.fromError(`Failed to fetch allowed IPs ${error}`);
       setAllowedIPs([all_ip_address_allowed]);
     } finally {
       if (premiumUser === true) {
@@ -107,11 +106,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         // Fetch the updated list of IPs
         const updatedIPs = await getAllowedIPs(accessToken);
         setAllowedIPs(updatedIPs);
-        NotificationsManager.success("IP address added successfully");
+        toast.success("IP address added successfully");
       }
     } catch (error) {
       console.error("Error adding IP:", error);
-      NotificationsManager.fromBackend(`Failed to add IP address ${error}`);
+      toast.fromError(`Failed to add IP address ${error}`);
     } finally {
       setIsAddIPModalVisible(false);
     }
@@ -129,10 +128,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         // Fetch the updated list of IPs
         const updatedIPs = await getAllowedIPs(accessToken);
         setAllowedIPs(updatedIPs.length > 0 ? updatedIPs : [all_ip_address_allowed]);
-        NotificationsManager.success("IP address deleted successfully");
+        toast.success("IP address deleted successfully");
       } catch (error) {
         console.error("Error deleting IP:", error);
-        NotificationsManager.fromBackend(`Failed to delete IP address ${error}`);
+        toast.fromError(`Failed to delete IP address ${error}`);
       } finally {
         setIsDeleteIPModalVisible(false);
         setIPToDelete(null);
@@ -228,7 +227,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
                   onClick={() =>
                     premiumUser === true
                       ? setIsUIAccessControlModalVisible(true)
-                      : NotificationsManager.fromBackend("Only premium users can configure UI access control")
+                      : toast.fromError("Only premium users can configure UI access control")
                   }
                 >
                   UI Access Control
@@ -334,7 +333,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
                 accessToken={accessToken}
                 onSuccess={() => {
                   handleUIAccessControlOk();
-                  NotificationsManager.success("UI Access Control settings updated successfully");
+                  toast.success("UI Access Control settings updated successfully");
                 }}
               />
             </Modal>
@@ -362,7 +361,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
           </Text>
         </Space>
       ),
-      children: <UISettings />,
+      children: (
+        <div className="flex flex-col gap-4">
+          <UISettings />
+          <UserBannerSettings />
+        </div>
+      ),
     },
     {
       key: "logging-settings",

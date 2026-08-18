@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import React, { useState } from "react";
+import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
@@ -96,7 +96,7 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
 let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
-let mockUseAuthorizedImpl = () => ({
+const mockUseAuthorizedImpl = () => ({
   userId: "test-user",
   userEmail: "test@example.com",
   userRole: "Admin",
@@ -150,6 +150,12 @@ describe("Navbar", () => {
     expect(screen.getByRole("button", { name: /^notifications$/i })).toBeInTheDocument();
     expect(screen.getByText("Docs")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
+  });
+
+  it("should link the logo to the UI home route rather than the proxy origin", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: /litellm brand/i })).toHaveAttribute("href", "/ui");
   });
 
   it("should display user information in dropdown", async () => {
@@ -252,7 +258,7 @@ describe("Navbar", () => {
     expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
   });
 
-  it("should handle hide new features toggle", async () => {
+  it("should handle hide new feature indicators toggle", async () => {
     const user = userEvent.setup();
 
     // Initially disabled

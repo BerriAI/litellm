@@ -1,6 +1,6 @@
 "use client";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { Button, Form, Modal, Space } from "antd";
 import React from "react";
@@ -24,11 +24,11 @@ const AddSSOSettingsModal: React.FC<AddSSOSettingsModalProps> = ({ isVisible, on
 
     await mutateAsync(payload, {
       onSuccess: () => {
-        NotificationsManager.success("SSO settings added successfully");
+        toast.success("SSO settings added successfully");
         onSuccess();
       },
       onError: (error) => {
-        NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
+        toast.fromError("Failed to save SSO settings: " + parseErrorMessage(error));
       },
     });
   };

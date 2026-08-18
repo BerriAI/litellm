@@ -23,7 +23,7 @@ describe("AreaChart", () => {
   it("renders the No data placeholder instead of a chart when data is empty", () => {
     const { container, getByText } = render(<AreaChart data={[]} index="date" categories={["tokens"]} />);
 
-    expect(getByText("No data")).toBeTruthy();
+    expect(getByText("No data")).toBeInTheDocument();
     expect(container.querySelector('[data-slot="chart"]')).toBeNull();
   });
 
@@ -37,7 +37,15 @@ describe("AreaChart", () => {
     const areas = Array.from(container.querySelectorAll("path.recharts-area-area"));
     expect(areas).toHaveLength(2);
     for (const area of areas) {
-      expect(area.getAttribute("fill")).toMatch(/^url\(#fill-/);
+      expect(area).toHaveAttribute("fill", expect.stringMatching(/^url\(#fill-/));
     }
+  });
+
+  it("marks each reading with a dot only when asked", () => {
+    const withoutDots = render(<AreaChart data={data} index="date" categories={["tokens"]} />);
+    expect(withoutDots.container.querySelectorAll("circle.recharts-dot")).toHaveLength(0);
+
+    const withDots = render(<AreaChart data={data} index="date" categories={["tokens"]} showDots />);
+    expect(withDots.container.querySelectorAll("circle.recharts-dot").length).toBeGreaterThanOrEqual(data.length);
   });
 });
