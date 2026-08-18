@@ -1,5 +1,6 @@
 import { KeywordTierRule } from "./KeywordTierRules";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { normalizeTierModels } from "./complexity_router_tiers";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -8,11 +9,14 @@ import {
   ClassifierType,
   ComplexityTierLabels,
   ComplexityTiers,
+  CustomTierSet,
   DimensionWeights,
   TIER_DESCRIPTIONS,
   TierBoundaries,
   TokenThresholds,
+  activeTierNames,
   effectiveTierLabel,
+  isBuiltInTierName,
   heuristicScoringRoleFor,
 } from "./ComplexityRouterConfig";
 
@@ -73,6 +77,7 @@ const scorerKnobPayload = ({
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  customTierSet: CustomTierSet | undefined;
   defaultModel: string | undefined;
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
@@ -101,8 +106,15 @@ export interface BuildComplexityRouterConfigParams {
   reasoningOverrideMinScore?: number;
 }
 
+export interface TierDefinitionPayload {
+  name: string;
+  description?: string;
+}
+
 export interface ComplexityRouterConfigPayload {
-  tiers: ComplexityTiers;
+  tiers: ComplexityTiers | Record<string, string[]>;
+  tier_definitions?: TierDefinitionPayload[];
+  fallback_tier?: string;
   default_model?: string;
   plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
@@ -182,8 +194,20 @@ export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
 // The backend rejects a plan-mode floor naming a tier with no models. The create form's
 // getMissingTiersError makes this unreachable there; the edit modal allows partially filled
 // tiers, so both gates call this to keep the two forms symmetric.
-export const getPlanModeTierError = (planModeMinTier: string | undefined, tiers: ComplexityTiers): string | null => {
+export const getPlanModeTierError = (
+  planModeMinTier: string | undefined,
+  tiers: ComplexityTiers,
+  customTierSet?: CustomTierSet,
+): string | null => {
   if (!planModeMinTier) return null;
+  if (customTierSet) {
+    const row = customTierSet.tiers.find((tier) => tier.id === planModeMinTier);
+    const shownName = row?.name.trim() || planModeMinTier;
+    if (!row)
+      return `The plan-mode minimum tier (${shownName}) is not in the tier set. Re-pick or turn the override off.`;
+    if (row.models.length > 0) return null;
+    return `The plan-mode minimum tier (${shownName}) has no models. Add one or turn the override off.`;
+  }
   const models = tiers[planModeMinTier as keyof ComplexityTiers] ?? [];
   if (models.length > 0) return null;
   return `The plan-mode minimum tier (${planModeMinTier}) has no models. Add one or turn the override off.`;
@@ -208,8 +232,212 @@ export const getSemanticConfigError = ({
   return null;
 };
 
+export const MIN_TIER_COUNT = 2;
+export const MAX_TIER_COUNT = 8;
+export const MAX_TIER_NAME_CHARS = 64;
+export const MAX_TIER_DEFINITION_CHARS = 500;
+
+/**
+ * The wire shape of an edited tier set. The draft rows already ARE the definition list in
+ * severity order, so this is a plain map: names become tier_definitions entries (a blank
+ * definition is omitted, which on a built-in name inherits the built-in criteria) and `tiers`
+ * maps exactly those names, mirroring the backend's bijective-keys validation.
+ */
+export const serializeCustomTierSet = (
+  customTierSet: CustomTierSet,
+): Pick<ComplexityRouterConfigPayload, "tiers" | "tier_definitions" | "fallback_tier"> => ({
+  tiers: Object.fromEntries(customTierSet.tiers.map((row) => [row.name.trim(), row.models] as const)),
+  tier_definitions: customTierSet.tiers.map((row) => ({
+    name: row.name.trim(),
+    ...(row.definition.trim() && { description: row.definition.trim() }),
+  })),
+  ...(() => {
+    const fallbackName = customTierSet.tiers.find((row) => row.id === customTierSet.fallback_tier_id)?.name.trim();
+    return fallbackName ? { fallback_tier: fallbackName } : {};
+  })(),
+});
+
+/**
+ * The inverse of serializeCustomTierSet, for the edit modal: one draft row per stored definition,
+ * in stored order, so any backend-valid shape round-trips byte-identically. Definition list order
+ * is severity order on the backend (the keyword tie-break), which is why the draft is the ordered
+ * list itself rather than a diff against the built-in four.
+ */
+export const hydrateCustomTierSet = (parsedConfig: {
+  tier_definitions?: unknown;
+  fallback_tier?: unknown;
+  tiers?: unknown;
+}): CustomTierSet | undefined => {
+  if (!Array.isArray(parsedConfig.tier_definitions) || parsedConfig.tier_definitions.length === 0) return undefined;
+  const storedTiers =
+    typeof parsedConfig.tiers === "object" && parsedConfig.tiers !== null && !Array.isArray(parsedConfig.tiers)
+      ? (parsedConfig.tiers as Record<string, unknown>)
+      : {};
+  const rows = parsedConfig.tier_definitions.flatMap((entry, index) => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const { name, description } = entry as { name?: unknown; description?: unknown };
+    if (typeof name !== "string" || !name.trim()) return [];
+    return [
+      {
+        // A built-in name keeps its canonical key as the id: the editor's Restore chip and
+        // mode-exit checks compare row ids against TIER_KEYS, so a hydrated SIMPLE must be
+        // the same identity as an in-editor SIMPLE or restore would duplicate it.
+        id: TIER_KEYS.find((tier) => tier.toLowerCase() === name.trim().toLowerCase()) ?? `stored-${index}`,
+        name: name.trim(),
+        definition: typeof description === "string" ? description.trim() : "",
+        models: normalizeTierModels(storedTiers[name.trim()]),
+      },
+    ];
+  });
+  if (rows.length === 0) return undefined;
+  const storedFallback = typeof parsedConfig.fallback_tier === "string" ? parsedConfig.fallback_tier.trim() : "";
+  return {
+    tiers: rows,
+    fallback_tier_id: rows.find((row) => row.name === storedFallback)?.id ?? "",
+  };
+};
+
+/**
+ * Stored config keys the backend rejects alongside tier_definitions. The create form cannot emit
+ * them in custom mode (its builder strips its own inputs), but the edit modal preserves unmanaged
+ * stored keys, so a router that already carried one of these would fail an otherwise valid custom
+ * tier save with a raw 400 unless the modal drops them through this one list.
+ *
+ * Mirrors the rejections in ComplexityRouterConfig's model validators, surfaced by
+ * validate_complexity_router_config_write (litellm/router_utils/auto_router_model_naming.py):
+ * when the backend adds a rejection, add its key here. Drift is not fatal (the pre-save dry-run
+ * of that same validator reports the conflict inline) but only this list can auto-drop the key.
+ */
+export const KEYS_REJECTED_WITH_CUSTOM_TIERS: readonly string[] = [
+  "plugins",
+  "tier_labels",
+  "classifier_fallback",
+  "adaptive",
+  "adaptive_weights",
+  "tier_distance_penalty",
+  "adaptive_eligible",
+  "tier_boundaries",
+  "token_thresholds",
+  "dimension_weights",
+  "escalation_keywords",
+  "session_affinity",
+];
+
+/**
+ * Everything a custom tier set forces onto the wire, shared by the create form's builder and the
+ * edit modal's so the invariant set has one owner: forcing the LLM classifier, stripping the
+ * rubric preset and wholesale prompt, and disabling session affinity and escalation, any of which
+ * would turn a disabled control's stale state into a 400.
+ */
+export const customTierSetWireFields = (
+  customTierSet: CustomTierSet,
+  classifierLlmConfig: ClassifierLLMConfig | undefined,
+  planModeMinTierId: string | undefined,
+) => {
+  const planModeName = customTierSet.tiers.find((row) => row.id === planModeMinTierId)?.name.trim();
+  return {
+    ...serializeCustomTierSet(customTierSet),
+    classifier_type: "llm" as const,
+    ...(classifierLlmConfig && {
+      classifier_llm_config: {
+        model: classifierLlmConfig.model,
+        timeout_ms: classifierLlmConfig.timeout_ms,
+      },
+    }),
+    session_affinity: false,
+    escalation_keywords: [] as string[],
+    ...(planModeName && { plan_mode_min_tier: planModeName }),
+  };
+};
+
+/**
+ * On the form value, plan_mode_min_tier holds a tier ROW ID (built-in row ids are the four tier
+ * names, so built-in configs are id-stable by construction). The wire carries the NAME, so
+ * hydration maps it back to the row minted for that name; an unmatched name is kept raw so
+ * getPlanModeTierError blocks the save with the stored name in the message.
+ */
+export const hydratePlanModeMinTier = (
+  stored: unknown,
+  customTierSet: CustomTierSet | undefined,
+): string | undefined => {
+  if (typeof stored !== "string" || stored.trim() === "") return undefined;
+  if (!customTierSet) return stored;
+  return customTierSet.tiers.find((row) => row.name.trim() === stored.trim())?.id ?? stored;
+};
+
+const applyCustomTierSetInvariants = (
+  payload: ComplexityRouterConfigPayload,
+  customTierSet: CustomTierSet,
+  classifierLlmConfig: ClassifierLLMConfig | undefined,
+): ComplexityRouterConfigPayload => {
+  const {
+    tier_labels: _tierLabels,
+    classifier_fallback: _classifierFallback,
+    adaptive: _adaptive,
+    adaptive_weights: _adaptiveWeights,
+    tier_distance_penalty: _tierDistancePenalty,
+    adaptive_eligible: _adaptiveEligible,
+    tier_boundaries: _tierBoundaries,
+    token_thresholds: _tokenThresholds,
+    dimension_weights: _dimensionWeights,
+    plan_mode_min_tier: planModeMinTierId,
+    ...rest
+  } = payload;
+  return {
+    ...rest,
+    ...customTierSetWireFields(customTierSet, classifierLlmConfig, planModeMinTierId),
+  };
+};
+
+/**
+ * A keyword rule whose tier left the active set would pass the create form (rule validation only
+ * checks for empty keywords) and then fail the save as a raw backend 400: the backend validates
+ * rule tiers against the active tier names, so the form must fail the same way, inline.
+ */
+export const getKeywordRuleTierError = (
+  keywordTierRules: KeywordTierRule[],
+  customTierSet: CustomTierSet | undefined,
+): string | null => {
+  const active = new Set(activeTierNames(customTierSet));
+  const stranded = [...new Set(keywordTierRules.map((rule) => rule.tier).filter((tier) => !active.has(tier)))];
+  if (stranded.length === 0) return null;
+  return `Keyword rule(s) target tier(s) not in the tier set: ${stranded.join(", ")}. Retarget or delete those rules`;
+};
+
+export const getCustomTierSetError = (customTierSet: CustomTierSet): string | null => {
+  const names = customTierSet.tiers.map((row) => row.name.trim());
+  if (names.some((name) => name === "")) return "Name every tier";
+  if (names.some((name) => name.length > MAX_TIER_NAME_CHARS))
+    return `Tier names must be at most ${MAX_TIER_NAME_CHARS} characters`;
+  const folded = names.map((name) => name.toLowerCase());
+  const duplicated = Array.from(new Set(names.filter((_, index) => folded.indexOf(folded[index]) !== index)));
+  if (duplicated.length > 0) return `Tier names must be unique: ${duplicated.join(", ")}`;
+  const multiline = customTierSet.tiers
+    .filter((row) => /[\n\r]/.test(row.name) || /[\n\r]/.test(row.definition))
+    .map((row) => row.name.trim() || "the new tier");
+  if (multiline.length > 0)
+    return `Keep the name and definition of ${multiline.join(", ")} to one line: the classifier rubric renders one bullet per tier`;
+  const undefinedTiers = customTierSet.tiers
+    .filter((row) => !row.definition.trim() && !isBuiltInTierName(row.name))
+    .map((row) => row.name.trim());
+  if (undefinedTiers.length > 0)
+    return `Write a definition for the classifier to use for: ${undefinedTiers.join(", ")}`;
+  const overlongDefinitions = customTierSet.tiers.filter(
+    (row) => row.definition.trim().length > MAX_TIER_DEFINITION_CHARS,
+  );
+  if (overlongDefinitions.length > 0) return `Tier definitions must be at most ${MAX_TIER_DEFINITION_CHARS} characters`;
+  const modelless = customTierSet.tiers.filter((row) => row.models.length === 0).map((row) => row.name.trim());
+  if (modelless.length > 0) return `Select a model for the following tier(s): ${modelless.join(", ")}`;
+  if (names.length < MIN_TIER_COUNT) return `Keep at least ${MIN_TIER_COUNT} tiers`;
+  if (names.length > MAX_TIER_COUNT) return `Keep at most ${MAX_TIER_COUNT} tiers`;
+  if (!customTierSet.tiers.some((row) => row.id === customTierSet.fallback_tier_id))
+    return "Pick a fallback tier, so requests have somewhere to route when the classifier fails";
+  return null;
+};
+
 export const buildComplexityRouterConfig = ({
   tiers,
+  customTierSet,
   defaultModel,
   planModeMinTier,
   tierLabels,
@@ -250,7 +478,7 @@ export const buildComplexityRouterConfig = ({
   };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
 
-  return {
+  const payload: ComplexityRouterConfigPayload = {
     tiers,
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
@@ -290,4 +518,5 @@ export const buildComplexityRouterConfig = ({
     ...(returnRawModelName && { return_raw_model_name: true }),
     ...scorerKnobs,
   };
+  return customTierSet ? applyCustomTierSetInvariants(payload, customTierSet, classifierLlmConfig) : payload;
 };

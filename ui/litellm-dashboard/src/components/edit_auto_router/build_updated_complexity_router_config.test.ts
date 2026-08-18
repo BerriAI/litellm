@@ -373,3 +373,146 @@ describe("buildUpdatedComplexityRouterConfig plan-mode minimum tier", () => {
     expect(result.plan_mode_min_tier).toBe("MEDIUM");
   });
 });
+
+describe("buildUpdatedComplexityRouterConfig custom tier sets", () => {
+  const customValue = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o"], COMPLEX: ["claude-sonnet-4"], REASONING: ["o1-preview"] },
+    custom_tier_set: {
+      tiers: [
+        { id: "SIMPLE", name: "SIMPLE", definition: "", models: ["gpt-4o-mini"] },
+        { id: "COMPLEX", name: "COMPLEX", definition: "", models: ["claude-sonnet-4"] },
+        { id: "REASONING", name: "REASONING", definition: "", models: ["o1-preview"] },
+        { id: "sec", name: "AUDIT", definition: "security audits", models: ["claude-sonnet-5"] },
+      ],
+      fallback_tier_id: "COMPLEX",
+    },
+    classifier_type: "llm" as const,
+    classifier_llm_config: {
+      model: "haiku-classifier",
+      timeout_ms: 400,
+      classification_rubric: "agentic" as const,
+      system_prompt: "grade it",
+    },
+    classifier_fallback: "default_model" as const,
+    session_affinity: true,
+    adaptive: true,
+    tier_labels: { SIMPLE: "Cheap" },
+  };
+
+  it("writes the edited tier set and forces off everything the backend rejects beside it", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, customValue, undefined, hydratedState);
+    expect(result.tier_definitions).toEqual([
+      { name: "SIMPLE" },
+      { name: "COMPLEX" },
+      { name: "REASONING" },
+      { name: "AUDIT", description: "security audits" },
+    ]);
+    expect(result.fallback_tier).toBe("COMPLEX");
+    expect(result.tiers).toEqual({
+      SIMPLE: ["gpt-4o-mini"],
+      COMPLEX: ["claude-sonnet-4"],
+      REASONING: ["o1-preview"],
+      AUDIT: ["claude-sonnet-5"],
+    });
+    expect(result.classifier_type).toBe("llm");
+    expect(result.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400 });
+    expect(result.session_affinity).toBe(false);
+    expect(result.escalation_keywords).toEqual([]);
+    expect(result).not.toHaveProperty("tier_labels");
+    expect(result).not.toHaveProperty("classifier_fallback");
+    expect(result).not.toHaveProperty("adaptive");
+    expect(result.some_future_backend_key).toEqual({ nested: true });
+  });
+
+  it("drops stored keys the backend rejects beside tier_definitions, like plugins", () => {
+    const storedWithPlugins = { ...STORED, plugins: ["my.plugin.path"] };
+    const result = buildUpdatedComplexityRouterConfig(storedWithPlugins, customValue, undefined, hydratedState);
+    expect(result).not.toHaveProperty("plugins");
+    expect(result.some_future_backend_key).toEqual({ nested: true });
+  });
+
+  it("drops a stored classification_prompt when the built-in four are restored", () => {
+    const storedCustomWithPrompt = {
+      ...STORED,
+      tier_definitions: [{ name: "SIMPLE" }, { name: "AUDIT", description: "security audits" }],
+      fallback_tier: "AUDIT",
+      classification_prompt: "Grade the security relevance.",
+    };
+    const restored = buildUpdatedComplexityRouterConfig(storedCustomWithPrompt, FORM_VALUE, undefined, hydratedState);
+    expect(restored).not.toHaveProperty("classification_prompt");
+    const stillCustom = buildUpdatedComplexityRouterConfig(
+      storedCustomWithPrompt,
+      customValue,
+      undefined,
+      hydratedState,
+    );
+    expect(stillCustom.classification_prompt).toBe("Grade the security relevance.");
+  });
+
+  it("drops a stored tier set when the operator restores the built-in four", () => {
+    const storedCustom = {
+      ...STORED,
+      tier_definitions: [{ name: "SIMPLE" }, { name: "AUDIT", description: "security audits" }],
+      fallback_tier: "AUDIT",
+    };
+    const result = buildUpdatedComplexityRouterConfig(storedCustom, FORM_VALUE, undefined, hydratedState);
+    expect(result).not.toHaveProperty("tier_definitions");
+    expect(result).not.toHaveProperty("fallback_tier");
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig custom tier set plan-mode floor", () => {
+  const customValue = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o"], COMPLEX: ["claude-sonnet-4"], REASONING: ["o1-preview"] },
+    custom_tier_set: {
+      tiers: [
+        { id: "SIMPLE", name: "SIMPLE", definition: "", models: ["gpt-4o-mini"] },
+        { id: "COMPLEX", name: "COMPLEX", definition: "", models: ["claude-sonnet-4"] },
+        { id: "sec", name: "AUDIT", definition: "security audits", models: ["claude-sonnet-5"] },
+      ],
+      fallback_tier_id: "COMPLEX",
+    },
+    classifier_type: "llm" as const,
+    classifier_llm_config: { model: "haiku-classifier", timeout_ms: 400 },
+  };
+
+  it("round-trips a stored floor on a custom tier save instead of silently clearing it", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, plan_mode_min_tier: "AUDIT" },
+      { ...customValue, plan_mode_min_tier: "sec" },
+      undefined,
+      hydratedState,
+    );
+    expect(result.plan_mode_min_tier).toBe("AUDIT");
+  });
+
+  it("follows a rename of the floor's tier, because the floor points at the row id", () => {
+    const renamed = {
+      ...customValue,
+      custom_tier_set: {
+        ...customValue.custom_tier_set,
+        tiers: customValue.custom_tier_set.tiers.map((row) =>
+          row.id === "sec" ? { ...row, name: "SECURITY_REVIEW" } : row,
+        ),
+      },
+      plan_mode_min_tier: "sec",
+    };
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, plan_mode_min_tier: "AUDIT" },
+      renamed,
+      undefined,
+      hydratedState,
+    );
+    expect(result.plan_mode_min_tier).toBe("SECURITY_REVIEW");
+  });
+
+  it("emits no floor when its row left the tier set, rather than a stale name", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, plan_mode_min_tier: "AUDIT" },
+      { ...customValue, plan_mode_min_tier: "gone" },
+      undefined,
+      hydratedState,
+    );
+    expect(result).not.toHaveProperty("plan_mode_min_tier");
+  });
+});

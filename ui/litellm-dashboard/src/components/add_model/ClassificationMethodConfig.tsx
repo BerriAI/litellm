@@ -25,6 +25,7 @@ import {
   CLASSIFICATION_RUBRIC_DESCRIPTIONS,
   CLASSIFICATION_RUBRIC_KEYS,
   ClassificationRubric,
+  effectiveClassifierType,
   effectiveTierLabel,
 } from "./ComplexityRouterConfig";
 
@@ -146,8 +147,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   defaultModel,
 }) => {
   const hasDefaultModel = Boolean(defaultModel);
+  const hasCustomTierSet = Boolean(value.custom_tier_set);
+  const classifierType = effectiveClassifierType(value);
   const classifierModelMissing =
-    showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
+    showValidationErrors && classifierType === "llm" && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
 
@@ -252,20 +255,28 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   return (
     <>
       <RadioGroup
-        value={value.classifier_type}
+        value={classifierType}
         onValueChange={(classifierType: unknown) => handleClassifierTypeChange(classifierType as ClassifierType)}
         className="w-full"
       >
         <div className="flex w-full flex-col items-start gap-2">
-          <Label className="items-start font-normal leading-normal">
-            <RadioGroupItem value="heuristic" className="mt-0.5" />
-            <span>
-              <strong className="font-semibold">Heuristic</strong>{" "}
-              <span className="text-muted-foreground">
-                (default) — rule-based scoring, no API calls, &lt;1ms latency
+          <SimpleTooltip
+            content={
+              hasCustomTierSet
+                ? "An edited tier set requires the LLM classifier: the heuristic scorer only produces the built-in tiers"
+                : undefined
+            }
+          >
+            <Label className="items-start font-normal leading-normal">
+              <RadioGroupItem value="heuristic" className="mt-0.5" disabled={hasCustomTierSet} />
+              <span>
+                <strong className="font-semibold">Heuristic</strong>{" "}
+                <span className="text-muted-foreground">
+                  (default) — rule-based scoring, no API calls, &lt;1ms latency
+                </span>
               </span>
-            </span>
-          </Label>
+            </Label>
+          </SimpleTooltip>
           <Label className="items-start font-normal leading-normal">
             <RadioGroupItem value="llm" className="mt-0.5" />
             <span>
@@ -276,7 +287,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       </RadioGroup>
 
-      {value.classifier_type === "llm" && (
+      {classifierType === "llm" && (
         <div className="mt-4 space-y-3">
           <div>
             <strong className="block mb-1 font-semibold">Classifier Model</strong>
@@ -306,92 +317,105 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               How long the classifier call has before it fails and the fallback below takes over.
             </span>
           </div>
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <strong className="font-semibold">Classification Rubric</strong>
-              <SimpleTooltip content="Every rubric uses the same four tiers. They differ in the worked examples that show the classifier where the boundary between tiers sits, and the Business rubric also rewrites the tier definitions for business traffic.">
-                <Info className="size-4 text-muted-foreground" />
-              </SimpleTooltip>
-            </div>
-            <SimpleTooltip
-              content={usesCustomPrompt ? "Your custom prompt replaces the built-in rubric entirely" : undefined}
-              className="w-full"
-            >
-              <Select
-                items={CLASSIFICATION_RUBRIC_KEYS.map((preset) => ({
-                  value: preset,
-                  label: CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label,
-                }))}
-                value={classificationRubric}
-                onValueChange={(preset: ClassificationRubric | null) =>
-                  preset && handleClassificationRubricChange(preset)
-                }
-                disabled={usesCustomPrompt}
+          {!hasCustomTierSet && (
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <strong className="font-semibold">Classification Rubric</strong>
+                <SimpleTooltip content="Every rubric uses the same four tiers. They differ in the worked examples that show the classifier where the boundary between tiers sits, and the Business rubric also rewrites the tier definitions for business traffic.">
+                  <Info className="size-4 text-muted-foreground" />
+                </SimpleTooltip>
+              </div>
+              <SimpleTooltip
+                content={usesCustomPrompt ? "Your custom prompt replaces the built-in rubric entirely" : undefined}
+                className="w-full"
               >
-                <SelectTrigger aria-label="Classification Rubric" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {CLASSIFICATION_RUBRIC_KEYS.map((preset) => (
-                    <SelectItem key={preset} value={preset}>
-                      {CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </SimpleTooltip>
-            <span className="block text-xs text-muted-foreground">
-              {usesCustomPrompt
-                ? "Not in use: the custom prompt below is the classifier's entire rubric."
-                : CLASSIFICATION_RUBRIC_DESCRIPTIONS[classificationRubric].description}
-            </span>
-          </div>
-          <div>
-            <strong className="block mb-1 font-semibold">Classifier Prompt</strong>
-            <ClassifierPromptEditor
-              systemPrompt={value.classifier_llm_config?.system_prompt}
-              onChange={handleClassifierSystemPromptChange}
-              contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
-              tierLabels={value.tier_labels}
-              classificationRubric={classificationRubric}
-            />
-          </div>
+                <Select
+                  items={CLASSIFICATION_RUBRIC_KEYS.map((preset) => ({
+                    value: preset,
+                    label: CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label,
+                  }))}
+                  value={classificationRubric}
+                  onValueChange={(preset: ClassificationRubric | null) =>
+                    preset && handleClassificationRubricChange(preset)
+                  }
+                  disabled={usesCustomPrompt}
+                >
+                  <SelectTrigger aria-label="Classification Rubric" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CLASSIFICATION_RUBRIC_KEYS.map((preset) => (
+                      <SelectItem key={preset} value={preset}>
+                        {CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SimpleTooltip>
+              <span className="block text-xs text-muted-foreground">
+                {usesCustomPrompt
+                  ? "Not in use: the custom prompt below is the classifier's entire rubric."
+                  : CLASSIFICATION_RUBRIC_DESCRIPTIONS[classificationRubric].description}
+              </span>
+            </div>
+          )}
+          {!hasCustomTierSet && (
+            <div>
+              <strong className="block mb-1 font-semibold">Classifier Prompt</strong>
+              <ClassifierPromptEditor
+                systemPrompt={value.classifier_llm_config?.system_prompt}
+                onChange={handleClassifierSystemPromptChange}
+                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
+                tierLabels={value.tier_labels}
+                classificationRubric={classificationRubric}
+              />
+            </div>
+          )}
           <div>
             <strong className="block mb-1 font-semibold">If the classifier fails</strong>
-            <RadioGroup
-              value={value.classifier_fallback ?? DEFAULT_CLASSIFIER_FALLBACK}
-              onValueChange={(fallback: unknown) => handleClassifierFallbackChange(fallback as ClassifierFallback)}
-            >
-              <div className="inline-flex flex-col gap-2">
-                <Label className="items-start font-normal leading-normal">
-                  <RadioGroupItem value="heuristic" className="mt-0.5" />
-                  <span>
-                    <span>Score with the heuristic</span>{" "}
-                    <span className="text-muted-foreground">— right when the classifier grades complexity too</span>
-                  </span>
-                </Label>
-                <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-                  <RadioGroupItem value="default_model" disabled={!hasDefaultModel} className="mt-0.5" />
-                  <SimpleTooltip
-                    content={
-                      hasDefaultModel
-                        ? "Change it from the Default Model select."
-                        : "Set a default model on this router to use this option"
-                    }
-                  >
-                    <span>
-                      <span>Route to the default model{defaultModel ? ` (${defaultModel})` : ""}</span>{" "}
-                      <span className="text-muted-foreground">
-                        — right when your prompt grades something other than complexity
+            {hasCustomTierSet ? (
+              <span className="block text-xs text-muted-foreground">
+                Failures route to the Fallback Tier chosen in the tier configuration above. The classifier prompt is
+                built from your tier definitions.
+              </span>
+            ) : (
+              <>
+                <RadioGroup
+                  value={value.classifier_fallback ?? DEFAULT_CLASSIFIER_FALLBACK}
+                  onValueChange={(fallback: unknown) => handleClassifierFallbackChange(fallback as ClassifierFallback)}
+                >
+                  <div className="inline-flex flex-col gap-2">
+                    <Label className="items-start font-normal leading-normal">
+                      <RadioGroupItem value="heuristic" className="mt-0.5" />
+                      <span>
+                        <span>Score with the heuristic</span>{" "}
+                        <span className="text-muted-foreground">— right when the classifier grades complexity too</span>
                       </span>
-                    </span>
-                  </SimpleTooltip>
-                </Label>
-              </div>
-            </RadioGroup>
-            <span className="block text-xs text-muted-foreground">
-              Applies when the classifier call errors, times out, or returns an unparseable response.
-            </span>
+                    </Label>
+                    <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
+                      <RadioGroupItem value="default_model" disabled={!hasDefaultModel} className="mt-0.5" />
+                      <SimpleTooltip
+                        content={
+                          hasDefaultModel
+                            ? "Change it from the Default Model select."
+                            : "Set a default model on this router to use this option"
+                        }
+                      >
+                        <span>
+                          <span>Route to the default model{defaultModel ? ` (${defaultModel})` : ""}</span>{" "}
+                          <span className="text-muted-foreground">
+                            — right when your prompt grades something other than complexity
+                          </span>
+                        </span>
+                      </SimpleTooltip>
+                    </Label>
+                  </div>
+                </RadioGroup>
+                <span className="block text-xs text-muted-foreground">
+                  Applies when the classifier call errors, times out, or returns an unparseable response.
+                </span>
+              </>
+            )}
           </div>
           <div>
             <strong className="block mb-1 font-semibold">Context Window Size</strong>
@@ -446,7 +470,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
-      {value.classifier_type === "heuristic" && (
+      {classifierType === "heuristic" && (
         <div className="mt-4">
           <div className="flex items-center gap-2 mb-1">
             <strong className="font-semibold">Custom Technical Keywords</strong>
@@ -478,7 +502,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 
       <HeuristicScoringConfig value={value} onChange={onChange} />
 
-      <HowClassificationWorks value={value} />
+      {!hasCustomTierSet && <HowClassificationWorks value={value} />}
     </>
   );
 };

@@ -1,4 +1,4 @@
-import type { ComplexityTiers } from "./ComplexityRouterConfig";
+import type { ComplexityTiers, CustomTierSet } from "./ComplexityRouterConfig";
 import type { ComplexityTier } from "./KeywordTierRules";
 
 /**
@@ -17,9 +17,9 @@ export const normalizeTierModels = (value: unknown): string[] => {
 };
 
 /**
- * Mirrors `init_complexity_router_deployment` (litellm/router.py): an explicit pin wins, otherwise
- * the default is `MEDIUM or SIMPLE`. Deriving past SIMPLE would name a model the backend never
- * picks, and it raises rather than falling through to COMPLEX/REASONING.
+ * Mirrors `init_complexity_router_deployment` (litellm/router.py) for a built-in tier set: an
+ * explicit pin wins, otherwise the default is `MEDIUM or SIMPLE`. Deriving past SIMPLE would name
+ * a model the backend never picks, and it raises rather than falling through to COMPLEX/REASONING.
  */
 export const resolveComplexityDefaultModel = (tiers: ComplexityTiers, pinned?: string): string | undefined =>
   pinned?.trim() || tiers.MEDIUM[0] || tiers.SIMPLE[0];
@@ -33,7 +33,26 @@ export const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
 
 export const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
+const isBuiltInOption = (tier: string): tier is ComplexityTier => (TIER_ORDER as string[]).includes(tier);
+
 export const tierOptions = (
   tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
-): { value: ComplexityTier; label: string }[] =>
-  TIER_ORDER.map((tier) => ({ value: tier, label: tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier] }));
+  tierNames?: string[],
+): { value: string; label: string }[] =>
+  (tierNames ?? TIER_ORDER).map((tier) => ({
+    value: tier,
+    label: (isBuiltInOption(tier) && (tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier])) || tier,
+  }));
+
+export const defaultRuleTier = (tierNames?: string[]): string =>
+  !tierNames || tierNames.includes("COMPLEX") ? "COMPLEX" : tierNames[0] ?? "COMPLEX";
+
+/**
+ * The same backend derivation for an edited tier set, over the rows the payload will carry: the
+ * pin wins, then the fallback tier's pool, then a row named MEDIUM or SIMPLE if the set kept one.
+ */
+export const customTierDefaultModel = (customTierSet: CustomTierSet, pinned?: string): string | undefined => {
+  const rowNamed = (name: string) => customTierSet.tiers.find((row) => row.name.trim() === name);
+  const fallbackRow = customTierSet.tiers.find((row) => row.id === customTierSet.fallback_tier_id);
+  return pinned?.trim() || fallbackRow?.models[0] || rowNamed("MEDIUM")?.models[0] || rowNamed("SIMPLE")?.models[0];
+};

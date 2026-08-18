@@ -192,6 +192,8 @@ export const getMissingModelsInPreset = (preset: AutoRouterPreset, availability:
 export const getReferencedModelsError = (
   params: {
     tiers: ComplexityTiers;
+    /** Models referenced by custom tiers from an edited tier set. */
+    additionalModels?: string[];
     classifierType: ClassifierType;
     classifierLlmConfig: ClassifierLLMConfig | undefined;
     semanticMatchingEnabled: boolean;
@@ -209,7 +211,11 @@ export const getReferencedModelsError = (
     },
     availability,
   );
-  return missing.length > 0 ? `Model(s) no longer available: ${missing.join(", ")}` : null;
+  const missingCustom = (params.additionalModels ?? []).filter(
+    (model) => model.trim() && resolveAvailableModel(model, availability) === undefined,
+  );
+  const allMissing = [...new Set([...missing, ...missingCustom])].sort();
+  return allMissing.length > 0 ? `Model(s) no longer available: ${allMissing.join(", ")}` : null;
 };
 
 // Every piece of AddAutoRouterTab's config state that a preset (or a reset to Custom) prefills in

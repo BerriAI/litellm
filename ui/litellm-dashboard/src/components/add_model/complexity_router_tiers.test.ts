@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeTierModels, resolveComplexityDefaultModel } from "./complexity_router_tiers";
+import { customTierDefaultModel, normalizeTierModels, resolveComplexityDefaultModel } from "./complexity_router_tiers";
 
 import type { ComplexityTiers } from "./ComplexityRouterConfig";
 
@@ -68,5 +68,25 @@ describe("resolveComplexityDefaultModel", () => {
 
   it("resolves to nothing when neither a pin nor a tier offers a model", () => {
     expect(resolveComplexityDefaultModel(noTiers)).toBeUndefined();
+  });
+});
+
+describe("customTierDefaultModel", () => {
+  const rows = (fallbackId: string) => ({
+    tiers: [
+      { id: "SIMPLE", name: "SIMPLE", definition: "", models: ["cheap"] },
+      { id: "MEDIUM", name: "MEDIUM", definition: "", models: ["mid"] },
+      { id: "sec", name: "AUDIT", definition: "security audits", models: ["sonnet"] },
+    ],
+    fallback_tier_id: fallbackId,
+  });
+
+  it("prefers the pin, then the fallback row, then a MEDIUM or SIMPLE row", () => {
+    expect(customTierDefaultModel(rows("sec"), "pinned")).toBe("pinned");
+    expect(customTierDefaultModel(rows("sec"))).toBe("sonnet");
+    expect(customTierDefaultModel(rows("gone"))).toBe("mid");
+    expect(
+      customTierDefaultModel({ tiers: rows("gone").tiers.filter((r) => r.id !== "MEDIUM"), fallback_tier_id: "gone" }),
+    ).toBe("cheap");
   });
 });

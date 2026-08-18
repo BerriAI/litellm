@@ -71,6 +71,7 @@ const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(()
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true, error: null }),
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({

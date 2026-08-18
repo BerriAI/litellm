@@ -1,7 +1,12 @@
 import {
   buildComplexityRouterConfig,
   getPlanModeTierError,
+  getCustomTierSetError,
+  getKeywordRuleTierError,
+  hydrateCustomTierSet,
+  hydratePlanModeMinTier,
   normalizeClassifierLlmConfig,
+  serializeCustomTierSet,
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
@@ -9,6 +14,7 @@ import {
   hydrateTierLabels,
   BuildComplexityRouterConfigParams,
 } from "./build_complexity_router_config";
+import { isBuiltInTierName } from "./ComplexityRouterConfig";
 
 const tiers = {
   SIMPLE: ["gpt-4o-mini"],
@@ -19,6 +25,7 @@ const tiers = {
 
 const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
+  customTierSet: undefined,
   tierLabels: undefined,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
@@ -654,5 +661,230 @@ describe("getPlanModeTierError", () => {
 
   it("blocks a tier whose models were removed, which the backend would reject with a 400", () => {
     expect(getPlanModeTierError("COMPLEX", tiersWithEmptyComplex)).toContain("COMPLEX");
+  });
+});
+
+describe("custom tier sets", () => {
+  const customTierSet = {
+    tiers: [
+      { id: "SIMPLE", name: "SIMPLE", definition: "", models: ["gpt-4o-mini"] },
+      { id: "COMPLEX", name: "COMPLEX", definition: "", models: ["claude-sonnet-4"] },
+      { id: "REASONING", name: "REASONING", definition: "", models: ["o1-preview"] },
+      {
+        id: "sec",
+        name: "SECURITY_REVIEW",
+        definition: "requests asking for a security audit or vulnerability review",
+        models: ["claude-sonnet-5"],
+      },
+    ],
+    fallback_tier_id: "COMPLEX",
+  };
+
+  const customParams = {
+    ...baseParams,
+    customTierSet,
+  };
+
+  it("serializes rows in order: bare names inherit criteria, written definitions become descriptions", () => {
+    const config = buildComplexityRouterConfig(customParams);
+    expect(config.tier_definitions).toEqual([
+      { name: "SIMPLE" },
+      { name: "COMPLEX" },
+      { name: "REASONING" },
+      { name: "SECURITY_REVIEW", description: "requests asking for a security audit or vulnerability review" },
+    ]);
+    expect(config.fallback_tier).toBe("COMPLEX");
+    expect(config.tiers).toEqual({
+      SIMPLE: ["gpt-4o-mini"],
+      COMPLEX: ["claude-sonnet-4"],
+      REASONING: ["o1-preview"],
+      SECURITY_REVIEW: ["claude-sonnet-5"],
+    });
+  });
+
+  it("forces off everything the backend rejects alongside tier_definitions", () => {
+    const config = buildComplexityRouterConfig({
+      ...customParams,
+      tierLabels: { SIMPLE: "Cheap" },
+      classifierType: "heuristic",
+      classifierLlmConfig: {
+        model: "haiku-classifier",
+        timeout_ms: 400,
+        classification_rubric: "agentic",
+        system_prompt: "grade it",
+      },
+      classifierFallback: "default_model",
+      sessionAffinity: true,
+      escalationKeywords: ["GO UP"],
+      adaptive: true,
+    });
+    expect(config.classifier_type).toBe("llm");
+    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400 });
+    expect(config.session_affinity).toBe(false);
+    expect(config.escalation_keywords).toEqual([]);
+    expect(config).not.toHaveProperty("tier_labels");
+    expect(config).not.toHaveProperty("classifier_fallback");
+    expect(config).not.toHaveProperty("adaptive");
+    expect(config).not.toHaveProperty("adaptive_weights");
+  });
+
+  it("drops scorer knobs, which cannot run on a custom tier set", () => {
+    const config = buildComplexityRouterConfig({
+      ...customParams,
+      tierBoundaries: { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 },
+    });
+    expect(config).not.toHaveProperty("tier_boundaries");
+  });
+
+  it("emits no custom tier keys when the tier set was never edited", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, customTierSet: undefined });
+    expect(config).not.toHaveProperty("tier_definitions");
+    expect(config).not.toHaveProperty("fallback_tier");
+  });
+
+  describe("getCustomTierSetError", () => {
+    const editRow = (id: string, patch: object) => ({
+      ...customTierSet,
+      tiers: customTierSet.tiers.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+    });
+
+    it("returns null for a complete tier set", () => {
+      expect(getCustomTierSetError(customTierSet)).toBeNull();
+    });
+
+    it("accepts a bare built-in name, which inherits the built-in criteria", () => {
+      expect(getCustomTierSetError(editRow("SIMPLE", { definition: "" }))).toBeNull();
+    });
+
+    it.each([
+      ["an unnamed tier", editRow("sec", { name: " " }), "Name every tier"],
+      [
+        "a custom tier without a definition",
+        editRow("sec", { definition: "" }),
+        "Write a definition for the classifier to use for: SECURITY_REVIEW",
+      ],
+      [
+        "a tier without models",
+        editRow("sec", { models: [] }),
+        "Select a model for the following tier(s): SECURITY_REVIEW",
+      ],
+      ["a duplicate name", editRow("sec", { name: "complex" }), "Tier names must be unique"],
+      [
+        "a definition with a newline, which the backend rejects",
+        editRow("sec", { definition: "security audits\nand exploits" }),
+        "to one line",
+      ],
+      ["a fallback pointing at no row", { ...customTierSet, fallback_tier_id: "gone" }, "Pick a fallback tier"],
+      [
+        "fewer than two tiers",
+        { tiers: [customTierSet.tiers[0]], fallback_tier_id: "SIMPLE" },
+        "Keep at least 2 tiers",
+      ],
+    ])("names %s", (_case, tierSet, expected) => {
+      expect(getCustomTierSetError(tierSet)).toContain(expected);
+    });
+  });
+
+  describe("getKeywordRuleTierError", () => {
+    it("passes rules that target active tiers and flags ones stranded by a removed tier", () => {
+      const rules = [
+        { id: "r1", keywords: ["audit"], tier: "SECURITY_REVIEW" },
+        { id: "r2", keywords: ["billing"], tier: "MEDIUM" },
+      ];
+      expect(getKeywordRuleTierError([rules[1]], undefined)).toBeNull();
+      expect(getKeywordRuleTierError([rules[0]], customTierSet)).toBeNull();
+      expect(getKeywordRuleTierError(rules, customTierSet)).toContain("MEDIUM");
+    });
+  });
+
+  describe("hydrateCustomTierSet", () => {
+    it("round-trips what serializeCustomTierSet wrote, in order, built-in ids canonical", () => {
+      const serialized = serializeCustomTierSet(customTierSet);
+      const hydrated = hydrateCustomTierSet(serialized);
+      expect(hydrated).toEqual({
+        tiers: customTierSet.tiers.map((row, index) => ({
+          ...row,
+          id: isBuiltInTierName(row.name) ? row.name : `stored-${index}`,
+        })),
+        fallback_tier_id: "COMPLEX",
+      });
+      expect(serializeCustomTierSet(hydrated!)).toEqual(serialized);
+    });
+
+    it("round-trips a backend-valid shape this UI never writes, preserving severity order", () => {
+      const stored = {
+        tier_definitions: [{ name: "SIMPLE", description: "only greetings" }, { name: "COMPLEX" }],
+        tiers: { SIMPLE: ["cheap"], COMPLEX: ["big"] },
+        fallback_tier: "COMPLEX",
+      };
+      const hydrated = hydrateCustomTierSet(stored);
+      expect(hydrated?.tiers).toEqual([
+        { id: "SIMPLE", name: "SIMPLE", definition: "only greetings", models: ["cheap"] },
+        { id: "COMPLEX", name: "COMPLEX", definition: "", models: ["big"] },
+      ]);
+      const reserialized = serializeCustomTierSet(hydrated!);
+      expect(reserialized.tier_definitions).toEqual(stored.tier_definitions);
+      expect(reserialized.fallback_tier).toBe("COMPLEX");
+    });
+
+    it("omits fallback_tier when the pointer resolves to no row", () => {
+      const serialized = serializeCustomTierSet({ ...customTierSet, fallback_tier_id: "gone" });
+      expect(serialized).not.toHaveProperty("fallback_tier");
+    });
+
+    it("returns undefined for a built-in router config", () => {
+      expect(hydrateCustomTierSet({ tiers: { SIMPLE: ["cheap"] } })).toBeUndefined();
+    });
+  });
+});
+
+describe("plan-mode floor on a custom tier set", () => {
+  const rows = [
+    { id: "SIMPLE", name: "SIMPLE", definition: "", models: ["gpt-4o-mini"] },
+    { id: "sec", name: "SECURITY_REVIEW", definition: "security audits", models: ["claude-sonnet-5"] },
+    { id: "new-1", name: "DRAFTING", definition: "long-form writing", models: [] },
+  ];
+  const set = { tiers: rows, fallback_tier_id: "SIMPLE" };
+  const params = { ...baseParams, customTierSet: set, classifierType: "llm" as const };
+
+  it("resolves the floor's row id to the tier NAME on the wire", () => {
+    const config = buildComplexityRouterConfig({ ...params, planModeMinTier: "sec" });
+    expect(config.plan_mode_min_tier).toBe("SECURITY_REVIEW");
+  });
+
+  it("emits no floor when the id matches no row", () => {
+    const config = buildComplexityRouterConfig({ ...params, planModeMinTier: "gone" });
+    expect(config).not.toHaveProperty("plan_mode_min_tier");
+  });
+
+  it("getPlanModeTierError looks the floor up by row id and reports the row's NAME", () => {
+    const builtInTiers = { SIMPLE: ["m"], MEDIUM: [], COMPLEX: [], REASONING: [] };
+    expect(getPlanModeTierError("sec", builtInTiers, set)).toBeNull();
+    expect(getPlanModeTierError("new-1", builtInTiers, set)).toContain("DRAFTING");
+    expect(getPlanModeTierError("gone", builtInTiers, set)).toContain("not in the tier set");
+  });
+
+  it("hydration maps the stored NAME back to the row id, and keeps an unmatched name raw", () => {
+    expect(hydratePlanModeMinTier("SECURITY_REVIEW", set)).toBe("sec");
+    expect(hydratePlanModeMinTier("NOT_A_TIER", set)).toBe("NOT_A_TIER");
+    expect(hydratePlanModeMinTier("COMPLEX", undefined)).toBe("COMPLEX");
+    expect(hydratePlanModeMinTier("  ", set)).toBeUndefined();
+    expect(hydratePlanModeMinTier(7, set)).toBeUndefined();
+  });
+});
+
+describe("hydrated tier row identity", () => {
+  it("gives a built-in name its canonical key as the row id, so Restore and mode-exit recognize it", () => {
+    const hydrated = hydrateCustomTierSet({
+      tier_definitions: [
+        { name: "simple", description: "cheap chat" },
+        { name: "SECURITY_REVIEW", description: "audits" },
+        { name: "REASONING" },
+      ],
+      tiers: { simple: ["m1"], SECURITY_REVIEW: ["m2"], REASONING: ["m3"] },
+      fallback_tier: "REASONING",
+    });
+    expect(hydrated?.tiers.map((row) => row.id)).toEqual(["SIMPLE", "stored-1", "REASONING"]);
+    expect(hydrated?.fallback_tier_id).toBe("REASONING");
   });
 });

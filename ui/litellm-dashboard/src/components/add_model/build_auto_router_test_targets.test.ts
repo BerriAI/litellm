@@ -120,3 +120,18 @@ describe("buildAutoRouterTestTargets", () => {
     expect(targets).toEqual([{ labels: ["SIMPLE"], modelGroup: "gpt-4o-mini", mode: "chat" }]);
   });
 });
+
+describe("additionalTiers", () => {
+  it("probes custom tier models after the built-ins, labeled by tier name", () => {
+    const targets = buildAutoRouterTestTargets({
+      tiers: { SIMPLE: ["cheap"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+      additionalTiers: [{ name: "AUDIT", models: ["sonnet", "cheap"] }],
+      semanticMatchingEnabled: false,
+      embeddingModel: undefined,
+    });
+    expect(targets).toEqual([
+      { labels: ["SIMPLE", "AUDIT"], modelGroup: "cheap", mode: "chat" },
+      { labels: ["AUDIT"], modelGroup: "sonnet", mode: "chat" },
+    ]);
+  });
+});
