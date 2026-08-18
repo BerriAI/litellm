@@ -1647,4 +1647,135 @@ describe("KeyEditView", () => {
       expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
     });
   });
+
+  const UNTOUCHED_SAVE_PAYLOAD = {
+    key_alias: "asdasdas",
+    models: [],
+    max_budget: 0,
+    budget_duration: "30d",
+    tpm_limit: 10,
+    tpm_limit_type: null,
+    rpm_limit: 10,
+    rpm_limit_type: null,
+    throttle_on_budget_exceeded: false,
+    enable_prompt_caching: false,
+    max_parallel_requests: 10,
+    model_tpm_limit: undefined,
+    model_rpm_limit: undefined,
+    guardrails: undefined,
+    disable_global_guardrails: false,
+    policies: undefined,
+    tags: ["test-tag"],
+    prompts: undefined,
+    access_group_ids: [],
+    allowed_passthrough_routes: undefined,
+    vector_stores: [],
+    mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+    mcp_tool_permissions: {},
+    agents_and_groups: { agents: [], accessGroups: [] },
+    organization_id: null,
+    team_id: null,
+    logging_settings: [],
+    metadata: "{}",
+    duration: "30d",
+    token: "test-token-123",
+    disabled_callbacks: [],
+    auto_rotate: false,
+    rotation_interval: undefined,
+    tag_rpm_limit: {},
+  };
+
+  describe("submit payload contract", () => {
+    const renderForPayload = (
+      onSubmit: (values: Record<string, unknown>) => Promise<void>,
+      keyData: KeyResponse = MOCK_KEY_DATA,
+    ) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyData}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Admin"}
+          premiumUser={true}
+        />,
+      );
+
+    it("sends exactly the bound form fields on an untouched save, and no server-only key data", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toStrictEqual(UNTOUCHED_SAVE_PAYLOAD);
+    });
+
+    it("drops the policy and prompt keys entirely for a role that cannot see those fields", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Internal User"}
+          premiumUser={true}
+        />,
+      );
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const payload = onSubmitMock.mock.calls[0][0];
+      expect(payload).not.toHaveProperty("policies");
+      expect(payload).not.toHaveProperty("prompts");
+      expect(payload).toHaveProperty("guardrails");
+    });
+
+    it("routes the shared lifecycle and rate-limit-type controls into their own payload keys", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      const duration = screen.getByPlaceholderText("e.g., 30d");
+      await userEvent.clear(duration);
+      await userEvent.type(duration, "45d");
+
+      await userEvent.click(screen.getByLabelText(/TPM Rate Limit Type/));
+      await userEvent.click(await screen.findByTitle("Guaranteed throughput"));
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const payload = onSubmitMock.mock.calls[0][0];
+      expect(payload.duration).toBe("45d");
+      expect(payload.tpm_limit_type).toBe("guaranteed_throughput");
+      expect(payload.rpm_limit_type).toBeNull();
+    });
+
+    it("blanks duration rather than dropping the key when Never Expire is ticked", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, { ...MOCK_KEY_DATA, expires: "2026-01-01T00:00:00Z" });
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("checkbox", { name: /never expire/i }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("duration", null);
+    });
+  });
 });

@@ -188,6 +188,77 @@ def test_resolve_complexity_router_plugins_rejects_synchronous_run_method(tmp_pa
         )
 
 
+def test_resolve_complexity_router_plugins_resolves_classifier_plugin_dotted_path(tmp_path):
+    plugin_file = tmp_path / "my_classifier.py"
+    plugin_file.write_text(
+        "class _Classifier:\n"
+        "    async def classify(self, context):\n"
+        "        return 'SIMPLE'\n"
+        "\n"
+        "my_classifier_instance = _Classifier()\n"
+    )
+    config: dict[str, Any] = {
+        "classifier_type": "custom",
+        "classifier_plugin": "my_classifier.my_classifier_instance",
+    }
+
+    resolve_complexity_router_plugins(
+        model_name="smart-router",
+        complexity_router_config=config,
+        config_file_path=str(tmp_path / "config.yaml"),
+    )
+
+    assert hasattr(config["classifier_plugin"], "classify")
+    assert type(config["classifier_plugin"]).__name__ == "_Classifier"
+
+
+def test_resolve_complexity_router_plugins_rejects_non_classifier_object(tmp_path):
+    plugin_file = tmp_path / "bad_classifier.py"
+    plugin_file.write_text("not_a_classifier = object()\n")
+    config: dict[str, Any] = {"classifier_plugin": "bad_classifier.not_a_classifier"}
+
+    with pytest.raises(ValueError, match="does not implement the ClassifierPlugin interface"):
+        resolve_complexity_router_plugins(
+            model_name="smart-router",
+            complexity_router_config=config,
+            config_file_path=str(tmp_path / "config.yaml"),
+        )
+
+
+def test_resolve_complexity_router_plugins_rejects_synchronous_classify_method(tmp_path):
+    """A synchronous `classify` passes the runtime_checkable isinstance and would only fail on
+    the first classified request, so reject it at config load like the sync-run case above."""
+    plugin_file = tmp_path / "sync_classifier.py"
+    plugin_file.write_text(
+        "class _SyncClassifier:\n"
+        "    def classify(self, context):\n"
+        "        return 'SIMPLE'\n"
+        "\n"
+        "sync_classifier_instance = _SyncClassifier()\n"
+    )
+    config: dict[str, Any] = {"classifier_plugin": "sync_classifier.sync_classifier_instance"}
+
+    with pytest.raises(ValueError, match="does not implement the ClassifierPlugin interface"):
+        resolve_complexity_router_plugins(
+            model_name="smart-router",
+            complexity_router_config=config,
+            config_file_path=str(tmp_path / "config.yaml"),
+        )
+
+
+def test_resolve_complexity_router_plugins_leaves_live_classifier_instance_alone():
+    class _Classifier:
+        async def classify(self, context):
+            return "SIMPLE"
+
+    instance = _Classifier()
+    config: dict[str, Any] = {"classifier_plugin": instance}
+    resolve_complexity_router_plugins(
+        model_name="smart-router", complexity_router_config=config, config_file_path=None
+    )
+    assert config["classifier_plugin"] is instance
+
+
 # ---------------------------------------------------------------------------
 # resolve_routing_plugins
 # ---------------------------------------------------------------------------
