@@ -211,6 +211,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
+  const planModeTiers = planModeEligibleTiers(value.tiers);
   const derivedDefaultModel = resolveComplexityDefaultModel(value.tiers);
   const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
@@ -435,12 +436,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 <div className="flex items-center gap-2 mb-2">
                   <Switch
                     checked={value.plan_mode_min_tier !== undefined}
-                    disabled={planModeEligibleTiers(value.tiers).length === 0}
+                    disabled={planModeTiers.length === 0}
                     onChange={(enabled) =>
-                      onChange({
-                        ...value,
-                        plan_mode_min_tier: enabled ? planModeEligibleTiers(value.tiers).at(-1) : undefined,
-                      })
+                      onChange({ ...value, plan_mode_min_tier: enabled ? planModeTiers.at(-1) : undefined })
                     }
                     aria-label="Route plan-mode requests to a minimum tier"
                   />
@@ -449,7 +447,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 <Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 12 }}>
                   Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier.
                   The classifier still wins when it picks higher, and the override only lasts while plan mode is active.
-                  {planModeEligibleTiers(value.tiers).length === 0 && " Add models to a tier to enable this."}
+                  {planModeTiers.length === 0 && " Add models to a tier to enable this."}
                 </Text>
                 {value.plan_mode_min_tier !== undefined && (
                   <div style={{ maxWidth: 320 }}>
@@ -458,7 +456,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                       style={{ width: "100%" }}
                       value={value.plan_mode_min_tier}
                       options={tierOptions(value.tier_labels).filter((option) =>
-                        planModeEligibleTiers(value.tiers).some((tier) => tier === option.value),
+                        (planModeTiers as string[]).includes(option.value),
                       )}
                       onChange={(tier: string) => onChange({ ...value, plan_mode_min_tier: tier })}
                     />
