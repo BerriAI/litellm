@@ -659,3 +659,7 @@ All these checks must pass before your PR can be merged.
 <a href="https://github.com/BerriAI/litellm/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
 </a>
+
+---
+
+*[Mukller](https://github.com/Mukller)*
