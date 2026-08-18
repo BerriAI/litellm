@@ -1,7 +1,12 @@
 import { modelCreateCall, Model } from "../networking";
 import NotificationManager from "../molecules/notifications_manager";
 
-export const handleAddAutoRouterSubmit = async (values: any, accessToken: string, form: any, callback?: () => void) => {
+export const handleAddAutoRouterSubmit = async (
+  values: any,
+  accessToken: string,
+  resetForm: () => void,
+  callback?: () => void,
+) => {
   try {
     let autoRouterConfig: any;
 
@@ -44,7 +49,7 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
     const routerTypeName = values.model_type === "complexity_router" ? "Auto Router" : "Semantic Router";
     NotificationManager.success(`Successfully created ${routerTypeName}: ${values.auto_router_name}`);
 
-    form.resetFields();
+    resetForm();
 
     if (callback) {
       callback();

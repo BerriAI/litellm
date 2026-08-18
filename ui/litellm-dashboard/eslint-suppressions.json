@@ -1951,7 +1951,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/add_model/add_model_modes.tsx": {
@@ -2301,9 +2301,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/immutability": {
       "count": 1
     }
@@ -2448,7 +2445,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/model_dashboard/ModelSettingsModal/ModelSettingsModal.tsx": {
