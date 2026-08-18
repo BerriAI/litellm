@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from litellm.proxy.guardrails.usage_tracking import process_spend_logs_guardrail_usage
@@ -94,8 +95,8 @@ async def test_one_failing_upsert_does_not_drop_remaining_writes():
     permanently under-report billable counters.
     """
     prisma = _prisma()
-    prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = RuntimeError("db down")
-    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [RuntimeError("db down"), None, None]
+    prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
+    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [httpx.ConnectError("db down"), None, None]
     sleep, _ = _fake_sleep()
     logs = [
         _payload("r1", usage={"topicPolicyUnits": 1}),
@@ -113,12 +114,13 @@ async def test_one_failing_upsert_does_not_drop_remaining_writes():
 @pytest.mark.asyncio
 async def test_transient_upsert_failure_is_retried_with_backoff_for_failed_rows_only():
     """
-    A transient DB error must not permanently drop billed units from the
-    aggregates: only the rows that failed are re-sent, after exponential
-    backoff, and the batch ends once every row has landed.
+    A connection error (the write provably never reached the database) must
+    not permanently drop billed units from the aggregates: only the rows that
+    failed are re-sent, after exponential backoff, and the batch ends once
+    every row has landed.
     """
     prisma = _prisma()
-    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [RuntimeError("blip"), None, None]
+    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [httpx.ConnectError("blip"), None, None]
     sleep, delays = _fake_sleep()
     logs = [
         _payload("r1", usage={"topicPolicyUnits": 1}),
@@ -136,7 +138,7 @@ async def test_transient_upsert_failure_is_retried_with_backoff_for_failed_rows_
 @pytest.mark.asyncio
 async def test_persistent_upsert_failure_stops_after_three_retries():
     prisma = _prisma()
-    prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = RuntimeError("db down")
+    prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
     sleep, delays = _fake_sleep()
 
     await process_spend_logs_guardrail_usage(prisma, [_payload("r1", usage={"topicPolicyUnits": 1})], sleep=sleep)
@@ -144,6 +146,61 @@ async def test_persistent_upsert_failure_stops_after_three_retries():
     assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_count == 4
     assert delays == [1, 2, 4]
     assert prisma.db.litellm_dailyguardrailusageunits.upsert.call_count == 1
+
+
+def _units_upsert_wheres(prisma: MagicMock) -> list[tuple]:
+    return [
+        tuple(
+            c.kwargs["where"]["guardrail_id_date_team_id_api_key_usage_unit"][k]
+            for k in ("guardrail_id", "date", "team_id", "api_key", "usage_unit")
+        )
+        for c in prisma.db.litellm_dailyguardrailusageunits.upsert.call_args_list
+    ]
+
+
+@pytest.mark.asyncio
+async def test_post_send_failure_is_never_retried_so_increments_cannot_double_count():
+    """
+    Follow-up to #37225: the units upsert is a non-idempotent increment, so an
+    ambiguous post-send failure (read timeout after the statement may have
+    committed) must be attempted exactly once. Re-sending it stacks a second
+    increment and inflates billable unit totals. Only a connection error proves
+    the write never reached the database and may be retried; the other rows in
+    the batch still land either way.
+    """
+    prisma = _prisma()
+    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = [
+        httpx.ReadTimeout("read timed out"),
+        httpx.ConnectError("refused"),
+        None,
+    ]
+    sleep, delays = _fake_sleep()
+    logs = [
+        _payload("r1", usage={"topicPolicyUnits": 1}),
+        _payload("r2", team_id=None, api_key="hashed-key-2", usage={"topicPolicyUnits": 1}),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs, sleep=sleep)
+
+    timed_out_row = ("bedrock-guard", "2026-08-17", "", "hashed-key-2", "topicPolicyUnits")
+    refused_row = ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits")
+    assert _units_upsert_wheres(prisma) == [timed_out_row, refused_row, refused_row]
+    assert delays == [1]
+
+
+@pytest.mark.asyncio
+async def test_generic_upsert_exception_is_terminal_for_that_row_only():
+    prisma = _prisma()
+    prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = RuntimeError("constraint violation")
+    sleep, delays = _fake_sleep()
+
+    await process_spend_logs_guardrail_usage(prisma, [_payload("r1", usage={"topicPolicyUnits": 1})], sleep=sleep)
+
+    assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_count == 1
+    assert delays == []
+    assert _units_upserts(prisma) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
+    }
 
 
 @pytest.mark.asyncio

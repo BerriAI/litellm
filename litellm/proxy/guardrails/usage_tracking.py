@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
@@ -63,11 +64,21 @@ async def _upsert_rows_with_retry(
     retries_left: int = _UPSERT_RETRY_TIMES,
 ) -> None:
     outcomes: Final = {key: await _attempt_upsert(upsert_row, key, value) for key, value in rows.items()}
-    failed: Final = MappingProxyType({key: rows[key] for key, error in outcomes.items() if error is not None})
-    if not failed:
+    for key, error in outcomes.items():
+        if error is not None and not isinstance(error, DB_RETRY_SAFE_ERROR_TYPES):
+            verbose_proxy_logger.warning(
+                "Guardrail usage tracking: %s upsert failed for %s and is not safe to retry (non-fatal): %s",
+                label,
+                key,
+                error,
+            )
+    retryable: Final = MappingProxyType(
+        {key: rows[key] for key, error in outcomes.items() if isinstance(error, DB_RETRY_SAFE_ERROR_TYPES)}
+    )
+    if not retryable:
         return
     if retries_left == 0:
-        for key in failed:
+        for key in retryable:
             verbose_proxy_logger.warning(
                 "Guardrail usage tracking: %s upsert failed for %s after %d retries (non-fatal): %s",
                 label,
@@ -77,7 +88,7 @@ async def _upsert_rows_with_retry(
             )
         return
     await sleep(2 ** (_UPSERT_RETRY_TIMES - retries_left))
-    await _upsert_rows_with_retry(failed, upsert_row, label, sleep, retries_left - 1)
+    await _upsert_rows_with_retry(retryable, upsert_row, label, sleep, retries_left - 1)
 
 
 def _guardrail_status_to_action(status: str | None) -> str:
