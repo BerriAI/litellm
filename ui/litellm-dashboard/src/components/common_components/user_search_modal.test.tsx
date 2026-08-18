@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import UserSearchModal from "./user_search_modal";
 import { userFilterUICall } from "@/components/networking";
@@ -74,5 +75,85 @@ describe("UserSearchModal", () => {
     expect(notice).toHaveTextContent(/ask a proxy admin to create their account first/i);
     // info, not warning: a warning here would read as an error state on an empty form
     expect(notice.className).toMatch(/ant-alert-info/);
+  });
+});
+
+describe("UserSearchModal submit payload", () => {
+  beforeEach(() => {
+    vi.mocked(userFilterUICall).mockReset();
+    vi.mocked(userFilterUICall).mockResolvedValue([{ user_id: "u-1", user_email: "picked@example.com" }] as never);
+  });
+
+  const setup = () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={onSubmit} accessToken="sk-test" />);
+    return { user, onSubmit };
+  };
+
+  const save = () => screen.getByRole("button", { name: /add member/i });
+
+  const searchByEmail = async (user: ReturnType<typeof userEvent.setup>, text: string) => {
+    const input = getEmailSearchInput();
+    await user.click(input);
+    await user.type(input, text);
+    await waitFor(() => expect(userFilterUICall).toHaveBeenCalled(), { timeout: 3000 });
+    const matches = await screen.findAllByText("picked@example.com");
+    await user.click(matches[matches.length - 1]);
+  };
+
+  it("submits every registered field, with the untouched identity fields undefined", async () => {
+    const { user, onSubmit } = setup();
+
+    await user.click(save());
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const values = onSubmit.mock.calls[0][0];
+    expect(Object.keys(values).sort()).toEqual(["role", "user_email", "user_id"]);
+    expect(values).toStrictEqual({ user_email: undefined, user_id: undefined, role: "user" });
+  });
+
+  it("carries the picked user's email and id into the payload", async () => {
+    const { user, onSubmit } = setup();
+
+    await searchByEmail(user, "pick");
+    await user.click(save());
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toStrictEqual({
+      user_email: "picked@example.com",
+      user_id: "u-1",
+      role: "user",
+    });
+  });
+
+  it("carries a role changed off its default into the payload", async () => {
+    const { onSubmit } = setup();
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+
+    await user.click(screen.getByLabelText("Member Role"));
+    const options = await screen.findAllByText("admin");
+    await user.click(options[options.length - 1]);
+    await user.click(save());
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ role: "admin" });
+  });
+
+  it("does not submit on Enter in any field, while the button still does", async () => {
+    const { user, onSubmit } = setup();
+
+    await user.click(getEmailSearchInput());
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByLabelText("User ID"));
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByLabelText("Member Role"));
+    await user.keyboard("{Escape}");
+    await user.keyboard("{Enter}");
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await user.click(save());
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
   });
 });
