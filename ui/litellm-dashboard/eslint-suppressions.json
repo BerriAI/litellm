@@ -2377,7 +2377,7 @@
   },
   "src/components/mcp_tools/MCPToolArgumentsForm.tsx": {
     "no-nested-ternary": {
-      "count": 5
+      "count": 1
     },
     "no-restricted-imports": {
       "count": 1

@@ -45,7 +45,8 @@ describe("MCPToolArgumentsForm", () => {
     await user.clear(screen.getByPlaceholderText("Enter ratio"));
     await user.type(screen.getByPlaceholderText("Enter ratio"), "1.5");
 
-    await expect(submit(ref)).resolves.toEqual({ city: "berlin", count: 7, ratio: 1.5, verbose: false });
+    const expected = { city: "berlin", count: 7, ratio: 1.5, verbose: false };
+    await expect(submit(ref)).resolves.toEqual(expected);
   });
 
   it("truncates a fractional value for an integer field", async () => {
