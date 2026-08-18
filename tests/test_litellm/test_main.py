@@ -2465,6 +2465,59 @@ async def test_acompletion_forwards_aws_credentials_through_responses_bridge(
         litellm.in_memory_llm_clients_cache.flush_cache()
 
 
+@pytest.mark.asyncio
+async def test_acompletion_delivers_prompt_cache_and_store_params_to_wire(
+    respx_mock: respx.MockRouter, monkeypatch
+):
+    """
+    store, prompt_cache_key and prompt_cache_retention are valid chat completion
+    params but were silently dropped before the wire: they are excluded from
+    provider-specific passthrough (OPENAI_CHAT_COMPLETION_PARAMS) yet never fed
+    into get_optional_params.
+    """
+    original_disable_aiohttp = litellm.disable_aiohttp_transport
+    try:
+        litellm.disable_aiohttp_transport = True
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        mock_route = respx_mock.post("https://api.openai.com/v1/chat/completions")
+        mock_route.return_value = httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-cache-test",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+
+        await litellm.acompletion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fake-api-key",
+            store=False,
+            prompt_cache_key="codex-session-1",
+            prompt_cache_retention="24h",
+        )
+
+        request_body = json.loads(respx_mock.calls.last.request.read())
+        assert request_body["store"] is False
+        assert request_body["prompt_cache_key"] == "codex-session-1"
+        assert request_body["prompt_cache_retention"] == "24h"
+    finally:
+        litellm.disable_aiohttp_transport = original_disable_aiohttp
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
 _GEMINI_RESPONSE_BODY = {
     "candidates": [{"content": {"parts": [{"text": "hello"}], "role": "model"}, "finishReason": "STOP"}],
     "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},

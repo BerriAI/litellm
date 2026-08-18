@@ -5367,6 +5367,9 @@ def completion(
             ),
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
+            "store": kwargs.get("store"),
+            "prompt_cache_key": kwargs.get("prompt_cache_key"),
+            "prompt_cache_retention": kwargs.get("prompt_cache_retention"),
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
             "base_model": base_model,
         }
