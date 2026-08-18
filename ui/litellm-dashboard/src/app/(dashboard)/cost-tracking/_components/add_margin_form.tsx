@@ -1,7 +1,8 @@
 import React from "react";
-import { TextInput, Button } from "@tremor/react";
 import { Select as AntdSelect, Form, Tooltip, Radio } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Providers, provider_map } from "@/components/provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { MarginConfig } from "./types";
@@ -125,10 +126,10 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
           ]}
         >
           <div className="flex items-center gap-2">
-            <TextInput
+            <Input
               placeholder="10"
               value={percentageValue}
-              onValueChange={onPercentageChange}
+              onChange={(e) => onPercentageChange(e.target.value)}
               className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 flex-1"
             />
             <span className="text-gray-600">%</span>
@@ -164,10 +165,10 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
         >
           <div className="flex items-center gap-2">
             <span className="text-gray-600">$</span>
-            <TextInput
+            <Input
               placeholder="0.001"
               value={fixedAmountValue}
-              onValueChange={onFixedAmountChange}
+              onChange={(e) => onFixedAmountChange(e.target.value)}
               className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 flex-1"
             />
           </div>
@@ -176,7 +177,6 @@ const AddMarginForm: React.FC<AddMarginFormProps> = ({
 
       <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
         <Button
-          variant="primary"
           onClick={onAddProvider}
           disabled={
             !selectedProvider ||

@@ -1,6 +1,8 @@
 import React, { useEffect } from "react";
-import { TextInput, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import { ChevronDown } from "lucide-react";
 import { Button as Button2, Modal, Form, InputNumber, Select } from "antd";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
 import { useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -53,7 +55,7 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
       >
         <>
           <Form.Item label="Budget ID" name="budget_id" help="Budget ID cannot be changed after creation">
-            <TextInput placeholder="" disabled={true} />
+            <Input placeholder="" disabled={true} />
           </Form.Item>
           <Form.Item label="Max Tokens per minute" name="tpm_limit" help="Default is model limit.">
             <InputNumber step={1} precision={2} width={200} />
@@ -62,11 +64,12 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
             <InputNumber step={1} precision={2} width={200} />
           </Form.Item>
 
-          <Accordion className="mt-20 mb-8">
-            <AccordionHeader>
+          <Collapsible className="mt-20 mb-8 overflow-hidden rounded-lg border">
+            <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
               <b>Optional Settings</b>
-            </AccordionHeader>
-            <AccordionBody>
+              <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="px-4 pb-3">
               <Form.Item label="Max Budget (USD)" name="max_budget">
                 <InputNumber step={0.01} precision={2} width={200} />
               </Form.Item>
@@ -77,8 +80,8 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
                   <Select.Option value="30d">monthly</Select.Option>
                 </Select>
               </Form.Item>
-            </AccordionBody>
-          </Accordion>
+            </CollapsibleContent>
+          </Collapsible>
         </>
 
         <div style={{ textAlign: "right", marginTop: "10px" }}>

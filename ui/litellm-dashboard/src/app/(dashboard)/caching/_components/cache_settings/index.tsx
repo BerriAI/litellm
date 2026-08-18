@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import { ChevronDown } from "lucide-react";
 import { Form } from "antd";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -185,11 +187,12 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
           </div>
         )}
 
-        <Accordion className="mt-4">
-          <AccordionHeader>
+        <Collapsible className="mt-4 overflow-hidden rounded-lg border">
+          <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
             <span className="text-sm font-medium text-gray-900">Advanced Settings</span>
-          </AccordionHeader>
-          <AccordionBody>
+            <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="px-4 pb-3">
             <div className="space-y-6">
               <CacheFieldSection
                 title="SSL Settings"
@@ -213,8 +216,8 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
                 headingLevel="h5"
               />
             </div>
-          </AccordionBody>
-        </Accordion>
+          </CollapsibleContent>
+        </Collapsible>
       </Form>
 
       <div className="border-t border-gray-200 pt-6 flex justify-end gap-3">
