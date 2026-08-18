@@ -85,6 +85,41 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("Score")).not.toBeInTheDocument();
   });
 
+  it("explains a route that fell back to the default model after the classifier failed", () => {
+    // No tier is recorded on this path, so the card must not show a Tier row: nothing
+    // about the request produced one, the classifier never answered.
+    render(
+      <RoutingDecisionCard
+        decision={{
+          router_model_name: "llm-router",
+          router_type: "complexity",
+          routed_model: "gpt-4o",
+          cause: "default_model_fallback",
+          signals: ["classifier-failed:default-model"],
+        }}
+      />,
+    );
+    expect(screen.getByText("Default model, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.queryByText("Tier")).not.toBeInTheDocument();
+  });
+
+  it("explains a route that fell back to the configured fallback tier after the classifier failed", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          router_model_name: "custom-tier-router",
+          router_type: "complexity",
+          routed_model: "claude-sonnet",
+          cause: "classifier_fallback",
+          tier: "SECURITY_REVIEW",
+          signals: ["classifier-fallback:SECURITY_REVIEW"],
+        }}
+      />,
+    );
+    expect(screen.getByText("Fallback tier, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("SECURITY_REVIEW")).toBeInTheDocument();
+  });
+
   it("shows the keyword that fired a tier rule", () => {
     render(
       <RoutingDecisionCard
@@ -92,6 +127,33 @@ describe("RoutingDecisionCard", () => {
       />,
     );
     expect(screen.getByText('Keyword match: "deploy to k8s"')).toBeInTheDocument();
+  });
+
+  it("shows the plan-mode sentinel that floored the tier", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "Plan mode is active", score: undefined }}
+      />,
+    );
+    expect(screen.getByText('Plan-mode floor: "Plan mode is active"')).toBeInTheDocument();
+  });
+
+  it("names the exit_plan_mode tool instead of quoting it as a sentinel", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "exit_plan_mode", score: undefined }}
+      />,
+    );
+    expect(screen.getByText("Plan-mode floor (exit_plan_mode tool)")).toBeInTheDocument();
+  });
+
+  it("does not claim the score chose the tier on a plan-mode floored row", () => {
+    // The score's band can name a lower tier than the floored badge; the cause suppresses it.
+    render(
+      <RoutingDecisionCard decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "Plan mode is active" }} />,
+    );
+    expect(screen.queryByText(/below|to 0|at or above/)).not.toBeInTheDocument();
+    expect(screen.getByText('Plan-mode floor: "Plan mode is active"')).toBeInTheDocument();
   });
 
   it("shows the escalation keyword", () => {

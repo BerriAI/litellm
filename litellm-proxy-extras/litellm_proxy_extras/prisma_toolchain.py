@@ -121,9 +121,13 @@ def heal_incomplete_nodeenv_cache() -> bool:
     Prisma invocation reinstalls it instead of failing on a missing binary.
     """
     cache_dir = nodeenv_cache_dir()
-    if cache_dir is None or not cache_dir.is_dir():
+    if cache_dir is None:
         return False
-    if node_binary_path(cache_dir).exists():
+    try:
+        if not cache_dir.is_dir() or node_binary_path(cache_dir).exists():
+            return False
+    except OSError as e:
+        logger.warning("Could not inspect the Node toolchain at %s: %s", cache_dir, e)
         return False
     logger.warning(
         "Node toolchain at %s has no %s, so a previous install was interrupted. "

@@ -43,6 +43,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    add_internal_model_credentials,
     apply_team_provider_credentials,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -50,6 +51,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     handle_model_based_routing,
     prepare_data_with_credentials,
     validate_managed_files_requirement,
+    validate_managed_id_requirement,
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
@@ -612,6 +614,13 @@ async def get_file_content(
 
     data: dict = {"file_id": file_id}
     try:
+        await validate_managed_id_requirement(
+            resource_id=file_id,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -698,6 +707,7 @@ async def get_file_content(
 
             model: Final = cast(str | None, data.get("model"))
             if model:
+                add_internal_model_credentials(data=data, llm_router=llm_router, model_id=model)
                 response = await llm_router.afile_content(
                     **{
                         "model": model,
@@ -908,6 +918,13 @@ async def get_file(
 
     data: dict = {"file_id": file_id}
     try:
+        await validate_managed_id_requirement(
+            resource_id=file_id,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+
         custom_llm_provider: Final = (
             provider
             or get_custom_llm_provider_from_request_headers(request=request)
@@ -1098,6 +1115,13 @@ async def delete_file(
 
     data: dict = {"file_id": file_id}
     try:
+        await validate_managed_id_requirement(
+            resource_id=file_id,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+
         custom_llm_provider: Final = (
             provider
             or get_custom_llm_provider_from_request_headers(request=request)
@@ -1330,7 +1354,7 @@ async def list_files(
 
         if should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            data.update(credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,

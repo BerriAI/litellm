@@ -1,11 +1,18 @@
 """
-Counts billable HTTP requests on enterprise deployments.
+Counts HTTP requests to LLM inference, MCP, and A2A endpoints.
 
-A billable request is an inbound request to an LLM inference, MCP, or A2A
-endpoint that returns a 2xx status. The actual export happens in an injected
-recorder (see litellm.proxy.enterprise_billing.billing_metrics); when no
-recorder is injected (non-enterprise, or metering misconfigured) this
-middleware is a transparent pass-through.
+Feeds two independent sinks off one classification:
+
+- ``GatewayRequestSink`` receives every classified request with its status and
+  is the source of truth for SGR (successful gateway requests) on the admin UI.
+  Not license-gated (see litellm.proxy.db.gateway_request_tracking). It is not
+  told which deployment served the request: it persists its counts, so every
+  dimension it takes has to be one the proxy chooses.
+- ``BillingRecorder`` receives 2xx requests only and exports them for
+  enterprise metering (see litellm.proxy.enterprise_billing.billing_metrics).
+
+Both are injected. When neither is present the middleware is a transparent
+pass-through.
 """
 
 import re
@@ -29,6 +36,21 @@ class BillableCategory(str, Enum):
 @runtime_checkable
 class BillingRecorder(Protocol):
     def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: str | None) -> None: ...
+
+
+@runtime_checkable
+class GatewayRequestSink(Protocol):
+    """
+    Records every classified request, 2xx or not, for the SGR dashboard.
+
+    Distinct from BillingRecorder on three counts: this is not license-gated,
+    it is not restricted to 2xx, and it takes no model id. The deployment that
+    served a request is deliberately not part of what it records, because the
+    dashboard aggregates by route and a per-deployment dimension would only
+    multiply the rows it has to sum back together.
+    """
+
+    def record(self, *, category: BillableCategory, route: str, status_code: int) -> None: ...
 
 
 _MODEL_ID_HEADER: Final = b"x-litellm-model-id"
@@ -70,6 +92,7 @@ _LLM_ROUTE_EXACT: Final[tuple[str, ...]] = (
     "/v1/messages",
     "/interactions",  # Google Interactions create; /{id} reads and /cancel do not match
     "/v1beta/interactions",
+    "/comprehendmedical",  # AWS-SDK-shaped passthrough: the operation rides in the X-Amz-Target header
 )
 
 # Provider passthrough prefixes (e.g. /bedrock/..., /vertex-ai/...) carry real
@@ -165,10 +188,11 @@ def _extract_model_id(headers: Sequence[tuple[bytes, bytes]]) -> str | None:
 
 class BillableRequestMetricsMiddleware:
     """
-    Pure ASGI middleware that records one billable request per 2xx response to a
-    billable endpoint. Modeled on InFlightRequestsMiddleware: it wraps `send`,
-    reads the final status and the x-litellm-model-id header off the
-    `http.response.start` message, and never blocks or fails the request path.
+    Pure ASGI middleware that classifies each request once and fans the result
+    out to the SGR sink (any status) and the billing recorder (2xx only).
+    Modeled on InFlightRequestsMiddleware: it wraps `send`, reads the final
+    status and the x-litellm-model-id header off the `http.response.start`
+    message, and never blocks or fails the request path.
     """
 
     def __init__(
@@ -176,6 +200,8 @@ class BillableRequestMetricsMiddleware:
         app: ASGIApp,
         recorder: BillingRecorder | None = None,
         recorder_factory: Callable[[], BillingRecorder | None] | None = None,
+        sink: GatewayRequestSink | None = None,
+        sink_factory: Callable[[], GatewayRequestSink | None] | None = None,
     ) -> None:
         self.app = app
         self.recorder = recorder
@@ -187,6 +213,12 @@ class BillableRequestMetricsMiddleware:
         self._recorder_factory = recorder_factory
         self._resolved = recorder_factory is None
         self._resolve_lock = threading.Lock()
+        # Resolved on the same schedule and for the same reason: the DB is not
+        # connected at import time, so the sink cannot be built there either.
+        self.sink = sink
+        self._sink_factory = sink_factory
+        self._sink_resolved = sink_factory is None
+        self._sink_resolve_lock = threading.Lock()
 
     def _resolve_recorder(self) -> BillingRecorder | None:
         if self._resolved:
@@ -200,13 +232,24 @@ class BillableRequestMetricsMiddleware:
                 self._resolved = True
         return self.recorder
 
+    def _resolve_sink(self) -> GatewayRequestSink | None:
+        if self._sink_resolved:
+            return self.sink
+        with self._sink_resolve_lock:
+            if not self._sink_resolved:
+                factory: Final = self._sink_factory
+                self.sink = factory() if factory is not None else self.sink
+                self._sink_resolved = True
+        return self.sink
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
         recorder: Final = self._resolve_recorder()
-        if recorder is None:
+        sink: Final = self._resolve_sink()
+        if recorder is None and sink is None:
             await self.app(scope, receive, send)
             return
 
@@ -228,7 +271,13 @@ class BillableRequestMetricsMiddleware:
 
         await self.app(scope, receive, send_wrapper)
 
-        if 200 <= status_code < 300:
+        if sink is not None:
+            try:
+                sink.record(category=category, route=route, status_code=status_code)
+            except Exception:  # noqa: BLE001 -- metering must never fail a request that was already served
+                verbose_proxy_logger.warning("gateway request metering failed for %s", route, exc_info=True)
+
+        if recorder is not None and 200 <= status_code < 300:
             try:
                 recorder.record(category=category, route=route, status_code=status_code, model_id=model_id)
             except Exception:  # noqa: BLE001 -- metering must never fail a request that was already served

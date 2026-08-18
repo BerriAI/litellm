@@ -11,7 +11,6 @@ import time
 import uuid as uuid_module
 from collections.abc import Coroutine
 from functools import partial
-from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 
 import httpx
@@ -37,6 +36,7 @@ import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentProvider, FileContentStreamingResult
+from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
@@ -86,14 +86,6 @@ azure_files_instance: Final = AzureOpenAIFilesAPI()
 vertex_ai_files_instance: Final = VertexAIFilesHandler()
 bedrock_files_instance: Final = BedrockFilesHandler()
 #################################################
-
-
-def _add_trusted_model_credentials_to_litellm_params(
-    litellm_params_dict: dict[str, Any], kwargs: dict[str, Any]
-) -> None:
-    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
-    if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
-        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials
 
 
 @client
@@ -375,7 +367,7 @@ def file_retrieve(
             )
             if provider_config is not None:
                 litellm_params_dict: Final = get_litellm_params(**kwargs)
-                _add_trusted_model_credentials_to_litellm_params(
+                add_trusted_model_credentials_to_litellm_params(
                     litellm_params_dict=litellm_params_dict,
                     kwargs=kwargs,
                 )
@@ -497,7 +489,7 @@ def file_delete(
             pass
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        _add_trusted_model_credentials_to_litellm_params(
+        add_trusted_model_credentials_to_litellm_params(
             litellm_params_dict=litellm_params_dict,
             kwargs=kwargs,
         )
@@ -837,7 +829,7 @@ def file_content(
     try:
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        _add_trusted_model_credentials_to_litellm_params(
+        add_trusted_model_credentials_to_litellm_params(
             litellm_params_dict=litellm_params_dict,
             kwargs=kwargs,
         )

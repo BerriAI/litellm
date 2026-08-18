@@ -4,6 +4,10 @@ import { vi } from "vitest";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import { testAutoRouterRouting } from "../networking";
 import { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
 vi.mock("../networking", () => ({
   testAutoRouterRouting: vi.fn(),

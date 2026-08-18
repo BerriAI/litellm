@@ -6,10 +6,6 @@ import { ModelData } from "@/components/model_dashboard/types";
 
 import { AllModelsTable } from "./AllModelsTable";
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
   ({
     model_name: "gpt-4-public",
@@ -79,7 +75,7 @@ const row = (modelId: string): HTMLElement => {
 };
 
 describe("AllModelsTable", () => {
-  it("renders the nine design columns and hides Status behind the Columns menu", async () => {
+  it("renders the nine design columns and hides Source behind the Columns menu", async () => {
     const user = userEvent.setup();
     render(<AllModelsTable {...baseProps} />);
 
@@ -97,12 +93,15 @@ describe("AllModelsTable", () => {
       expect(screen.getByRole("columnheader", { name: new RegExp(header, "i") })).toBeInTheDocument();
     }
 
+    expect(screen.queryByRole("columnheader", { name: /^source$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: /^status$/i })).not.toBeInTheDocument();
     expect(screen.queryByText("DB Model")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /columns/i }));
-    await user.click(await screen.findByRole("menuitemcheckbox", { name: /status/i }));
+    expect(screen.queryByRole("menuitemcheckbox", { name: /status/i })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: /^source$/i }));
 
+    expect(await screen.findByRole("columnheader", { name: /^source$/i })).toBeInTheDocument();
     expect(await screen.findByText("DB Model")).toBeInTheDocument();
   });
 

@@ -5,7 +5,8 @@ import ssl
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from contextlib import asynccontextmanager
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast, get_type_hints
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, Union, cast, get_type_hints
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
@@ -48,6 +49,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
+from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -148,6 +150,7 @@ from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+    from websockets.asyncio.client import ClientConnection
 
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -174,6 +177,19 @@ else:
     LiteLLMLoggingObj = Any
 
 _ResponseT = TypeVar("_ResponseT")
+
+
+class _DeleteRequestKwargs(TypedDict, total=False):
+    url: str
+    headers: dict[str, str]
+    timeout: float | httpx.Timeout | None
+    json: dict[str, object]
+
+
+class _MediaUploadKwargs(TypedDict, total=False):
+    headers: dict[str, str]
+    content: Iterator[bytes] | AsyncIterator[bytes]
+    timeout: float | httpx.Timeout
 
 
 def _google_genai_streaming_hidden_params(
@@ -1413,7 +1429,7 @@ class BaseLLMHTTPHandler:
         headers: dict[str, object] | None,
         provider_config: BaseOCRConfig,
         litellm_params: dict,
-    ) -> tuple[dict[str, Any], str, dict[str, Any], None]:
+    ) -> tuple[dict[str, object], str, dict[str, object], None]:
         """
         Shared logic for preparing OCR requests.
         Returns: (headers, complete_url, data, files)
@@ -1479,7 +1495,7 @@ class BaseLLMHTTPHandler:
         headers: dict[str, object] | None,
         provider_config: BaseOCRConfig,
         litellm_params: dict,
-    ) -> tuple[dict[str, Any], str, dict[str, Any], None]:
+    ) -> tuple[dict[str, object], str, dict[str, object], None]:
         """
         Async version of _prepare_ocr_request for providers that need async transforms.
         Returns: (headers, complete_url, data, files)
@@ -1540,12 +1556,14 @@ class BaseLLMHTTPHandler:
         model: str,
         response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        optional_params: Mapping[str, object],
     ) -> OCRResponse:
         """Shared logic for transforming OCR responses."""
         return provider_config.transform_ocr_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     def ocr(
@@ -1621,6 +1639,7 @@ class BaseLLMHTTPHandler:
             model=model,
             response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def async_ocr(
@@ -1683,6 +1702,7 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     def search(
@@ -2361,14 +2381,14 @@ class BaseLLMHTTPHandler:
         model: str,
         input: str | ResponseInputParam,
         custom_llm_provider: str,
-        response_api_optional_request_params: dict[str, Any],
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
     ) -> tuple[
         str,
         str | ResponseInputParam,
         str,
-        dict[str, Any],
+        dict[str, object],
         GenericLiteLLMParams,
     ]:
         if not _has_pre_call_deployment_hook(logging_obj):
@@ -2894,7 +2914,7 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        delete_kwargs: Final[dict[str, Any]] = {
+        delete_kwargs: Final[_DeleteRequestKwargs] = {
             "url": url,
             "headers": headers,
             "timeout": timeout,
@@ -2984,7 +3004,7 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        delete_kwargs: Final[dict[str, Any]] = {
+        delete_kwargs: Final[_DeleteRequestKwargs] = {
             "url": url,
             "headers": headers,
             "timeout": timeout,
@@ -3725,7 +3745,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         headers: Final = {**base_headers, "Content-Type": content_type}
-        kwargs: Final[dict[str, Any]] = {
+        kwargs: Final[_MediaUploadKwargs] = {
             "headers": headers,
             "content": self._iter_in_blocks(body_stream.iter_bytes(), self._MEDIA_UPLOAD_BLOCK_SIZE),
         }
@@ -3762,7 +3782,7 @@ class BaseLLMHTTPHandler:
                     break
                 yield cast(bytes, block)
 
-        kwargs: Final[dict[str, Any]] = {"headers": headers, "content": _abody()}
+        kwargs: Final[_MediaUploadKwargs] = {"headers": headers, "content": _abody()}
         if timeout is not None:
             kwargs["timeout"] = timeout
         resp: Final = await client.client.post(url, **kwargs)
@@ -5242,7 +5262,7 @@ class BaseLLMHTTPHandler:
 
     def _wrap_responses_response_as_fake_stream(
         self,
-        result: Any,
+        result: ResponsesAPIResponse,
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: "LiteLLMLoggingObj",
@@ -5365,7 +5385,7 @@ class BaseLLMHTTPHandler:
 
     async def _call_agentic_completion_hooks(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         anthropic_messages_provider_config: "BaseAnthropicMessagesConfig",
@@ -5536,7 +5556,7 @@ class BaseLLMHTTPHandler:
 
     async def _call_agentic_chat_completion_hooks(
         self,
-        response: Any,
+        response: ModelResponse,
         model: str,
         messages: list[dict],
         optional_params: dict,
@@ -5760,14 +5780,14 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     async def _open_realtime_backend_ws(
-        websockets_module: Any,
+        websockets_module: ModuleType,
         url: str,
         headers: dict,
-        ssl_context: Any,
+        ssl_context: bool | str | ssl.SSLContext,
         *,
         open_timeout: float = 8.0,
         max_attempts: int = 3,
-    ) -> Any:
+    ) -> "ClientConnection":
         """Open the backend realtime websocket, retrying a hung open handshake.
 
         The upstream Live handshake (e.g. Gemini Live) intermittently hangs on
@@ -5826,7 +5846,6 @@ class BaseLLMHTTPHandler:
         query_params: RealtimeQueryParams | None = None,
     ):
         import websockets
-        from websockets.asyncio.client import ClientConnection
 
         url: Final = provider_config.get_complete_url(api_base, model, api_key)
         headers = provider_config.validate_environment(
@@ -5844,12 +5863,12 @@ class BaseLLMHTTPHandler:
                 ssl_context.verify_mode = ssl.CERT_NONE
             backend_ws: Final = await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
             async with backend_ws:
-                _request_data: Final[dict[str, Any]] = {}
+                _request_data: Final[dict[str, object]] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
                 realtime_streaming: Final = RealTimeStreaming(
                     websocket,
-                    cast(ClientConnection, backend_ws),
+                    backend_ws,
                     logging_obj,
                     provider_config,
                     model,
@@ -5916,10 +5935,10 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -5949,10 +5968,10 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -5978,7 +5997,7 @@ class BaseLLMHTTPHandler:
         endpoint: Literal["client_secrets", "transcription_sessions"],
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: Any | None = None,
@@ -6008,7 +6027,7 @@ class BaseLLMHTTPHandler:
                 )
             else:
                 url = provider_config.get_complete_url(api_base=api_base, model=model or "", api_version=api_version)
-            headers: dict[str, Any] = provider_config.validate_environment(
+            headers: dict[str, object] = provider_config.validate_environment(
                 headers={}, model=model or "", api_key=api_key
             )
         else:
@@ -6079,7 +6098,7 @@ class BaseLLMHTTPHandler:
 
         if provider_config is not None:
             url = provider_config.get_realtime_calls_url(api_base=api_base, model=model or "", api_version=api_version)
-            headers: dict[str, Any] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
+            headers: dict[str, object] = provider_config.get_realtime_calls_headers(ephemeral_key=openai_ephemeral_key)
         else:
             url = f"{api_base.rstrip('/')}/v1/realtime/calls"
             headers = {
@@ -6247,7 +6266,7 @@ class BaseLLMHTTPHandler:
                     yield backend
 
             async with _backend_connection() as backend_ws:
-                _request_data: Final[dict[str, Any]] = {}
+                _request_data: Final[dict[str, object]] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
 
@@ -9444,7 +9463,7 @@ class BaseLLMHTTPHandler:
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
             )
-        all_optional_params: Final[dict[str, Any]] = dict(litellm_params)
+        all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
         headers, signed_json_body = vector_store_provider_config.sign_request(
             headers=headers,
@@ -9540,7 +9559,7 @@ class BaseLLMHTTPHandler:
             extra_body=extra_body,
         )
 
-        all_optional_params: Final[dict[str, Any]] = dict(litellm_params)
+        all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
 
         headers, signed_json_body = vector_store_provider_config.sign_request(
@@ -9860,7 +9879,7 @@ class BaseLLMHTTPHandler:
 
         url: Final = api_base
 
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, object]] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -9938,7 +9957,7 @@ class BaseLLMHTTPHandler:
 
         url: Final = api_base
 
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, object]] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -11063,7 +11082,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
-        system_instruction: Any | None = None,
+        system_instruction: object | None = None,
     ) -> Any:
         """
         Handles Google GenAI generate content requests.
@@ -11194,7 +11213,7 @@ class BaseLLMHTTPHandler:
         client: AsyncHTTPHandler | None = None,
         stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
-        system_instruction: Any | None = None,
+        system_instruction: object | None = None,
     ) -> Any:
         """
         Async version of the generate content handler.

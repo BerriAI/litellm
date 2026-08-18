@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
 import {
   ADMIN_STORAGE_PATH,
   E2E_TEAM_CRUD_ID,
@@ -8,6 +8,22 @@ import {
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
+import { readBack } from "../../helpers/roundTrip";
+
+/** GET /team/list returns a bare array of teams, each carrying team_alias/team_id. */
+async function findTeamByAlias(page: PlaywrightPage, alias: string): Promise<Record<string, any> | undefined> {
+  const teams = await readBack<Record<string, any>[]>(page, "/team/list");
+  return teams.find((team) => team.team_alias === alias);
+}
+
+/** GET /team/info nests the record under `team_info`; membership lives in members_with_roles. */
+async function teamMemberEmails(page: PlaywrightPage, teamId: string): Promise<string[]> {
+  const info = await readBack<{ team_info: { members_with_roles?: { user_email?: string }[] } }>(
+    page,
+    `/team/info?team_id=${encodeURIComponent(teamId)}`,
+  );
+  return (info.team_info.members_with_roles ?? []).map((member) => member.user_email ?? "").filter(Boolean);
+}
 
 test.describe("Proxy Admin - Teams", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
@@ -31,10 +47,10 @@ test.describe("Proxy Admin - Teams", () => {
     // Fill Team Name — the input has id="team_alias"
     await dialog.locator("#team_alias").fill(uniqueAlias);
 
-    // Select models — the models multi-select is inside the modal
-    // Click to open dropdown, select "All Proxy Models"
-    await dialog.locator(".ant-select-selection-overflow").first().click();
-    await page.locator(".ant-select-dropdown:visible").getByText("All Proxy Models").click();
+    // Select models — the models multi-select is inside the modal. Its popup is
+    // portaled to the body, so scope the option lookup to the page, not the dialog.
+    await dialog.getByTestId("create-team-models-select").getByRole("combobox").click();
+    await page.getByRole("option", { name: "All Proxy Models", exact: true }).click();
     await page.keyboard.press("Escape");
 
     // Submit — click the submit button inside the dialog (not the header button)
@@ -42,6 +58,11 @@ test.describe("Proxy Admin - Teams", () => {
 
     // Verify success notification
     await expect(page.getByText("Team created").first()).toBeVisible({ timeout: 10_000 });
+
+    // A create that drops its model selection still toasts success.
+    const created = await findTeamByAlias(page, uniqueAlias);
+    expect(created, `team ${uniqueAlias} readable from /team/list`).toBeTruthy();
+    expect(created?.models, "created team kept its model selection").toBeTruthy();
   });
 
   test("Invite a user to a team", async ({ page }) => {
@@ -71,6 +92,14 @@ test.describe("Proxy Admin - Teams", () => {
     await modal.getByRole("button", { name: /Add Member/i }).click();
 
     await expect(page.getByText(/member.*added|success/i).first()).toBeVisible({ timeout: 10_000 });
+
+    // The toast is matched loosely enough (/success/i) that almost any notification satisfies it.
+    await expect
+      .poll(async () => await teamMemberEmails(page, E2E_TEAM_CRUD_ID), {
+        message: "invited user never appeared in the team's members",
+        timeout: 15_000,
+      })
+      .toContain("invitable@test.local");
   });
 
   test("Edit team member for team proxy admin does not belong to", async ({ page }) => {
@@ -100,12 +129,20 @@ test.describe("Proxy Admin - Teams", () => {
     await teamRow.locator('[data-testid^="team-actions-"]').click();
     await page.getByTestId("team-action-delete").click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Delete Team?" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.locator("input").fill(E2E_TEAM_DELETE_ALIAS);
     await modal.getByRole("button", { name: /Force Delete|Delete/i }).click();
 
     await expect(teamRow).not.toBeVisible({ timeout: 10_000 });
+
+    // A row vanishing is local state, which happens whether or not the delete landed.
+    await expect
+      .poll(async () => await findTeamByAlias(page, E2E_TEAM_DELETE_ALIAS), {
+        message: `team ${E2E_TEAM_DELETE_ALIAS} still readable from /team/list after delete`,
+        timeout: 15_000,
+      })
+      .toBeUndefined();
   });
 
   test("Team in org - edit team member", async ({ page }) => {
@@ -154,11 +191,11 @@ test.describe("Proxy Admin - Teams", () => {
       const modelsSelect = page.locator("[data-testid='models-select']");
       await expect(modelsSelect).toBeVisible({ timeout: 10_000 });
 
-      const anthropicTag = modelsSelect
-        .locator(".ant-select-selection-item")
+      const anthropicChip = modelsSelect
+        .locator('[data-slot="combobox-chip"]')
         .filter({ hasText: "fake-anthropic-claude" });
-      await expect(anthropicTag).toBeVisible({ timeout: 5_000 });
-      await anthropicTag.locator(".ant-select-selection-item-remove").click();
+      await expect(anthropicChip).toBeVisible({ timeout: 5_000 });
+      await anthropicChip.locator('[data-slot="combobox-chip-remove"]').click();
 
       await page.getByRole("button", { name: "Save Changes" }).click();
 

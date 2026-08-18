@@ -67,12 +67,20 @@ def _init_arg_names(cls: type) -> frozenset[str]:
 
     Keyword-only parameters are included, and the MRO is walked because redis-py splits a
     connection's parameters between ``AbstractConnection`` and its concrete subclasses.
+
+    Each ``__init__`` is unwrapped before introspection: redis-py >= 7.4 decorates
+    ``AbstractConnection.__init__`` with ``@deprecated_args``, whose wrapper is declared
+    ``(self, *args, **kwargs)`` — introspecting the wrapper directly loses every real
+    parameter (``socket_timeout`` included), which silently emptied this allowlist and
+    dropped the socket timeouts from url-configured connections. ``inspect.unwrap``
+    follows the ``__wrapped__`` chain to the true signature and is a no-op on
+    undecorated ``__init__``s.
     """
     return frozenset(
         name
         for klass in inspect.getmro(cls)
         if klass is not object
-        for spec in (inspect.getfullargspec(klass.__init__),)
+        for spec in (inspect.getfullargspec(inspect.unwrap(klass.__init__)),)
         for name in spec.args + spec.kwonlyargs
     )
 
@@ -395,9 +403,7 @@ def _get_redis_client_logic(**env_overrides):
     if _sentinel_password is not None:
         redis_kwargs["sentinel_password"] = _sentinel_password
 
-    _service_name: Final[str | None] = redis_kwargs.get("service_name", None) or get_secret(
-        "REDIS_SERVICE_NAME"
-    )
+    _service_name: Final[str | None] = redis_kwargs.get("service_name", None) or get_secret("REDIS_SERVICE_NAME")
 
     if _service_name is not None:
         redis_kwargs["service_name"] = _service_name

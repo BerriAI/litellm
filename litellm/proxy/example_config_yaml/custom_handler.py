@@ -1,9 +1,7 @@
-import time
-from typing import Any, Final, Optional
+from typing import Final
 
 import litellm
-from litellm import CustomLLM, ImageObject, ImageResponse, completion, get_llm_provider
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm import CustomLLM
 from litellm.types.utils import ModelResponse
 
 

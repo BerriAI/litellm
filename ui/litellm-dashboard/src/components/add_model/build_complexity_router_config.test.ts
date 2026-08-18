@@ -1,5 +1,6 @@
 import {
   buildComplexityRouterConfig,
+  normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
@@ -23,7 +24,9 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierContextWindowSize: undefined,
   classifierContextPerTurnChars: undefined,
   classifierContextIncludeAssistantTurns: undefined,
+  classifierFallback: undefined,
   sessionAffinity: false,
+  deploymentAffinity: true,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
@@ -44,6 +47,7 @@ describe("buildComplexityRouterConfig", () => {
       tiers,
       classifier_type: "heuristic",
       session_affinity: false,
+      deployment_affinity: true,
       escalation_keywords: ["LITELLM ESCALATE"],
     });
   });
@@ -403,6 +407,92 @@ describe("buildComplexityRouterConfig assistant turns", () => {
   });
 });
 
+describe("classifier prompt and fallback", () => {
+  const llmParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400 },
+  };
+
+  it("omits system_prompt when the operator never edited the prompt", () => {
+    // The backend rejects a blank string, and storing a copy of the default would freeze the
+    // rubric so later improvements never reach this router.
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: "   " },
+    });
+    expect(config.classifier_llm_config).toEqual({ model: "haiku-classifier", timeout_ms: 400 });
+    expect(config.classifier_llm_config).not.toHaveProperty("system_prompt");
+  });
+
+  it("keeps a custom system_prompt verbatim, whitespace and all", () => {
+    const systemPrompt = "  Grade data sensitivity.\n\nSIMPLE=public  ";
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, system_prompt: systemPrompt },
+    });
+    expect(config.classifier_llm_config?.system_prompt).toBe(systemPrompt);
+  });
+
+  it("emits classifier_fallback only for the llm classifier", () => {
+    expect(buildComplexityRouterConfig({ ...llmParams, classifierFallback: "default_model" }).classifier_fallback).toBe(
+      "default_model",
+    );
+    expect(buildComplexityRouterConfig({ ...baseParams, classifierFallback: "default_model" })).not.toHaveProperty(
+      "classifier_fallback",
+    );
+  });
+
+  it("omits classifier_fallback when unset so the backend default applies", () => {
+    expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
+  });
+
+  it("sends the chat preset the operator picked", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, classification_rubric: "chat" },
+    });
+    expect(config.classifier_llm_config).toEqual({
+      model: "haiku-classifier",
+      timeout_ms: 400,
+      classification_rubric: "chat",
+    });
+  });
+
+  it("omits the preset when none is set, leaving an existing router on the rubric it already had", () => {
+    // An unset preset means the pre-calibration rubric on the backend. Materializing a value here
+    // would change the tier decisions, and the bill, of a router the operator only opened to edit.
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
+  });
+
+  it("drops the preset when a custom prompt replaces the rubric, which the backend rejects together", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: {
+        model: "haiku-classifier",
+        timeout_ms: 400,
+        classification_rubric: "chat",
+        system_prompt: "Grade the data sensitivity of the request.",
+      },
+    });
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
+    expect(config.classifier_llm_config?.system_prompt).toBe("Grade the data sensitivity of the request.");
+  });
+
+  it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
+      model: "m",
+      timeout_ms: 1,
+      system_prompt: "x",
+    });
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
+      model: "m",
+      timeout_ms: 1,
+    });
+  });
+});
+
 describe("tier labels", () => {
   it("omits tier_labels entirely when the operator renamed nothing", () => {
     expect(buildComplexityRouterConfig(baseParams).tier_labels).toBeUndefined();
@@ -437,9 +527,8 @@ describe("getTierLabelsError", () => {
   });
 
   it("accepts a full distinct rename", () => {
-    expect(
-      getTierLabelsError({ SIMPLE: "Cheap", MEDIUM: "Standard", COMPLEX: "Premium", REASONING: "Deep" }),
-    ).toBeNull();
+    const fullRename = { SIMPLE: "Cheap", MEDIUM: "Standard", COMPLEX: "Premium", REASONING: "Deep" };
+    expect(getTierLabelsError(fullRename)).toBeNull();
   });
 
   it("rejects two tiers sharing a name, which would be ambiguous in the logs", () => {
@@ -473,9 +562,8 @@ describe("hydrateTierLabels", () => {
   });
 
   it("drops non-string and blank values a hand-edited config could hold", () => {
-    expect(hydrateTierLabels({ SIMPLE: 7, MEDIUM: "  ", COMPLEX: null, REASONING: "Deep" })).toEqual({
-      REASONING: "Deep",
-    });
+    const handEdited = { SIMPLE: 7, MEDIUM: "  ", COMPLEX: null, REASONING: "Deep" };
+    expect(hydrateTierLabels(handEdited)).toEqual({ REASONING: "Deep" });
   });
 
   it("ignores keys that are not tiers", () => {
@@ -485,5 +573,31 @@ describe("hydrateTierLabels", () => {
   it("returns undefined for a value that is not an object", () => {
     expect(hydrateTierLabels("Cheap")).toBeUndefined();
     expect(hydrateTierLabels(["Cheap"])).toBeUndefined();
+  });
+});
+
+describe("buildComplexityRouterConfig scorer knobs", () => {
+  const BOUNDARIES = { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 };
+  const tuned: BuildComplexityRouterConfigParams = { ...baseParams, tierBoundaries: BOUNDARIES };
+  const llmWithDefaultFallback: BuildComplexityRouterConfigParams = {
+    ...tuned,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifierFallback: "default_model",
+  };
+
+  it("omits untouched knobs so the router tracks the backend defaults", () => {
+    const config = buildComplexityRouterConfig(baseParams);
+
+    expect(config).not.toHaveProperty("tier_boundaries");
+    expect(config).not.toHaveProperty("dimension_weights");
+  });
+
+  it("emits what was set", () => {
+    expect(buildComplexityRouterConfig(tuned).tier_boundaries).toEqual(BOUNDARIES);
+  });
+
+  it("drops them when the classifier falls back to the default model and nothing is scored", () => {
+    expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
   });
 });

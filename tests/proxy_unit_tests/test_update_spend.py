@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 
 import httpx
-from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES
+from litellm.proxy.utils import update_spend
 
 
 class MockPrismaClient:
@@ -29,12 +29,14 @@ class MockPrismaClient:
         self.spend_log_transactions = []
         self.daily_user_spend_transactions = {}
         self.tool_usage_transactions = []
+        self.autorouter_turn_transactions = []
 
         # Add locks for the transaction queues (matches real PrismaClient)
         import asyncio
 
         self._spend_log_transactions_lock = asyncio.Lock()
         self._tool_usage_transactions_lock = asyncio.Lock()
+        self._autorouter_turn_transactions_lock = asyncio.Lock()
 
     def jsonify_object(self, obj):
         return obj

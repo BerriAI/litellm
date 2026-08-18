@@ -3,7 +3,7 @@
 import { useHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides/useHashicorpVaultConfig";
 import { useUpdateHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides/useUpdateHashicorpVaultConfig";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button, Divider, Form, Input, Modal, Space, Typography } from "antd";
 import React, { useEffect } from "react";
 import { SENSITIVE_FIELDS, FIELD_LABELS } from "./constants";
@@ -81,11 +81,11 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVis
 
     mutate(config, {
       onSuccess: () => {
-        NotificationManager.success("Hashicorp Vault configuration updated successfully");
+        toast.success("Hashicorp Vault configuration updated successfully");
         onSuccess();
       },
       onError: (err) => {
-        NotificationManager.fromBackend(err);
+        toast.fromError(err);
       },
     });
   };

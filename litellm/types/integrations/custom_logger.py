@@ -1,4 +1,4 @@
-from typing import Any, Dict, Final, List, Optional
+from typing import Any, Final
 
 from pydantic import BaseModel, Field
 
@@ -28,7 +28,7 @@ class StandardCustomLoggerInitParams(BaseModel):
     Params for initializing a CustomLogger.
     """
 
-    turn_off_message_logging: Optional[bool] = False
+    turn_off_message_logging: bool | None = False
 
 
 class AgenticLoopRequestPatch(BaseModel):
@@ -36,12 +36,12 @@ class AgenticLoopRequestPatch(BaseModel):
     Patch returned by callbacks to request a follow-up LLM call.
     """
 
-    model: Optional[str] = None
-    messages: Optional[List[Dict[str, Any]]] = None
-    tools: Optional[List[Dict[str, Any]]] = None
-    max_tokens: Optional[int] = None
-    optional_params: Dict[str, Any] = Field(default_factory=dict)
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    model: str | None = None
+    messages: list[dict[str, Any]] | None = None
+    tools: list[dict[str, Any]] | None = None
+    max_tokens: int | None = None
+    optional_params: dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgenticLoopPlan(BaseModel):
@@ -50,8 +50,8 @@ class AgenticLoopPlan(BaseModel):
     """
 
     run_agentic_loop: bool = False
-    request_patch: Optional[AgenticLoopRequestPatch] = None
-    response_override: Optional[Any] = None
+    request_patch: AgenticLoopRequestPatch | None = None
+    response_override: Any | None = None
     terminate: bool = False
-    stop_reason: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    stop_reason: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)

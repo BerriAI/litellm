@@ -14,7 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.llms.openai import CreateBatchRequest
 from litellm.types.llms.vertex_ai import (
@@ -98,9 +98,6 @@ class VertexAIBatchPrediction(VertexLLM):
             data=json.dumps(vertex_batch_request),
         )
 
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
-
         _json_response: Final = response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
             response=_json_response
@@ -130,8 +127,6 @@ class VertexAIBatchPrediction(VertexLLM):
                 error_body[:1000],
             )
             raise
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
 
         _json_response: Final = response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
@@ -243,7 +238,9 @@ class VertexAIBatchPrediction(VertexLLM):
         )
 
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code, message=f"Error: {response.status_code} {response.text}"
+            )
 
         _json_response: Final = response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
@@ -293,7 +290,9 @@ class VertexAIBatchPrediction(VertexLLM):
             headers=headers,
         )
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code, message=f"Error: {response.status_code} {response.text}"
+            )
 
         _json_response: Final = response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
@@ -366,7 +365,9 @@ class VertexAIBatchPrediction(VertexLLM):
         )
 
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code, message=f"Error: {response.status_code} {response.text}"
+            )
 
         _json_response: Final = response.json()
         vertex_batch_response: Final = (
@@ -391,7 +392,9 @@ class VertexAIBatchPrediction(VertexLLM):
             params=params,
         )
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code, message=f"Error: {response.status_code} {response.text}"
+            )
 
         _json_response: Final = response.json()
         vertex_batch_response: Final = (
@@ -461,7 +464,7 @@ class VertexAIBatchPrediction(VertexLLM):
 
         sync_handler: Final = _get_httpx_client()
         try:
-            response: Final = sync_handler.post(
+            sync_handler.post(
                 url=api_base,
                 headers=headers,
                 data=json.dumps({}),
@@ -475,9 +478,6 @@ class VertexAIBatchPrediction(VertexLLM):
             )
             raise
 
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
-
         # HTTPHandler.get() does not accept a timeout parameter
         retrieve_response: Final = sync_handler.get(
             url=retrieve_api_base,
@@ -489,7 +489,10 @@ class VertexAIBatchPrediction(VertexLLM):
                 retrieve_response.status_code,
                 retrieve_response.text[:1000],
             )
-            raise Exception(f"Error: {retrieve_response.status_code} {retrieve_response.text}")
+            raise VertexAIError(
+                status_code=retrieve_response.status_code,
+                message=f"Error: {retrieve_response.status_code} {retrieve_response.text}",
+            )
 
         _json_response: Final = retrieve_response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
@@ -508,7 +511,7 @@ class VertexAIBatchPrediction(VertexLLM):
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
         try:
-            response: Final = await client.post(
+            await client.post(
                 url=api_base,
                 headers=headers,
                 data=json.dumps({}),
@@ -521,8 +524,6 @@ class VertexAIBatchPrediction(VertexLLM):
                 e.response.text[:1000],
             )
             raise
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
 
         # AsyncHTTPHandler.get() does not accept a timeout parameter
         retrieve_response: Final = await client.get(
@@ -535,7 +536,10 @@ class VertexAIBatchPrediction(VertexLLM):
                 retrieve_response.status_code,
                 retrieve_response.text[:1000],
             )
-            raise Exception(f"Error: {retrieve_response.status_code} {retrieve_response.text}")
+            raise VertexAIError(
+                status_code=retrieve_response.status_code,
+                message=f"Error: {retrieve_response.status_code} {retrieve_response.text}",
+            )
 
         _json_response: Final = retrieve_response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
