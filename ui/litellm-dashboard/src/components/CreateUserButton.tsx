@@ -174,7 +174,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         labelCol={{ span: 8 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
-        initialValues={{ user_role: "internal_user_viewer", send_invite_email: true }}
+        initialValues={{ user_role: "internal_user_viewer", send_invite_email: true, metadata: "{}" }}
       >
         <Alert
           message="Email invitations"
@@ -266,7 +266,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
-          initialValues={{ user_role: "internal_user_viewer", send_invite_email: true }}
+          initialValues={{ user_role: "internal_user_viewer", send_invite_email: true, metadata: "{}" }}
         >
           <Form.Item label="User Email" name="user_email">
             <Input />
