@@ -230,6 +230,27 @@ class TestVertexAILivePassthroughLoggingHandler:
     @patch(
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.get_model_info"
     )
+    def test_calculate_cost_input_free_output_priced(self, mock_get_model_info, handler):
+        """A model free on input but priced on output must still bill output, not return 0."""
+        mock_get_model_info.return_value = {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.000005,
+        }
+
+        usage_metadata = {
+            "promptTokenCount": 1000,
+            "candidatesTokenCount": 200,
+            "totalTokenCount": 1200,
+        }
+
+        cost = handler._calculate_live_api_cost("gemini-live-x", usage_metadata)
+
+        assert cost == pytest.approx(200 * 0.000005)
+        assert cost > 0
+
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.get_model_info"
+    )
     def test_calculate_cost_with_audio(self, mock_get_model_info, handler):
         """Test cost calculation with audio tokens"""
         mock_get_model_info.return_value = {
