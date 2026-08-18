@@ -265,7 +265,9 @@ class JsonFormatter(Formatter):
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
-        return safe_dumps(json_record)
+        # SecretRedactionFilter only scrubs str values; redacting the rendered line means
+        # no `extra=` value shape (dict, list, set, nested) can bypass redaction.
+        return _redact_string(safe_dumps(json_record))
 
 
 class CorrelationPlainFormatter(logging.Formatter):
@@ -276,7 +278,7 @@ class CorrelationPlainFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        formatted: Final = super().format(record)
+        formatted: Final = _redact_string(super().format(record))
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
