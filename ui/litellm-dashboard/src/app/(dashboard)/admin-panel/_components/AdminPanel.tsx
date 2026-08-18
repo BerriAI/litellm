@@ -3,18 +3,12 @@
  * Use this to avoid sharing master key with others
  */
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import {
-  Button,
-  Callout,
-  Card,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-} from "@tremor/react";
-import { Alert, Modal, Space, Tabs, Typography } from "antd";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Alert as AntdAlert, Modal, Space, Tabs, Typography } from "antd";
+import { Info } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import NewBadge from "@/components/common_components/NewBadge";
 import { useBaseUrl } from "@/components/constants";
@@ -37,7 +31,6 @@ import UIAccessControlForm from "@/components/UIAccessControlForm";
 import { z } from "zod/v4";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
-import { Button as ShadcnButton } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
@@ -59,7 +52,7 @@ const AddAllowedIPForm = ({ onSubmit }: { onSubmit: (values: AllowedIPFormValues
           {({ ref, ...field }) => <Input ref={ref} placeholder="Enter IP address" {...field} />}
         </FormField>
         <div>
-          <ShadcnButton type="submit">Add IP Address</ShadcnButton>
+          <Button type="submit">Add IP Address</Button>
         </div>
       </FieldGroup>
     </form>
@@ -228,9 +221,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       label: "Security Settings",
       children: (
         <>
-          <Card>
+          <Card className="block p-6">
             <Title level={4}> ✨ Security Settings</Title>
-            <Alert
+            <AntdAlert
               message="SSO Configuration Deprecated"
               description="Editing SSO Settings on this page is deprecated and will be removed in a future version. Please use the SSO Settings tab for SSO configuration."
               type="warning"
@@ -298,19 +291,19 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
               ]}
             >
               <Table>
-                <TableHead>
+                <TableHeader>
                   <TableRow>
-                    <TableHeaderCell>IP Address</TableHeaderCell>
-                    <TableHeaderCell className="text-right">Action</TableHeaderCell>
+                    <TableHead>IP Address</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
                   </TableRow>
-                </TableHead>
+                </TableHeader>
                 <TableBody>
                   {allowedIPs.map((ip, index) => (
                     <TableRow key={index}>
                       <TableCell>{ip}</TableCell>
                       <TableCell className="text-right">
                         {ip !== all_ip_address_allowed && (
-                          <Button onClick={() => handleDeleteIP(ip)} color="red" size="xs">
+                          <Button onClick={() => handleDeleteIP(ip)} variant="destructive" size="sm">
                             Delete
                           </Button>
                         )}
@@ -365,12 +358,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
               />
             </Modal>
           </div>
-          <Callout title="Login without SSO" color="teal">
-            If you need to login without sso, you can access{" "}
-            <a href={nonSssoUrl} target="_blank" rel="noopener noreferrer">
-              <b>{nonSssoUrl}</b>{" "}
-            </a>
-          </Callout>
+          <Alert variant="info">
+            <Info />
+            <AlertTitle>Login without SSO</AlertTitle>
+            <AlertDescription>
+              If you need to login without sso, you can access{" "}
+              <a href={nonSssoUrl} target="_blank" rel="noopener noreferrer">
+                <b>{nonSssoUrl}</b>{" "}
+              </a>
+            </AlertDescription>
+          </Alert>
         </>
       ),
     },
