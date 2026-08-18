@@ -17,7 +17,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     _should_track_cost_callback,
     _update_database_and_spend_counters,
 )
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, Usage
 
 
 @pytest.mark.asyncio
@@ -150,6 +150,70 @@ async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_m
 
         metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
         assert metadata["standard_logging_guardrail_information"] == metadata_bucket_info
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_bills_guardrail_cost_on_blocked_request():
+    """LIT-5651: a request blocked by a guardrail never reaches the LLM, but the
+    guardrail invocation itself is billed by the provider. The failure row must
+    charge that cost against the key instead of recording zero spend."""
+    logger = _ProxyDBLogger()
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {
+            "standard_logging_guardrail_information": [
+                {
+                    "guardrail_name": "bedrock-guard",
+                    "guardrail_status": "guardrail_intervened",
+                    "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+                    "guardrail_cost": 0.0003,
+                }
+            ]
+        },
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Violated guardrail policy"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+        assert mock_update_database.call_args[1]["response_cost"] == pytest.approx(0.0003)
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_stream_cost():
+    logger = _ProxyDBLogger()
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {
+            "standard_logging_guardrail_information": [
+                {"guardrail_name": "bedrock-guard", "guardrail_status": "success", "guardrail_cost": 0.0003}
+            ]
+        },
+        "proxy_server_request": {"request_id": "test_request_id"},
+        "combined_usage_object": Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        "response_cost": 0.001,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("stream broke mid-flight"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+        assert mock_update_database.call_args[1]["response_cost"] == pytest.approx(0.0013)
 
 
 @pytest.mark.asyncio

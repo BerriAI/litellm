@@ -792,6 +792,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             nlp_cloud_models.add(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             aleph_alpha_models.add(key)
+        elif value.get("litellm_provider") == "bedrock" and value.get("mode") == "guardrail":
+            pass
         elif value.get("litellm_provider") == "bedrock" and not is_bedrock_pricing_only_model(key):
             bedrock_models.add(key)
         elif value.get("litellm_provider") == "bedrock_converse":
