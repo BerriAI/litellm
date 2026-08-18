@@ -78,7 +78,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
             and groups in LiteLLM.
           </p>
 
-          <Separator className="my-4" />
+          <Separator className="my-6" />
 
           <div className="space-y-8">
             {/* Step 1: SCIM URL */}

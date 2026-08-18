@@ -2,9 +2,10 @@ import React, { useState, useEffect } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Modal, Form, Spin, Select } from "antd";
-import { CircleCheck, FileDown } from "lucide-react";
+import { CircleCheck, Eye, EyeOff, FileDown } from "lucide-react";
 import { getGlobalLitellmHeaderName } from "@/components/networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
@@ -26,6 +27,25 @@ interface CloudZeroSettingsView {
 }
 
 type ExportType = "cloudzero" | "csv";
+
+const PasswordInput = React.forwardRef<HTMLInputElement, React.ComponentPropsWithoutRef<"input">>((props, ref) => {
+  const [visible, setVisible] = useState(false);
+  return (
+    <InputGroup>
+      <InputGroupInput ref={ref} type={visible ? "text" : "password"} {...props} />
+      <InputGroupAddon align="inline-end">
+        <InputGroupButton
+          size="icon-xs"
+          onClick={() => setVisible((current) => !current)}
+          aria-label={visible ? "Hide API key" : "Show API key"}
+        >
+          {visible ? <EyeOff /> : <Eye />}
+        </InputGroupButton>
+      </InputGroupAddon>
+    </InputGroup>
+  );
+});
+PasswordInput.displayName = "PasswordInput";
 
 const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onClose, accessToken }) => {
   const [form] = Form.useForm();
@@ -266,7 +286,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
                       name="api_key"
                       rules={[{ required: true, message: "Please enter your CloudZero API key" }]}
                     >
-                      <Input type="password" placeholder="Enter your CloudZero API key" />
+                      <PasswordInput placeholder="Enter your CloudZero API key" />
                     </Form.Item>
 
                     <Form.Item
