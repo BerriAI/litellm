@@ -981,6 +981,9 @@ class NoOpMetric:
     def labels(self, *args, **kwargs):
         return self
 
+    def remove(self, *labelvalues: object) -> None:
+        pass
+
     def inc(self, *args, **kwargs) -> None:
         pass
 

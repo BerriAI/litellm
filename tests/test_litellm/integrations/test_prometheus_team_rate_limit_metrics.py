@@ -149,6 +149,36 @@ def test_emits_nothing_when_team_has_no_configured_limits():
         getattr(logger, metric_name).labels.assert_not_called()
 
 
+def test_drops_stale_series_when_a_team_limit_is_removed():
+    """
+    Prometheus keeps a child series for the life of the process once emitted,
+    so a team whose limit is removed would otherwise keep publishing the last
+    values it saw and alerts would fire on a limit nobody enforces.
+    """
+    logger = _logger_with_mock_team_gauges(labels_are_real=True)
+
+    _set_team_metrics(logger, _payload_with_headers(dict(ALL_TEAM_HEADERS)))
+    _assert_set_once(logger, "litellm_remaining_team_requests_for_model", 42)
+
+    _set_team_metrics(logger, _payload_with_headers({}))
+
+    for metric_name in TEAM_RATE_LIMIT_METRICS:
+        gauge = getattr(logger, metric_name)
+        gauge.remove.assert_called_once_with("team-abc", "research", "gpt-4o-mini")
+
+
+def test_survives_removing_a_series_that_was_never_emitted():
+    """The common case: a team that never had a limit for this model."""
+    logger = _logger_with_mock_team_gauges()
+    for metric_name in TEAM_RATE_LIMIT_METRICS:
+        getattr(logger, metric_name).remove.side_effect = KeyError("not present")
+
+    _set_team_metrics(logger, _payload_with_headers({}))
+
+    for metric_name in TEAM_RATE_LIMIT_METRICS:
+        getattr(logger, metric_name).labels.assert_not_called()
+
+
 def test_emits_only_the_dimension_the_team_configured():
     """A team with only an RPM limit must not get a fabricated TPM series."""
     logger = _logger_with_mock_team_gauges()

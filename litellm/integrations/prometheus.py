@@ -95,6 +95,13 @@ class _ExcludedLabelMetric:
         )
         return self._metric.labels(*kept_values) if kept_values else self._metric
 
+    def remove(self, *labelvalues: str) -> None:
+        kept_values: Final = tuple(
+            value for name, value in zip(self._original_labelnames, labelvalues) if name not in self._excluded_labels
+        )
+        if kept_values:
+            self._metric.remove(*kept_values)
+
 
 def _get_budget_metrics_per_request_timeout() -> float:
     raw: Final = os.getenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT")
@@ -2071,22 +2078,6 @@ class PrometheusLogger(CustomLogger):
         if user_api_team is None:
             return
 
-        configured: Final = tuple(
-            (metric_name, value)
-            for metric_name, value_type, rate_limit_type in _TEAM_RATE_LIMIT_GAUGE_SPECS
-            if (
-                value := self._get_v3_rate_limit_header(
-                    standard_logging_payload=standard_logging_payload,
-                    descriptor_key="model_per_team",
-                    value_type=value_type,
-                    rate_limit_type=rate_limit_type,
-                )
-            )
-            is not None
-        )
-        if not configured:
-            return
-
         enum_values: Final = UserAPIKeyLabelValues(
             team=user_api_team,
             team_alias=user_api_team_alias,
@@ -2099,29 +2090,54 @@ class PrometheusLogger(CustomLogger):
         )
         label_context: Final = PrometheusLabelFactoryContext(enum_values)
 
-        for metric_name, value in configured:
-            self._set_team_rate_limit_gauge(
+        for metric_name, value_type, rate_limit_type in _TEAM_RATE_LIMIT_GAUGE_SPECS:
+            self._sync_team_rate_limit_gauge(
                 gauge=getattr(self, metric_name),
                 metric_name=metric_name,
-                value=value,
+                value=self._get_v3_rate_limit_header(
+                    standard_logging_payload=standard_logging_payload,
+                    descriptor_key="model_per_team",
+                    value_type=value_type,
+                    rate_limit_type=rate_limit_type,
+                ),
                 enum_values=enum_values,
                 label_context=label_context,
             )
 
-    def _set_team_rate_limit_gauge(
+    def _sync_team_rate_limit_gauge(
         self,
         gauge: _LabeledGauge,
         metric_name: DEFINED_PROMETHEUS_METRICS,
-        value: int,
+        value: int | None,
         enum_values: UserAPIKeyLabelValues,
         label_context: PrometheusLabelFactoryContext,
     ) -> None:
+        """
+        Set the gauge, or drop its child series when this team has no limit
+        configured for this model. Prometheus keeps a child series for the
+        life of the process once emitted, so without the drop a team whose
+        limit is removed would keep publishing the last remaining/limit
+        values it ever saw, and alerts would evaluate against a number no
+        longer being enforced.
+        """
         labels: Final = prometheus_label_factory(
             supported_enum_labels=self.get_labels_for_metric(metric_name),
             enum_values=enum_values,
             label_context=label_context,
         )
-        gauge.labels(**labels).set(value)
+        if value is not None:
+            gauge.labels(**labels).set(value)
+            return
+
+        remove: Final = getattr(gauge, "remove", None)
+        if remove is None:
+            return
+        try:
+            remove(*(labels[name] for name in self.get_labels_for_metric(metric_name)))
+        except KeyError:
+            # No child series for this labelset, which is the common case:
+            # the team never had a limit for this model.
+            pass
 
     def _set_latency_metrics(
         self,
