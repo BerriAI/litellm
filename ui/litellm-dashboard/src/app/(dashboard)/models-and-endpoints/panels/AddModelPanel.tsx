@@ -3,10 +3,10 @@
 import { Form } from "antd";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import AddModelTab from "@/components/add_model/add_model_tab";
+import AddModelForm from "@/components/add_model/AddModelForm";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -14,7 +14,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { vertexCredentialsUploadProps } from "@/app/(dashboard)/models-and-endpoints/vertexCredentialsUpload";
 
 export default function AddModelPanel() {
-  const { accessToken, userRole } = useAuthorized();
+  const { accessToken } = useAuthorized();
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
   const { data: modelCostMapData } = useModelCostMap();
@@ -34,12 +34,12 @@ export default function AddModelPanel() {
       const errorMessages =
         error.errorFields?.map((field: any) => `${field.name.join(".")}: ${field.errors.join(", ")}`).join(" | ") ||
         "Unknown validation error";
-      NotificationsManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`);
+      toast.fromError(`Please fill in the following required fields: ${errorMessages}`);
     }
   };
 
   return (
-    <AddModelTab
+    <AddModelForm
       form={form}
       handleOk={handleOk}
       selectedProvider={selectedProvider}
@@ -52,8 +52,6 @@ export default function AddModelPanel() {
       setShowAdvancedSettings={setShowAdvancedSettings}
       teams={teams ?? null}
       credentials={credentialsResponse?.credentials || []}
-      accessToken={accessToken}
-      userRole={userRole}
     />
   );
 }

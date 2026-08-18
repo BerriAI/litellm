@@ -10,7 +10,6 @@ describe("LoggingSettings", () => {
   });
 
   it("passes a number to updateCallbackVar when user inputs a number in NumericalInput", async () => {
-    const user = userEvent.setup();
     const mockOnChange = vi.fn();
 
     // Create initial config with a callback that has number parameters (LangSmith has langsmith_sampling_rate)
@@ -111,6 +110,29 @@ describe("LoggingSettings", () => {
     expect(updatedConfig[0].callback_vars.langsmith_sampling_rate).toBe("0.3"); // Preserves initial value
   });
 
+  it("masks a sensitive parameter until the reveal toggle is used", async () => {
+    const user = userEvent.setup({ delay: null });
+    const initialValue = [
+      {
+        callback_name: "langsmith",
+        callback_type: "success",
+        callback_vars: { langsmith_api_key: "sk-secret-value" },
+      },
+    ];
+
+    renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
+
+    const apiKeyInput = screen.getByPlaceholderText("os.environ/LANGSMITH_API_KEY");
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+
+    await user.click(screen.getByRole("button", { name: "Show password" }));
+    expect(apiKeyInput).toHaveAttribute("type", "text");
+    expect(apiKeyInput).toHaveValue("sk-secret-value");
+
+    await user.click(screen.getByRole("button", { name: "Hide password" }));
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+  });
+
   it("shows the bundled logo in the integration card header", () => {
     const initialValue = [
       {
@@ -137,7 +159,7 @@ describe("LoggingSettings", () => {
     renderWithProviders(<LoggingSettings value={initialValue} onChange={vi.fn()} />);
 
     expect(screen.getByText("Custom Callback API Configuration")).toBeInTheDocument();
-    expect(screen.queryByAltText("Custom Callback API logo")).toBeNull();
+    expect(screen.queryByAltText("Custom Callback API logo")).not.toBeInTheDocument();
     expect(screen.getByText("C")).toBeInTheDocument();
   });
 

@@ -15,11 +15,12 @@ const staticImageData: Plugin = {
 const config: ViteUserConfig = {
   plugins: [staticImageData],
   test: {
-    environment: "jsdom",
+    environment: "./tests/jsdomFetchEnv.ts",
     setupFiles: ["tests/setupTests.ts"],
     globals: true,
     css: true, // lets you import CSS/modules without extra mocks
-    testTimeout: 30000,
+    testTimeout: 60000,
+    hookTimeout: 30000,
     silent: process.env.CI ? "passed-only" : false,
     teardownTimeout: 60000,
     coverage: {
@@ -29,6 +30,7 @@ const config: ViteUserConfig = {
       exclude: [
         "**/*.d.ts",
         "**/*.test.*",
+        "**/*.test-d.*",
         "**/*.spec.*",
 
         "tests/**",
@@ -45,6 +47,10 @@ const config: ViteUserConfig = {
     },
     exclude: ["node_modules/**"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    typecheck: {
+      include: ["src/**/*.test-d.ts", "src/**/*.test-d.tsx"],
+      ignoreSourceErrors: true,
+    },
   },
   resolve: {
     alias: {

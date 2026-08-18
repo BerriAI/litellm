@@ -24,6 +24,8 @@ interface SearchSelectProps {
   emptyText?: string;
   disabled?: boolean;
   className?: string;
+  inputId?: string;
+  allowClear?: boolean;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -40,12 +42,19 @@ export function SearchSelect({
   emptyText = "No results",
   disabled = false,
   className,
+  inputId,
+  allowClear = true,
 }: SearchSelectProps) {
-  const selected = options.find((option) => option.value === value) ?? null;
+  const selected =
+    value === undefined || value === ""
+      ? null
+      : options.find((option) => option.value === value) ?? { label: value, value };
+  const items =
+    selected !== null && !options.some((option) => option.value === selected.value) ? [selected, ...options] : options;
 
   return (
     <Combobox
-      items={options}
+      items={items}
       value={selected}
       onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
@@ -54,11 +63,12 @@ export function SearchSelect({
       disabled={disabled}
     >
       <ComboboxInput
+        id={inputId}
         placeholder={placeholder}
-        showClear={value != null && value !== ""}
-        className={`w-full ${className ?? ""}`}
+        showClear={allowClear && value != null && value !== ""}
+        className={`h-8 w-full text-sm ${className ?? ""}`}
       />
-      <ComboboxContent>
+      <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(item: SearchSelectOption) => (

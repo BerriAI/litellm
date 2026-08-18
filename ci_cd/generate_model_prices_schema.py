@@ -41,6 +41,11 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
         },
         "additionalProperties": False,
     },
+    "guardrail_cost_per_unit": {
+        "type": "object",
+        "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
+        "additionalProperties": NONNEG_NUMBER,
+    },
     "metadata": {
         "type": "object",
         "description": "Free-form notes about the entry (e.g. pricing derivation).",
@@ -96,6 +101,7 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
                 "output_cost_per_token": NONNEG_NUMBER,
                 "output_cost_per_reasoning_token": NONNEG_NUMBER,
                 "cache_read_input_token_cost": NONNEG_NUMBER,
+                "cache_creation_input_token_cost": NONNEG_NUMBER,
                 "input_cost_per_query": NONNEG_NUMBER,
             },
             "additionalProperties": False,

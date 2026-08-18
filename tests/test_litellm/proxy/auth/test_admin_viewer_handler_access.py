@@ -58,10 +58,14 @@ def admin_viewer_client(monkeypatch):
     mock_config_table = MagicMock()
     mock_config_table.find_first = AsyncMock(return_value=None)
 
+    # /management/v1/budgets reads through query_raw: count first, then the page.
+    mock_query_raw = AsyncMock(side_effect=[[{"count": 0}], []])
+
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_budget_table,
         litellm_invitationlink=mock_invitation_table,
         litellm_config=mock_config_table,
+        query_raw=mock_query_raw,
     )
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
@@ -102,6 +106,14 @@ def _assert_not_role_blocked(response) -> None:
 def test_budget_list_allows_admin_viewer(admin_viewer_client):
     """`/budget/list` is read-only and must be accessible to Admin Viewer."""
     resp = admin_viewer_client.get("/budget/list")
+    _assert_not_role_blocked(resp)
+    assert resp.status_code == 200, resp.text
+
+
+def test_management_v1_budgets_allows_admin_viewer(admin_viewer_client):
+    """`/management/v1/budgets` is the paged/sortable budget list; same read tier as
+    `/budget/list`, and it answers 403 rather than an empty page when it refuses."""
+    resp = admin_viewer_client.get("/management/v1/budgets")
     _assert_not_role_blocked(resp)
     assert resp.status_code == 200, resp.text
 

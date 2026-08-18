@@ -6,8 +6,9 @@ endpoint defined in endpoints.json, eliminating the need for individual handler 
 """
 
 import json
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -32,23 +33,23 @@ if TYPE_CHECKING:
 
 
 # Response type mapping
-RESPONSE_TYPES: Dict[str, Type] = {
+RESPONSE_TYPES: Final[dict[str, type]] = {
     "ContainerFileListResponse": ContainerFileListResponse,
     "ContainerFileObject": ContainerFileObject,
     "DeleteContainerFileResponse": DeleteContainerFileResponse,
 }
 
 
-def _load_endpoints_config() -> Dict:
+def _load_endpoints_config() -> dict:
     """Load the endpoints configuration from JSON file."""
-    config_path = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
+    config_path: Final = Path(__file__).parent.parent.parent / "containers" / "endpoints.json"
     with open(config_path) as f:
         return json.load(f)
 
 
-def _get_endpoint_config(endpoint_name: str) -> Optional[Dict]:
+def _get_endpoint_config(endpoint_name: str) -> dict | None:
     """Get config for a specific endpoint by name."""
-    config = _load_endpoints_config()
+    config: Final = _load_endpoints_config()
     for endpoint in config["endpoints"]:
         if endpoint["name"] == endpoint_name or endpoint["async_name"] == endpoint_name:
             return endpoint
@@ -58,7 +59,7 @@ def _get_endpoint_config(endpoint_name: str) -> Optional[Dict]:
 def _build_url(
     api_base: str,
     path_template: str,
-    path_params: Dict[str, str],
+    path_params: dict[str, str],
 ) -> str:
     """Build the full URL by substituting path parameters.
 
@@ -68,8 +69,7 @@ def _build_url(
     """
     # api_base ends with /containers, path_template starts with /containers
     # So we need to strip /containers from the path
-    if path_template.startswith("/containers"):
-        path_template = path_template[len("/containers") :]
+    path_template = path_template.removeprefix("/containers")
 
     # Substitute path parameters
     for param, value in path_params.items():
@@ -77,23 +77,23 @@ def _build_url(
         path_template = path_template.replace(f"{{{param}}}", encoded_value)
 
     # Parse the api_base to extract existing query params
-    parsed_base = httpx.URL(api_base)
+    parsed_base: Final = httpx.URL(api_base)
 
     # Append the path to the existing path (before query params)
-    new_path = f"{parsed_base.path.rstrip('/')}{path_template}"
+    new_path: Final = f"{parsed_base.path.rstrip('/')}{path_template}"
 
     # Rebuild URL with new path, preserving query params
-    final_url = parsed_base.copy_with(path=new_path)
+    final_url: Final = parsed_base.copy_with(path=new_path)
 
     return str(final_url)
 
 
 def _build_query_params(
     query_param_names: list,
-    kwargs: Dict[str, Any],
-) -> Dict[str, str]:
+    kwargs: dict[str, Any],
+) -> dict[str, str]:
     """Build query parameters from kwargs."""
-    params = {}
+    params: Final = {}
     for param_name in query_param_names:
         value = kwargs.get(param_name)
         if value is not None:
@@ -103,7 +103,7 @@ def _build_query_params(
 
 def _prepare_multipart_file_upload(
     file: Any,
-    headers: Dict[str, Any],
+    headers: dict[str, Any],
 ) -> tuple:
     """
     Prepare file and headers for multipart upload.
@@ -115,14 +115,14 @@ def _prepare_multipart_file_upload(
         extract_file_data,
     )
 
-    extracted = extract_file_data(file)
-    filename = extracted.get("filename") or "file"
-    content = extracted.get("content") or b""
-    content_type = extracted.get("content_type") or "application/octet-stream"
-    files = {"file": (filename, content, content_type)}
+    extracted: Final = extract_file_data(file)
+    filename: Final = extracted.get("filename") or "file"
+    content: Final = extracted.get("content") or b""
+    content_type: Final = extracted.get("content_type") or "application/octet-stream"
+    files: Final = {"file": (filename, content, content_type)}
 
     # Remove content-type header - httpx will set it automatically for multipart
-    headers_copy = headers.copy()
+    headers_copy: Final = headers.copy()
     headers_copy.pop("content-type", None)
     headers_copy.pop("Content-Type", None)
 
@@ -143,13 +143,13 @@ class GenericContainerHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
+        extra_headers: dict[str, Any] | None = None,
+        extra_query: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         **kwargs,
-    ) -> Union[Any, Coroutine[Any, Any, Any]]:
+    ) -> Any | Coroutine[Any, Any, Any]:
         """
         Generic handler for any container file endpoint.
 
@@ -196,14 +196,14 @@ class GenericContainerHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_query: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout = 600,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> Any:
         """Synchronous request handler."""
-        endpoint_config = _get_endpoint_config(endpoint_name)
+        endpoint_config: Final = _get_endpoint_config(endpoint_name)
         if not endpoint_config:
             raise ValueError(f"Unknown endpoint: {endpoint_name}")
 
@@ -221,17 +221,17 @@ class GenericContainerHandler:
         if extra_headers:
             headers.update(extra_headers)
 
-        api_base = container_provider_config.get_complete_url(
+        api_base: Final = container_provider_config.get_complete_url(
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
 
         # Build URL with path params
-        path_params = {p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])}
-        url = _build_url(api_base, endpoint_config["path"], path_params)
+        path_params: Final = {p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])}
+        url: Final = _build_url(api_base, endpoint_config["path"], path_params)
 
         # Build query params
-        query_params = _build_query_params(endpoint_config.get("query_params", []), kwargs)
+        query_params: Final = _build_query_params(endpoint_config.get("query_params", []), kwargs)
         if extra_query:
             query_params.update(extra_query)
 
@@ -247,14 +247,14 @@ class GenericContainerHandler:
         )
 
         # Make request
-        method = endpoint_config["method"].upper()
-        returns_binary = endpoint_config.get("returns_binary", False)
-        is_multipart = endpoint_config.get("is_multipart", False)
+        method: Final = endpoint_config["method"].upper()
+        returns_binary: Final = endpoint_config.get("returns_binary", False)
+        is_multipart: Final = endpoint_config.get("is_multipart", False)
 
         # An empty dict passed as `params` to httpx strips any existing query
         # string from the URL (e.g. ?api-version=...).  Use None instead so
         # httpx leaves the URL's own query string intact.
-        effective_params = query_params or None
+        effective_params: Final = query_params or None
 
         try:
             if method == "GET":
@@ -275,11 +275,11 @@ class GenericContainerHandler:
                 return response.content
 
             # Check for error response
-            response_json = response.json()
+            response_json: Final = response.json()
             if "error" in response_json:
                 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-                error_msg = response_json.get("error", {}).get("message", str(response_json))
+                error_msg: Final = response_json.get("error", {}).get("message", str(response_json))
                 raise BaseLLMException(
                     status_code=response.status_code,
                     message=error_msg,
@@ -287,7 +287,7 @@ class GenericContainerHandler:
                 )
 
             # Parse response
-            response_type = RESPONSE_TYPES.get(endpoint_config["response_type"])
+            response_type: Final = RESPONSE_TYPES.get(endpoint_config["response_type"])
             if response_type:
                 return response_type(**response_json)
             return response_json
@@ -301,14 +301,14 @@ class GenericContainerHandler:
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-        timeout: Union[float, httpx.Timeout] = 600,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_query: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout = 600,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> Any:
         """Asynchronous request handler."""
-        endpoint_config = _get_endpoint_config(endpoint_name)
+        endpoint_config: Final = _get_endpoint_config(endpoint_name)
         if not endpoint_config:
             raise ValueError(f"Unknown endpoint: {endpoint_name}")
 
@@ -329,17 +329,17 @@ class GenericContainerHandler:
         if extra_headers:
             headers.update(extra_headers)
 
-        api_base = container_provider_config.get_complete_url(
+        api_base: Final = container_provider_config.get_complete_url(
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
 
         # Build URL with path params
-        path_params = {p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])}
-        url = _build_url(api_base, endpoint_config["path"], path_params)
+        path_params: Final = {p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])}
+        url: Final = _build_url(api_base, endpoint_config["path"], path_params)
 
         # Build query params
-        query_params = _build_query_params(endpoint_config.get("query_params", []), kwargs)
+        query_params: Final = _build_query_params(endpoint_config.get("query_params", []), kwargs)
         if extra_query:
             query_params.update(extra_query)
 
@@ -355,14 +355,14 @@ class GenericContainerHandler:
         )
 
         # Make request
-        method = endpoint_config["method"].upper()
-        returns_binary = endpoint_config.get("returns_binary", False)
-        is_multipart = endpoint_config.get("is_multipart", False)
+        method: Final = endpoint_config["method"].upper()
+        returns_binary: Final = endpoint_config.get("returns_binary", False)
+        is_multipart: Final = endpoint_config.get("is_multipart", False)
 
         # An empty dict passed as `params` to httpx strips any existing query
         # string from the URL (e.g. ?api-version=...).  Use None instead so
         # httpx leaves the URL's own query string intact.
-        effective_params = query_params or None
+        effective_params: Final = query_params or None
 
         try:
             if method == "GET":
@@ -383,11 +383,11 @@ class GenericContainerHandler:
                 return response.content
 
             # Check for error response
-            response_json = response.json()
+            response_json: Final = response.json()
             if "error" in response_json:
                 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-                error_msg = response_json.get("error", {}).get("message", str(response_json))
+                error_msg: Final = response_json.get("error", {}).get("message", str(response_json))
                 raise BaseLLMException(
                     status_code=response.status_code,
                     message=error_msg,
@@ -395,7 +395,7 @@ class GenericContainerHandler:
                 )
 
             # Parse response
-            response_type = RESPONSE_TYPES.get(endpoint_config["response_type"])
+            response_type: Final = RESPONSE_TYPES.get(endpoint_config["response_type"])
             if response_type:
                 return response_type(**response_json)
             return response_json
@@ -405,4 +405,4 @@ class GenericContainerHandler:
 
 
 # Singleton instance
-generic_container_handler = GenericContainerHandler()
+generic_container_handler: Final = GenericContainerHandler()

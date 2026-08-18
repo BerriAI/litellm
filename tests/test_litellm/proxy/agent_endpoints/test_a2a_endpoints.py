@@ -1473,6 +1473,51 @@ async def test_handle_stream_message_proxy_hook_path_frames_events_as_sse():
 
 
 @pytest.mark.asyncio
+async def test_handle_stream_message_frames_preserialized_jsonrpc_error_once():
+    """A stream chunk that is already a serialized JSON-RPC object (what a
+    guardrail may yield when it terminates an A2A stream mid-flight) must be
+    framed as one SSE event carrying that object, not JSON-encoded a second time
+    into a bare string."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    error_event = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "error": {"code": -32603, "message": "blocked by guardrail", "data": {}},
+    }
+
+    async def fake_stream(**kwargs):
+        yield json.dumps(error_event) + "\n"
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == 1
+    payload = json.loads(chunks[0].removeprefix("data: ").strip())
+    assert payload == error_event
+
+
+@pytest.mark.asyncio
 async def test_send_message_pascal_case_routes_to_asend_message():
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -2093,3 +2138,85 @@ def test_served_version_falls_back_to_header_when_unconfigured():
 
     assert _served_version(_agent(None), _request_with_a2a_header("1.0")) == "1.0"
     assert _served_version(_agent(None), _request_with_a2a_header(None)) == "0.3"
+
+
+def _sse_agent_handler(lines):
+    mock_resp = AsyncMock()
+    mock_resp.is_success = True
+    mock_resp.aiter_lines = lines
+    mock_resp.aclose = AsyncMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.client = mock_async_client
+    return mock_handler
+
+
+async def _resubscribe_response():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _forward_jsonrpc_sse
+
+    return await _forward_jsonrpc_sse(
+        agent_url="http://backend-agent:10001",
+        body={"jsonrpc": "2.0", "id": "req-1", "method": "tasks/resubscribe"},
+        request_id="req-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_forward_jsonrpc_sse_pings_while_the_upstream_agent_is_still_silent(
+    monkeypatch,
+):
+    """Regression for LIT-5737. The upstream agent is only contacted once the body
+    iterator is first pulled, so a slow first event leaves the response body idle
+    for its whole time-to-first-token and an idle-timeout hop drops a healthy
+    connection."""
+    import asyncio
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
+
+    async def _slow_lines():
+        await asyncio.sleep(0.3)
+        yield 'data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}'
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        return_value=_sse_agent_handler(_slow_lines),
+    ):
+        response = await _resubscribe_response()
+        assert response.headers["x-accel-buffering"] == "no"
+        chunks = [chunk async for chunk in response.body_iterator]
+
+    # A comment, not a frame: an A2A client parsing JSON-RPC events has to be able
+    # to discard the filler without understanding it.
+    assert chunks[0] == ": ping\n\n"
+    assert chunks.count(": ping\n\n") >= 3
+    assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigured(
+    monkeypatch,
+):
+    """Off until an operator sets an interval, so the default stream is unchanged."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
+
+    async def _lines():
+        yield 'data: {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task"}}'
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        return_value=_sse_agent_handler(_lines),
+    ):
+        response = await _resubscribe_response()
+        assert "x-accel-buffering" not in response.headers
+        chunks = [chunk async for chunk in response.body_iterator]
+
+    assert not any(chunk.startswith(":") for chunk in chunks)
+    assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"

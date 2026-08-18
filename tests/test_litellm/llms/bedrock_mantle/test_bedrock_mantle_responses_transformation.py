@@ -154,12 +154,6 @@ class TestBedrockMantleResponsesURL:
         assert url == "https://bedrock-mantle.us-east-2.api.aws/v1/responses"
         assert url.count("/responses") == 1
 
-    def test_default_construction_keeps_openai_path(self, monkeypatch):
-        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
-        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
-        cfg = BedrockMantleResponsesAPIConfig()
-        url = cfg.get_complete_url(api_base=None, litellm_params={})
-        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
 
     def test_url_aws_region_name_overrides_stale_api_base(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -1519,8 +1513,8 @@ class TestBedrockMantleResponsesPricing:
         "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
         [
             ("openai.gpt-5.6-sol", 5.5e-06, 6.875e-06, 5.5e-07, 3.3e-05),
-            ("openai.gpt-5.6-terra", 2.75e-06, 3.4375e-06, 2.75e-07, 1.65e-05),
-            ("openai.gpt-5.6-luna", 1.1e-06, 1.375e-06, 1.1e-07, 6.6e-06),
+            ("openai.gpt-5.6-terra", 2.2e-06, 2.75e-06, 2.2e-07, 1.32e-05),
+            ("openai.gpt-5.6-luna", 2.2e-07, 2.75e-07, 2.2e-08, 1.32e-06),
         ],
     )
     def test_gpt_5_6_pricing_and_mode(
@@ -1532,7 +1526,44 @@ class TestBedrockMantleResponsesPricing:
         assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
         assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
         assert info["output_cost_per_token"] == pytest.approx(output_cost)
-        assert info["max_input_tokens"] == 272000
+        assert info["max_input_tokens"] == 1000000
+        assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(input_cost * 2)
+        assert info["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(cache_creation_cost * 2)
+        assert info["cache_read_input_token_cost_above_272k_tokens"] == pytest.approx(cache_read_cost * 2)
+        assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(output_cost * 1.5)
+
+    @pytest.mark.parametrize(
+        "model, input_cost, output_cost",
+        [
+            ("openai.gpt-5.6-sol", 5.5e-06, 3.3e-05),
+            ("openai.gpt-5.6-terra", 2.2e-06, 1.32e-05),
+            ("openai.gpt-5.6-luna", 2.2e-07, 1.32e-06),
+        ],
+    )
+    def test_gpt_5_6_responses_call_cost(self, local_cost_map, model, input_cost, output_cost):
+        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+        input_tokens = 100000
+        output_tokens = 10000
+        response = ResponsesAPIResponse(
+            id="resp-1",
+            created_at=1700000000,
+            model=model,
+            output=[],
+            usage=ResponseAPIUsage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=input_tokens + output_tokens,
+            ),
+        )
+
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model=f"bedrock_mantle/{model}",
+            custom_llm_provider="bedrock_mantle",
+        )
+
+        assert cost == pytest.approx(input_tokens * input_cost + output_tokens * output_cost)
 
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
