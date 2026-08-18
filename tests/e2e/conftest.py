@@ -15,7 +15,7 @@ shared fixtures build on it.
 
 import functools
 import os
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from datetime import datetime, timezone
 
 import pytest
@@ -27,6 +27,7 @@ from fixture_transport import (
     fixture_mode_collection_error,
     fixture_report_lines,
     parse_fixture_mode,
+    replay_leftover_error,
 )
 from junit_properties import attach_result_properties
 from lifecycle import ProxyClientProvider, ResourceManager
@@ -34,6 +35,7 @@ from proxy_client import ProxyClient, build_proxy_client
 
 
 _E2E_TEST_RAN = pytest.StashKey[bool]()
+_CALL_PASSED = pytest.StashKey[bool]()
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -132,6 +134,36 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     if item.get_closest_marker("e2e") is None:
         return
     item.session.stash[_E2E_TEST_RAN] = True
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Stash the call-phase outcome so teardown can tell a passed test from a
+    failed one without re-deriving it."""
+    report = yield
+    if report.when == "call":
+        item.stash[_CALL_PASSED] = report.passed
+    return report
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, None, None]:
+    """In replay mode a passing test must consume its whole recording: leftover
+    interactions mean the test now makes fewer calls than it did at record time,
+    so the replay proved less than the bundle claims. The check runs after the
+    yield so fixture finalizers replay their recorded calls first. Failed tests
+    are left alone - their own failure already explains any unconsumed tail."""
+    result = yield
+    if not item.stash.get(_CALL_PASSED, False):
+        return result
+    reason = replay_leftover_error(
+        mode_raw=FIXTURE_MODE_RAW, bundle_dir=FIXTURE_DIR, test_key=item.nodeid
+    )
+    if reason is not None:
+        pytest.fail(reason)
+    return result
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

@@ -50,6 +50,7 @@ from fixture_transport import (
     fixture_mode_collection_error,
     fixture_report_lines,
     parse_fixture_mode,
+    replay_leftover_error,
     select_transport,
 )
 from transport import Transport
@@ -352,6 +353,52 @@ class TestReplayTransport:
         replay.post("/model/new", headers=replay.master, json=Body(prompt="x"), response_type=Payload)
         with pytest.raises(ReplayMiss, match=r"call #2 \(post /model/new\) has no recorded interaction \(1 recorded"):
             replay.post("/model/new", headers=replay.master, json=Body(prompt="x"), response_type=Payload)
+
+
+class TestReplayLeftover:
+    def test_fully_consumed_recording_leaves_nothing(self, tmp_path: Path) -> None:
+        fake = FakeTransport()
+        root = tmp_path / "bundle"
+        recording: Transport = RecordingTransport(inner=fake, recorder=make_recorder(root))
+        recording.post("/model/new", headers=fake.master, json=Body(prompt="x"), response_type=Payload)
+        source = replay_source(root)
+        replay: Transport = ReplayTransport(source=source, master_key="sk-1234")
+        replay.post("/model/new", headers=replay.master, json=Body(prompt="x"), response_type=Payload)
+        assert source.leftover_error(current_test_key()) is None
+
+    def test_unconsumed_trailing_interactions_name_the_next_call(self, tmp_path: Path) -> None:
+        fake = FakeTransport()
+        root = tmp_path / "bundle"
+        recording: Transport = RecordingTransport(inner=fake, recorder=make_recorder(root))
+        recording.post("/model/new", headers=fake.master, json=Body(prompt="x"), response_type=Payload)
+        recording.probe("/health/liveliness", params=Query(q="1"))
+        source = replay_source(root)
+        replay: Transport = ReplayTransport(source=source, master_key="sk-1234")
+        replay.post("/model/new", headers=replay.master, json=Body(prompt="x"), response_type=Payload)
+        error = source.leftover_error(current_test_key())
+        assert error is not None
+        assert "1 of 2 recorded interactions never consumed" in error
+        assert "next is probe /health/liveliness" in error
+        assert "re-record with E2E_FIXTURE_MODE=record" in error
+
+    def test_test_without_recordings_has_no_leftover(self, tmp_path: Path) -> None:
+        root = tmp_path / "bundle"
+        make_recorder(root)
+        assert replay_source(root).leftover_error("suite.py::test_never_recorded") is None
+
+    def test_inert_outside_replay_mode(self, tmp_path: Path) -> None:
+        missing = tmp_path / "missing"
+        assert replay_leftover_error(mode_raw="", bundle_dir=missing, test_key="k") is None
+        assert replay_leftover_error(mode_raw="record", bundle_dir=missing, test_key="k") is None
+
+    def test_replay_mode_reads_the_shared_bundle(self, tmp_path: Path) -> None:
+        fake = FakeTransport()
+        root = tmp_path / "bundle"
+        recording: Transport = RecordingTransport(inner=fake, recorder=make_recorder(root))
+        recording.post("/model/new", headers=fake.master, json=Body(prompt="x"), response_type=Payload)
+        error = replay_leftover_error(mode_raw="replay", bundle_dir=root, test_key=current_test_key())
+        assert error is not None
+        assert "1 of 1 recorded interactions never consumed" in error
 
 
 class TestSelectTransport:
