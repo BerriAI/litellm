@@ -13,7 +13,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
@@ -1684,11 +1684,11 @@ class MCPServerManager:
         """
         self._get_or_start_oauth_discovery_task(server)
 
-    def _prime_oauth_metadata_discovery_for_servers(self, servers: Iterable[MCPServer]) -> None:
+    def _prime_oauth_metadata_discovery_for_servers(self, servers: Sequence[MCPServer]) -> None:
         for server in servers:
             self.prime_oauth_metadata_discovery(server)
 
-    def _reconcile_oauth_discovery_slots_for_servers(self, servers: Iterable[MCPServer]) -> None:
+    def _reconcile_oauth_discovery_slots_for_servers(self, servers: Sequence[MCPServer]) -> None:
         """Align retry slots after an atomic registry replacement."""
         for server in servers:
             should_defer = _requires_oauth_discovery(server.url, server.issuer_is_anchored, server)
@@ -2105,7 +2105,7 @@ class MCPServerManager:
 
         await self._hydrate_config_servers_dcr_clients()
 
-        self._prime_oauth_metadata_discovery_for_servers(self.config_mcp_servers.values())
+        self._prime_oauth_metadata_discovery_for_servers(tuple(self.config_mcp_servers.values()))
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
 
@@ -5862,8 +5862,9 @@ class MCPServerManager:
         # this replacement was being staged. Reconcile every published entry
         # synchronously after the swap so a lost publication cannot also leave
         # the replacement unresolved with no retry slot.
-        self._reconcile_oauth_discovery_slots_for_servers(registered_registry.values())
-        self._prime_oauth_metadata_discovery_for_servers(registered_registry.values())
+        registered_servers: Final = tuple(registered_registry.values())
+        self._reconcile_oauth_discovery_slots_for_servers(registered_servers)
+        self._prime_oauth_metadata_discovery_for_servers(registered_servers)
         if registered_openapi_tools:
             self.initialize_tool_name_to_mcp_server_name_mapping()
 
