@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import jsonschema
@@ -97,3 +98,52 @@ def test_schema_accepts_minimal_and_unknown_optional_fields(committed_schema: di
     validator = build_validator(committed_schema)
     assert validator.is_valid({"some-model": {"litellm_provider": "openai"}})
     assert validator.is_valid({"some-model": {"litellm_provider": "openai", "brand_new_field": {"nested": True}}})
+
+
+def test_schema_accepts_cache_creation_cost_inside_a_pricing_tier(committed_schema: dict):
+    validator = build_validator(committed_schema)
+    entry = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "tiered_pricing": [
+            {
+                "range": [0, 256000],
+                "input_cost_per_token": 3.25e-07,
+                "output_cost_per_token": 1.95e-06,
+                "cache_creation_input_token_cost": 4.063e-07,
+                "cache_read_input_token_cost": 3.25e-08,
+            }
+        ],
+    }
+    assert validator.is_valid({"some-model": entry})
+
+
+DATED_VARIANT = re.compile(r"^(.*?)-(\d{4}-\d{2}-\d{2})$")
+SERVICE_TIER_SUFFIXES = ("_flex", "_priority")
+
+
+def tier_anchor(tier_key: str) -> str:
+    matched = next(suffix for suffix in SERVICE_TIER_SUFFIXES if tier_key.endswith(suffix))
+    return tier_key[: -len(matched)]
+
+
+def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
+    drifted = [
+        f"{name}: missing {tier_key}={base[tier_key]} (base alias {match.group(1)})"
+        for name, entry in prices.items()
+        if isinstance(entry, dict)
+        for match in [DATED_VARIANT.match(name)]
+        if match is not None
+        for base in [prices.get(match.group(1))]
+        if isinstance(base, dict)
+        for tier_key in base
+        if tier_key.endswith(SERVICE_TIER_SUFFIXES)
+        and tier_anchor(tier_key) in base
+        and entry.get(tier_anchor(tier_key)) == base[tier_anchor(tier_key)]
+        and entry.get(tier_key) != base[tier_key]
+    ]
+    assert drifted == [], (
+        "dated model variants are missing flex/priority pricing their base alias has; "
+        "sync the tier keys so service-tier requests against pinned snapshots are not "
+        "billed at standard rates:\n" + "\n".join(drifted)
+    )
