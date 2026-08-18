@@ -32,7 +32,11 @@ def clear_client_cache():
 
 @pytest.fixture
 def mock_env_vars():
-    with mock.patch.dict(os.environ, {"RESEND_API_KEY": "test_api_key"}):
+    # Set test API key and ensure RESEND_FROM_EMAIL is unset for isolation
+    # so tests can verify the default `from_email` argument is used.
+    patched = {"RESEND_API_KEY": "test_api_key"}
+    with mock.patch.dict(os.environ, patched):
+        os.environ.pop("RESEND_FROM_EMAIL", None)
         yield
 
 
@@ -87,7 +91,7 @@ async def test_send_email_success(mock_env_vars):
 async def test_send_email_missing_api_key():
     # Remove the API key from environment before initializing logger
     original_key = os.environ.pop("RESEND_API_KEY", None)
-    
+
     try:
         # Initialize the logger after removing the API key
         logger = ResendEmailLogger()
@@ -104,16 +108,19 @@ async def test_send_email_missing_api_key():
         mock_response.raise_for_status.return_value = None
         mock_response.status_code = 200
         mock_response.json.return_value = {"id": "test_email_id"}
-        
+
         mock_async_client = mock.AsyncMock()
         mock_async_client.post.return_value = mock_response
-        
+
         # Directly inject the mock client to bypass any caching
         logger.async_httpx_client = mock_async_client
 
         # Send email
         await logger.send_email(
-            from_email=from_email, to_email=to_email, subject=subject, html_body=html_body
+            from_email=from_email,
+            to_email=to_email,
+            subject=subject,
+            html_body=html_body,
         )
 
         # Verify the HTTP client was called with None as the API key
@@ -159,3 +166,62 @@ async def test_send_email_multiple_recipients(mock_env_vars):
     call_args = mock_async_client.post.call_args
     request_body = call_args[1]["json"]
     assert request_body["to"] == to_email
+
+
+@pytest.mark.asyncio
+async def test_send_email_uses_resend_from_email_override():
+    """RESEND_FROM_EMAIL overrides the caller-supplied from_email."""
+    with mock.patch.dict(
+        os.environ,
+        {
+            "RESEND_API_KEY": "test_api_key",
+            "RESEND_FROM_EMAIL": "alerts@my-verified-domain.com",
+        },
+    ):
+        logger = ResendEmailLogger()
+
+        mock_response = mock.Mock(spec=Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"id": "test_email_id"}
+        mock_response.raise_for_status.return_value = None
+
+        mock_async_client = mock.AsyncMock()
+        mock_async_client.post.return_value = mock_response
+        logger.async_httpx_client = mock_async_client
+
+        await logger.send_email(
+            from_email="notifications@alerts.litellm.ai",
+            to_email=["recipient@example.com"],
+            subject="Test Subject",
+            html_body="<p>Test email body</p>",
+        )
+
+        mock_async_client.post.assert_called_once()
+        request_body = mock_async_client.post.call_args[1]["json"]
+        assert request_body["from"] == "alerts@my-verified-domain.com"
+
+
+@pytest.mark.asyncio
+async def test_send_email_falls_back_to_argument_when_override_unset(mock_env_vars):
+    """When RESEND_FROM_EMAIL is unset, the caller-supplied from_email is used."""
+    logger = ResendEmailLogger()
+
+    mock_response = mock.Mock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"id": "test_email_id"}
+    mock_response.raise_for_status.return_value = None
+
+    mock_async_client = mock.AsyncMock()
+    mock_async_client.post.return_value = mock_response
+    logger.async_httpx_client = mock_async_client
+
+    await logger.send_email(
+        from_email="notifications@alerts.litellm.ai",
+        to_email=["recipient@example.com"],
+        subject="Test Subject",
+        html_body="<p>Test email body</p>",
+    )
+
+    mock_async_client.post.assert_called_once()
+    request_body = mock_async_client.post.call_args[1]["json"]
+    assert request_body["from"] == "notifications@alerts.litellm.ai"

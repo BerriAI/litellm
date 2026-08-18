@@ -4,8 +4,6 @@ https://docs.cohere.com/reference/rerank
 
 """
 
-from typing import List, Optional, Union
-
 from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Required, TypedDict
 
@@ -13,38 +11,43 @@ from typing_extensions import Required, TypedDict
 class RerankRequest(BaseModel):
     model: str
     query: str
-    top_n: Optional[int] = None
-    documents: List[Union[str, dict]]
-    rank_fields: Optional[List[str]] = None
-    return_documents: Optional[bool] = None
-    max_chunks_per_doc: Optional[int] = None
-    max_tokens_per_doc: Optional[int] = None
+    top_n: int | None = None
+    documents: list[str | dict]
+    rank_fields: list[str] | None = None
+    return_documents: bool | None = None
+    max_chunks_per_doc: int | None = None
+    max_tokens_per_doc: int | None = None
+    # Optional task/query instruction passed through to providers that support it
+    # (e.g. hosted vLLM / Qwen3-Reranker, DeepInfra). Omitted from the outgoing
+    # request when None, so this is fully backward-compatible.
+    instruction: str | None = None
 
 
 class OptionalRerankParams(TypedDict, total=False):
     query: str
-    top_n: Optional[int]
-    documents: List[Union[str, dict]]
-    rank_fields: Optional[List[str]]
-    return_documents: Optional[bool]
-    max_chunks_per_doc: Optional[int]
-    max_tokens_per_doc: Optional[int]
+    top_n: int | None
+    documents: list[str | dict]
+    rank_fields: list[str] | None
+    return_documents: bool | None
+    max_chunks_per_doc: int | None
+    max_tokens_per_doc: int | None
+    instruction: str | None
 
 
 class RerankBilledUnits(TypedDict, total=False):
-    search_units: Optional[int]
-    total_tokens: Optional[int]
+    search_units: int | None
+    total_tokens: int | None
 
 
 class RerankTokens(TypedDict, total=False):
-    input_tokens: Optional[int]
-    output_tokens: Optional[int]
+    input_tokens: int | None
+    output_tokens: int | None
 
 
 class RerankResponseMeta(TypedDict, total=False):
-    api_version: Optional[dict]
-    billed_units: Optional[RerankBilledUnits]
-    tokens: Optional[RerankTokens]
+    api_version: dict | None
+    billed_units: RerankBilledUnits | None
+    tokens: RerankTokens | None
 
 
 class RerankResponseDocument(TypedDict):
@@ -58,11 +61,9 @@ class RerankResponseResult(TypedDict, total=False):
 
 
 class RerankResponse(BaseModel):
-    id: Optional[str] = None
-    results: Optional[List[RerankResponseResult]] = (
-        None  # Contains index and relevance_score
-    )
-    meta: Optional[RerankResponseMeta] = None  # Contains api_version and billed_units
+    id: str | None = None
+    results: list[RerankResponseResult] | None = None  # Contains index and relevance_score
+    meta: RerankResponseMeta | None = None  # Contains api_version and billed_units
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
@@ -73,5 +74,5 @@ class RerankResponse(BaseModel):
     def get(self, key, default=None):
         return self.__dict__.get(key, default)
 
-    def __contains__(self, key):
+    def __contains__(self, key) -> bool:
         return key in self.__dict__

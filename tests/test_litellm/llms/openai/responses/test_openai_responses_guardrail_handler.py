@@ -901,6 +901,20 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert result == responses_so_far
 
     @pytest.mark.asyncio
+    async def test_process_output_streaming_response_null_response(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        responses_so_far = [{"type": "response.completed", "response": None}]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
     async def test_process_output_streaming_response_unrecognized_output_type(self):
         """Test that streaming response with unrecognized output types doesn't raise IndexError
 
@@ -996,6 +1010,105 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         # Should return the responses
         assert result == responses_so_far
 
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_writes_back_guardrailed_text(self):
+        """Guardrailed text must be written back into the response.completed chunk in-place."""
+
+        class RewriteGuardrail(CustomGuardrail):
+            """Replaces '<TOKEN_1>' with 'john@example.com' to simulate PII unmasking."""
+
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                texts = inputs.get("texts", [])
+                inputs["texts"] = [
+                    t.replace("<TOKEN_1>", "john@example.com") for t in texts
+                ]
+                return inputs
+
+        handler = OpenAIResponsesHandler()
+        guardrail = RewriteGuardrail(guardrail_name="test-rewrite")
+
+        responses_so_far = [
+            {"type": "response.output_text.delta", "delta": "send to "},
+            {"type": "response.output_text.delta", "delta": "<TOKEN_1>"},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "model": "gpt-4o",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_123",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "send to <TOKEN_1>"},
+                            ],
+                        }
+                    ],
+                    "status": "completed",
+                },
+            },
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        completed_chunk = next(
+            c
+            for c in result
+            if isinstance(c, dict) and c.get("type") == "response.completed"
+        )
+        output_text = completed_chunk["response"]["output"][0]["content"][0]["text"]
+        assert (
+            output_text == "send to john@example.com"
+        ), f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_pass_through_unchanged(self):
+        """A pass-through guardrail must not modify the output text."""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="pass-through")
+
+        original_text = "No PII here, just normal text."
+        responses_so_far = [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_456",
+                    "model": "gpt-4o",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_456",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": original_text}],
+                        }
+                    ],
+                    "status": "completed",
+                },
+            }
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        output_text = result[-1]["response"]["output"][0]["content"][0]["text"]
+        assert output_text == original_text
+
 
 class TestGetStructuredMessages:
     """Test the get_structured_messages method for Responses API handler."""
@@ -1055,3 +1168,69 @@ class TestGetStructuredMessages:
         data = {"input": None}
         result = handler.get_structured_messages(data)
         assert result is None
+
+
+class ToolAppendingGuardrail(CustomGuardrail):
+    """Guardrail that appends a new function tool, mimicking a guardrail that
+    injects a retrieval/recovery tool the model can later call."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        tools = list(inputs.get("tools") or [])
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "injected_tool",
+                    "description": "injected by guardrail",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        )
+        inputs["tools"] = tools
+        return inputs
+
+
+class TestOpenAIResponsesHandlerToolInjection:
+    """A tool a guardrail injects must survive the write-back to Responses format."""
+
+    def test_merge_keeps_guardrail_appended_tool(self):
+        """_merge_tools_after_guardrail must not drop the extra appended tool."""
+        handler = OpenAIResponsesHandler()
+        original = [{"type": "function", "name": "a"}]
+        remapped = [
+            {"type": "function", "name": "a"},
+            {"type": "function", "name": "b"},
+        ]
+        merged = handler._merge_tools_after_guardrail(original, remapped)
+        assert [t["name"] for t in merged] == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_injected_tool_survives_when_request_already_has_tools(self):
+        """Regression: the merge dropped the injected tool whenever the request
+        already carried tools, so the model never saw it."""
+        handler = OpenAIResponsesHandler()
+        guardrail = ToolAppendingGuardrail(guardrail_name="test")
+
+        data = {
+            "input": [{"role": "user", "content": "hi", "type": "message"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        names = [t.get("name") for t in result["tools"]]
+        assert "get_weather" in names
+        assert "injected_tool" in names

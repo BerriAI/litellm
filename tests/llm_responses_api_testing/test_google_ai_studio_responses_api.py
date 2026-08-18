@@ -81,9 +81,8 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
             call_kwargs["messages"][0]["content"]
             == "what is the latest version of supabase python package and when was it released?"
         )
-        assert (
-            call_kwargs["tools"] == []
-        )  # web search tools are converted to web_search_options, not kept as tools
+        assert "tools" not in call_kwargs
+        assert "tool_choice" not in call_kwargs
 
 
 @pytest.mark.asyncio
@@ -97,7 +96,7 @@ async def test_gemini_3_responses_api_with_thought_signatures():
         pytest.skip("GEMINI_API_KEY not set")
 
     litellm.set_verbose = False
-    request_model = "gemini/gemini-3-pro-preview"
+    request_model = "gemini/gemini-3.1-pro-preview"
 
     tools = [
         {
@@ -197,7 +196,7 @@ async def test_gemini_3_responses_api_streaming_with_thought_signatures():
         pytest.skip("GEMINI_API_KEY not set")
 
     litellm.set_verbose = False
-    request_model = "gemini/gemini-3-pro-preview"
+    request_model = "gemini/gemini-3.1-pro-preview"
 
     tools = [
         {

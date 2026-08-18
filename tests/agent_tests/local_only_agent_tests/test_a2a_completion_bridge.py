@@ -54,9 +54,9 @@ async def test_a2a_completion_bridge_non_streaming():
     assert response.jsonrpc == "2.0"
     assert response.id is not None
     assert response.result is not None
-    assert "message" in response.result
+    assert response.result.get("kind") == "message"
 
-    message = response.result["message"]
+    message = response.result
     assert "role" in message
     assert message["role"] == "agent"
     assert "parts" in message

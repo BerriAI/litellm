@@ -1,9 +1,19 @@
 "use client";
 
-import { ArrowLeftOutlined, HistoryOutlined, ToolOutlined } from "@ant-design/icons";
+import { ArrowLeft, History, Wrench } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Select, Spin } from "antd";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
 import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
@@ -14,12 +24,9 @@ import {
   fetchToolPolicyOptions,
   getToolUsageLogs,
   keyListCall,
-  teamListCall,
   updateToolPolicy,
-  type ToolPolicyOption,
   type ToolPolicyOverrideRow,
 } from "@/components/networking";
-import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface ToolDetailProps {
   toolName: string;
@@ -32,6 +39,11 @@ interface KeyOption {
   key_alias?: string;
 }
 
+interface KeyItem {
+  value: string;
+  label: string;
+}
+
 const TOOL_DETAIL_QUERY_KEY = "tool-detail";
 
 const LOGS_PAGE_SIZE = 50;
@@ -40,8 +52,7 @@ function getDefaultLogsDateRange(): { start: string; end: string } {
   const end = new Date();
   const start = new Date();
   start.setDate(start.getDate() - 90);
-  const fmt = (d: Date) =>
-    d.toISOString().slice(0, 19).replace("T", " ");
+  const fmt = (d: Date) => d.toISOString().slice(0, 19).replace("T", " ");
   return { start: fmt(start), end: fmt(end) };
 }
 
@@ -56,7 +67,11 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
 
   const logsDateRange = useMemo(() => getDefaultLogsDateRange(), []);
 
-  const { data: detail, isLoading: detailLoading, error: detailError } = useQuery({
+  const {
+    data: detail,
+    isLoading: detailLoading,
+    error: detailError,
+  } = useQuery({
     queryKey: [TOOL_DETAIL_QUERY_KEY, toolName],
     queryFn: () => fetchToolDetail(accessToken!, toolName),
     enabled: !!accessToken && !!toolName,
@@ -67,12 +82,6 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     queryFn: () => fetchToolPolicyOptions(accessToken!),
     enabled: !!accessToken,
     staleTime: 60_000,
-  });
-
-  const { data: teamsData } = useQuery({
-    queryKey: ["teams-list-tool-detail"],
-    queryFn: () => teamListCall(accessToken!, null, null),
-    enabled: !!accessToken,
   });
 
   const { data: keysData } = useQuery({
@@ -104,24 +113,6 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     }));
   }, [logsData?.logs]);
 
-  const teams: Team[] = useMemo(() => {
-    const arr = Array.isArray(teamsData) ? teamsData : teamsData?.data ?? [];
-    return arr.map((t: { team_id?: string; id?: string; team_alias?: string }) => ({
-      team_id: t.team_id ?? t.id ?? "",
-      team_alias: t.team_alias ?? t.team_id ?? "",
-      models: [],
-      max_budget: null,
-      budget_duration: null,
-      tpm_limit: null,
-      rpm_limit: null,
-      organization_id: "",
-      created_at: "",
-      keys: [],
-      members_with_roles: [],
-      spend: 0,
-    }));
-  }, [teamsData]);
-
   const keys: KeyOption[] = useMemo(() => {
     const keysRes = keysData?.keys ?? keysData?.data ?? [];
     return keysRes.map((k: { token?: string; api_key?: string; key_hash?: string; key_alias?: string }) => ({
@@ -129,6 +120,11 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
       key_alias: k.key_alias ?? (k.token ?? k.api_key ?? k.key_hash)?.toString?.()?.substring?.(0, 8),
     }));
   }, [keysData]);
+
+  const keyItems: KeyItem[] = useMemo(
+    () => keys.map((k) => ({ value: k.token, label: k.key_alias || k.token?.substring?.(0, 12) || k.token })),
+    [keys],
+  );
 
   const invalidateDetail = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: [TOOL_DETAIL_QUERY_KEY, toolName] });
@@ -147,7 +143,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         setInputPolicySaving(false);
       }
     },
-    [accessToken, toolName, invalidateDetail]
+    [accessToken, toolName, invalidateDetail],
   );
 
   const handleOutputPolicyChange = useCallback(
@@ -163,7 +159,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         setOutputPolicySaving(false);
       }
     },
-    [accessToken, toolName, invalidateDetail]
+    [accessToken, toolName, invalidateDetail],
   );
 
   const handleAddOverride = useCallback(async () => {
@@ -173,11 +169,16 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     if (!isTeam && !blockKey?.token) return;
     setOverrideSaving(true);
     try {
-      await updateToolPolicy(accessToken, toolName, { input_policy: "blocked" }, {
-        team_id: isTeam ? blockTeamId : undefined,
-        key_hash: !isTeam ? blockKey!.token : undefined,
-        key_alias: !isTeam ? blockKey!.key_alias : undefined,
-      });
+      await updateToolPolicy(
+        accessToken,
+        toolName,
+        { input_policy: "blocked" },
+        {
+          team_id: isTeam ? blockTeamId : undefined,
+          key_hash: !isTeam ? blockKey!.token : undefined,
+          key_alias: !isTeam ? blockKey!.key_alias : undefined,
+        },
+      );
       invalidateDetail();
       setBlockTeamId(null);
       setBlockKey(null);
@@ -204,13 +205,13 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         setOverrideSaving(false);
       }
     },
-    [accessToken, toolName, invalidateDetail]
+    [accessToken, toolName, invalidateDetail],
   );
 
   if (detailLoading && !detail) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Spin size="large" />
+        <UiLoadingSpinner className="size-8 text-muted-foreground" />
       </div>
     );
   }
@@ -218,10 +219,11 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
   if (detailError && !detail) {
     return (
       <div>
-        <Button type="link" icon={<ArrowLeftOutlined />} onClick={onBack} className="pl-0 mb-4">
+        <Button variant="link" onClick={onBack} className="mb-4 pl-0">
+          <ArrowLeft />
           Back to Tool Policies
         </Button>
-        <p className="text-red-600">Failed to load tool details.</p>
+        <p className="text-destructive">Failed to load tool details.</p>
       </div>
     );
   }
@@ -232,53 +234,43 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
 
   const { tool, overrides } = detail;
 
-  const inputDesc = policyOptions?.input_policies?.find(
-    (p) => p.value === tool.input_policy
-  )?.description;
-  const outputDesc = policyOptions?.output_policies?.find(
-    (p) => p.value === tool.output_policy
-  )?.description;
+  const inputDesc = policyOptions?.input_policies?.find((p) => p.value === tool.input_policy)?.description;
+  const outputDesc = policyOptions?.output_policies?.find((p) => p.value === tool.output_policy)?.description;
 
   return (
     <div>
       <div className="mb-6">
-        <Button
-          type="link"
-          icon={<ArrowLeftOutlined />}
-          onClick={onBack}
-          className="pl-0 mb-4"
-        >
+        <Button variant="link" onClick={onBack} className="mb-4 pl-0">
+          <ArrowLeft />
           Back to Tool Policies
         </Button>
 
         <div className="flex items-start justify-between">
           <div>
-            <div className="flex items-center gap-3 mb-1 flex-wrap">
-              <ToolOutlined className="text-xl text-gray-400" />
-              <h1 className="text-xl font-semibold text-gray-900 font-mono">{tool.tool_name}</h1>
-              <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-md bg-gray-100 text-gray-700 border border-gray-200">
-                {tool.origin ?? "—"}
-              </span>
-              <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
-                {(tool.call_count ?? 0).toLocaleString()} calls
-              </span>
+            <div className="mb-1 flex flex-wrap items-center gap-3">
+              <Wrench className="size-5 text-muted-foreground" />
+              <h1 className="font-mono text-xl font-semibold">{tool.tool_name}</h1>
+              <Badge variant="outline">{tool.origin ?? "—"}</Badge>
+              <Badge variant="secondary">{(tool.call_count ?? 0).toLocaleString()} calls</Badge>
             </div>
-            <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-600">
+            <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
               {tool.user_agent && (
                 <div className="flex items-center gap-1.5">
-                  <dt className="font-medium text-gray-500 whitespace-nowrap">User Agent:</dt>
-                  <dd className="font-mono truncate max-w-[40ch]" title={tool.user_agent}>{tool.user_agent}</dd>
+                  <dt className="font-medium whitespace-nowrap">User Agent:</dt>
+                  <dd className="max-w-[40ch] truncate font-mono" title={tool.user_agent}>
+                    {tool.user_agent}
+                  </dd>
                 </div>
               )}
               {tool.created_at && (
                 <div className="flex items-center gap-1.5">
-                  <dt className="font-medium text-gray-500 whitespace-nowrap">First Discovered:</dt>
+                  <dt className="font-medium whitespace-nowrap">First Discovered:</dt>
                   <dd>{new Date(tool.created_at).toLocaleString()}</dd>
                 </div>
               )}
               {tool.last_used_at && (
                 <div className="flex items-center gap-1.5">
-                  <dt className="font-medium text-gray-500 whitespace-nowrap">Last Used:</dt>
+                  <dt className="font-medium whitespace-nowrap">Last Used:</dt>
                   <dd>{new Date(tool.last_used_at).toLocaleString()}</dd>
                 </div>
               )}
@@ -290,9 +282,9 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
       <div className="space-y-6">
         {/* Two-panel policy layout */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-700 mb-1">Input Policy</h2>
-            <p className="text-xs text-gray-500 mb-3">
+          <section className="rounded-lg border border-border bg-card p-5 shadow-xs">
+            <h2 className="mb-1 text-sm font-semibold">Input Policy</h2>
+            <p className="mb-3 text-xs text-muted-foreground">
               {inputDesc ?? "Controls what data this tool is allowed to accept."}
             </p>
             <PolicySelect
@@ -307,9 +299,9 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
             />
           </section>
 
-          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-700 mb-1">Output Policy</h2>
-            <p className="text-xs text-gray-500 mb-3">
+          <section className="rounded-lg border border-border bg-card p-5 shadow-xs">
+            <h2 className="mb-1 text-sm font-semibold">Output Policy</h2>
+            <p className="mb-3 text-xs text-muted-foreground">
               {outputDesc ?? "Controls how this tool's output is trusted by downstream tools."}
             </p>
             <PolicySelect
@@ -326,27 +318,18 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         </div>
 
         {overrides.length > 0 && (
-          <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3">Blocked for team or key</h2>
-            <ul className="border rounded-md divide-y divide-gray-100 bg-red-50/30">
+          <section className="rounded-lg border border-border bg-card p-5 shadow-xs">
+            <h2 className="mb-3 text-sm font-semibold">Blocked for team or key</h2>
+            <ul className="divide-y divide-border rounded-md border border-border">
               {overrides.map((ov) => (
-                <li
-                  key={ov.override_id}
-                  className="flex items-center justify-between px-3 py-2.5 text-sm"
-                >
-                  <span className="text-gray-700">
+                <li key={ov.override_id} className="flex items-center justify-between px-3 py-2.5 text-sm">
+                  <span>
                     {ov.team_id ? `Team: ${ov.team_id}` : ""}
                     {ov.team_id && ov.key_hash ? " · " : ""}
                     {ov.key_hash ? `Key: ${ov.key_alias || ov.key_hash.substring(0, 8)}` : ""}
                     {!ov.team_id && !ov.key_hash ? "—" : ""}
                   </span>
-                  <Button
-                    type="link"
-                    danger
-                    size="small"
-                    disabled={overrideSaving}
-                    onClick={() => handleRemoveOverride(ov)}
-                  >
+                  <Button variant="link" size="sm" disabled={overrideSaving} onClick={() => handleRemoveOverride(ov)}>
                     Remove
                   </Button>
                 </li>
@@ -355,13 +338,13 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
           </section>
         )}
 
-        <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">Block for team or key</h2>
-          <div className="flex flex-col gap-4 max-w-md">
+        <section className="rounded-lg border border-border bg-card p-5 shadow-xs">
+          <h2 className="mb-3 text-sm font-semibold">Block for team or key</h2>
+          <div className="flex max-w-md flex-col gap-4">
             <div>
-              <span className="text-sm font-medium text-gray-700 block mb-2">Scope</span>
+              <span className="mb-2 block text-sm font-medium">Scope</span>
               <div className="flex items-center gap-6">
-                <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700">
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
                   <input
                     type="radio"
                     checked={blockScope === "team"}
@@ -370,7 +353,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
                   />
                   Team
                 </label>
-                <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700">
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
                   <input
                     type="radio"
                     checked={blockScope === "key"}
@@ -382,39 +365,34 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
               </div>
             </div>
             <div>
-              <span className="text-sm font-medium text-gray-700 block mb-2">
-                {blockScope === "team" ? "Team" : "Key"}
-              </span>
+              <span className="mb-2 block text-sm font-medium">{blockScope === "team" ? "Team" : "Key"}</span>
               {blockScope === "team" ? (
-                <TeamDropdown
-                  value={blockTeamId ?? undefined}
-                  onChange={(id) => setBlockTeamId(id || null)}
-                />
+                <TeamDropdown value={blockTeamId ?? undefined} onChange={(id) => setBlockTeamId(id || null)} />
               ) : (
-                <Select
-                  placeholder="Select key"
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  value={blockKey ? blockKey.token : undefined}
-                  onChange={(token) => {
-                    const k = keys.find((x) => x.token === token);
-                    setBlockKey(k ?? null);
-                  }}
-                  options={keys.map((k) => ({
-                    value: k.token,
-                    label: k.key_alias || k.token?.substring?.(0, 12) || k.token,
-                  }))}
-                  className="w-full"
-                  style={{ minWidth: 200 }}
-                />
+                <Combobox
+                  items={keyItems}
+                  value={keyItems.find((k) => k.value === blockKey?.token) ?? null}
+                  onValueChange={(item: KeyItem | null) =>
+                    setBlockKey(keys.find((k) => k.token === item?.value) ?? null)
+                  }
+                >
+                  <ComboboxInput placeholder="Select key" showClear className="w-full min-w-50" />
+                  <ComboboxContent>
+                    <ComboboxEmpty>No keys found</ComboboxEmpty>
+                    <ComboboxList>
+                      {(item: KeyItem) => (
+                        <ComboboxItem key={item.value} value={item}>
+                          {item.label}
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
               )}
             </div>
             <Button
-              type="primary"
-              danger
+              variant="destructive"
               disabled={overrideSaving || (blockScope === "team" ? !blockTeamId : !blockKey?.token)}
-              loading={overrideSaving}
               onClick={handleAddOverride}
             >
               Block for {blockScope}
@@ -422,10 +400,10 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
           </div>
         </section>
 
-        <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-            <HistoryOutlined />
-            Recent logs
+        <section className="rounded-lg border border-border bg-card p-5 shadow-xs">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+            <History className="size-4" />
+            Recent invocations
           </h2>
           <LogViewer
             guardrailName={tool.tool_name}

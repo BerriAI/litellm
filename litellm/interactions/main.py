@@ -8,33 +8,34 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 
 Usage:
     import litellm
-    
+
     # Create an interaction with a model
     response = litellm.interactions.create(
         model="gemini-2.5-flash",
         input="Hello, how are you?"
     )
-    
+
     # Create an interaction with an agent
     response = litellm.interactions.create(
         agent="deep-research-pro-preview-12-2025",
         input="Research the current state of cancer research"
     )
-    
+
     # Async version
     response = await litellm.interactions.acreate(...)
-    
+
     # Get an interaction
     response = litellm.interactions.get(interaction_id="...")
-    
+
     # Delete an interaction
     result = litellm.interactions.delete(interaction_id="...")
 """
 
 import asyncio
 import contextvars
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, List, Optional, Union
+from typing import Any, Final
 
 import httpx
 
@@ -48,6 +49,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.types.interactions import (
     CancelInteractionResult,
     DeleteInteractionResult,
+    InteractionEnvironment,
     InteractionInput,
     InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
@@ -64,36 +66,38 @@ from litellm.utils import client
 @client
 async def acreate(
     # Model or Agent (one required per OpenAPI spec)
-    model: Optional[str] = None,
-    agent: Optional[str] = None,
+    model: str | None = None,
+    agent: str | None = None,
     # Input (required)
-    input: Optional[InteractionInput] = None,
+    input: InteractionInput | None = None,
     # Tools (for model interactions)
-    tools: Optional[List[InteractionTool]] = None,
+    tools: list[InteractionTool] | None = None,
     # System instruction
-    system_instruction: Optional[str] = None,
+    system_instruction: str | None = None,
     # Generation config
-    generation_config: Optional[Dict[str, Any]] = None,
+    generation_config: dict[str, Any] | None = None,
     # Streaming
-    stream: Optional[bool] = None,
+    stream: bool | None = None,
     # Storage
-    store: Optional[bool] = None,
+    store: bool | None = None,
     # Background execution
-    background: Optional[bool] = None,
+    background: bool | None = None,
+    # Agent execution environment ("remote", env id, or remote config object)
+    environment: InteractionEnvironment | None = None,
     # Response format
-    response_modalities: Optional[List[str]] = None,
-    response_format: Optional[Dict[str, Any]] = None,
-    response_mime_type: Optional[str] = None,
+    response_modalities: list[str] | None = None,
+    response_format: dict[str, Any] | None = None,
+    response_mime_type: str | None = None,
     # Continuation
-    previous_interaction_id: Optional[str] = None,
+    previous_interaction_id: str | None = None,
     # Extra params
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]]:
+) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
     """
     Async: Create a new interaction using Google's Interactions API.
 
@@ -109,6 +113,10 @@ async def acreate(
         stream: Whether to stream the response
         store: Whether to store the response for later retrieval
         background: Whether to run in background
+        environment: Agent execution environment — ``"remote"``, an existing env id
+            string, or a config object such as
+            ``{"type": "remote", "sources": [...]}`` /
+            ``{"type": "remote", "network": {...}}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
@@ -121,19 +129,17 @@ async def acreate(
     Returns:
         InteractionsAPIResponse or async iterator for streaming
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acreate_interaction"] = True
 
         if custom_llm_provider is None and model:
-            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=kwargs.get("api_base", None)
-            )
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
         elif custom_llm_provider is None:
             custom_llm_provider = "gemini"
 
-        func = partial(
+        func: Final = partial(
             create,
             model=model,
             agent=agent,
@@ -144,6 +150,7 @@ async def acreate(
             stream=stream,
             store=store,
             background=background,
+            environment=environment,
             response_modalities=response_modalities,
             response_format=response_format,
             response_mime_type=response_mime_type,
@@ -155,16 +162,16 @@ async def acreate(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             response = init_response
 
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=model,
@@ -178,44 +185,42 @@ async def acreate(
 @client
 def create(
     # Model or Agent (one required per OpenAPI spec)
-    model: Optional[str] = None,
-    agent: Optional[str] = None,
+    model: str | None = None,
+    agent: str | None = None,
     # Input (required)
-    input: Optional[InteractionInput] = None,
+    input: InteractionInput | None = None,
     # Tools (for model interactions)
-    tools: Optional[List[InteractionTool]] = None,
+    tools: list[InteractionTool] | None = None,
     # System instruction
-    system_instruction: Optional[str] = None,
+    system_instruction: str | None = None,
     # Generation config
-    generation_config: Optional[Dict[str, Any]] = None,
+    generation_config: dict[str, Any] | None = None,
     # Streaming
-    stream: Optional[bool] = None,
+    stream: bool | None = None,
     # Storage
-    store: Optional[bool] = None,
+    store: bool | None = None,
     # Background execution
-    background: Optional[bool] = None,
+    background: bool | None = None,
+    # Agent execution environment ("remote", env id, or remote config object)
+    environment: InteractionEnvironment | None = None,
     # Response format
-    response_modalities: Optional[List[str]] = None,
-    response_format: Optional[Dict[str, Any]] = None,
-    response_mime_type: Optional[str] = None,
+    response_modalities: list[str] | None = None,
+    response_format: dict[str, Any] | None = None,
+    response_mime_type: str | None = None,
     # Continuation
-    previous_interaction_id: Optional[str] = None,
+    previous_interaction_id: str | None = None,
     # Extra params
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM params
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[
-    InteractionsAPIResponse,
-    Iterator[InteractionsAPIStreamingResponse],
-    Coroutine[
-        Any,
-        Any,
-        Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]],
-    ],
-]:
+) -> (
+    InteractionsAPIResponse
+    | Iterator[InteractionsAPIStreamingResponse]
+    | Coroutine[Any, Any, InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]]
+):
     """
     Sync: Create a new interaction using Google's Interactions API.
 
@@ -231,6 +236,10 @@ def create(
         stream: Whether to stream the response
         store: Whether to store the response for later retrieval
         background: Whether to run in background
+        environment: Agent execution environment — ``"remote"``, an existing env id
+            string, or a config object such as
+            ``{"type": "remote", "sources": [...]}`` /
+            ``{"type": "remote", "network": {...}}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
@@ -243,16 +252,23 @@ def create(
     Returns:
         InteractionsAPIResponse or iterator for streaming
     """
-    local_vars = locals()
+    local_vars: Final = locals()
 
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("acreate_interaction", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("acreate_interaction", False) is True
 
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-        if model:
+        # Routing logic:
+        # - agent provided (no model, or model accidentally set to agent name) → gemini
+        # - model provided → resolve provider via get_llm_provider (normal routing)
+        if agent and model == agent:
+            model = None
+        if agent and not model:
+            custom_llm_provider = custom_llm_provider or "gemini"
+        elif model:
             model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -262,31 +278,24 @@ def create(
         else:
             custom_llm_provider = custom_llm_provider or "gemini"
 
-        interactions_api_config = get_provider_interactions_api_config(
+        interactions_api_config: Final = get_provider_interactions_api_config(
             provider=custom_llm_provider,
             model=model,
         )
 
         # Get optional params using utility (similar to responses API pattern)
         local_vars.update(kwargs)
-        optional_params = (
-            InteractionsAPIRequestUtils.get_requested_interactions_api_optional_params(
-                local_vars
-            )
-        )
+        optional_params: Final = InteractionsAPIRequestUtils.get_requested_interactions_api_optional_params(local_vars)
 
         # Check if this is a bridge provider (litellm_responses) - similar to responses API
         # Either provider is explicitly "litellm_responses" or no config found (bridge to responses)
-        if (
-            custom_llm_provider == "litellm_responses"
-            or interactions_api_config is None
-        ):
+        if custom_llm_provider == "litellm_responses" or interactions_api_config is None:
             # Bridge to litellm.responses() for non-native providers
             from litellm.interactions.litellm_responses_transformation.handler import (
                 LiteLLMResponsesInteractionsHandler,
             )
 
-            handler = LiteLLMResponsesInteractionsHandler()
+            handler: Final = LiteLLMResponsesInteractionsHandler()
             return handler.interactions_api_handler(
                 model=model or "",
                 input=input,
@@ -305,7 +314,7 @@ def create(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = interactions_http_handler.create_interaction(
+        response: Final = interactions_http_handler.create_interaction(
             model=model,
             agent=agent,
             input=input,
@@ -340,18 +349,18 @@ def create(
 @client
 async def aget(
     interaction_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> InteractionsAPIResponse:
     """Async: Get an interaction by its ID."""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aget_interaction"] = True
 
-        func = partial(
+        func: Final = partial(
             get,
             interaction_id=interaction_id,
             extra_headers=extra_headers,
@@ -360,16 +369,16 @@ async def aget(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             response = init_response
 
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -383,30 +392,28 @@ async def aget(
 @client
 def get(
     interaction_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[InteractionsAPIResponse, Coroutine[Any, Any, InteractionsAPIResponse]]:
+) -> InteractionsAPIResponse | Coroutine[Any, Any, InteractionsAPIResponse]:
     """Sync: Get an interaction by its ID."""
-    local_vars = locals()
+    local_vars: Final = locals()
     custom_llm_provider = custom_llm_provider or "gemini"
 
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("aget_interaction", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("aget_interaction", False) is True
 
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-        interactions_api_config = get_provider_interactions_api_config(
+        interactions_api_config: Final = get_provider_interactions_api_config(
             provider=custom_llm_provider,
         )
 
         if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API not supported for: {custom_llm_provider}"
-            )
+            raise ValueError(f"Interactions API not supported for: {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -444,18 +451,18 @@ def get(
 @client
 async def adelete(
     interaction_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> DeleteInteractionResult:
     """Async: Delete an interaction by its ID."""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["adelete_interaction"] = True
 
-        func = partial(
+        func: Final = partial(
             delete,
             interaction_id=interaction_id,
             extra_headers=extra_headers,
@@ -464,16 +471,16 @@ async def adelete(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             response = init_response
 
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -487,30 +494,28 @@ async def adelete(
 @client
 def delete(
     interaction_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[DeleteInteractionResult, Coroutine[Any, Any, DeleteInteractionResult]]:
+) -> DeleteInteractionResult | Coroutine[Any, Any, DeleteInteractionResult]:
     """Sync: Delete an interaction by its ID."""
-    local_vars = locals()
+    local_vars: Final = locals()
     custom_llm_provider = custom_llm_provider or "gemini"
 
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("adelete_interaction", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("adelete_interaction", False) is True
 
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-        interactions_api_config = get_provider_interactions_api_config(
+        interactions_api_config: Final = get_provider_interactions_api_config(
             provider=custom_llm_provider,
         )
 
         if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API not supported for: {custom_llm_provider}"
-            )
+            raise ValueError(f"Interactions API not supported for: {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -548,18 +553,18 @@ def delete(
 @client
 async def acancel(
     interaction_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> CancelInteractionResult:
     """Async: Cancel an interaction by its ID."""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acancel_interaction"] = True
 
-        func = partial(
+        func: Final = partial(
             cancel,
             interaction_id=interaction_id,
             extra_headers=extra_headers,
@@ -568,16 +573,16 @@ async def acancel(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
             response = init_response
 
-        return response  # type: ignore
+        return response
     except Exception as e:
         raise litellm.exception_type(
             model=None,
@@ -591,30 +596,28 @@ async def acancel(
 @client
 def cancel(
     interaction_id: str,
-    extra_headers: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
-    custom_llm_provider: Optional[str] = None,
+    extra_headers: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[CancelInteractionResult, Coroutine[Any, Any, CancelInteractionResult]]:
+) -> CancelInteractionResult | Coroutine[Any, Any, CancelInteractionResult]:
     """Sync: Cancel an interaction by its ID."""
-    local_vars = locals()
+    local_vars: Final = locals()
     custom_llm_provider = custom_llm_provider or "gemini"
 
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("acancel_interaction", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("acancel_interaction", False) is True
 
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-        interactions_api_config = get_provider_interactions_api_config(
+        interactions_api_config: Final = get_provider_interactions_api_config(
             provider=custom_llm_provider,
         )
 
         if interactions_api_config is None:
-            raise ValueError(
-                f"Interactions API not supported for: {custom_llm_provider}"
-            )
+            raise ValueError(f"Interactions API not supported for: {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,

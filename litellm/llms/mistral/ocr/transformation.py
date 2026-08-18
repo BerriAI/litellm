@@ -2,7 +2,7 @@
 Mistral OCR transformation implementation.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Final
 
 import httpx
 
@@ -14,6 +14,8 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
 )
 from litellm.secret_managers.main import get_secret_str
+
+MISTRAL_OCR_API_KEY_ENV_VAR: Final = "MISTRAL_API_KEY"
 
 
 class MistralOCRConfig(BaseOCRConfig):
@@ -42,6 +44,7 @@ class MistralOCRConfig(BaseOCRConfig):
         - extract_footer: Whether to extract document footer
         - table_format: Table output format ("markdown" or "html")
         - confidence_scores_granularity: Confidence score level ("word" or "page")
+        - include_blocks: Whether to return paragraph-level bounding boxes and typed content blocks (OCR 4)
         - id: Request identifier
         """
         return [
@@ -56,8 +59,12 @@ class MistralOCRConfig(BaseOCRConfig):
             "extract_footer",
             "table_format",
             "confidence_scores_granularity",
+            "include_blocks",
             "id",
         ]
+
+    def get_api_key_env_var(self) -> str | None:
+        return MISTRAL_OCR_API_KEY_ENV_VAR
 
     def map_ocr_params(
         self,
@@ -71,10 +78,10 @@ class MistralOCRConfig(BaseOCRConfig):
         Mistral accepts these parameters directly, so no transformation needed.
         Just filter out unsupported params.
         """
-        supported_params = self.get_supported_ocr_params(model=model)
+        supported_params: Final = self.get_supported_ocr_params(model=model)
 
         # Only include params that are in the supported list
-        mapped_params = {}
+        mapped_params: Final = {}
         for param, value in non_default_params.items():
             if param in supported_params:
                 mapped_params[param] = value
@@ -83,19 +90,19 @@ class MistralOCRConfig(BaseOCRConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers for Mistral OCR.
         """
         # Get API key from environment if not provided
         if api_key is None:
-            api_key = get_secret_str("MISTRAL_API_KEY")
+            api_key = get_secret_str(MISTRAL_OCR_API_KEY_ENV_VAR)
 
         if api_key is None:
             raise ValueError(
@@ -113,10 +120,10 @@ class MistralOCRConfig(BaseOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """
@@ -168,7 +175,7 @@ class MistralOCRConfig(BaseOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(f"Mistral OCR transform_ocr_request - model: {model}")
+        verbose_logger.debug("Mistral OCR transform_ocr_request - model: %s", model)
 
         # Document parameter is the Mistral-format dict from the user
         # Just pass it through as-is to the Mistral API
@@ -176,7 +183,7 @@ class MistralOCRConfig(BaseOCRConfig):
             raise ValueError(f"Expected document dict, got {type(document)}")
 
         # Build request data - use document dict directly
-        data = {
+        data: Final = {
             "model": model,
             "document": document,  # Pass through the Mistral-format document dict
         }
@@ -217,9 +224,9 @@ class MistralOCRConfig(BaseOCRConfig):
         }
         """
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
 
-            verbose_logger.debug(f"Mistral OCR response keys: {response_json.keys()}")
+            verbose_logger.debug("Mistral OCR response keys: %s", response_json.keys())
 
             # Return native Mistral format - no transformation
             return OCRResponse(
@@ -230,5 +237,5 @@ class MistralOCRConfig(BaseOCRConfig):
                 object="ocr",
             )
         except Exception as e:
-            verbose_logger.error(f"Error parsing Mistral OCR response: {e}")
+            verbose_logger.error("Error parsing Mistral OCR response: %s", e)
             raise e

@@ -21,7 +21,7 @@ import {
 } from "antd";
 import { QuestionCircleOutlined, CheckCircleOutlined, SaveOutlined } from "@ant-design/icons";
 import { useEffect, useState } from "react";
-import { fetchAvailableModels, ModelGroup } from "@/components/playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import MCPSemanticFilterTestPanel from "./MCPSemanticFilterTestPanel";
 import { getCurlCommand, runSemanticFilterTest, TestResult } from "./semanticFilterTestUtils";
 
@@ -46,6 +46,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
   const [testQuery, setTestQuery] = useState("");
   const [testModel, setTestModel] = useState<string>("gpt-4o");
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
   const schema = data?.field_schema;
@@ -90,7 +91,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
           setSaveSuccess(true);
           setTimeout(() => setSaveSuccess(false), 3000);
           NotificationManager.success(
-            "Settings updated successfully. Changes will be applied across all pods within 10 seconds."
+            "Settings updated successfully. Changes will be applied across all pods within 10 seconds.",
           );
         },
         onError: (error) => {
@@ -113,15 +114,12 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
       testQuery,
       setIsTesting,
       setTestResult,
+      setTestError,
     });
   };
 
   if (!accessToken) {
-    return (
-      <div className="p-6 text-center text-gray-500">
-        Please log in to configure semantic filter settings.
-      </div>
-    );
+    return <div className="p-6 text-center text-gray-500">Please log in to configure semantic filter settings.</div>;
   }
 
   return (
@@ -160,9 +158,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
             <Alert
               type="error"
               message="Could not update settings"
-              description={
-                updateError instanceof Error ? updateError.message : undefined
-              }
+              description={updateError instanceof Error ? updateError.message : undefined}
               style={{ marginBottom: 16 }}
             />
           )}
@@ -220,9 +216,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                       showSearch
                       disabled={isUpdating || loadingModels}
                       loading={loadingModels}
-                      notFoundContent={
-                        loadingModels ? "Loading..." : "No embedding models available"
-                      }
+                      notFoundContent={loadingModels ? "Loading..." : "No embedding models available"}
                     />
                   </Form.Item>
 
@@ -237,12 +231,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                       </Space>
                     }
                   >
-                    <InputNumber
-                      min={1}
-                      max={100}
-                      style={{ width: "100%" }}
-                      disabled={isUpdating}
-                    />
+                    <InputNumber min={1} max={100} style={{ width: "100%" }} disabled={isUpdating} />
                   </Form.Item>
 
                   <Form.Item
@@ -298,6 +287,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                 onTest={handleTest}
                 filterEnabled={!!values.enabled}
                 testResult={testResult}
+                testError={testError}
                 curlCommand={getCurlCommand(testModel, testQuery)}
               />
             </Col>

@@ -1,9 +1,9 @@
 import json as json_lib
-from typing import Optional
+from typing import Final
 
 import click
-import rich
 import requests
+import rich
 
 from ...http_client import HTTPClient
 
@@ -11,7 +11,6 @@ from ...http_client import HTTPClient
 @click.group()
 def http():
     """Make HTTP requests to the LiteLLM proxy server"""
-    pass
 
 
 @http.command()
@@ -40,8 +39,8 @@ def request(
     ctx: click.Context,
     method: str,
     uri: str,
-    data: Optional[str] = None,
-    json: Optional[str] = None,
+    data: str | None = None,
+    json: str | None = None,
     header: tuple[str, ...] = (),
 ):
     """Make an HTTP request to the LiteLLM proxy server
@@ -55,15 +54,13 @@ def request(
         litellm http request GET /health/test_connection -H "X-Custom-Header:value"
     """
     # Parse headers from key:value format
-    headers = {}
+    headers: Final = {}
     for h in header:
         try:
             key, value = h.split(":", 1)
             headers[key.strip()] = value.strip()
         except ValueError:
-            raise click.BadParameter(
-                f"Invalid header format: {h}. Expected format: 'key:value'"
-            )
+            raise click.BadParameter(f"Invalid header format: {h}. Expected format: 'key:value'")
 
     # Parse JSON data if provided
     json_data = None
@@ -82,9 +79,9 @@ def request(
             # If not JSON, use as raw data
             request_data = data
 
-    client = HTTPClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    client: Final = HTTPClient(ctx.obj["base_url"], ctx.obj["api_key"])
     try:
-        response = client.request(
+        response: Final = client.request(
             method=method,
             uri=uri,
             data=request_data,
@@ -95,7 +92,7 @@ def request(
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body = e.response.json()
+            error_body: Final = e.response.json()
             rich.print_json(data=error_body)
         except json_lib.JSONDecodeError:
             click.echo(e.response.text, err=True)

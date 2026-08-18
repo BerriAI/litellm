@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -11,15 +11,15 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.caching import CachePingResponse, HealthCheckCacheParams
 
-masker = SensitiveDataMasker()
+masker: Final = SensitiveDataMasker()
 
-router = APIRouter(
+router: Final = APIRouter(
     prefix="/cache",
     tags=["caching"],
 )
 
 
-def _extract_cache_params() -> Dict[str, Any]:
+def _extract_cache_params() -> dict[str, Any]:
     """
     Safely extracts and cleans cache parameters.
 
@@ -39,13 +39,11 @@ def _extract_cache_params() -> Dict[str, Any]:
     if litellm.cache is None:
         return {}
     try:
-        cache_params = vars(litellm.cache.cache)
-        cleaned_params = (
-            HealthCheckCacheParams(**cache_params).model_dump() if cache_params else {}
-        )
+        cache_params: Final = vars(litellm.cache.cache)
+        cleaned_params: Final = HealthCheckCacheParams(**cache_params).model_dump() if cache_params else {}
         return masker.mask_dict(cleaned_params)
     except (AttributeError, TypeError) as e:
-        verbose_proxy_logger.debug(f"Error extracting cache params: {str(e)}")
+        verbose_proxy_logger.debug("Error extracting cache params: %s", e)
         return {}
 
 
@@ -58,23 +56,30 @@ async def cache_ping():
     """
     Endpoint for checking if cache can be pinged
     """
-    litellm_cache_params: Dict[str, Any] = {}
-    cleaned_cache_params: Dict[str, Any] = {}
+    litellm_cache_params: dict[str, Any] = {}
+    cleaned_cache_params: dict[str, Any] = {}
+    if litellm.cache is None:
+        raise ProxyException(
+            message=safe_dumps(
+                {
+                    "message": "Cache not initialized. litellm.cache is None",
+                    "litellm_cache_params": "{}",
+                    "health_check_cache_params": "{}",
+                }
+            ),
+            type=ProxyErrorTypes.cache_ping_error,
+            param="cache_ping",
+            code=503,
+        )
     try:
-        if litellm.cache is None:
-            raise HTTPException(
-                status_code=503, detail="Cache not initialized. litellm.cache is None"
-            )
         litellm_cache_params = masker.mask_dict(vars(litellm.cache))
         # remove field that might reference itself
         litellm_cache_params.pop("cache", None)
         cleaned_cache_params = _extract_cache_params()
 
         if litellm.cache.type == "redis":
-            ping_response = await litellm.cache.ping()
-            verbose_proxy_logger.debug(
-                "/cache/ping: ping_response: " + str(ping_response)
-            )
+            ping_response: Final = await litellm.cache.ping()
+            verbose_proxy_logger.debug("/cache/ping: ping_response: " + str(ping_response))
             # add cache does not return anything
             await litellm.cache.async_add_cache(
                 result="test_key",
@@ -97,14 +102,14 @@ async def cache_ping():
                 cache_type=str(litellm.cache.type),
                 litellm_cache_params=safe_dumps(litellm_cache_params),
             )
-    except Exception as e:
-        import traceback
-
-        error_message = {
-            "message": f"Service Unhealthy ({str(e)})",
+    except HTTPException:
+        raise
+    except Exception:
+        verbose_proxy_logger.exception("Cache health check failed")
+        error_message: Final = {
+            "message": "Service Unhealthy",
             "litellm_cache_params": safe_dumps(litellm_cache_params),
             "health_check_cache_params": safe_dumps(cleaned_cache_params),
-            "traceback": traceback.format_exc(),
         }
         raise ProxyException(
             message=safe_dumps(error_message),
@@ -135,12 +140,10 @@ async def cache_delete(request: Request):
     """
     try:
         if litellm.cache is None:
-            raise HTTPException(
-                status_code=503, detail="Cache not initialized. litellm.cache is None"
-            )
+            raise HTTPException(status_code=503, detail="Cache not initialized. litellm.cache is None")
 
-        request_data = await request.json()
-        keys = request_data.get("keys", None)
+        request_data: Final = await request.json()
+        keys: Final = request_data.get("keys", None)
 
         if litellm.cache.type == "redis":
             await litellm.cache.delete_cache_keys(keys=keys)
@@ -155,11 +158,11 @@ async def cache_delete(request: Request):
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Cache Delete Failed({str(e)})",
+            detail=f"Cache Delete Failed({e})",
         )
 
 
-def _get_redis_client_info(cache_instance) -> Tuple[List, int]:
+def _get_redis_client_info(cache_instance) -> tuple[list, int]:
     """
     Helper function to safely get Redis client list information.
 
@@ -167,12 +170,10 @@ def _get_redis_client_info(cache_instance) -> Tuple[List, int]:
         tuple: (client_list, num_clients) where num_clients is -1 if CLIENT LIST is unavailable
     """
     try:
-        client_list = cache_instance.client_list()
+        client_list: Final = cache_instance.client_list()
         return client_list, len(client_list)
     except Exception as e:
-        verbose_proxy_logger.warning(
-            f"CLIENT LIST command failed (likely restricted on managed Redis): {str(e)}"
-        )
+        verbose_proxy_logger.warning("CLIENT LIST command failed (likely restricted on managed Redis): %s", e)
         return ["CLIENT LIST command not available on this Redis instance"], -1
 
 
@@ -186,14 +187,9 @@ async def cache_redis_info():
     """
     try:
         if litellm.cache is None:
-            raise HTTPException(
-                status_code=503, detail="Cache not initialized. litellm.cache is None"
-            )
+            raise HTTPException(status_code=503, detail="Cache not initialized. litellm.cache is None")
 
-        if not (
-            litellm.cache.type == "redis"
-            and isinstance(litellm.cache.cache, RedisCache)
-        ):
+        if not (litellm.cache.type == "redis" and isinstance(litellm.cache.cache, RedisCache)):
             raise HTTPException(
                 status_code=500,
                 detail=f"Cache type {litellm.cache.type} does not support redis info",
@@ -203,7 +199,7 @@ async def cache_redis_info():
         client_list, num_clients = _get_redis_client_info(litellm.cache.cache)
 
         # Get Redis server information
-        redis_info = litellm.cache.cache.info()
+        redis_info: Final = litellm.cache.cache.info()
 
         return {
             "num_clients": num_clients,
@@ -213,7 +209,7 @@ async def cache_redis_info():
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Service Unhealthy ({str(e)})",
+            detail=f"Service Unhealthy ({e})",
         )
 
 
@@ -235,12 +231,8 @@ async def cache_flushall():
     """
     try:
         if litellm.cache is None:
-            raise HTTPException(
-                status_code=503, detail="Cache not initialized. litellm.cache is None"
-            )
-        if litellm.cache.type == "redis" and isinstance(
-            litellm.cache.cache, RedisCache
-        ):
+            raise HTTPException(status_code=503, detail="Cache not initialized. litellm.cache is None")
+        if litellm.cache.type == "redis" and isinstance(litellm.cache.cache, RedisCache):
             litellm.cache.cache.flushall()
             return {
                 "status": "success",
@@ -253,5 +245,5 @@ async def cache_flushall():
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Service Unhealthy ({str(e)})",
+            detail=f"Service Unhealthy ({e})",
         )

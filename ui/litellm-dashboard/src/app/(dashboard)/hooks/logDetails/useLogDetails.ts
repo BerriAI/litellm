@@ -10,11 +10,7 @@ import { uiSpendLogDetailsCall } from "@/components/networking";
  * @param startTime - The formatted start time for the query
  * @param enabled - Whether the query should be enabled (e.g., drawer is open)
  */
-export const useLogDetails = (
-  requestId: string | undefined,
-  startTime: string | undefined,
-  enabled: boolean,
-) => {
+export const useLogDetails = (requestId: string | undefined, startTime: string | undefined, enabled: boolean) => {
   const { accessToken } = useAuthorized();
 
   return useQuery({

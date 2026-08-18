@@ -59,7 +59,7 @@ async def test_audio_output_from_model(stream):
     litellm.set_verbose = False
     try:
         completion = await litellm.acompletion(
-            model="gpt-4o-audio-preview",
+            model="gpt-audio-1.5",
             modalities=["text", "audio"],
             audio={"voice": "alloy", "format": "pcm16"},
             messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
@@ -69,8 +69,14 @@ async def test_audio_output_from_model(stream):
         print(e)
         pytest.skip("Skipping test due to timeout")
     except Exception as e:
-        if "openai-internal" in str(e):
-            pytest.skip("Skipping test due to openai-internal error")
+        err = str(e).lower()
+        if (
+            "model_not_found" in err
+            or "does not exist" in err
+            or "openai-internal" in err
+        ):
+            pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
+        raise
 
     if stream is True:
         await check_streaming_response(completion)
@@ -85,7 +91,7 @@ async def test_audio_output_from_model(stream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [True, False])
-@pytest.mark.parametrize("model", ["gpt-4o-audio-preview"])  # "gpt-4o-audio-preview",
+@pytest.mark.parametrize("model", ["gpt-audio-1.5"])
 async def test_audio_input_to_model(stream, model):
     # Fetch the audio file and convert it to a base64 encoded string
     audio_format = "pcm16"
@@ -121,9 +127,14 @@ async def test_audio_input_to_model(stream, model):
         print(e)
         pytest.skip("Skipping test due to timeout")
     except Exception as e:
-        if "openai-internal" in str(e):
-            pytest.skip("Skipping test due to openai-internal error")
-        raise e
+        err = str(e).lower()
+        if (
+            "model_not_found" in err
+            or "does not exist" in err
+            or "openai-internal" in err
+        ):
+            pytest.skip(f"Skipping - upstream gpt-audio-1.5 unavailable: {e}")
+        raise
     if stream is True:
         await check_streaming_response(completion)
     else:

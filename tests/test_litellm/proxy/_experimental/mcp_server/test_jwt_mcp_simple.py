@@ -41,37 +41,44 @@ async def test_simple_jwt_mcp_permissions_enforced():
         object_permission_id="perm-123",
         mcp_servers=team_mcp_servers,
     )
+    team_obj = LiteLLM_TeamTable(
+        team_id="my-team",
+        access_group_ids=[],
+        object_permission_id="perm-123",
+    )
+    team_obj.object_permission = team_object_permission
 
-    # 3. Mock the team permission lookup
-    with patch.object(
-        MCPRequestHandler, "_get_team_object_permission", new_callable=AsyncMock
-    ) as mock_team_perm:
-        mock_team_perm.return_value = team_object_permission
+    # 3. Mock the team object lookup (object_permission attached) and prisma_client
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team_obj,
+        ) as mock_get_team,
+        patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        # 4. Call get_allowed_mcp_servers - this is what MCP routes use
+        allowed = await MCPRequestHandler.get_allowed_mcp_servers(user_auth)
 
-        # Mock key permissions (empty - user has no key-level MCP permissions)
-        with patch.object(
-            MCPRequestHandler, "_get_key_object_permission", new_callable=AsyncMock
-        ) as mock_key_perm:
-            mock_key_perm.return_value = None
+        # 5. Verify only team's MCP servers are returned
+        assert sorted(allowed) == sorted(
+            team_mcp_servers
+        ), f"Expected {team_mcp_servers}, got {allowed}"
 
-            # Mock access groups (empty)
-            with patch.object(
-                MCPRequestHandler,
-                "_get_mcp_servers_from_access_groups",
-                new_callable=AsyncMock,
-            ) as mock_access_groups:
-                mock_access_groups.return_value = []
-
-                # 4. Call get_allowed_mcp_servers - this is what MCP routes use
-                allowed = await MCPRequestHandler.get_allowed_mcp_servers(user_auth)
-
-                # 5. Verify only team's MCP servers are returned
-                assert sorted(allowed) == sorted(
-                    team_mcp_servers
-                ), f"Expected {team_mcp_servers}, got {allowed}"
-
-                # Verify team permission was looked up
-                mock_team_perm.assert_called_once_with(user_auth)
+        # Verify team was looked up
+        mock_get_team.assert_called()
 
 
 @pytest.mark.asyncio
@@ -120,25 +127,33 @@ async def test_simple_jwt_team_id_required_for_mcp_permissions():
         object_permission_id="perm-1",
         mcp_servers=team_mcp_servers,
     )
+    team_obj = LiteLLM_TeamTable(
+        team_id="team-abc",
+        access_group_ids=[],
+        object_permission_id="perm-1",
+    )
+    team_obj.object_permission = team_perm
 
-    with patch.object(
-        MCPRequestHandler, "_get_team_object_permission", new_callable=AsyncMock
-    ) as mock_perm:
-        mock_perm.return_value = team_perm
-
-        with patch.object(
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team_obj,
+        ) as mock_get_team,
+        patch.object(
             MCPRequestHandler,
             "_get_mcp_servers_from_access_groups",
             new_callable=AsyncMock,
-        ) as mock_groups:
-            mock_groups.return_value = []
+            return_value=[],
+        ),
+    ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+            user_with_team
+        )
 
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
-                user_with_team
-            )
-
-            assert sorted(result) == sorted(team_mcp_servers)
-            mock_perm.assert_called_once()  # Permission WAS checked
+        assert sorted(result) == sorted(team_mcp_servers)
+        mock_get_team.assert_called()  # Team WAS looked up
 
     # Case 2: team_id is None -> team permissions NOT checked
     user_without_team = UserAPIKeyAuth(

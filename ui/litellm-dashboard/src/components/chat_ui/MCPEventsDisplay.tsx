@@ -1,0 +1,175 @@
+import React, { useState } from "react";
+import { ChevronRight } from "lucide-react";
+import type { MCPEvent } from "@/components/mcp_tools/types";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/cva.config";
+
+interface MCPEventsDisplayProps {
+  events: MCPEvent[];
+  className?: string;
+}
+
+function formatArguments(raw: string | undefined): string {
+  if (!raw) {
+    return "";
+  }
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+const MCPEventsDisplay: React.FC<MCPEventsDisplayProps> = ({ events, className }) => {
+  if (!events || events.length === 0) {
+    return null;
+  }
+
+  const isListToolsEvent = (event: MCPEvent): boolean => {
+    if (event.type !== "response.output_item.done") {
+      return false;
+    }
+    if (event.item?.type !== "mcp_list_tools") {
+      return false;
+    }
+    return Boolean(event.item.tools && event.item.tools.length > 0);
+  };
+
+  const isMcpCallEvent = (event: MCPEvent): boolean =>
+    event.type === "response.output_item.done" && event.item?.type === "mcp_call";
+
+  const toolsEvent = events.find(isListToolsEvent);
+  const mcpCallEvents = events.filter(isMcpCallEvent);
+
+  if (!toolsEvent && mcpCallEvents.length === 0) {
+    return null;
+  }
+
+  const defaultOpenKeys = new Set<string>(
+    toolsEvent ? ["list-tools"] : mcpCallEvents.map((_, index) => `mcp-call-${index}`),
+  );
+
+  return (
+    <div className={cn("mcp-events-display", className)}>
+      <MCPEventsPanels toolsEvent={toolsEvent} mcpCallEvents={mcpCallEvents} defaultOpenKeys={defaultOpenKeys} />
+    </div>
+  );
+};
+
+interface MCPEventsPanelsProps {
+  toolsEvent: MCPEvent | undefined;
+  mcpCallEvents: MCPEvent[];
+  defaultOpenKeys: Set<string>;
+}
+
+function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEventsPanelsProps) {
+  const [openKeys, setOpenKeys] = useState<Set<string>>(defaultOpenKeys);
+
+  const toggleKey = (key: string, open: boolean) => {
+    setOpenKeys((prev) => {
+      const next = new Set(prev);
+      if (open) {
+        next.add(key);
+      } else {
+        next.delete(key);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="relative m-0 p-0">
+      <div className="absolute bottom-0 left-[9px] top-[18px] w-px bg-gray-100 opacity-80" aria-hidden="true" />
+
+      <div className="space-y-1">
+        {toolsEvent && (
+          <MCPEventPanel
+            panelKey="list-tools"
+            title="List tools"
+            open={openKeys.has("list-tools")}
+            onOpenChange={(open) => toggleKey("list-tools", open)}
+          >
+            <div>
+              {toolsEvent.item?.tools?.map((tool, index) => (
+                <div key={index} className="relative z-[1] bg-white font-mono text-[13px] leading-[18px] text-gray-600">
+                  {tool.name}
+                </div>
+              ))}
+            </div>
+          </MCPEventPanel>
+        )}
+
+        {mcpCallEvents.map((callEvent, index) => {
+          const key = `mcp-call-${index}`;
+          return (
+            <MCPEventPanel
+              key={key}
+              panelKey={key}
+              title={callEvent.item?.name || "Tool call"}
+              open={openKeys.has(key)}
+              onOpenChange={(open) => toggleKey(key, open)}
+            >
+              <div>
+                <div className="relative z-[1] mb-3 bg-white last:mb-0">
+                  <div className="mb-1 text-[13px] font-medium text-gray-500">Request</div>
+                  <div className="rounded-md border border-gray-100 bg-gray-50 p-2 text-xs">
+                    {callEvent.item?.arguments && (
+                      <pre className="m-0 whitespace-pre-wrap break-words font-mono text-gray-700">
+                        {formatArguments(callEvent.item.arguments)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+
+                <div className="relative z-[1] mb-3 bg-white last:mb-0">
+                  <div className="flex items-center text-[13px] text-gray-500">
+                    <span className="mr-1.5 font-bold text-emerald-500" aria-hidden="true">
+                      ✓
+                    </span>
+                    Approved
+                  </div>
+                </div>
+
+                {callEvent.item?.output && (
+                  <div className="relative z-[1] mb-3 bg-white last:mb-0">
+                    <div className="mb-1 text-[13px] font-medium text-gray-500">Response</div>
+                    <div className="whitespace-pre-wrap font-mono text-[13px] leading-normal text-gray-700">
+                      {callEvent.item.output}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </MCPEventPanel>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface MCPEventPanelProps {
+  panelKey: string;
+  title: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactNode;
+}
+
+function MCPEventPanel({ title, open, onOpenChange, children }: MCPEventPanelProps) {
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange}>
+      <CollapsibleTrigger className="relative flex min-h-5 w-full items-center gap-1 pl-5 text-left text-sm font-normal leading-5 text-gray-400 hover:text-gray-500">
+        <ChevronRight
+          className={cn("absolute left-0.5 top-0.5 size-4 text-gray-400 transition-transform", open && "rotate-90")}
+          aria-hidden="true"
+        />
+        {title}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="pt-1 pl-5">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+export default MCPEventsDisplay;

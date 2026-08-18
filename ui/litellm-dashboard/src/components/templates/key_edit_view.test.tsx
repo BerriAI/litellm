@@ -1,9 +1,15 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { getPoliciesList, getPromptsList, modelAvailableCall } from "../networking";
 import { KeyEditView } from "./key_edit_view";
+
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
+}));
 
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
@@ -53,6 +59,24 @@ vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
 }));
 
+const routerSettingsMocks = vi.hoisted(() => ({
+  receivedValue: undefined as { router_settings: Record<string, unknown> } | undefined,
+  editedValue: null as Record<string, unknown> | null,
+}));
+
+vi.mock("../common_components/RouterSettingsAccordion", async () => {
+  const { forwardRef, useImperativeHandle } = await import("react");
+  return {
+    default: forwardRef(({ value }: { value?: { router_settings: Record<string, unknown> } }, ref) => {
+      routerSettingsMocks.receivedValue = value;
+      useImperativeHandle(ref, () => ({
+        getValue: () => ({ router_settings: routerSettingsMocks.editedValue ?? value?.router_settings ?? {} }),
+      }));
+      return <div data-testid="router-settings-accordion" />;
+    }),
+  };
+});
+
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: vi.fn().mockReturnValue({
     data: [
@@ -83,6 +107,25 @@ vi.mock("../common_components/AccessGroupSelector", () => ({
     />
   ),
 }));
+
+/* eslint-disable local/no-antd-class-selectors -- the "Key Type" and "Models" Form.Items wrap a noStyle nested item, so antd renders a label with no associated control and there is no accessible query for these selects */
+const antdSelectorFor = (label: HTMLElement): Element =>
+  label.closest(".ant-form-item")!.querySelector(".ant-select-selector")!;
+/* eslint-enable local/no-antd-class-selectors */
+
+const visibleOptions = (): HTMLElement[] =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd puts role="option" only on a hidden mirror list; the visible, clickable options carry no role or accessible name
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option"));
+
+const isOptionDisabled = (option: HTMLElement): boolean =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd signals option disabled state only through this class; the rendered options carry no aria-disabled
+  option.classList.contains("ant-select-item-option-disabled");
+
+const optionByContent = (label: string): HTMLElement | undefined =>
+  visibleOptions().find(
+    // eslint-disable-next-line local/no-antd-class-selectors -- the option's own label text lives in this child node, with no accessible equivalent
+    (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
+  );
 
 describe("KeyEditView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
@@ -154,6 +197,83 @@ describe("KeyEditView", () => {
     last_rotation_at: undefined,
     key_rotation_at: undefined,
   };
+  describe("router settings", () => {
+    const UNSUPPORTED_STORED_FIELD = { tag_routing_prefix: "team-" };
+    const STORED_ROUTER_SETTINGS = {
+      num_retries: 2,
+      fallbacks: [{ "gpt-4": ["gpt-4o"] }],
+      ...UNSUPPORTED_STORED_FIELD,
+    };
+
+    const renderWithRouterSettings = (onSubmit: (values: Record<string, unknown>) => Promise<void>) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, router_settings: STORED_ROUTER_SETTINGS }}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="proxy_admin"
+          premiumUser={true}
+        />,
+      );
+
+    beforeEach(() => {
+      routerSettingsMocks.receivedValue = undefined;
+      routerSettingsMocks.editedValue = null;
+    });
+
+    it("should load the fields it renders into the editor and withhold the ones it does not", async () => {
+      renderWithRouterSettings(async () => {});
+
+      await waitFor(() => {
+        expect(routerSettingsMocks.receivedValue).toStrictEqual({
+          router_settings: { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o"] }] },
+        });
+      });
+    });
+
+    it("should submit edited fallbacks alongside routing fields the editor cannot show", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithRouterSettings(onSubmit);
+      routerSettingsMocks.editedValue = { num_retries: 2, fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }] };
+
+      fireEvent.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            router_settings: expect.objectContaining({
+              ...UNSUPPORTED_STORED_FIELD,
+              num_retries: 2,
+              fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }],
+            }),
+          }),
+        );
+      });
+    });
+
+    it("should submit cleared router settings so removing every fallback is persisted", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithRouterSettings(onSubmit);
+      routerSettingsMocks.editedValue = { num_retries: null, fallbacks: null };
+
+      fireEvent.click(screen.getByText("Save Changes"));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            router_settings: expect.objectContaining({
+              ...UNSUPPORTED_STORED_FIELD,
+              num_retries: null,
+              fallbacks: null,
+            }),
+          }),
+        );
+      });
+    });
+  });
+
   it("should render", async () => {
     const { getByText } = renderWithProviders(
       <KeyEditView
@@ -211,6 +331,45 @@ describe("KeyEditView", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    can.mockReturnValue(true);
+  });
+
+  describe("policy and prompt fields", () => {
+    const renderAs = (userRole: string) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole={userRole}
+          premiumUser={true}
+        />,
+      );
+
+    it("should render both fields and load prompts for an admin", async () => {
+      renderAs("Admin");
+
+      await waitFor(() => {
+        expect(getPromptsList).toHaveBeenCalledWith("test-token");
+      });
+      expect(screen.getByText("Prompts", { selector: "label" })).toBeInTheDocument();
+      expect(screen.getByText("Policies")).toBeInTheDocument();
+    });
+
+    it("should omit both fields and fire neither admin-only request for an internal user", async () => {
+      renderAs("Internal User");
+
+      await waitFor(() => {
+        expect(modelAvailableCall).toHaveBeenCalled();
+      });
+
+      expect(getPromptsList).not.toHaveBeenCalled();
+      expect(getPoliciesList).not.toHaveBeenCalled();
+      expect(screen.queryByText("Prompts", { selector: "label" })).not.toBeInTheDocument();
+      expect(screen.queryByText("Policies")).not.toBeInTheDocument();
+    });
   });
 
   it("should call onCancel when cancel button is clicked", async () => {
@@ -332,6 +491,66 @@ describe("KeyEditView", () => {
 
     await waitFor(() => {
       expect(onSubmitMock).toHaveBeenCalled();
+    });
+  });
+
+  it("should initialize and submit throttle_on_budget_exceeded from key metadata", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithThrottle = {
+      ...MOCK_KEY_DATA,
+      metadata: { ...MOCK_KEY_DATA.metadata, throttle_on_budget_exceeded: true },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithThrottle}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Throttle on budget exceeded")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ throttle_on_budget_exceeded: true }));
+    });
+  });
+
+  it("should initialize and submit enable_prompt_caching from key metadata", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithPromptCaching = {
+      ...MOCK_KEY_DATA,
+      metadata: { ...MOCK_KEY_DATA.metadata, enable_prompt_caching: true },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithPromptCaching}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Enable Prompt Caching")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ enable_prompt_caching: true }));
     });
   });
 
@@ -600,6 +819,328 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should keep mcp_toolsets when saving an edit that does not touch the MCP selector", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithToolset = {
+      ...MOCK_KEY_DATA,
+      object_permission: {
+        ...MOCK_KEY_DATA.object_permission!,
+        mcp_toolsets: ["ts-1"],
+      },
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithToolset}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken="test-token"
+        userID="test-user"
+        userRole="admin"
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Save Changes")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+    expect(onSubmitMock.mock.calls[0][0].mcp_servers_and_groups.toolsets).toEqual(["ts-1"]);
+  });
+
+  it("should submit budget_limits: [] when the last budget window is deleted", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithWindow = {
+      ...MOCK_KEY_DATA,
+      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithWindow}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const deleteWindowButton = await screen.findByRole("button", { name: "✕" });
+    await userEvent.click(deleteWindowButton);
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toEqual([]);
+    });
+  });
+
+  it("should persist a canonical budget_duration value, not a word-form the backend cannot parse", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await userEvent.click(await screen.findByLabelText("Reset Budget"));
+
+    const weeklyOption = await screen.findByText("weekly");
+    await userEvent.click(weeklyOption);
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_duration).toBe("7d");
+    });
+  });
+
+  it("should keep an existing canonical budget_duration canonical when saved untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_duration).toBe("30d");
+    });
+  });
+
+  it("should heal a legacy word-form budget_duration to canonical when saved untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const legacyKeyData = { ...MOCK_KEY_DATA, budget_duration: "monthly" };
+    renderWithProviders(
+      <KeyEditView
+        keyData={legacyKeyData}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_duration).toBe("30d");
+    });
+  });
+
+  it("should send an explicit null budget_duration when a previously-set Reset Budget is cleared", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const resetBudget = await screen.findByLabelText("Reset Budget");
+    await userEvent.click(resetBudget);
+    await userEvent.click(await screen.findByText("Never resets"));
+
+    await waitFor(() => {
+      expect(resetBudget).toHaveTextContent("Never resets");
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+    const callArgs = onSubmitMock.mock.calls[0][0];
+    expect(callArgs.budget_duration).toBeNull();
+    expect(JSON.stringify({ ...callArgs })).toContain('"budget_duration":null');
+  });
+
+  it("should send an explicit null budget_duration when a legacy word-form Reset Budget is cleared", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const legacyKeyData = { ...MOCK_KEY_DATA, budget_duration: "monthly" };
+    renderWithProviders(
+      <KeyEditView
+        keyData={legacyKeyData}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await userEvent.click(await screen.findByLabelText("Reset Budget"));
+    await userEvent.click(await screen.findByText("Never resets"));
+
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+    expect(onSubmitMock.mock.calls[0][0].budget_duration).toBeNull();
+  });
+
+  it("should omit budget_limits when existing windows are left untouched (issue #33246)", async () => {
+    // The backend treats any budget_limits in the payload as an admin-only
+    // budget change, so re-sending untouched windows 403s a non-admin owner.
+    // Leaving the field off keeps the stored windows and passes the gate.
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithWindow = {
+      ...MOCK_KEY_DATA,
+      budget_limits: [{ budget_duration: "30d", max_budget: 100, reset_at: "2026-08-01T00:00:00" }],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithWindow}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toBeUndefined();
+    });
+  });
+
+  it("should omit budget_limits on a key that has no windows (issue #33246 repro)", async () => {
+    // Core repro: a non-admin owner edits a non-budget field on a key with no
+    // budget windows. The form previously always sent budget_limits: [], which
+    // the backend read as a budget change and rejected.
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA} // no budget_limits
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const submitButton = await screen.findByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toBeUndefined();
+    });
+  });
+
+  it("should send budget_limits when a window's cap is changed", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithWindow = {
+      ...MOCK_KEY_DATA,
+      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithWindow}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const maxBudgetInput = await screen.findByPlaceholderText("Max spend ($)");
+    await userEvent.clear(maxBudgetInput);
+    await userEvent.type(maxBudgetInput, "200");
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toEqual([{ budget_duration: "30d", max_budget: 200 }]);
+    });
+  });
+
+  it("should omit budget_limits (not clear stored windows) when a window is left incomplete", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithWindow = {
+      ...MOCK_KEY_DATA,
+      budget_limits: [{ budget_duration: "30d", max_budget: 100 }],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithWindow}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    const maxBudgetInput = await screen.findByPlaceholderText("Max spend ($)");
+    await userEvent.clear(maxBudgetInput);
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.budget_limits).toBeUndefined();
+    });
+  });
+
   it("should display 'AI APIs' label for the llm_api key type option", async () => {
     const keyDataWithLlmApiRoutes = {
       ...MOCK_KEY_DATA,
@@ -623,17 +1164,11 @@ describe("KeyEditView", () => {
     });
 
     // The selected key type label should show "AI APIs" (not "LLM API")
-    const keyTypeSection = screen.getByText("Key Type").closest(".ant-form-item")!;
-    expect(keyTypeSection).toBeInTheDocument();
-
-    // Open the dropdown to see all options
-    const selectElement = keyTypeSection.querySelector(".ant-select-selector")!;
-    await userEvent.click(selectElement);
+    await userEvent.click(antdSelectorFor(screen.getByText("Key Type")));
 
     await waitFor(() => {
       // Verify "AI APIs" appears as an option label
-      const options = document.querySelectorAll(".ant-select-item-option");
-      const optionTexts = Array.from(options).map((el) => el.textContent);
+      const optionTexts = visibleOptions().map((el) => el.textContent);
       const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
       expect(hasAIAPIs).toBe(true);
 
@@ -709,7 +1244,7 @@ describe("KeyEditView", () => {
     });
 
     it("should disable the organization dropdown for non-admin users", async () => {
-      const { container } = renderWithProviders(
+      renderWithProviders(
         <KeyEditView
           keyData={MOCK_KEY_DATA}
           onCancel={() => {}}
@@ -725,13 +1260,13 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeTruthy();
+      await userEvent.click(screen.getByLabelText("Organization"));
+
+      expect(screen.queryByText("Engineering")).not.toBeInTheDocument();
     });
 
     it("should not disable the organization dropdown for admin users", async () => {
-      const { container } = renderWithProviders(
+      renderWithProviders(
         <KeyEditView
           keyData={MOCK_KEY_DATA}
           onCancel={() => {}}
@@ -747,9 +1282,9 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeFalsy();
+      await userEvent.click(screen.getByLabelText("Organization"));
+
+      expect(await screen.findByText("Engineering")).toBeInTheDocument();
     });
 
     it("should initialize organization from keyData", async () => {
@@ -771,8 +1306,347 @@ describe("KeyEditView", () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText("Engineering")).toBeInTheDocument();
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
       });
+    });
+  });
+
+  describe("models dropdown team gating", () => {
+    const openModelsDropdown = () => {
+      fireEvent.mouseDown(antdSelectorFor(screen.getByText("Models", { selector: "label" })));
+    };
+
+    it("should offer all-proxy-models but not all-team-models for a teamless key", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      await waitFor(() => {
+        expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      });
+
+      expect(screen.getAllByText("All Proxy Models").length).toBeGreaterThan(0);
+      expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
+    });
+
+    it("should offer all-team-models but hide all-proxy-models for a team key", async () => {
+      const teamKeyData = { ...MOCK_KEY_DATA, team_id: "team-1" };
+      const teams = [{ team_id: "team-1", models: ["all-proxy-models", "team-model-1"] }];
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={teamKeyData}
+          teams={teams}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      await waitFor(() => {
+        expect(screen.getAllByText("team-model-1").length).toBeGreaterThan(0);
+      });
+
+      expect(screen.getAllByText("All Team Models").length).toBeGreaterThan(0);
+      expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
+      expect(screen.queryAllByText("all-proxy-models")).toHaveLength(0);
+    });
+
+    it("should not offer all-team-models for a team key whose team has not loaded yet", async () => {
+      const teamKeyData = { ...MOCK_KEY_DATA, team_id: "team-1" };
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={teamKeyData}
+          teams={[]}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
+      expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
+    });
+
+    it("should not duplicate the all-proxy-models option when the teamless model list already carries the sentinel", async () => {
+      vi.mocked(modelAvailableCall).mockResolvedValueOnce({
+        data: [{ id: "all-proxy-models" }, { id: "gpt-4" }],
+      });
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      const proxyOptionLabels = () =>
+        Array.from(document.querySelectorAll('[role="option"]')).map((option) => option.getAttribute("aria-label"));
+
+      await waitFor(() => {
+        expect(proxyOptionLabels()).toContain("gpt-4");
+      });
+
+      const labels = proxyOptionLabels();
+      expect(labels.filter((label) => label === "All Proxy Models")).toHaveLength(1);
+      expect(labels).not.toContain("all-proxy-models");
+    });
+
+    it("should collapse the selection to all-proxy-models when the sentinel is picked alongside a model", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      const clickOption = async (label: string) => {
+        const option = await waitFor(() => {
+          const match = optionByContent(label);
+          expect(match).toBeTruthy();
+          return match as HTMLElement;
+        });
+        fireEvent.click(option);
+      };
+
+      await clickOption("gpt-4");
+      await clickOption("All Proxy Models");
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].models).toEqual(["all-proxy-models"]);
+    });
+
+    it("should disable the individual model options once all-proxy-models is selected", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
+      });
+
+      openModelsDropdown();
+
+      const findOption = (label: string) => optionByContent(label);
+
+      const gpt4Before = await waitFor(() => {
+        const match = findOption("gpt-4");
+        expect(match).toBeTruthy();
+        return match!;
+      });
+      expect(isOptionDisabled(gpt4Before)).toBe(false);
+
+      fireEvent.click(
+        await waitFor(() => {
+          const match = findOption("All Proxy Models");
+          expect(match).toBeTruthy();
+          return match!;
+        }),
+      );
+
+      await waitFor(() => {
+        expect(isOptionDisabled(findOption("gpt-4")!)).toBe(true);
+      });
+    });
+  });
+
+  describe("estimated output tokens", () => {
+    const renderEditView = (
+      keyData: KeyResponse,
+      onSubmit: (values: any) => Promise<void>,
+      userRole: string = "Admin",
+    ) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyData}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={userRole}
+          premiumUser={false}
+        />,
+      );
+
+    it("loads the estimates from key metadata and resubmits them unchanged", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(
+        {
+          ...MOCK_KEY_DATA,
+          metadata: {
+            ...MOCK_KEY_DATA.metadata,
+            default_estimated_output_tokens: 512,
+            default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+          },
+        },
+        onSubmitMock,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens")).toHaveValue(512);
+      });
+      expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toHaveValue('{"gpt-4":4096}');
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.default_estimated_output_tokens).toBe(512);
+      expect(callArgs.default_estimated_output_tokens_per_model).toEqual({ "gpt-4": 4096 });
+    });
+
+    it("submits edited estimates as a number and a parsed object", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(MOCK_KEY_DATA, onSubmitMock);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens")).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens"), { target: { value: "2048" } });
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens Per Model"), {
+        target: { value: '{"gpt-5": 8192}' },
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.default_estimated_output_tokens).toBe(2048);
+      expect(callArgs.default_estimated_output_tokens_per_model).toEqual({ "gpt-5": 8192 });
+    });
+
+    it("omits both estimates from the payload when the controls are blank", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(MOCK_KEY_DATA, onSubmitMock);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toHaveValue("");
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs).not.toHaveProperty("default_estimated_output_tokens");
+      expect(callArgs).not.toHaveProperty("default_estimated_output_tokens_per_model");
+    });
+
+    it.each(["Internal User", "Admin Viewer", "org_admin"])(
+      "leaves both controls read-only for %s and still resubmits the stored values",
+      async (userRole) => {
+        const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+        renderEditView(
+          {
+            ...MOCK_KEY_DATA,
+            metadata: {
+              ...MOCK_KEY_DATA.metadata,
+              default_estimated_output_tokens: 512,
+              default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+            },
+          },
+          onSubmitMock,
+          userRole,
+        );
+
+        await waitFor(() => {
+          expect(screen.getByLabelText("Estimated Output Tokens")).toBeDisabled();
+        });
+        expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeDisabled();
+
+        await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(onSubmitMock).toHaveBeenCalled();
+        });
+        const callArgs = onSubmitMock.mock.calls[0][0];
+        expect(callArgs.default_estimated_output_tokens).toBe(512);
+        expect(callArgs.default_estimated_output_tokens_per_model).toEqual({ "gpt-4": 4096 });
+      },
+    );
+
+    it.each(["Admin", "proxy_admin"])("leaves both controls editable for %s", async (userRole) => {
+      renderEditView(MOCK_KEY_DATA, vi.fn().mockResolvedValue(undefined), userRole);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Estimated Output Tokens")).toBeEnabled();
+      });
+      expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
     });
   });
 });

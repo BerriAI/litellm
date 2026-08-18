@@ -3,7 +3,6 @@
  */
 import React, { useState, useEffect } from "react";
 
-
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
 import DynamicForm from "./dynamic_form";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -41,7 +40,6 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
     );
 
-    console.log(`updatedSettings: ${JSON.stringify(updatedSettings)}`);
     setAlertingSettings(updatedSettings);
   };
 
@@ -50,7 +48,6 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       return;
     }
 
-    console.log(`formValues: ${formValues}`);
     let fieldValue = formValues;
 
     if (fieldValue == null || fieldValue == undefined) {
@@ -65,9 +62,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
 
     // Merge initialFormValues with actual formValues
     const mergedFormValues = { ...formValues, ...initialFormValues };
-    console.log(`mergedFormValues: ${JSON.stringify(mergedFormValues)}`);
     const { slack_alerting, ...alertingArgs } = mergedFormValues;
-    console.log(`slack_alerting: ${slack_alerting}, alertingArgs: ${JSON.stringify(alertingArgs)}`);
     try {
       updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
       if (typeof slack_alerting === "boolean") {
@@ -105,7 +100,6 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       setAlertingSettings(updatedSettings);
     } catch (error) {
       // do something
-      console.log("ERROR OCCURRED!");
     }
   };
 

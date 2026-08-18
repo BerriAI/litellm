@@ -63,3 +63,28 @@ jobs:
               sha: commitHash,
             });
             core.info(`Created branch ${branchName} at ${commitHash}`);
+
+      - name: Create stable line branch
+        env:
+          TAG: ${{ inputs.tag }}
+          COMMIT_HASH: ${{ inputs.commit_hash }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const tag = process.env.TAG;
+            const commitHash = process.env.COMMIT_HASH;
+
+            const match = tag.match(/^v?(\d+)\.(\d+)\.0$/);
+            if (!match) {
+              core.info(`Tag ${tag} is not the X.Y.0 stable opener; skipping stable line branch`);
+              return;
+            }
+            const lineBranch = `stable/${match[1]}.${match[2]}.x`;
+
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/heads/${lineBranch}`,
+              sha: commitHash,
+            });
+            core.info(`Created branch ${lineBranch} at ${commitHash}`);

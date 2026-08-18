@@ -5,58 +5,151 @@ resource "aws_ecs_cluster" "this" {
     name  = "containerInsights"
     value = "enabled"
   }
+
+  tags = local.tags
 }
 
 resource "aws_cloudwatch_log_group" "gateway" {
   name              = "/ecs/${local.name}/gateway"
   retention_in_days = var.log_retention_days
+
+  tags = local.tags
 }
 
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "/ecs/${local.name}/backend"
   retention_in_days = var.log_retention_days
+
+  tags = local.tags
 }
 
 resource "aws_cloudwatch_log_group" "ui" {
   name              = "/ecs/${local.name}/ui"
   retention_in_days = var.log_retention_days
+
+  tags = local.tags
 }
 
 resource "aws_cloudwatch_log_group" "migrations" {
+  count             = local.database_enabled ? 1 : 0
   name              = "/ecs/${local.name}/migrations"
   retention_in_days = var.log_retention_days
+
+  tags = local.tags
 }
 
 # Shared env block fed to gateway, backend, and the migration task. Mirrors
-# the helm chart's `litellm.serverEnv` helper on the IAM-auth branch:
-# DATABASE_URL is assembled at runtime by
+# the helm chart's `litellm.serverEnv` helper on the IAM-auth branch: for the
+# module-created Aurora, DATABASE_URL is assembled at runtime by
 # litellm/proxy/auth/rds_iam_token.py::init_iam_db_url_from_env from
 # HOST/PORT/USER/NAME plus an IAM-signed token, so no DB password is needed
-# in the task definition.
+# in the task definition. An existing database instead arrives as a
+# DATABASE_URL secret (var.database_url), which run.py and the proxy both
+# take as-is.
 locals {
-  shared_env = [
+  # OTel v2 is opt-in and gated on otel_endpoint, matching the GCP stack.
+  # When set, LITELLM_OTEL_V2 flips on alongside the OTEL_* block, with
+  # OTEL_SERVICE_NAME stamped per component so spans land tagged with the
+  # right hop. Any OTEL_* key set in *_extra_env wins over the default for
+  # that service (ECS allows duplicates but last-wins is undefined, so we
+  # filter here for the same predictable behavior GCP gets from Cloud Run's
+  # hard duplicate-rejection).
+  otel_enabled          = var.otel_endpoint != ""
+  otel_environment_name = var.otel_environment_name != "" ? var.otel_environment_name : var.env
+  otel_shared_env = local.otel_enabled ? [
+    { name = "LITELLM_OTEL_V2", value = "true" },
+    { name = "OTEL_EXPORTER", value = var.otel_exporter },
+    { name = "OTEL_ENDPOINT", value = var.otel_endpoint },
+    { name = "OTEL_ENVIRONMENT_NAME", value = local.otel_environment_name },
+    { name = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", value = var.otel_capture_message_content },
+  ] : []
+  gateway_otel_env_raw = concat(local.otel_shared_env, local.otel_enabled ? [
+    { name = "OTEL_SERVICE_NAME", value = "${local.name}-gateway" },
+  ] : [])
+  backend_otel_env_raw = concat(local.otel_shared_env, local.otel_enabled ? [
+    { name = "OTEL_SERVICE_NAME", value = "${local.name}-backend" },
+  ] : [])
+  gateway_otel_env = [
+    for e in local.gateway_otel_env_raw : e if !contains(keys(var.gateway_extra_env), e.name)
+  ]
+  backend_otel_env = [
+    for e in local.backend_otel_env_raw : e if !contains(keys(var.backend_extra_env), e.name)
+  ]
+  otel_secrets = local.otel_enabled && var.otel_headers_secret_arn != "" ? [
+    { name = "OTEL_HEADERS", valueFrom = var.otel_headers_secret_arn },
+  ] : []
+
+  # Enterprise request metering, gated on billing_metrics_endpoint. The
+  # endpoint rides in as a plain env var; the mTLS material is stored in
+  # Secrets Manager (secrets.tf) and injected as PEM-valued env vars, which
+  # the proxy accepts in place of file paths. Each PEM is wired only when the
+  # operator supplied it, so an empty ca_cert_pem falls back to the system
+  # trust store.
+  billing_metrics_enabled             = var.billing_metrics_endpoint != ""
+  billing_metrics_client_cert_enabled = local.billing_metrics_enabled && var.billing_metrics_client_cert_pem != ""
+  billing_metrics_client_key_enabled  = local.billing_metrics_enabled && var.billing_metrics_client_key_pem != ""
+  billing_metrics_ca_cert_enabled     = local.billing_metrics_enabled && var.billing_metrics_ca_cert_pem != ""
+
+  billing_metrics_env = local.billing_metrics_enabled ? [
+    { name = "LITELLM_BILLING_METRICS_ENDPOINT", value = var.billing_metrics_endpoint },
+  ] : []
+
+  billing_metrics_secrets = concat(
+    local.billing_metrics_client_cert_enabled ? [
+      { name = "LITELLM_BILLING_METRICS_CLIENT_CERT", valueFrom = aws_secretsmanager_secret.billing_metrics_client_cert[0].arn },
+    ] : [],
+    local.billing_metrics_client_key_enabled ? [
+      { name = "LITELLM_BILLING_METRICS_CLIENT_KEY", valueFrom = aws_secretsmanager_secret.billing_metrics_client_key[0].arn },
+    ] : [],
+    local.billing_metrics_ca_cert_enabled ? [
+      { name = "LITELLM_BILLING_METRICS_CA_CERT", valueFrom = aws_secretsmanager_secret.billing_metrics_ca_cert[0].arn },
+    ] : [],
+  )
+
+  managed_db_env = var.create_database ? [
     { name = "IAM_TOKEN_DB_AUTH", value = "true" },
-    { name = "DATABASE_HOST", value = aws_rds_cluster.this.endpoint },
-    { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this.port) },
+    { name = "DATABASE_HOST", value = aws_rds_cluster.this[0].endpoint },
+    { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this[0].port) },
     { name = "DATABASE_USER", value = var.db_username },
     { name = "DATABASE_NAME", value = var.db_name },
-    { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this.reader_endpoint },
-    { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this.port) },
-    { name = "REDIS_HOST", value = aws_elasticache_replication_group.this.primary_endpoint_address },
-    { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this.port) },
+    { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this[0].reader_endpoint },
+    { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this[0].port) },
+  ] : []
+
+  managed_redis_env = var.create_redis ? [
+    { name = "REDIS_HOST", value = aws_elasticache_replication_group.this[0].primary_endpoint_address },
+    { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this[0].port) },
     # transit_encryption_enabled = true on the replication group means the
     # proxy must connect via rediss://. _redis.get_redis_url_from_environment
     # honors REDIS_SSL to flip the scheme.
     { name = "REDIS_SSL", value = "true" },
-    # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
-    # (e.g. cache backend, request log archival, /files passthrough).
-    { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
-    { name = "S3_REGION_NAME", value = var.region },
-    # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
-    # AWS_REGION. Set both for compatibility.
-    { name = "AWS_REGION", value = var.region },
-    { name = "AWS_REGION_NAME", value = var.region },
-  ]
+  ] : []
+
+  shared_env = concat(
+    local.managed_db_env,
+    local.managed_redis_env,
+    [
+      # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
+      # (e.g. cache backend, request log archival, /files passthrough).
+      { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
+      { name = "S3_REGION_NAME", value = var.region },
+      # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
+      # AWS_REGION. Set both for compatibility.
+      { name = "AWS_REGION", value = var.region },
+      { name = "AWS_REGION_NAME", value = var.region },
+    ],
+  )
+
+  # DATABASE_URL / REDIS_URL both outrank the discrete host/port vars in the
+  # proxy, so the BYO branch needs nothing removed from shared_env: the
+  # managed_*_env blocks are already empty whenever these are set.
+  byo_database_secrets = local.byo_database ? [
+    { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url[0].arn },
+  ] : []
+
+  byo_redis_secrets = local.byo_redis ? [
+    { name = "REDIS_URL", valueFrom = aws_secretsmanager_secret.redis_url[0].arn },
+  ] : []
 
   shared_secrets = concat(
     [
@@ -65,6 +158,10 @@ locals {
     var.litellm_license == "" ? [] : [
       { name = "LITELLM_LICENSE", valueFrom = aws_secretsmanager_secret.license[0].arn },
     ],
+    local.byo_database_secrets,
+    local.byo_redis_secrets,
+    local.otel_secrets,
+    local.billing_metrics_secrets,
   )
 
   # Backend-only managed secrets. UI_PASSWORD is consumed by the management
@@ -80,9 +177,11 @@ locals {
     for k, v in var.backend_extra_env : { name = k, value = v }
   ]
 
-  backend_default_env = [
+  # Storing models in the DB needs a DB. Without one the backend reads its
+  # model list from proxy_config only.
+  backend_default_env = local.database_enabled ? [
     { name = "STORE_MODEL_IN_DB", value = "true" },
-  ]
+  ] : []
   gateway_extra_secrets_list = [
     for k, v in var.gateway_extra_secrets : { name = k, valueFrom = v }
   ]
@@ -91,45 +190,77 @@ locals {
   ]
 
   # Mirrors the helm chart's gateway.config.create / configmap pattern.
-  # ECS Fargate has no ConfigMap analogue, so we pass the YAML as a
-  # base64-encoded env var and decode it at container start via a tiny
-  # python shim that prepends the image's normal uvicorn entrypoint.
+  # ECS Fargate has no ConfigMap analogue, so the YAML is uploaded to S3
+  # (see aws_s3_object.proxy_config in s3.tf) and the container entrypoint
+  # downloads it to /tmp/litellm-config.yaml via boto3 before exec'ing
+  # uvicorn. The S3 object's etag is embedded in the task definition so a
+  # config edit forces a new task-def revision and a rolling redeploy.
   proxy_config_enabled = length(keys(var.proxy_config)) > 0
-  proxy_config_b64     = local.proxy_config_enabled ? base64encode(yamlencode(var.proxy_config)) : ""
+  proxy_config_path    = "/tmp/litellm-config.yaml"
 
   proxy_config_env = local.proxy_config_enabled ? [
-    { name = "LITELLM_PROXY_CONFIG_B64", value = local.proxy_config_b64 },
-    { name = "CONFIG_FILE_PATH", value = "/tmp/litellm-config.yaml" },
+    { name = "CONFIG_FILE_PATH", value = local.proxy_config_path },
+    { name = "LITELLM_PROXY_CONFIG_S3_BUCKET", value = aws_s3_bucket.this.bucket },
+    { name = "LITELLM_PROXY_CONFIG_S3_KEY", value = aws_s3_object.proxy_config[0].key },
+    { name = "LITELLM_PROXY_CONFIG_S3_ETAG", value = aws_s3_object.proxy_config[0].etag },
   ] : []
+
+  proxy_config_fetch_cmd = "python -c \"import os, boto3; boto3.client('s3', region_name=os.environ['AWS_REGION']).download_file(os.environ['LITELLM_PROXY_CONFIG_S3_BUCKET'], os.environ['LITELLM_PROXY_CONFIG_S3_KEY'], os.environ['CONFIG_FILE_PATH'])\""
 
   # Gateway always needs --workers wired in (no NUM_WORKERS env var support
   # in the image entrypoint). When proxy_config is enabled we also have to
-  # decode the base64 config first, so the command goes through `sh -c`;
+  # pull the config from S3 first, so the command goes through `sh -c`;
   # otherwise we keep the image's ENTRYPOINT and only override `command`.
   gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
   backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
 
+  gateway_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args}; else exec uvicorn gateway.main:app ${local.gateway_uvicorn_args}; fi"
+  backend_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args}; else exec uvicorn backend.main:app ${local.backend_uvicorn_args}; fi"
+
   gateway_proxy_overrides = local.proxy_config_enabled ? {
     entryPoint = ["sh", "-c"]
     command = [
-      "python -c \"import os, base64, pathlib; pathlib.Path(os.environ['CONFIG_FILE_PATH']).write_bytes(base64.b64decode(os.environ['LITELLM_PROXY_CONFIG_B64']))\" && exec uvicorn gateway.main:app ${local.gateway_uvicorn_args}"
+      "${local.proxy_config_fetch_cmd} && ${local.gateway_launch_cmd}"
     ]
     } : {
-    # Mirror the image's ENTRYPOINT so we can append --workers via command.
-    entryPoint = ["uvicorn", "gateway.main:app"]
-    command    = split(" ", local.gateway_uvicorn_args)
+    entryPoint = ["sh", "-c"]
+    command    = [local.gateway_launch_cmd]
   }
 
   backend_proxy_overrides = local.proxy_config_enabled ? {
     entryPoint = ["sh", "-c"]
     command = [
-      "python -c \"import os, base64, pathlib; pathlib.Path(os.environ['CONFIG_FILE_PATH']).write_bytes(base64.b64decode(os.environ['LITELLM_PROXY_CONFIG_B64']))\" && exec uvicorn backend.main:app ${local.backend_uvicorn_args}"
+      "${local.proxy_config_fetch_cmd} && ${local.backend_launch_cmd}"
     ]
   } : {}
 }
 
 # ---------- Gateway ----------
 resource "aws_ecs_task_definition" "gateway" {
+  # Metering needs a client certificate AND its key. Each secret is created only
+  # when its own PEM is supplied, so an endpoint set with a missing key would
+  # otherwise apply cleanly and leave the proxy logging "missing config" and
+  # never exporting. ca_cert_pem stays optional: empty means fall back to the
+  # system trust store.
+  #
+  # The guard lives here, on an unconditional resource, rather than on the cert
+  # secret: that secret is count-gated on the cert itself, so it has zero
+  # instances in exactly the case this must catch. Adding count or for_each to
+  # this resource would silently stop the guard from evaluating.
+  #
+  #   endpoint  cert  key  -> result
+  #   ""        any   any  -> metering off, no secrets created
+  #   set       set   set  -> metering on
+  #   set       any-missing -> plan fails here
+  lifecycle {
+    precondition {
+      condition = var.billing_metrics_endpoint == "" || (
+        var.billing_metrics_client_cert_pem != "" && var.billing_metrics_client_key_pem != ""
+      )
+      error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
+    }
+  }
+
   family                   = "${local.name}-gateway"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
@@ -148,6 +279,8 @@ resource "aws_ecs_task_definition" "gateway" {
         portMappings = [{ containerPort = 4000, protocol = "tcp" }]
         environment = concat(
           local.shared_env,
+          local.gateway_otel_env,
+          local.billing_metrics_env,
           local.gateway_extra_env_list,
           local.proxy_config_env,
         )
@@ -169,6 +302,8 @@ resource "aws_ecs_task_definition" "gateway" {
       local.gateway_proxy_overrides,
     )
   ])
+
+  tags = local.tags
 }
 
 resource "aws_ecs_service" "gateway" {
@@ -179,8 +314,8 @@ resource "aws_ecs_service" "gateway" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.tasks.id]
+    subnets          = local.private_subnet_ids
+    security_groups  = local.task_security_group_ids
     assign_public_ip = false
   }
 
@@ -201,15 +336,39 @@ resource "aws_ecs_service" "gateway" {
 
   # Don't start until the schema migration has run. Otherwise the proxy
   # boots, Prisma fails on the missing tables, and ECS thrashes the task.
+  # The _version entries are listed because a task reads its secrets by ARN,
+  # which gives Terraform no edge to the resource that writes the value; the
+  # migration covers that ordering only while a database exists.
   depends_on = [
     aws_lb_listener.http,
     aws_lb_listener.https,
     terraform_data.migration,
+    aws_secretsmanager_secret_version.master_key,
+    aws_secretsmanager_secret_version.license,
+    aws_secretsmanager_secret_version.database_url,
+    aws_secretsmanager_secret_version.redis_url,
+    aws_secretsmanager_secret_version.billing_metrics_client_cert,
+    aws_secretsmanager_secret_version.billing_metrics_client_key,
+    aws_secretsmanager_secret_version.billing_metrics_ca_cert,
   ]
+
+  tags = local.tags
 }
 
 # ---------- Backend ----------
 resource "aws_ecs_task_definition" "backend" {
+  # Same guard as the gateway: the backend meters too (it serves the named-server
+  # MCP transport), and a targeted apply of just this resource must not slip a
+  # billing endpoint through without the credentials to use it.
+  lifecycle {
+    precondition {
+      condition = var.billing_metrics_endpoint == "" || (
+        var.billing_metrics_client_cert_pem != "" && var.billing_metrics_client_key_pem != ""
+      )
+      error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
+    }
+  }
+
   family                   = "${local.name}-backend"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
@@ -229,6 +388,8 @@ resource "aws_ecs_task_definition" "backend" {
         environment = concat(
           local.shared_env,
           local.backend_default_env,
+          local.backend_otel_env,
+          local.billing_metrics_env,
           local.backend_extra_env_list,
           local.proxy_config_env,
         )
@@ -246,6 +407,8 @@ resource "aws_ecs_task_definition" "backend" {
       local.backend_proxy_overrides,
     )
   ])
+
+  tags = local.tags
 }
 
 resource "aws_ecs_service" "backend" {
@@ -256,8 +419,8 @@ resource "aws_ecs_service" "backend" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.tasks.id]
+    subnets          = local.private_subnet_ids
+    security_groups  = local.task_security_group_ids
     assign_public_ip = false
   }
 
@@ -274,11 +437,23 @@ resource "aws_ecs_service" "backend" {
     ignore_changes = [desired_count]
   }
 
+  # Same secret-version ordering as the gateway, plus UI_PASSWORD, which only
+  # the backend consumes.
   depends_on = [
     aws_lb_listener.http,
     aws_lb_listener.https,
     terraform_data.migration,
+    aws_secretsmanager_secret_version.master_key,
+    aws_secretsmanager_secret_version.license,
+    aws_secretsmanager_secret_version.ui_password,
+    aws_secretsmanager_secret_version.database_url,
+    aws_secretsmanager_secret_version.redis_url,
+    aws_secretsmanager_secret_version.billing_metrics_client_cert,
+    aws_secretsmanager_secret_version.billing_metrics_client_key,
+    aws_secretsmanager_secret_version.billing_metrics_ca_cert,
   ]
+
+  tags = local.tags
 }
 
 # ---------- UI ----------
@@ -312,6 +487,8 @@ resource "aws_ecs_task_definition" "ui" {
       }
     }
   ])
+
+  tags = local.tags
 }
 
 resource "aws_ecs_service" "ui" {
@@ -322,8 +499,8 @@ resource "aws_ecs_service" "ui" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
-    security_groups  = [aws_security_group.tasks.id]
+    subnets          = local.private_subnet_ids
+    security_groups  = local.task_security_group_ids
     assign_public_ip = false
   }
 
@@ -344,4 +521,6 @@ resource "aws_ecs_service" "ui" {
     aws_lb_listener.http,
     aws_lb_listener.https,
   ]
+
+  tags = local.tags
 }

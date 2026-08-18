@@ -28,15 +28,7 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
 
 _verbose_state = VerboseReporterState()
 
-
-# Files where VCR replay breaks the test:
-# - ``test_litellm_overhead.py``: asserts overhead/total < 40%, which
-#   inverts when cached replay collapses the upstream time to microseconds.
-_VCR_INCOMPATIBLE_FILES = frozenset(
-    {
-        "test_litellm_overhead.py",
-    }
-)
+_VCR_INCOMPATIBLE_FILES = frozenset()
 
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 

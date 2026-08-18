@@ -1,17 +1,9 @@
 "use client";
 
-import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
+import ClaudeCodePluginsPanel from "./_components/ClaudeCodePluginsPanel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
-const SkillsPage = () => {
+export default function Skills() {
   const { accessToken, userRole } = useAuthorized();
-
-  return (
-    <ClaudeCodePluginsPanel
-      accessToken={accessToken}
-      userRole={userRole}
-    />
-  );
-};
-
-export default SkillsPage;
+  return <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />;
+}

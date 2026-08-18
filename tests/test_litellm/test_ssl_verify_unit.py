@@ -15,9 +15,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import litellm.proxy.guardrails.guardrail_hooks.aim.aim as _aim_module
+import litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks as _cato_networks_module
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
 from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks import CatoNetworksGuardrail
 
 
 class TestBaseAWSLLMSSLVerify:
@@ -85,23 +86,6 @@ class TestBaseAWSLLMSSLVerify:
         assert True  # If we got here without error, parameter was accepted
 
 
-class TestBedrockLLMSSLVerify:
-    """Test SSL verification parameter handling in BedrockLLM."""
-
-    def test_bedrock_llm_accepts_ssl_verify_in_optional_params(self):
-        """Test that BedrockLLM can receive ssl_verify in optional_params."""
-        # This is a simple test to verify the parameter is accepted
-        # The actual propagation is tested in integration tests
-        bedrock_llm = BedrockLLM()
-
-        # Verify the class exists and can be instantiated
-        assert bedrock_llm is not None
-
-        # Verify _get_ssl_verify method exists and works
-        result = bedrock_llm._get_ssl_verify(ssl_verify="/path/to/cert.pem")
-        assert result == "/path/to/cert.pem"
-
-
 class TestAimGuardrailSSLVerify:
     """Test SSL verification parameter handling in AimGuardrail."""
 
@@ -139,6 +123,48 @@ class TestAimGuardrailSSLVerify:
         ) as mock_get_client:
             # Initialize without ssl_verify
             AimGuardrail(api_key="test_key", api_base="https://test.aim.api")
+
+            # Should still work, just without custom SSL
+            assert mock_get_client.called
+
+
+class TestCatoNetworksGuardrailSSLVerify:
+    """Test SSL verification parameter handling in CatoNetworksGuardrail."""
+
+    def test_init_accepts_ssl_verify(self):
+        """Test that CatoNetworksGuardrail.__init__ accepts and uses ssl_verify parameter."""
+        mock_handler = Mock()
+
+        # Use patch.object on the actual module reference for reliable patching
+        # across different import orders / CI environments
+        with patch.object(
+                _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
+        ) as mock_get_client:
+            # Initialize with ssl_verify
+            cert_path = "/path/to/cato_cert.pem"
+            CatoNetworksGuardrail(
+                api_key="test_key",
+                api_base="https://test.catonetworks.api",
+                ssl_verify=cert_path,
+            )
+
+            # Verify get_async_httpx_client was called with ssl_verify in params
+            assert mock_get_client.called
+            call_kwargs = mock_get_client.call_args[1]
+            assert "params" in call_kwargs
+            assert call_kwargs["params"] is not None
+            assert call_kwargs["params"]["ssl_verify"] == cert_path
+
+    def test_init_without_ssl_verify(self):
+        """Test that CatoNetworksGuardrail works without ssl_verify parameter."""
+        mock_handler = Mock()
+
+        # Use patch.object on the actual module reference for reliable patching
+        with patch.object(
+                _cato_networks_module, "get_async_httpx_client", return_value=mock_handler
+        ) as mock_get_client:
+            # Initialize without ssl_verify
+            CatoNetworksGuardrail(api_key="test_key", api_base="https://test.catonetworks.api")
 
             # Should still work, just without custom SSL
             assert mock_get_client.called

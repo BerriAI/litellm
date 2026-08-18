@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Final
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
 
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> List:
-        params_list = super().get_supported_openai_params(model)
+    def get_supported_openai_params(self, model: str) -> list:
+        params_list: Final = super().get_supported_openai_params(model)
         params_list.extend(OPENAI_CHAT_COMPLETION_PARAMS)
         return params_list
 
@@ -27,7 +27,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param == "thinking":
                 optional_params.setdefault("extra_body", {})["thinking"] = value
@@ -36,30 +36,26 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         return optional_params
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
+        api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
+        dynamic_api_key: Final = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
         return api_base, dynamic_api_key
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base, api_key = self._get_openai_compatible_provider_info(api_base, api_key)
         if api_base is None:
-            raise ValueError(
-                "api_base not set for LiteLLM Proxy route. Set in env via `LITELLM_PROXY_API_BASE`"
-            )
-        models = super().get_models(api_key=api_key, api_base=api_base)
+            raise ValueError("api_base not set for LiteLLM Proxy route. Set in env via `LITELLM_PROXY_API_BASE`")
+        models: Final = super().get_models(api_key=api_key, api_base=api_base)
         return [f"litellm_proxy/{model}" for model in models]
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or get_secret_str("LITELLM_PROXY_API_KEY")
 
     @staticmethod
     def _should_use_litellm_proxy_by_default(
-        litellm_params: Optional[LiteLLM_Params] = None,
+        litellm_params: LiteLLM_Params | None = None,
     ):
         """
         Returns True if litellm proxy should be used by default for a given request
@@ -83,8 +79,8 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def litellm_proxy_get_custom_llm_provider_info(
-        model: str, api_base: Optional[str] = None, api_key: Optional[str] = None
-    ) -> Tuple[str, str, Optional[str], Optional[str]]:
+        model: str, api_base: str | None = None, api_key: str | None = None
+    ) -> tuple[str, str, str | None, str | None]:
         """
         Force use litellm proxy for all models
 
@@ -104,23 +100,21 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         """
         import litellm
 
-        custom_llm_provider = "litellm_proxy"
+        custom_llm_provider: Final = "litellm_proxy"
         if model.startswith("litellm_proxy/"):
             model = model.split("/", 1)[1]
 
         (
             api_base,
             api_key,
-        ) = litellm.LiteLLMProxyChatConfig()._get_openai_compatible_provider_info(
-            api_base=api_base, api_key=api_key
-        )
+        ) = litellm.LiteLLMProxyChatConfig()._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
 
         return model, custom_llm_provider, api_key, api_base
 
     def transform_request(
         self,
         model: str,
-        messages: List["AllMessageValues"],
+        messages: list["AllMessageValues"],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -135,7 +129,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
     async def async_transform_request(
         self,
         model: str,
-        messages: List["AllMessageValues"],
+        messages: list["AllMessageValues"],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,

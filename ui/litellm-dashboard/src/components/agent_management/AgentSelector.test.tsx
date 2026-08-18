@@ -1,5 +1,4 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 // Mock networking module
@@ -75,7 +74,11 @@ describe("AgentSelector", () => {
   it("shows loading state while fetching", async () => {
     // Keep the promise pending
     let resolve: any;
-    mockGetAgentsList.mockReturnValue(new Promise((r) => { resolve = r; }));
+    mockGetAgentsList.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      }),
+    );
 
     render(<AgentSelector {...defaultProps} />);
     expect(screen.getByTestId("agent-select")).toHaveAttribute("data-loading", "true");
@@ -121,12 +124,7 @@ describe("AgentSelector", () => {
   });
 
   it("passes value as flattened selectedValues", async () => {
-    render(
-      <AgentSelector
-        {...defaultProps}
-        value={{ agents: ["agent-1"], accessGroups: ["group-a"] }}
-      />
-    );
+    render(<AgentSelector {...defaultProps} value={{ agents: ["agent-1"], accessGroups: ["group-a"] }} />);
     await waitFor(() => {
       const select = screen.getByTestId("select-input");
       // The value should contain agent-1 and group:group-a

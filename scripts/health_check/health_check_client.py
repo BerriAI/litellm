@@ -54,7 +54,7 @@ class LiteLLMHealthCheckClient:
             timeout: Request timeout in seconds (default: 120, matching Go implementation)
             completion_prompt: Test prompt for chat/completion models
             embedding_text: Test text for embedding models
-            custom_auth_header: Optional custom header name for authentication (e.g., "x-ifood-requester-service").
+            custom_auth_header: Optional custom header name for authentication (e.g., "x-requester-service").
                 If provided, uses this header instead of standard "Authorization" header.
         """
         self.base_url = base_url.rstrip("/")
@@ -404,7 +404,7 @@ async def main():
     yaml_path = os.environ.get("LITELLM_MODELS_YAML")
     custom_auth_header = os.environ.get(
         "LITELLM_CUSTOM_AUTH_HEADER"
-    )  # e.g., "x-ifood-requester-service"
+    )  # e.g., "x-requester-service"
 
     # Debug: Print custom auth header value if set
     if custom_auth_header:
