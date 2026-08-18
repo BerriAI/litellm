@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { useForm } from "react-hook-form";
 import { Modal } from "antd";
 import { CircleHelp } from "lucide-react";
@@ -38,15 +38,19 @@ interface EditUserModalProps {
   onSubmit: (data: EditUserFormValues) => void;
 }
 
+interface EditUserFormProps extends Omit<EditUserModalProps, "user"> {
+  user: EditableUser;
+}
+
 const SPEND_MIN = 0;
 
-const toFormValues = (user: EditableUser | null): EditUserFormValues => ({
-  user_email: user?.user_email,
-  user_id: user?.user_id,
-  user_role: user?.user_role,
-  spend: user?.spend,
-  max_budget: user?.max_budget,
-  budget_duration: user?.budget_duration,
+const toFormValues = (user: EditableUser): EditUserFormValues => ({
+  user_email: user.user_email,
+  user_id: user.user_id,
+  user_role: user.user_role,
+  spend: user.spend,
+  max_budget: user.max_budget,
+  budget_duration: user.budget_duration,
 });
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
@@ -65,13 +69,8 @@ const roleOption = (uiLabel: string, description: string): React.ReactNode => (
   </div>
 );
 
-const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles, onCancel, user, onSubmit }) => {
+const EditUserForm: React.FC<EditUserFormProps> = ({ visible, possibleUIRoles, onCancel, user, onSubmit }) => {
   const form = useForm<EditUserFormValues>({ defaultValues: toFormValues(user) });
-
-  useEffect(() => {
-    form.reset(toFormValues(user));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
 
   const handleCancel = async () => {
     form.reset(toFormValues(user));
@@ -90,10 +89,6 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
       form.setValue("spend", SPEND_MIN);
     }
   };
-
-  if (!user) {
-    return null;
-  }
 
   const roleItems: Record<string, React.ReactNode> = Object.fromEntries(
     Object.entries(possibleUIRoles ?? {}).map(([role, { ui_label, description }]) => [
@@ -191,6 +186,14 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
       </TooltipProvider>
     </Modal>
   );
+};
+
+const EditUserModal: React.FC<EditUserModalProps> = ({ user, ...props }) => {
+  if (!user) {
+    return null;
+  }
+
+  return <EditUserForm key={user.user_id} user={user} {...props} />;
 };
 
 export default EditUserModal;
