@@ -302,6 +302,11 @@ def _build_advisor_context(
 
     tool_use blocks are excluded because Anthropic requires tool_use to be
     immediately followed by tool_result — not the advisor question.
+
+    In-sequence system rows (e.g. Claude Code SessionStart hook output) are
+    excluded: they are executor-directed, and a trailing one becomes invalid
+    once the question turn is appended after it (a system row must precede an
+    assistant message or end the array).
     """
     question: Final = (advisor_use_block.get("input") or {}).get("question") or (
         "Please provide guidance on the current task."
@@ -313,7 +318,7 @@ def _build_advisor_context(
         for block in raw_content
         if isinstance(block, dict) and block.get("type") == "text"
     ]
-    result: Final = list(messages)
+    result: Final = [m for m in messages if m.get("role") != "system"]
     if executor_text_blocks:
         result.append({"role": "assistant", "content": executor_text_blocks})
     result.append({"role": "user", "content": question})

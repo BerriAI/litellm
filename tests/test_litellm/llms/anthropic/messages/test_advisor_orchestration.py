@@ -1294,3 +1294,56 @@ async def test_advisor_sub_call_client_override_bypasses_router():
     assert len(advisor_sub_calls) == 1
     assert advisor_sub_calls[0]["api_key"] == "client-key"
     assert advisor_sub_calls[0]["api_base"] == "https://client.example.com"
+
+
+# ---------------------------------------------------------------------------
+# 16. In-sequence system rows (e.g. Claude Code SessionStart hook output) are
+#     excluded from the advisor sub-call context but kept for the executor: a
+#     trailing system row followed by the appended question turn is rejected
+#     upstream ("role 'system' must precede an 'assistant' message or end the
+#     array").
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_context_excludes_in_sequence_system_rows():
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    messages_with_system_row = [
+        *MESSAGES,
+        {"role": "system", "content": "SessionStart hook output: prefer functional style."},
+    ]
+
+    sub_calls = []
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        sub_calls.append({"messages": messages, "tools": tools})
+        if len(sub_calls) == 1:
+            return _make_advisor_tool_use_response()
+        if tools is None:
+            return _make_text_response("Advice.", model="claude-opus-4-6")
+        return _make_text_response("Final answer.")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_call,
+    ):
+        h = AdvisorOrchestrationHandler()
+        await h.handle(
+            model="openai/gpt-4o-mini",
+            messages=messages_with_system_row,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    assert len(sub_calls) == 3
+    advisor_messages = sub_calls[1]["messages"]
+    assert sub_calls[1]["tools"] is None
+    assert [m["role"] for m in advisor_messages if m["role"] == "system"] == []
+    assert advisor_messages[-1]["role"] == "user"
+    executor_roles = [m["role"] for m in sub_calls[0]["messages"]]
+    assert "system" in executor_roles
