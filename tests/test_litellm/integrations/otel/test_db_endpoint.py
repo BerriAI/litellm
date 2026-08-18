@@ -92,6 +92,10 @@ def test_percent_encoded_database_name_is_decoded():
 MISPARSED_AUTHORITY_DSNS = (
     ("postgresql://litellm:/kJ8xQz+9wT@db.internal:5432/litellm", "kJ8xQz+9wT"),
     ("postgresql://litellm:12345/aBcD@db.internal:5432/litellm", "aBcD"),
+    # '#' sends the tail to the fragment and '?' to the query, so the path is
+    # empty and only the stranded userinfo '@' reveals the mis-split.
+    ("postgresql://litellm:12345#aBcD@db.internal/litellm", "aBcD"),
+    ("postgresql://litellm:12345?aBcD@db.internal/litellm", "aBcD"),
 )
 
 
@@ -116,6 +120,15 @@ def test_extra_path_segment_yields_no_endpoint():
     """A database name cannot hold an unencoded '/', so a second path segment
     means the authority was mis-split even when no '@' survived into the path."""
     assert parse_database_endpoint("postgresql://db.internal:5432/litellm/extra") is None
+
+
+@pytest.mark.parametrize("dsn", [d for d, _ in MISPARSED_AUTHORITY_DSNS])
+def test_a_mis_split_authority_never_exports_the_database_username(dsn):
+    """The username lands in ``parsed.hostname`` when the authority truncates, so
+    a span would name the DB user as the server."""
+    attrs = _resolve("postgres", "get_data", database_url=dsn)
+    assert "server.address" not in attrs
+    assert "litellm" not in " ".join(str(v) for v in attrs.values())
 
 
 def test_percent_encoded_password_still_resolves_the_endpoint():

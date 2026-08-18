@@ -25,9 +25,10 @@ from litellm.secret_managers.main import get_secret_str
 _DEFAULT_POSTGRES_PORT: Final = 5432
 _DEFAULT_POSTGRES_SCHEMA: Final = "public"
 _POSTGRES_SCHEMES: Final = frozenset({"postgres", "postgresql"})
-# An unencoded '/' in the password truncates the authority, so urlparse hands
-# back the username as the host and the rest of the credential as the path.
-# Either character in the raw database segment means that happened.
+# An unencoded '/', '#' or '?' in the password truncates the authority, so
+# urlparse hands back the username as the host and the rest of the credential as
+# the path, query or fragment. Either character in the raw database segment, or a
+# userinfo '@' that fell outside the netloc, means that happened.
 _MISPARSED_AUTHORITY_MARKERS: Final = frozenset("@/")
 _EMPTY_ATTRIBUTES: Final[Mapping[str, str | int]] = MappingProxyType({})
 
@@ -53,6 +54,8 @@ def parse_database_endpoint(url: str | None) -> DatabaseEndpoint | None:
     try:
         parsed: Final = urlparse(url)
         if parsed.scheme not in _POSTGRES_SCHEMES:
+            return None
+        if "@" in url and "@" not in parsed.netloc:
             return None
         raw_database: Final = (parsed.path or "").lstrip("/")
         if _MISPARSED_AUTHORITY_MARKERS & set(raw_database):
