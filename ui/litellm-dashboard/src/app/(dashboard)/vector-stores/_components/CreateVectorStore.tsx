@@ -1,5 +1,4 @@
 import React, { useState } from "react";
-import { Card, Title, Text } from "@tremor/react";
 import { Upload, Alert } from "antd";
 import { toast } from "@/lib/toast";
 import { InboxOutlined } from "@ant-design/icons";
@@ -18,6 +17,7 @@ import {
 import { Logo } from "@/components/molecules/logo/Logo";
 import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -26,6 +26,8 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import S3VectorsConfig from "./S3VectorsConfig";
 
 const { Dragger } = Upload;
+
+const RAG_INGEST_UNSUPPORTED_PROVIDERS = new Set(["valkey"]);
 
 const asText = (value: unknown): string => (typeof value === "string" ? value : "");
 
@@ -210,47 +212,53 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     <TooltipProvider>
       <div className="space-y-6">
         <div>
-          <Title>Create Vector Store</Title>
-          <Text className="text-muted-foreground">
+          <h3 className="text-lg font-medium">Create Vector Store</h3>
+          <p className="text-sm text-muted-foreground">
             Upload documents and select a provider to create a new vector store with embedded content.
-          </Text>
+          </p>
         </div>
 
         {/* Upload Area */}
         <Card>
-          <div className="mb-4">
-            <Text className="font-medium">Step 1: Upload Documents</Text>
-            <Text className="text-sm text-muted-foreground block mt-1">
-              Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.
-            </Text>
-          </div>
-          <Dragger {...uploadProps}>
-            <p className="ant-upload-drag-icon">
-              <InboxOutlined style={{ fontSize: "48px", color: "#1890ff" }} />
-            </p>
-            <p className="ant-upload-text">Click or drag files to this area to upload</p>
-            <p className="ant-upload-hint">Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD</p>
-          </Dragger>
+          <CardContent>
+            <div className="mb-4">
+              <p className="font-medium">Step 1: Upload Documents</p>
+              <p className="text-sm text-muted-foreground block mt-1">
+                Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.
+              </p>
+            </div>
+            <Dragger {...uploadProps}>
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined style={{ fontSize: "48px", color: "#1890ff" }} />
+              </p>
+              <p className="ant-upload-text">Click or drag files to this area to upload</p>
+              <p className="ant-upload-hint">
+                Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD
+              </p>
+            </Dragger>
+          </CardContent>
         </Card>
 
         {/* Documents Table */}
         {documents.length > 0 && (
           <Card>
-            <div className="mb-4">
-              <Text className="font-medium">Uploaded Documents ({documents.length})</Text>
-            </div>
-            <DocumentsTable documents={documents} onRemove={handleRemoveDocument} />
+            <CardContent>
+              <div className="mb-4">
+                <p className="font-medium">Uploaded Documents ({documents.length})</p>
+              </div>
+              <DocumentsTable documents={documents} onRemove={handleRemoveDocument} />
+            </CardContent>
           </Card>
         )}
 
         {/* Provider Selection and Vector Store Details */}
         <Card>
-          <div className="space-y-4">
+          <CardContent className="space-y-4">
             <div>
-              <Text className="font-medium">Step 2: Configure Vector Store</Text>
-              <Text className="text-sm text-muted-foreground block mt-1">
+              <p className="font-medium">Step 2: Configure Vector Store</p>
+              <p className="text-sm text-muted-foreground block mt-1">
                 Choose the provider and optionally provide a name and description for your vector store.
-              </Text>
+              </p>
             </div>
 
             <FieldGroup>
@@ -291,16 +299,20 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                     <SelectValue placeholder="Select a provider" />
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger={false}>
-                    {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => (
-                      <SelectItem key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
-                        <Logo
-                          src={vectorStoreProviderLogoMap[providerDisplayName]}
-                          label={providerDisplayName}
-                          className="w-5 h-5"
-                        />
-                        <span>{providerDisplayName}</span>
-                      </SelectItem>
-                    ))}
+                    {Object.entries(VectorStoreProviders)
+                      .filter(
+                        ([providerEnum]) => !RAG_INGEST_UNSUPPORTED_PROVIDERS.has(vectorStoreProviderMap[providerEnum]),
+                      )
+                      .map(([providerEnum, providerDisplayName]) => (
+                        <SelectItem key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
+                          <Logo
+                            src={vectorStoreProviderLogoMap[providerDisplayName]}
+                            label={providerDisplayName}
+                            className="w-5 h-5"
+                          />
+                          <span>{providerDisplayName}</span>
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </Field>
@@ -342,7 +354,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                 {isCreating ? "Creating Vector Store..." : "Create Vector Store"}
               </Button>
             </div>
-          </div>
+          </CardContent>
         </Card>
 
         {/* Success Message */}

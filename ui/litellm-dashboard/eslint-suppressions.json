@@ -161,9 +161,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -401,24 +398,12 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-nested-ternary": {
-      "count": 5
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/app/(dashboard)/guardrails/_components/guardrail_provider_fields.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 5
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -428,11 +413,6 @@
   "src/app/(dashboard)/guardrails/_components/guardrail_table.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/guardrails/_components/llm_judge/LLMJudgeFields.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/guardrails/_components/pii_components.tsx": {
@@ -976,7 +956,7 @@
   },
   "src/app/(dashboard)/playground/components/compareUI/components/ModelSelector.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/playground/components/complianceUI/ComplianceUI.tsx": {
@@ -1406,7 +1386,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1513,7 +1493,7 @@
   },
   "src/app/(dashboard)/vector-stores/_components/CreateVectorStore.tsx": {
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/app/(dashboard)/vector-stores/_components/S3VectorsConfig.tsx": {
@@ -1539,9 +1519,6 @@
   },
   "src/app/(dashboard)/vector-stores/_components/vector_store_info.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -1810,7 +1787,7 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "prefer-const": {
       "count": 2
@@ -1868,7 +1845,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 4
+      "count": 3
     }
   },
   "src/components/add_model/ClassificationMethodConfig.tsx": {
@@ -1919,7 +1896,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 4
+      "count": 3
     },
     "prefer-const": {
       "count": 2
@@ -1954,7 +1931,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
@@ -1983,7 +1960,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/components/add_model/model_connection_test.tsx": {
@@ -2004,10 +1981,10 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 5
+      "count": 3
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/immutability": {
       "count": 3
@@ -2125,7 +2102,7 @@
   },
   "src/components/common_components/AccessGroupSelector.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/common_components/DeleteResourceModal.tsx": {
@@ -2143,7 +2120,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/common_components/MetadataKeyValueFields.test.tsx": {
@@ -2366,7 +2343,7 @@
   },
   "src/components/mcp_tools/MCPToolArgumentsForm.tsx": {
     "no-nested-ternary": {
-      "count": 5
+      "count": 1
     },
     "no-restricted-imports": {
       "count": 1
@@ -2384,7 +2361,7 @@
   },
   "src/components/model_add/CredentialModal.tsx": {
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/components/model_add/reuse_credentials.tsx": {
@@ -2486,7 +2463,7 @@
   },
   "src/components/organisms/create_key_button.test.tsx": {
     "@typescript-eslint/no-require-imports": {
-      "count": 2
+      "count": 1
     },
     "react/display-name": {
       "count": 8
@@ -2503,7 +2480,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "prefer-const": {
       "count": 2
@@ -2744,7 +2721,7 @@
   },
   "src/components/team/LoggingSettings.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/team/TeamInfo.tsx": {
@@ -2755,7 +2732,7 @@
       "count": 3
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -2800,7 +2777,7 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/templates/key_info_view.tsx": {

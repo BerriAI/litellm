@@ -62,6 +62,15 @@ describe("AddProviderForm", () => {
     expect(onAddProvider).toHaveBeenCalledTimes(1);
   });
 
+  it("should report the edited discount as the user types", async () => {
+    const onDiscountChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} newDiscount="1" onDiscountChange={onDiscountChange} />);
+
+    await user.type(screen.getByPlaceholderText("5"), "5");
+    expect(onDiscountChange).toHaveBeenCalledWith("15");
+  });
+
   it("should show the percent sign next to the discount input", () => {
     renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} />);
     expect(screen.getByText("%")).toBeInTheDocument();

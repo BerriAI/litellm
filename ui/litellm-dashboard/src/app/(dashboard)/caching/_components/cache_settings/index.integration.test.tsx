@@ -63,6 +63,19 @@ describe("CacheSettings advanced settings round-trip", () => {
     });
   });
 
+  it("reveals the advanced field sections only after the user expands them", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await screen.findByText("Connection Settings");
+    expect(screen.queryByText("SSL Settings")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Advanced Settings" }));
+
+    expect(await screen.findByText("SSL Settings")).toBeInTheDocument();
+    expect(screen.getByText("Cache Management")).toBeInTheDocument();
+    expect(screen.getByText("GCP Authentication")).toBeInTheDocument();
+  });
+
   it("sends the same payload whether or not the advanced section was expanded", async () => {
     const user = userEvent.setup();
     renderSettings();
