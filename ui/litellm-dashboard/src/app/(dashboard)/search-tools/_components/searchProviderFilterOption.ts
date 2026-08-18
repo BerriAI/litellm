@@ -7,7 +7,5 @@ interface SearchProviderOption {
 export const searchProviderFilterOption = (input: string, option?: SearchProviderOption): boolean => {
   const needle = input.trim().toLowerCase();
   if (!needle) return true;
-  return [option?.value, option?.title].some(
-    (part) => typeof part === "string" && part.toLowerCase().includes(needle),
-  );
+  return [option?.value, option?.title].some((part) => typeof part === "string" && part.toLowerCase().includes(needle));
 };
