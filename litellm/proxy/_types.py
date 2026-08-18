@@ -811,6 +811,9 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        # Endpoint restricts results to organizations the caller is ORG_ADMIN
+        # of; a caller who administers none gets an empty result set.
+        "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
