@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from litellm.proxy.guardrails.usage_tracking import process_spend_logs_guardrail_usage
+from litellm.proxy.guardrails.usage_tracking import (
+    _MAX_PENDING_ROWS,
+    PendingRollups,
+    _capped,
+    process_spend_logs_guardrail_usage,
+)
 
 
 def _prisma() -> MagicMock:
@@ -103,7 +108,7 @@ async def test_one_failing_upsert_does_not_drop_remaining_writes():
         _payload("r2", team_id=None, api_key="hashed-key-2", usage={"topicPolicyUnits": 1}),
     ]
 
-    await process_spend_logs_guardrail_usage(prisma, logs, sleep=sleep)
+    await process_spend_logs_guardrail_usage(prisma, logs, sleep=sleep, pending=PendingRollups())
 
     assert _units_upserts(prisma) == {
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
@@ -140,12 +145,86 @@ async def test_persistent_upsert_failure_stops_after_three_retries():
     prisma = _prisma()
     prisma.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
     sleep, delays = _fake_sleep()
+    pending = PendingRollups()
 
-    await process_spend_logs_guardrail_usage(prisma, [_payload("r1", usage={"topicPolicyUnits": 1})], sleep=sleep)
+    await process_spend_logs_guardrail_usage(
+        prisma, [_payload("r1", usage={"topicPolicyUnits": 1})], sleep=sleep, pending=pending
+    )
 
     assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_count == 4
     assert delays == [1, 2, 4]
     assert prisma.db.litellm_dailyguardrailusageunits.upsert.call_count == 1
+    assert dict(pending.metrics) == {
+        ("bedrock-guard", "2026-08-17"): {
+            "requests_evaluated": 1,
+            "passed_count": 1,
+            "blocked_count": 0,
+            "flagged_count": 0,
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_retry_exhausted_rows_are_requeued_and_land_on_the_next_flush():
+    """
+    LIT-5761: rollup rows whose connection-error retries exhaust must not be
+    silently lost. They are requeued and merged into the next flushed batch,
+    so the aggregates catch up once the database is reachable again.
+    """
+    pending = PendingRollups()
+    down = _prisma()
+    down.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
+    down.db.litellm_dailyguardrailusageunits.upsert.side_effect = httpx.ConnectError("db down")
+    sleep, _ = _fake_sleep()
+
+    await process_spend_logs_guardrail_usage(
+        down, [_payload("r1", usage={"topicPolicyUnits": 2})], sleep=sleep, pending=pending
+    )
+
+    assert dict(pending.units) == {("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 2}
+
+    recovered = _prisma()
+    await process_spend_logs_guardrail_usage(
+        recovered, [_payload("r2", usage={"topicPolicyUnits": 3})], sleep=sleep, pending=pending
+    )
+
+    assert _units_upserts(recovered) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 5,
+    }
+    metrics_create = recovered.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert metrics_create["requests_evaluated"] == 2
+    assert not pending.units
+    assert not pending.metrics
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_failures_are_never_requeued():
+    """
+    A post-send failure (the increment may have committed) must stay dropped:
+    requeueing it would re-send a possibly applied increment and double-count.
+    """
+    pending = PendingRollups()
+    prisma = _prisma()
+    prisma.db.litellm_dailyguardrailusageunits.upsert.side_effect = httpx.ReadTimeout("maybe committed")
+    sleep, delays = _fake_sleep()
+
+    await process_spend_logs_guardrail_usage(
+        prisma, [_payload("r1", usage={"topicPolicyUnits": 1})], sleep=sleep, pending=pending
+    )
+
+    assert delays == []
+    assert not pending.units
+    assert not pending.metrics
+
+
+def test_pending_requeue_is_capped_dropping_oldest_rows():
+    rows = {index: index for index in range(_MAX_PENDING_ROWS + 5)}
+
+    capped = _capped(rows, "usage unit")
+
+    assert len(capped) == _MAX_PENDING_ROWS
+    assert 4 not in capped
+    assert _MAX_PENDING_ROWS + 4 in capped
 
 
 def _units_upsert_wheres(prisma: MagicMock) -> list[tuple]:
