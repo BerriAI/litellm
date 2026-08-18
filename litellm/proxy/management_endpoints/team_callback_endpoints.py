@@ -125,7 +125,7 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
     entry as active for a team whose requests never fire it.
 
     Credential ``callback_vars`` are stored encrypted, so they are decrypted
-    before being masked by key; a value encrypted under a key that is no longer
+    before being dropped by key; a value encrypted under a key that is no longer
     classified as sensitive would otherwise come back as raw ciphertext.
     """
     if not isinstance(team_metadata, dict):

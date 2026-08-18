@@ -687,14 +687,14 @@ async def test_get_team_callbacks_decrypts_vars_stored_under_non_sensitive_keys(
     """Stored ciphertext must be decrypted, not handed back raw.
 
     Which keys count as sensitive is a moving classification, so a value can be
-    encrypted at rest under a key that later stops being masked on read. Without
+    encrypted at rest under a key that later stops being dropped on read. Without
     the decrypt step that value comes back as an unusable litellm_enc:: blob.
     """
     from litellm.proxy.common_utils.callback_utils import _CALLBACK_VAR_ENCRYPTED_PREFIX, is_sensitive_callback_key
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
-    assert not is_sensitive_callback_key("langsmith_project"), "test needs a key that is not masked on read"
+    assert not is_sensitive_callback_key("langsmith_project"), "test needs a key that is not dropped on read"
 
     metadata = {
         "logging": [
