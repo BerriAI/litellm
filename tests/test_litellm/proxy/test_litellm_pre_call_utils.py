@@ -1038,6 +1038,65 @@ async def test_add_litellm_data_to_request_ignores_forged_client_side_timeout():
 
 
 @pytest.mark.asyncio
+async def test_client_side_timeout_marker_never_reaches_the_provider():
+    """A proxy request with a caller-supplied timeout gets kwargs["client_side_timeout"]
+    stamped for the router's cooldown logic. That router-only marker must not ride
+    into the provider payload: unregistered kwargs are swept into extra_body /
+    additionalModelRequestFields, so Bedrock rejects the whole call with
+    `client_side_timeout: Extra inputs are not permitted`."""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "bedrock/us.anthropic.claude-sonnet-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10,
+            "timeout": 30,
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert updated["client_side_timeout"] is True
+
+    converse_response = MagicMock()
+    converse_response.status_code = 200
+    converse_response.headers = {}
+    converse_response.json.return_value = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+    }
+    converse_response.text = json.dumps(converse_response.json.return_value)
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=converse_response) as mock_post:
+        await litellm.acompletion(
+            **updated,
+            aws_access_key_id="fake-access-key",
+            aws_secret_access_key="fake-secret-key",
+            aws_region_name="us-east-1",
+            client=client,
+        )
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["url"].endswith("/converse")
+    provider_body = json.loads(mock_post.call_args.kwargs["data"])
+    assert "client_side_timeout" not in json.dumps(provider_body), provider_body
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_allows_client_mock_response_with_admin_opt_in():
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/chat/completions"

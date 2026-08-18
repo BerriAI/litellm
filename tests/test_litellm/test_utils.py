@@ -4797,6 +4797,24 @@ def test_bedrock_batch_params_never_reach_the_provider():
     )
 
 
+def test_client_side_timeout_marker_never_reaches_the_provider():
+    """The proxy stamps kwargs["client_side_timeout"] = True whenever a request carries
+    a caller-supplied timeout (body timeout / request_timeout / stream_timeout or the
+    x-litellm-timeout headers) so the router can skip cooldowns on the resulting 408s.
+    The marker is only meaningful to the router, so it must be filtered out of the
+    provider params: swept into extra_body / additionalModelRequestFields it turns every
+    timed-out request into a provider 400 (`client_side_timeout: Extra inputs are not
+    permitted`)."""
+    kwargs = {"a_real_provider_specific_param": 1, "client_side_timeout": True}
+
+    non_default = get_non_default_completion_params(kwargs)
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "client_side_timeout leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+
+
 def test_rust_flag_not_forwarded_as_provider_param():
     forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
     assert "rust" not in forwarded
