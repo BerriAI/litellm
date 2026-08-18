@@ -141,36 +141,6 @@ model_list:
         default_model: gpt-4o
 ```
 
-### Custom classifier plugin
-
-`classifier_type: plugin` hands the tier decision to your own hook instead of the heuristic scorer or an LLM call. Point `classifier_plugin` at an instance implementing an async `classify(context)` method; the dotted path resolves the same way `plugins` entries do. The context carries the request messages plus the request metadata, which includes the caller's identity (`user_api_key_team_id`, `user_api_key_user_id`, budgets, and the rest), so a plugin can route by team, spend, or any business rule:
-
-```yaml
-model_list:
-  - model_name: smart-router
-    litellm_params:
-      model: auto_router/complexity_router
-      complexity_router_config:
-        classifier_type: plugin
-        classifier_plugin: custom_classifiers.tier_by_team
-        classifier_plugin_timeout_ms: 3000
-        tiers:
-          SIMPLE: gpt-4o-mini
-          REASONING: o1-preview
-```
-
-```python
-# custom_classifiers.py, next to the proxy config
-class TierByTeam:
-    async def classify(self, context):
-        team = context.metadata.get("user_api_key_team_id")
-        return "REASONING" if team == "team-research" else "SIMPLE"
-
-tier_by_team = TierByTeam()
-```
-
-`classify` returns the name of a tier (a built-in value, a `tier_labels` label, or a `tier_definitions` name, matched case-insensitively), or `None` to decline. A decline, an error, a timeout, or an unknown tier falls back exactly like a failed LLM classifier: `fallback_tier` wins on a custom tier set, and `classifier_fallback` otherwise picks between the heuristic scorer and `default_model`. Routing decisions record `cause: classifier_plugin`, and the plugin cannot be set over HTTP, only from the proxy config file.
-
 ## Usage
 
 Once configured, use the model name like any other:

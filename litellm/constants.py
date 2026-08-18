@@ -1,5 +1,6 @@
 import os
 import sys
+from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
@@ -1764,3 +1765,7 @@ PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
 # one run delete a charge another just wrote. A stale row is hours old and a concurrent
 # one is seconds old, so a few minutes separates them.
 PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300
+
+# Shared read-only empty mapping, for defaulting optional Mapping parameters without
+# constructing a fresh mutable dict at each call site.
+EMPTY_MAPPING: Final = MappingProxyType({})

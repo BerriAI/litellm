@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 from pydantic import BaseModel, create_model
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
@@ -78,9 +78,6 @@ class _LabeledTierClassification(BaseModel):
     """Parses the classifier's reply when the wire carries operator-chosen tier strings."""
 
     tier: str
-
-
-_EMPTY_METADATA: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
 def _tier_name(tier: ComplexityTier | str) -> str:
@@ -1184,14 +1181,14 @@ class ComplexityRouter(CustomLogger):
         plugin: Final = self.config.classifier_plugin
         if plugin is None:
             return self._classifier_failure_outcome("classifier_plugin is not set", prompt, system_prompt)
-        kwargs: Final = request_kwargs or _EMPTY_METADATA
+        kwargs: Final = request_kwargs or EMPTY_MAPPING
         metadata_key: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
         pools: Final = self._tier_pools()
         context: Final = RoutingContext(
             raw_messages=tuple(raw_messages or messages or ()),
             structured_messages=tuple(messages or ()),
             candidate_models=tuple(model for pool in pools.values() for model in pool),
-            metadata=kwargs.get(metadata_key) or _EMPTY_METADATA,
+            metadata=kwargs.get(metadata_key) or EMPTY_MAPPING,
         )
         try:
             verdict: Final = await asyncio.wait_for(
@@ -1205,6 +1202,12 @@ class ComplexityRouter(CustomLogger):
             return self._classifier_failure_outcome(f"classifier plugin failed ({e})", prompt, system_prompt)
         if verdict is None:
             return self._classifier_failure_outcome("classifier plugin declined to classify", prompt, system_prompt)
+        if not isinstance(verdict, str):
+            return self._classifier_failure_outcome(
+                f"classifier plugin returned a non-string verdict of type {type(verdict).__name__}",
+                prompt,
+                system_prompt,
+            )
         tier: Final = self.config.resolve_classified_tier(verdict)
         if tier is None:
             return self._classifier_failure_outcome(

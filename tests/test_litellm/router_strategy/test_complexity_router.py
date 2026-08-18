@@ -4257,9 +4257,7 @@ class TestClassifierPlugin:
     @pytest.mark.asyncio
     async def test_plugin_reads_caller_identity_from_request_metadata(self, mock_router_instance):
         router = _plugin_router(mock_router_instance, _TeamTierClassifier())
-        premium = await router.aclassify(
-            "hi", request_kwargs={"metadata": {"user_api_key_team_id": "team-premium"}}
-        )
+        premium = await router.aclassify("hi", request_kwargs={"metadata": {"user_api_key_team_id": "team-premium"}})
         basic = await router.aclassify(
             "hi", request_kwargs={"litellm_metadata": {"user_api_key_team_id": "team-basic"}}
         )
@@ -4297,6 +4295,13 @@ class TestClassifierPlugin:
     @pytest.mark.asyncio
     async def test_plugin_timeout_falls_back_to_heuristic(self, mock_router_instance):
         router = _plugin_router(mock_router_instance, _SlowClassifier(), classifier_plugin_timeout_ms=20)
+        outcome = await router.aclassify("what is 2+2?")
+        assert outcome.cause == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_plugin_non_string_verdict_falls_back_to_heuristic(self, mock_router_instance):
+        """An operator hook returning a non-string must fall back, not raise into the request."""
+        router = _plugin_router(mock_router_instance, _FixedTierClassifier(42))
         outcome = await router.aclassify("what is 2+2?")
         assert outcome.cause == "heuristic_scorer"
 
@@ -4411,9 +4416,7 @@ class TestClassifierPlugin:
     def test_classifier_plugin_alone_keeps_tier_pinning_enabled(self, mock_router_instance):
         """Narrowing plugins suppress session pinning (a policy verdict can change between turns);
         a classifier plugin picks among operator-approved tiers, so pinning must stay on."""
-        pinning = _plugin_router(
-            mock_router_instance, _FixedTierClassifier("SIMPLE"), session_affinity=True
-        )
+        pinning = _plugin_router(mock_router_instance, _FixedTierClassifier("SIMPLE"), session_affinity=True)
         suppressed = _plugin_router(
             mock_router_instance,
             _FixedTierClassifier("SIMPLE"),
