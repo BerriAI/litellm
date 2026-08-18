@@ -1,6 +1,7 @@
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import HTTPException
@@ -13,6 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
+    get_passthrough_www_authenticate,
     get_request_base_url,
     well_known_root_suffix,
 )
@@ -437,24 +439,23 @@ class MCPRequestHandler:
             path=request_route,
             mcp_servers=mcp_servers,
             client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        ) or (
+            MCPRequestHandler._single_dcr_bridge_delegate_target(
+                path=request_route,
+                mcp_servers=mcp_servers,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
+            )
+            is not None
+            and not oauth2_headers
         ):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
-            (
-                bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
-                    path=request_route,
-                    mcp_servers=mcp_servers,
-                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
-                )
+            bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                path=request_route,
+                mcp_servers=mcp_servers,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
             )
-            is not None
-            and oauth2_headers
-            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
-        ):
-            # A single DCR-bridge oauth_delegate target carrying an envelope-shaped
-            # Authorization: open the envelope, admit under its recovered identity, and
-            # inject the inner upstream token for egress. A non-envelope bearer on the same
-            # server is NOT admitted here — it falls through to the oauth2 arm, which 401s.
+        ) is not None and oauth2_headers:
             validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
                 server=bridge_delegate_target,
                 authorization_value=oauth2_headers["Authorization"],
@@ -740,7 +741,10 @@ class MCPRequestHandler:
         if len(target_names) != 1:
             return None
         server: Final = global_mcp_server_manager.get_mcp_server_by_name(target_names[0], client_ip=client_ip)
-        if server is None or not server.is_oauth_delegate or not server.is_dcr_bridge:
+        # Both flags are security-sensitive opt-ins. Require literal booleans so
+        # partially populated objects and truthy proxy values cannot enable bridge
+        # admission accidentally.
+        if server is None or server.is_oauth_delegate is not True or server.is_dcr_bridge is not True:
             return None
         # Egress resolves the injected per-server token only by alias / server_name; a server with
         # neither cannot receive the forwarded token, so fail closed rather than admit-and-drop.
@@ -798,7 +802,25 @@ class MCPRequestHandler:
                 new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
-                raise HTTPException(status_code=401, detail="Invalid or expired credential")
+                resource_name: Final = server.alias or server.server_name
+                if resource_name is None:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Server misconfigured: MCP server has no routable name",
+                    )
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid or expired credential",
+                    headers=MappingProxyType(
+                        {
+                            "www-authenticate": get_passthrough_www_authenticate(
+                                scope=request.scope,
+                                server_name=resource_name,
+                                invalid_token=True,
+                            )
+                        }
+                    ),
+                )
             case _:
                 assert_never(result)
 

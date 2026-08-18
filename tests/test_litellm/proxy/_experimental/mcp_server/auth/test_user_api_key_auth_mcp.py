@@ -5097,13 +5097,10 @@ class TestMCPDcrBridgeDelegateAdmission:
     """Admission-side arm for a DCR-bridge ``oauth_delegate`` client that authenticates with
     a single envelope bearer (LIT-4338).
 
-    The arm fires only for a single ``is_dcr_bridge`` ``is_oauth_delegate`` target carrying an
-    envelope-shaped Authorization. It opens the litellm-signed envelope, reloads the live key
-    record the sealed ``key_hash`` references so the caller is admitted under the key's current
-    authorization context (team/org/object-permission) and revocation state, and injects the inner
-    upstream token under the server's per-server auth-header key so egress forwards it. A key that
-    is missing, blocked, or expired fails closed with a 401. Everything else must stay on its
-    existing admission path.
+    A credential-free request reaches the named MCP handler so it can issue the initial OAuth
+    challenge. Every bearer on that same route enters envelope resolution. A valid envelope opens
+    under its live authorization context, while invalid envelopes and non-envelope bearers receive
+    a named ``invalid_token`` challenge. Everything else stays on its existing admission path.
     """
 
     _MASTER_KEY = "sk-bridge-master-key-for-envelope-derivation"
@@ -5271,6 +5268,57 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         request.body = mock_body
         return request
+
+    async def test_bridge_target_requires_literal_boolean_opt_ins(self):
+        """Truthy proxy values must not opt an unresolved server into bridge admission."""
+        for delegate_value, bridge_value in ((MagicMock(), True), (True, MagicMock())):
+            server = MagicMock()
+            server.is_oauth_delegate = delegate_value
+            server.is_dcr_bridge = bridge_value
+            server.server_name = "bridge_delegate_server"
+            server.alias = None
+
+            with patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr:
+                mock_mgr.get_mcp_server_by_name.return_value = server
+                assert (
+                    MCPRequestHandler._single_dcr_bridge_delegate_target(
+                        path="/mcp/bridge_delegate_server",
+                        mcp_servers=None,
+                        client_ip=None,
+                    )
+                    is None
+                )
+
+    async def test_credential_free_named_bridge_request_reaches_mcp_handler(self):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            (
+                auth_result,
+                _mcp_auth_header,
+                _mcp_servers,
+                mcp_server_auth_headers,
+                _oauth2_headers,
+                _raw_headers,
+            ) = await MCPRequestHandler.process_mcp_request(scope)
+
+        mock_auth.assert_not_called()
+        assert auth_result == UserAPIKeyAuth()
+        assert mcp_server_auth_headers == {}
 
     async def test_valid_envelope_reloads_live_key_and_admits_its_authorization_context(self):
         """A valid envelope admits under the LIVE key record the sealed key_hash references, not a
@@ -5887,8 +5935,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         mock_auth.assert_called_once()
 
     async def test_expired_envelope_fails_closed_401(self):
-        """An envelope whose exp is in the past must fail closed with a 401, never fall through to
-        anonymous admission."""
+        """An expired envelope fails closed and tells the client where to reauthorize."""
         expired = self._mint_bridge_envelope(
             expires_in=60,
             minted_at=datetime.now(timezone.utc) - timedelta(hours=2),
@@ -5897,7 +5944,10 @@ class TestMCPDcrBridgeDelegateAdmission:
             "type": "http",
             "method": "POST",
             "path": "/mcp/bridge_delegate_server",
-            "headers": [(b"authorization", f"Bearer {expired}".encode("latin-1"))],
+            "headers": [
+                (b"host", b"testserver"),
+                (b"authorization", f"Bearer {expired}".encode("latin-1")),
+            ],
         }
 
         with (
@@ -5914,6 +5964,12 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 401
         mock_auth.assert_not_called()
+        assert exc_info.value.headers == {
+            "www-authenticate": (
+                'Bearer error="invalid_token", '
+                'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/bridge_delegate_server"'
+            )
+        }
 
     async def test_envelope_minted_for_a_different_server_fails_closed_401(self):
         """An envelope sealed for another server_id must be rejected when presented to this server,
@@ -5924,7 +5980,10 @@ class TestMCPDcrBridgeDelegateAdmission:
             "type": "http",
             "method": "POST",
             "path": "/mcp/bridge_delegate_server",
-            "headers": [(b"authorization", f"Bearer {wrong_server}".encode("latin-1"))],
+            "headers": [
+                (b"host", b"testserver"),
+                (b"authorization", f"Bearer {wrong_server}".encode("latin-1")),
+            ],
         }
 
         with (
@@ -5941,6 +6000,12 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 401
         mock_auth.assert_not_called()
+        assert exc_info.value.headers == {
+            "www-authenticate": (
+                'Bearer error="invalid_token", '
+                'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/bridge_delegate_server"'
+            )
+        }
 
     async def test_envelope_under_wrong_master_key_fails_closed_401(self):
         """An envelope-shaped bearer whose signature does not verify under the proxy's derived keys
@@ -5950,7 +6015,10 @@ class TestMCPDcrBridgeDelegateAdmission:
             "type": "http",
             "method": "POST",
             "path": "/mcp/bridge_delegate_server",
-            "headers": [(b"authorization", f"Bearer {foreign}".encode("latin-1"))],
+            "headers": [
+                (b"host", b"testserver"),
+                (b"authorization", f"Bearer {foreign}".encode("latin-1")),
+            ],
         }
 
         with (
@@ -5967,26 +6035,29 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 401
         mock_auth.assert_not_called()
+        assert exc_info.value.headers == {
+            "www-authenticate": (
+                'Bearer error="invalid_token", '
+                'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/bridge_delegate_server"'
+            )
+        }
 
-    async def test_non_envelope_bearer_on_bridge_server_falls_through_to_oauth2_arm(self):
-        """A plain (non-envelope) bearer on the same bridge server must NOT be admitted by the
-        envelope arm: it falls through to the oauth2 arm, which validates it as a LiteLLM key and
-        401s here. Proves the arm is gated on envelope shape, not merely on the target being a
-        bridge server."""
+    async def test_non_envelope_bearer_on_bridge_server_returns_named_challenge(self):
+        """A raw provider bearer cannot authorize a bridge route and triggers reauthorization."""
         scope = {
             "type": "http",
             "method": "POST",
             "path": "/mcp/bridge_delegate_server",
-            "headers": [(b"authorization", b"Bearer plain-upstream-bearer-not-an-envelope")],
+            "headers": [
+                (b"host", b"testserver"),
+                (b"authorization", b"Bearer plain-upstream-bearer-not-an-envelope"),
+            ],
         }
-
-        async def mock_user_api_key_auth_fails(api_key, request):
-            raise HTTPException(status_code=401, detail="Invalid API key")
 
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                side_effect=mock_user_api_key_auth_fails,
+                new_callable=AsyncMock,
             ) as mock_auth,
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
@@ -5996,8 +6067,13 @@ class TestMCPDcrBridgeDelegateAdmission:
                 await MCPRequestHandler.process_mcp_request(scope)
 
         assert exc_info.value.status_code == 401
-        # The envelope arm was skipped, so the oauth2 arm ran and validated the bearer.
-        mock_auth.assert_called_once()
+        mock_auth.assert_not_called()
+        assert exc_info.value.headers == {
+            "www-authenticate": (
+                'Bearer error="invalid_token", '
+                'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/bridge_delegate_server"'
+            )
+        }
 
     async def test_explicit_litellm_key_wins_over_envelope_arm(self):
         """An explicit x-litellm-api-key is always a LiteLLM credential and its arm precedes the
