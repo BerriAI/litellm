@@ -14807,6 +14807,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/{team_id}/callback/{callback_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Team Callback
+         * @description Remove a single callback from a team
+         *
+         *     The team's other callbacks stay registered and keep firing. Use this instead of
+         *     POST /team/{team_id}/disable_logging, which clears every callback on the team at once.
+         *
+         *     Every entry registered under this callback_name is removed, across callback types, so a
+         *     callback registered for both "success" and "failure" is deregistered by one call.
+         *
+         *     Parameters:
+         *     - team_id (str, required): The unique identifier for the team
+         *     - callback_name (str, required): The name of the callback to remove, matched exactly as it was
+         *       registered with POST /team/{team_id}/callback (e.g. "langfuse", "langsmith", "gcs")
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI. Teams still
+         *     on the deprecated callback_settings metadata shape hold no such entries, so this returns 404 for
+         *     them; POST /team/{team_id}/disable_logging remains the way to clear those.
+         *
+         *     Returns 404 if the team does not exist, or if callback_name is not registered for the team.
+         */
+        delete: operations["delete_team_callback_team__team_id__callback__callback_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/{team_id}/disable_logging": {
         parameters: {
             query?: never;
@@ -33727,6 +33769,26 @@ export interface components {
             updated_team_memberships: components["schemas"]["LiteLLM_TeamMembership"][];
             /** Updated Users */
             updated_users: components["schemas"]["LiteLLM_UserTable"][];
+        };
+        /** TeamCallbackDeleteResponse */
+        TeamCallbackDeleteResponse: {
+            data: components["schemas"]["TeamCallbackDeleteResponseData"];
+            /** Message */
+            message: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "success";
+        };
+        /** TeamCallbackDeleteResponseData */
+        TeamCallbackDeleteResponseData: {
+            /** Failure Callbacks */
+            failure_callbacks: string[];
+            /** Success Callbacks */
+            success_callbacks: string[];
+            /** Team Id */
+            team_id: string;
         };
         /**
          * TeamListItem
@@ -54548,6 +54610,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_team_callback_team__team_id__callback__callback_name__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path: {
+                team_id: string;
+                callback_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamCallbackDeleteResponse"];
                 };
             };
             /** @description Validation Error */
