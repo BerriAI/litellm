@@ -35,8 +35,8 @@ interface SearchToolsProps {
 const editSearchToolShape = {
   search_tool_name: z.string().min(1, "Please enter a search tool name"),
   search_provider: z.string().min(1, "Please select a search provider"),
-  api_key: z.string().optional(),
-  description: z.string().optional(),
+  api_key: z.string().nullish(),
+  description: z.string().nullish(),
 };
 
 const editSearchToolSchema = z.object(editSearchToolShape);

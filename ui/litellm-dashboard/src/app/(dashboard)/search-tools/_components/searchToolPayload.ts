@@ -1,18 +1,18 @@
 export interface SearchToolFormValues {
   search_tool_name: string;
   search_provider: string;
-  api_key?: string;
+  api_key?: string | null;
   api_base?: string;
   timeout?: string;
   max_retries?: string;
-  description?: string;
+  description?: string | null;
 }
 
 export interface SearchToolPayload {
   search_tool_name: string;
   litellm_params: {
     search_provider: string;
-    api_key: string | undefined;
+    api_key: string | null | undefined;
     api_base: string | undefined;
     timeout: number | undefined;
     max_retries: number | undefined;

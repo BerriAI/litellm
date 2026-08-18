@@ -38,6 +38,17 @@ const toolWithServerOnlyParams: SearchTool = {
   created_at: "2024-01-15T10:30:00Z",
 };
 
+const toolWithNullServerFields: SearchTool = {
+  search_tool_id: "tool-1",
+  search_tool_name: "Perplexity Search",
+  litellm_params: {
+    search_provider: "perplexity",
+    api_key: null,
+  },
+  search_tool_info: { description: null },
+  created_at: "2024-01-15T10:30:00Z",
+};
+
 const providers = [
   { provider_name: "perplexity", ui_friendly_name: "Perplexity AI" },
   { provider_name: "tavily", ui_friendly_name: "Tavily Search" },
@@ -154,5 +165,27 @@ describe("SearchTools edit payload", () => {
 
     expect(await screen.findByText("Please enter a search tool name")).toBeInTheDocument();
     expect(networking.updateSearchTool).not.toHaveBeenCalled();
+  });
+  it("still edits a tool whose api_key and search_tool_info came back null", async () => {
+    vi.mocked(networking.fetchSearchTools).mockResolvedValue({ search_tools: [toolWithNullServerFields] });
+    const user = userEvent.setup();
+    renderPage();
+    await openEditModal(user);
+
+    await user.click(screen.getByRole("button", { name: "OK" }));
+
+    await waitFor(() => expect(networking.updateSearchTool).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(networking.updateSearchTool).mock.calls[0][2];
+    expect(payload).toStrictEqual({
+      search_tool_name: "Perplexity Search",
+      litellm_params: {
+        search_provider: "perplexity",
+        api_key: null,
+        api_base: undefined,
+        timeout: undefined,
+        max_retries: undefined,
+      },
+      search_tool_info: undefined,
+    });
   });
 });
