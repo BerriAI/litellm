@@ -1198,8 +1198,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             body=exception_body,
                         )
                     else:
+                        # status_code was computed above by
+                        # _status_code_for_openai_sdk_error; hard-coding 500
+                        # here made the no-response branch discard it, so an
+                        # async streaming call with no configured API key
+                        # surfaced as a retryable 500 instead of the 400 the
+                        # non-streaming path reports.
                         raise OpenAIError(
-                            status_code=500,
+                            status_code=status_code,
                             message=f"{e}",
                             headers=error_headers,
                             body=exception_body,

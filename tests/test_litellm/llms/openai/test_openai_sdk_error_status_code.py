@@ -48,3 +48,27 @@ def test_status_code_zero_is_preserved():
         status_code = 0
 
     assert _status_code_for_openai_sdk_error(_ZeroStatus()) == 0
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_missing_credentials_is_not_a_server_error(monkeypatch):
+    """
+    The helper alone is not enough: async_streaming's no-response branch used
+    to hard-code 500, discarding the status computed above it, so the same
+    missing-key error that maps to 400 on the non-streaming path surfaced as a
+    retryable 500 when stream=True. This exercises the full call path.
+    """
+    import litellm
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None, raising=False)
+    monkeypatch.setattr(litellm, "openai_key", None, raising=False)
+
+    with pytest.raises(Exception) as exc_info:
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 400
