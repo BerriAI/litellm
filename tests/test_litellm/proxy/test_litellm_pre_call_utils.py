@@ -230,6 +230,43 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_stamped_auth_object_reflects_header_derived_identity():
+    """
+    Regression (LIT-5487): the stamped object is a copy taken partway through request setup,
+    so it only carries header-derived identity if the stamp still runs after those fields are
+    resolved. Moving the stamp earlier would silently misattribute spend.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", "user": "end-user-from-header"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"user_header_name": "user"},
+        version="test-version",
+    )
+
+    # precondition: the header was actually resolved onto the live object
+    assert user_api_key_dict.end_user_id == "end-user-from-header"
+
+    stamped = updated_data["metadata"]["user_api_key_auth"]
+    assert stamped.end_user_id == "end-user-from-header"
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_admin_injection_slots():
     """User-supplied user_api_key_metadata / user_api_key_team_metadata /
     _pipeline_managed_guardrails must be stripped from both metadata keys
@@ -2304,6 +2341,129 @@ def test_add_user_api_key_auth_to_request_metadata():
     # Verify original data is preserved
     assert result["model"] == "gpt-3.5-turbo"
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+def _auth_with_callback_credentials() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="hashed-test-key-123",
+        key_alias="test-key-alias",
+        team_id="test-team-789",
+        team_alias="test-team-alias",
+        metadata={
+            "logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "sk-KEY-CANARY"}}],
+            "rpm_limit_type": "guaranteed_throughput",
+        },
+        team_metadata={
+            "callback_settings": {"langfuse": {"callback_vars": {"langfuse_secret_key": "sk-TEAM-CANARY"}}},
+            "secret_manager_settings": {"vault_token": "vt-TEAM-CANARY"},
+            "model_rpm_limit": {"gpt-4": 10},
+        },
+        project_metadata={
+            "logging": [{"callback_vars": {"langfuse_secret_key": "sk-PROJECT-CANARY"}}],
+            "project_tier": "gold",
+        },
+        organization_metadata={
+            "secret_manager_settings": {"vault_token": "vt-ORG-CANARY"},
+            "org_tier": "platinum",
+        },
+    )
+
+
+def test_stamped_auth_object_carries_no_callback_credentials():
+    """
+    Regression (LIT-5487): the UserAPIKeyAuth stamped into request metadata reaches every
+    raw-metadata logging integration, so it must not carry team/key callback credentials.
+    """
+    user_api_key_dict = _auth_with_callback_credentials()
+    otel_span = object()
+    user_api_key_dict.parent_otel_span = otel_span
+    user_api_key_dict.budget_reservation = {"amount": 1.0}
+    user_api_key_dict.via_virtual_key = True
+    data = {"litellm_metadata": {}}
+
+    result = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+    )
+
+    stamped = result["litellm_metadata"]["user_api_key_auth"]
+    emitted = json.dumps(
+        {
+            "metadata": stamped.metadata,
+            "team_metadata": stamped.team_metadata,
+            "project_metadata": stamped.project_metadata,
+            "organization_metadata": stamped.organization_metadata,
+        },
+        default=str,
+    )
+    assert "sk-KEY-CANARY" not in emitted
+    assert "sk-TEAM-CANARY" not in emitted
+    assert "vt-TEAM-CANARY" not in emitted
+    assert "sk-PROJECT-CANARY" not in emitted
+    assert "vt-ORG-CANARY" not in emitted
+
+    # consumers keep the type and the non-credential slots they read
+    assert isinstance(stamped, UserAPIKeyAuth)
+    assert stamped.key_alias == "test-key-alias"
+    assert stamped.team_id == "test-team-789"
+    assert stamped.team_alias == "test-team-alias"
+    assert stamped.api_key == "hashed-test-key-123"
+    assert stamped.metadata["rpm_limit_type"] == "guaranteed_throughput"
+    assert stamped.team_metadata["model_rpm_limit"] == {"gpt-4": 10}
+    assert stamped.project_metadata["project_tier"] == "gold"
+    assert stamped.organization_metadata["org_tier"] == "platinum"
+
+    # server-only markers are excluded from model_dump, so rebuilding the object
+    # instead of copying it would silently drop them
+    assert stamped.via_virtual_key is True
+    assert stamped.budget_reservation == {"amount": 1.0}
+    assert stamped.parent_otel_span is otel_span
+
+
+def test_stamping_does_not_mutate_the_cached_auth_object():
+    """
+    Regression (LIT-5487): UserAPIKeyAuth is cached and model_copy is shallow, so stripping
+    in place would poison the shared dicts and silently kill team callbacks fleet-wide.
+    """
+    user_api_key_dict = _auth_with_callback_credentials()
+    metadata_before = copy.deepcopy(user_api_key_dict.metadata)
+    team_metadata_before = copy.deepcopy(user_api_key_dict.team_metadata)
+
+    LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data={"litellm_metadata": {}},
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+    )
+
+    assert user_api_key_dict.metadata == metadata_before
+    assert user_api_key_dict.team_metadata == team_metadata_before
+
+
+def test_management_endpoint_metadata_drops_callback_credentials():
+    """
+    Regression (LIT-5487): user_api_key_auth_metadata is part of StandardLoggingPayload, so a
+    callback_settings-shaped team must not push credentials into it.
+    """
+    data = {"litellm_metadata": {}}
+
+    result = LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
+        data=data,
+        management_endpoint_metadata={
+            "callback_settings": {"langfuse": {"callback_vars": {"langfuse_secret_key": "sk-TEAM-CANARY"}}},
+            "secret_manager_settings": {"vault_token": "vt-TEAM-CANARY"},
+            "logging": [{"callback_vars": {"langfuse_secret_key": "sk-LOGGING-CANARY"}}],
+            "other_field": "value",
+        },
+        _metadata_variable_name="litellm_metadata",
+    )
+
+    auth_metadata = result["litellm_metadata"]["user_api_key_auth_metadata"]
+    emitted = json.dumps(auth_metadata, default=str)
+    assert "sk-TEAM-CANARY" not in emitted
+    assert "vt-TEAM-CANARY" not in emitted
+    assert "sk-LOGGING-CANARY" not in emitted
+    assert auth_metadata["other_field"] == "value"
 
 
 @pytest.mark.parametrize(
