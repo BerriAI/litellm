@@ -33,7 +33,6 @@ from litellm.integrations.opentelemetry import (
     OTELSemconvCategory,
     _normalize_team_metadata_keys,
 )
-from litellm.integrations.otel.model.db_endpoint import _endpoint_for
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
@@ -6225,12 +6224,6 @@ class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
 
     DSN = "postgresql://llmproxy:dbpassword9090@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting"
     REPLICA_DSN = "postgresql://reader:r3ad0nly@litellm-prod-ro.abc123.us-east-1.rds.amazonaws.com/litellm"
-
-    def setUp(self):
-        _endpoint_for.cache_clear()
-
-    def tearDown(self):
-        _endpoint_for.cache_clear()
 
     def _service_span(self, service, call_type, dsn, error=None, replica_dsn=None):
         exporter = InMemorySpanExporter()

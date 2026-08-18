@@ -14,7 +14,6 @@ import pytest
 
 from litellm.integrations.otel.model.db_endpoint import (
     DatabaseEndpoint,
-    _endpoint_for,
     db_span_attributes,
     parse_database_endpoint,
     postgres_endpoint,
@@ -23,13 +22,6 @@ from litellm.integrations.otel.model.db_endpoint import (
 LOCAL_DSN = "postgresql://llmproxy:dbpassword9090@localhost:5432/litellm"
 REMOTE_DSN = "postgresql://llmproxy:s3cr3t@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting&sslmode=require"
 REPLICA_DSN = "postgresql://reader:r3ad0nly@litellm-prod-ro.abc123.us-east-1.rds.amazonaws.com/litellm_replica"
-
-
-@pytest.fixture(autouse=True)
-def _clear_endpoint_cache():
-    _endpoint_for.cache_clear()
-    yield
-    _endpoint_for.cache_clear()
 
 
 def _resolve(service, call_type=None, database_url=None, read_replica_url=None):
@@ -308,10 +300,3 @@ def test_a_replica_configured_after_the_first_span_suppresses_the_endpoint():
     assert _resolve("postgres", "get_data", database_url=REMOTE_DSN)["server.address"]
     later = _resolve("postgres", "get_data", database_url=REMOTE_DSN, read_replica_url=REPLICA_DSN)
     assert "server.address" not in later
-
-
-def test_the_parse_is_memoized_per_url():
-    _endpoint_for.cache_clear()
-    for _ in range(5):
-        _resolve("postgres", "get_data", database_url=LOCAL_DSN)
-    assert _endpoint_for.cache_info().misses == 1

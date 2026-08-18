@@ -36,7 +36,6 @@ from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     set_mcp_message_transport_span,
     set_request_root_span,
 )
-from litellm.integrations.otel.model.db_endpoint import _endpoint_for  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
@@ -1530,7 +1529,6 @@ def test_postgres_db_span_names_the_database_server_not_the_prisma_engine():
     dsn = "postgresql://llmproxy:dbpassword9090@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting"
     logger, exporter = _logger()
     parent = _service_parent(logger)
-    _endpoint_for.cache_clear()
     try:
         with patch.dict(os.environ, {"DATABASE_URL": dsn}, clear=False):
             os.environ.pop("DATABASE_URL_READ_REPLICA", None)
@@ -1542,7 +1540,6 @@ def test_postgres_db_span_names_the_database_server_not_the_prisma_engine():
             )
     finally:
         parent.end()
-        _endpoint_for.cache_clear()
     span = {s.name: s for s in exporter.get_finished_spans()}["postgres get_data"]
     assert span.kind is SpanKind.CLIENT
     assert span.attributes["db.system.name"] == "postgresql"

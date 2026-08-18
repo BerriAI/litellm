@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
@@ -24,8 +23,6 @@ from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
 
 _DATABASE_URL_ENV: Final = "DATABASE_URL"
 _READ_REPLICA_ENV: Final = "DATABASE_URL_READ_REPLICA"
-# Bounded because each RDS IAM token rotation produces a new URL string.
-_ENDPOINT_CACHE_SIZE: Final = 8
 _DEFAULT_POSTGRES_PORT: Final = 5432
 _DEFAULT_POSTGRES_SCHEMA: Final = "public"
 _POSTGRES_SCHEMES: Final = frozenset({"postgres", "postgresql"})
@@ -107,11 +104,6 @@ def _namespace(database: str, schema: str) -> str | None:
     return "|".join(part for part in (database, qualifier) if part) or None
 
 
-@lru_cache(maxsize=_ENDPOINT_CACHE_SIZE)
-def _endpoint_for(url: str) -> DatabaseEndpoint | None:
-    return parse_database_endpoint(url)
-
-
 def postgres_endpoint() -> DatabaseEndpoint | None:
     """The PostgreSQL endpoint the process is currently connected to.
 
@@ -134,7 +126,7 @@ def postgres_endpoint() -> DatabaseEndpoint | None:
     """
     if os.environ.get(_READ_REPLICA_ENV):
         return None
-    return _endpoint_for(os.environ.get(_DATABASE_URL_ENV, ""))
+    return parse_database_endpoint(os.environ.get(_DATABASE_URL_ENV, ""))
 
 
 def db_span_attributes(service_name: str, call_type: str | None = None) -> Mapping[str, str | int]:
