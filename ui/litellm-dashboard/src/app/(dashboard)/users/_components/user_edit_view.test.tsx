@@ -524,4 +524,143 @@ describe("UserEditView", () => {
       expect(checkbox).toBeChecked();
     });
   });
+  describe("submit payload parity", () => {
+    const submittedPayload = async (props: Partial<Parameters<typeof UserEditView>[0]> = {}) => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} {...props} onSubmit={onSubmit} />);
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      return onSubmit.mock.calls[0][0];
+    };
+
+    it("should send exactly the ten keys an admin edit produces, with seeded types preserved", async () => {
+      const payload = await submittedPayload();
+
+      expect(Object.keys(payload).sort()).toEqual([
+        "budget_duration",
+        "max_budget",
+        "mcp_servers_and_groups",
+        "mcp_tool_permissions",
+        "metadata",
+        "models",
+        "user_alias",
+        "user_email",
+        "user_id",
+        "user_role",
+      ]);
+      expect(payload).toStrictEqual({
+        user_id: "user-123",
+        user_email: "test@example.com",
+        user_alias: "Test User",
+        user_role: "proxy_admin",
+        models: ["gpt-4", "gpt-3.5-turbo"],
+        max_budget: 100.5,
+        budget_duration: "30d",
+        metadata: { key1: "value1", key2: "value2" },
+        mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+        mcp_tool_permissions: {},
+      });
+      expect(typeof payload.max_budget).toBe("number");
+    });
+
+    it("should drop user_id, user_email and both mcp keys in bulk edit mode", async () => {
+      const payload = await submittedPayload({ isBulkEdit: true });
+
+      expect(Object.keys(payload).sort()).toEqual([
+        "budget_duration",
+        "max_budget",
+        "metadata",
+        "models",
+        "user_alias",
+        "user_role",
+      ]);
+    });
+
+    it("should drop both mcp keys for a non-admin editor while keeping identity keys", async () => {
+      const payload = await submittedPayload({ userRole: "user" });
+
+      expect(Object.keys(payload).sort()).toEqual([
+        "budget_duration",
+        "max_budget",
+        "metadata",
+        "models",
+        "user_alias",
+        "user_email",
+        "user_id",
+        "user_role",
+      ]);
+    });
+
+    it("should send a typed budget as a string, not a number", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+      const budgetInput = await screen.findByRole("spinbutton", { name: /max budget/i });
+      await userEvent.clear(budgetInput);
+      await userEvent.type(budgetInput, "42.57");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].max_budget).toBe("42.57");
+    });
+
+    it("should keep the budget input's native step constraint armed", async () => {
+      renderWithProviders(<UserEditView {...defaultProps} />);
+
+      const budgetInput = await screen.findByRole("spinbutton", { name: /max budget/i });
+      expect(budgetInput).toHaveAttribute("step", "0.01");
+      expect(budgetInput).not.toHaveAttribute("min");
+      expect(budgetInput.closest("form")).not.toHaveAttribute("novalidate");
+    });
+
+    it("should send objects for the mcp keys seeded from objectPermission", async () => {
+      const payload = await submittedPayload({
+        objectPermission: {
+          mcp_servers: ["server-a"],
+          mcp_access_groups: ["group-a"],
+          mcp_toolsets: ["toolset-a"],
+          mcp_tool_permissions: { "server-a": ["tool-a"] },
+        } as never,
+      });
+
+      expect(payload.mcp_servers_and_groups).toStrictEqual({
+        servers: ["server-a"],
+        accessGroups: ["group-a"],
+        toolsets: ["toolset-a"],
+      });
+      expect(payload.mcp_tool_permissions).toStrictEqual({ "server-a": ["tool-a"] });
+    });
+
+    it("should not submit at all when metadata is not valid JSON", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+      const metadata = await screen.findByLabelText("Metadata");
+      await userEvent.clear(metadata);
+      await userEvent.type(metadata, "not json");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Metadata")).toHaveValue("not json");
+      });
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("should send an empty-string metadata through untouched rather than as an object", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+      await userEvent.clear(await screen.findByLabelText("Metadata"));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].metadata).toBe("");
+    });
+  });
 });

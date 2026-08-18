@@ -652,4 +652,84 @@ describe("LoggingSettings", () => {
     });
     expect(clearedFieldNames()).toContain("maximum_spend_logs_cleanup_run_budget");
   });
+  describe("numeric coercion parity", () => {
+    it("should round a fractional batch size to a whole number, in the input and in the payload", async () => {
+      const user = userEvent.setup();
+      mockMutate.mockImplementation((_params, options) => {
+        options?.onSuccess?.();
+      });
+
+      renderWithProviders(<LoggingSettings />);
+
+      const batchSize = screen.getByPlaceholderText("e.g., 1000");
+      await user.type(batchSize, "2000.7");
+      await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+      await waitFor(() => {
+        expect(mockMutate).toHaveBeenCalled();
+      });
+      expect(batchSize).toHaveDisplayValue("2001");
+      expect(mockMutate.mock.calls[0][0]).toEqual({
+        store_prompts_in_spend_logs: false,
+        maximum_spend_logs_cleanup_batch_size: 2001,
+      });
+      expect(typeof mockMutate.mock.calls[0][0].maximum_spend_logs_cleanup_batch_size).toBe("number");
+    });
+
+    it("should raise a below-minimum batch size to one rather than sending it", async () => {
+      const user = userEvent.setup();
+      mockMutate.mockImplementation((_params, options) => {
+        options?.onSuccess?.();
+      });
+
+      renderWithProviders(<LoggingSettings />);
+
+      const batchSize = screen.getByPlaceholderText("e.g., 1000");
+      await user.type(batchSize, "0");
+      await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+      await waitFor(() => {
+        expect(mockMutate).toHaveBeenCalled();
+      });
+      expect(batchSize).toHaveDisplayValue("1");
+      expect(mockMutate.mock.calls[0][0].maximum_spend_logs_cleanup_batch_size).toBe(1);
+    });
+
+    it("should send a trimmable duration exactly as typed, without coercion", async () => {
+      const user = userEvent.setup();
+      mockMutate.mockImplementation((_params, options) => {
+        options?.onSuccess?.();
+      });
+
+      renderWithProviders(<LoggingSettings />);
+
+      await user.type(screen.getByPlaceholderText("e.g., 7d, 30d"), "30d");
+      await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+      await waitFor(() => {
+        expect(mockMutate).toHaveBeenCalled();
+      });
+      expect(mockMutate.mock.calls[0][0]).toEqual({
+        store_prompts_in_spend_logs: false,
+        maximum_spend_logs_retention_period: "30d",
+      });
+    });
+
+    it("should keep a whitespace-only duration out of the payload", async () => {
+      const user = userEvent.setup();
+      mockMutate.mockImplementation((_params, options) => {
+        options?.onSuccess?.();
+      });
+
+      renderWithProviders(<LoggingSettings />);
+
+      await user.type(screen.getByPlaceholderText("e.g., 7d, 30d"), "   ");
+      await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+      await waitFor(() => {
+        expect(mockMutate).toHaveBeenCalled();
+      });
+      expect(mockMutate.mock.calls[0][0]).toEqual({ store_prompts_in_spend_logs: false });
+    });
+  });
 });
