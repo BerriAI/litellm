@@ -11704,6 +11704,14 @@ def _is_strict_token_count_model(
     router's configuration for the requested model. The fallback matters
     because deployment selection can fail for reasons unrelated to the
     policy, and a strict model must not quietly return an estimate then.
+
+    Note the precedence when a model group is configured inconsistently: a
+    deployment carrying `strict_token_count: false` does **not** short-circuit
+    to permissive. It falls through to the router check, so the group is
+    strict if any of its deployments asks for it. The caller cannot choose
+    which deployment serves them, so an ambiguous configuration is read the
+    safe way. Set the flag on every deployment in a group to avoid relying on
+    this.
     """
     if model_info is not None and bool(model_info.get("strict_token_count", False)):
         return True

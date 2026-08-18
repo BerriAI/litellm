@@ -236,6 +236,57 @@ async def test_non_strict_model_still_estimates_when_selection_fails():
 
 
 @pytest.mark.asyncio
+async def test_mixed_group_is_strict_if_any_deployment_asks():
+    """A group configured inconsistently resolves to strict.
+
+    A deployment carrying `strict_token_count: false` does not make the group
+    permissive when a sibling asks for strict. The caller cannot choose which
+    deployment serves them, so the ambiguous configuration is read the safe
+    way. Documented on `_is_strict_token_count_model` because it is
+    non-obvious. See https://github.com/BerriAI/litellm/issues/37102.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "mixed-model",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-opus-5-20260101-v1:0",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                },
+                "model_info": {"strict_token_count": False},
+            },
+            {
+                "model_name": "mixed-model",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-opus-5-20260101-v1:0",
+                    "aws_region_name": "us-west-2",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                },
+                "model_info": {"strict_token_count": True},
+            },
+        ]
+    )
+
+    original_router = getattr(proxy_server, "llm_router", None)
+    setattr(proxy_server, "llm_router", router)
+    try:
+        with _unsupported_count_tokens():
+            with pytest.raises(ProxyException):
+                await token_counter(
+                    request=TokenCountRequest(
+                        model="mixed-model",
+                        messages=[{"role": "user", "content": "hello " * 400}],
+                    ),
+                    call_endpoint=True,
+                )
+    finally:
+        setattr(proxy_server, "llm_router", original_router)
+
+
+@pytest.mark.asyncio
 async def test_disable_token_counter_still_applies_proxy_wide():
     """The existing proxy-wide flag must keep working for unmarked models."""
     router = _router()
