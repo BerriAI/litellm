@@ -14750,8 +14750,10 @@ export interface paths {
          *     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI as well as
          *     teams still on the deprecated callback_settings shape, resolved from the team's stored metadata
          *     with the same precedence used at request time. A key-level logging config overrides the team's
-         *     at request time and is not reflected here. Credential-bearing callback_vars are returned masked
-         *     as `***REDACTED***`
+         *     at request time and is not reflected here. Credential-bearing callback_vars are omitted from the
+         *     response rather than masked, so a marker can never be posted back and stored as a credential. The
+         *     response is therefore a partial config; credentials must be supplied again before it is written
+         *     anywhere, and a team left without one falls back to the proxy-level credential for that callback
          *
          *     Returns {
          *             "status": "success",

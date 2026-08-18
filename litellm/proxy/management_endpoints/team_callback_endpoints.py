@@ -76,21 +76,28 @@ def _redact_callback_secrets(metadata: Any) -> Any:
     return redacted
 
 
-def _mask_sensitive_callback_vars(callbacks: TeamCallbackMetadata) -> None:
-    """Mask credential-bearing callback vars in place, keeping the rest readable.
+def _drop_sensitive_callback_vars(callbacks: TeamCallbackMetadata) -> None:
+    """Remove credential-bearing callback vars in place, keeping the rest readable.
 
     ``callback_vars`` mixes credentials (``langsmith_api_key``,
     ``langfuse_secret_key``, ``gcs_path_service_account``) with plain
     configuration (project names, bucket names, hosts). The configuration is
     what makes a read of this endpoint useful, so only the sensitive keys are
-    replaced, using the same marker as the audit-log redaction above.
+    dropped.
 
     A value that still carries the encrypted prefix here failed to decrypt, so
-    it is masked too. Handing back a ciphertext blob under a key that is not
+    it is dropped too. Handing back a ciphertext blob under a key that is not
     classified as sensitive would give the caller something it cannot use and
     cannot tell apart from a real value.
 
-    Masking in place rather than rebuilding the mapping keeps this under the
+    Keys are omitted rather than replaced with the ``***REDACTED***`` marker
+    used for audit logs, because a marker survives a read-modify-write and is
+    then stored as the credential itself. Omitting does not make the response a
+    safe round trip: the metadata write paths replace ``logging`` wholesale, so
+    echoing this payload back still drops the stored credential. It only stops
+    a fabricated one being stored in its place.
+
+    Deleting in place rather than rebuilding the mapping keeps this under the
     LIT002 mutable-collection-construction budget. It is safe because the only
     caller passes an object it just built from a decrypted deep copy of the
     row, so nothing here is reachable from the team's stored metadata.
@@ -100,7 +107,7 @@ def _mask_sensitive_callback_vars(callbacks: TeamCallbackMetadata) -> None:
     for key in tuple(callbacks.callback_vars):
         value = callbacks.callback_vars[key]
         if is_sensitive_callback_key(key) or str(value).startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
-            callbacks.callback_vars[key] = _CALLBACK_VARS_REDACTED
+            del callbacks.callback_vars[key]
 
 
 def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
@@ -142,7 +149,7 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
             TeamCallbackMetadata(**callback_settings) if isinstance(callback_settings, dict) else TeamCallbackMetadata()
         )
 
-    _mask_sensitive_callback_vars(resolved)
+    _drop_sensitive_callback_vars(resolved)
     return resolved
 
 
@@ -530,8 +537,10 @@ async def get_team_callbacks(
     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI as well as
     teams still on the deprecated callback_settings shape, resolved from the team's stored metadata
     with the same precedence used at request time. A key-level logging config overrides the team's
-    at request time and is not reflected here. Credential-bearing callback_vars are returned masked
-    as `***REDACTED***`
+    at request time and is not reflected here. Credential-bearing callback_vars are omitted from the
+    response rather than masked, so a marker can never be posted back and stored as a credential. The
+    response is therefore a partial config; credentials must be supplied again before it is written
+    anywhere, and a team left without one falls back to the proxy-level credential for that callback
 
     Returns {
             "status": "success",
