@@ -134,11 +134,11 @@ describe("UpdateModelCredentialsModal", () => {
     await user.type(field, "sk-peek-42");
     expect(field).toHaveAttribute("type", "password");
 
-    await user.click(screen.getByRole("button", { name: /show api key/i }));
+    await user.click(screen.getByRole("button", { name: /show password/i }));
     expect(field).toHaveAttribute("type", "text");
     expect(field).toHaveValue("sk-peek-42");
 
-    await user.click(screen.getByRole("button", { name: /hide api key/i }));
+    await user.click(screen.getByRole("button", { name: /hide password/i }));
     expect(field).toHaveAttribute("type", "password");
     expect(field).toHaveValue("sk-peek-42");
   });

@@ -1,13 +1,12 @@
 import { Alert, Modal, Typography } from "antd";
-import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 import { z } from "zod/v4";
 import { modelPatchUpdateCall } from "./networking";
 import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
@@ -38,7 +37,6 @@ export default function UpdateModelCredentialsModal({
 }: UpdateModelCredentialsModalProps) {
   const form = useZodForm(updateCredentialsSchema, { defaultValues: EMPTY_VALUES });
   const [isSaving, setIsSaving] = useState(false);
-  const [isKeyVisible, setIsKeyVisible] = useState(false);
 
   const close = () => {
     form.reset(EMPTY_VALUES);
@@ -86,24 +84,7 @@ export default function UpdateModelCredentialsModal({
         <FieldGroup>
           <FormField control={form.control} name="api_key" label="New API Key">
             {({ ref, ...field }) => (
-              <InputGroup>
-                <InputGroupInput
-                  {...field}
-                  ref={ref}
-                  type={isKeyVisible ? "text" : "password"}
-                  placeholder="Enter the new API key"
-                  autoComplete="new-password"
-                />
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton
-                    size="icon-xs"
-                    onClick={() => setIsKeyVisible((visible) => !visible)}
-                    aria-label={isKeyVisible ? "Hide API key" : "Show API key"}
-                  >
-                    {isKeyVisible ? <EyeOff /> : <Eye />}
-                  </InputGroupButton>
-                </InputGroupAddon>
-              </InputGroup>
+              <PasswordInput {...field} ref={ref} placeholder="Enter the new API key" autoComplete="new-password" />
             )}
           </FormField>
         </FieldGroup>
