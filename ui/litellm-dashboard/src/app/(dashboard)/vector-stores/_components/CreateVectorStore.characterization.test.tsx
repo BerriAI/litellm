@@ -161,6 +161,32 @@ describe("CreateVectorStore submit payload characterization", () => {
     );
   });
 
+  it("loads the S3 embedding models, filters them by typing and sends the chosen one", async () => {
+    vi.mocked(fetchModels.fetchAvailableModels).mockResolvedValue([
+      { model_group: "text-embedding-3-small", mode: "embedding" },
+      { model_group: "text-embedding-3-large", mode: "embedding" },
+      { model_group: "gpt-5", mode: "chat" },
+    ] as Awaited<ReturnType<typeof fetchModels.fetchAvailableModels>>);
+    const user = userEvent.setup();
+    render(<CreateVectorStore accessToken="test-token" />);
+    await uploadFile();
+    await pickProvider("AWS S3 Vectors");
+
+    const modelInput = screen.getAllByRole("combobox").at(-1) as HTMLElement;
+    await user.click(modelInput);
+    expect((await screen.findAllByText("text-embedding-3-small")).at(-1)).toBeInTheDocument();
+    expect(screen.queryByText("gpt-5")).not.toBeInTheDocument();
+
+    await user.type(modelInput, "large");
+    await user.click((await screen.findAllByText("text-embedding-3-large")).at(-1) as HTMLElement);
+    await clickCreate();
+
+    await waitFor(() => expect(networking.ragIngestCall).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.ragIngestCall).mock.calls.at(-1)?.[6]).toEqual({
+      embedding_model: "text-embedding-3-large",
+    });
+  });
+
   it("blocks the submit when a required provider field is missing", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
     await uploadFile();
