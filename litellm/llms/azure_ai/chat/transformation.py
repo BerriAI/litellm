@@ -30,11 +30,7 @@ class AzureFoundryErrorStrings(str, enum.Enum):
     SET_EXTRA_PARAMETERS_TO_PASS_THROUGH = "Set extra-parameters to 'pass-through'"
 
 
-NON_OPENAI_SPEC_MESSAGE_FIELDS = (
-    "thinking_blocks",
-    "provider_specific_fields",
-    "cache_control",
-)
+NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = ("thinking_blocks", "provider_specific_fields", "cache_control")
 
 
 class AzureAIStudioConfig(OpenAIConfig):
@@ -187,8 +183,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
         """
-        messages = copy.deepcopy(messages)
-        for message in messages:
+        stripped_messages: Final = copy.deepcopy(messages)
+        for message in stripped_messages:
             message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
                 filter_value_from_dict(message_dict, field)
@@ -200,7 +196,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             texts = convert_content_list_to_str(message=message)
             if texts:
                 message["content"] = texts
-        return messages
+        return stripped_messages
 
     def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
         try:
