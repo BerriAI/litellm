@@ -2083,6 +2083,38 @@ async def test_exception_mid_batch_refunds_every_earlier_admission_before_propag
     assert (float(admitted_value) if admitted_value is not None else 0.0) == 0.0
 
 
+@pytest.mark.asyncio
+async def test_a_committed_increment_whose_response_is_lost_is_also_refunded(time_controller):
+    """
+    Regression test: a key can commit its own increment (e.g. Redis runs
+    the INCRBY) and still have the call raise if the response back to us is
+    lost (a timeout, a dropped connection) -- the caller can't tell a lost
+    response apart from a call that never reached Redis at all. The earlier
+    fix only refunded indices *before* the one that raised, leaving this
+    key's own possibly-committed increment permanently charged. It must be
+    refunded too, not just the earlier ones in the same batch.
+    """
+    raising_key = "{tag_rl:test:lost-response-refund:a}:requests"
+
+    class _FlakyLimiter(_PROXY_TagRateLimiter):
+        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int):
+            if key == raising_key:
+                # Simulate Redis committing the increment before the
+                # response is lost: the write actually happens...
+                await super()._check_and_increment_one(cache, key, limit, increment, ttl)
+                # ...but the caller never finds out.
+                raise RuntimeError("simulated lost response after a committed redis write")
+            return await super()._check_and_increment_one(cache, key, limit, increment, ttl)
+
+    flaky = _FlakyLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
+
+    with pytest.raises(RuntimeError):
+        await flaky._atomic_check_and_increment([(flaky.internal_usage_cache, raising_key, 10.0, 1.0, 60)])
+
+    raising_key_value = await flaky.internal_usage_cache.async_get_cache(key=raising_key, litellm_parent_otel_span=None)
+    assert (float(raising_key_value) if raising_key_value is not None else 0.0) == 0.0
+
+
 # ---------------------------------------------------------------------------
 # scope_by_key_hash -- opt-in per-calling-key bucket separation
 # ---------------------------------------------------------------------------

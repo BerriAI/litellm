@@ -833,10 +833,16 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         A later key's own admission raising (a transient Redis error, or
         this coroutine being cancelled mid-call, e.g. the caller
         disconnecting) is treated the same as a normal rejection for refund
-        purposes: every earlier admission in this batch is refunded via the
-        `finally` block below before the exception propagates, so a
-        mid-batch infra failure can't leave a permanently-charged counter or
-        a leaked concurrency reservation behind for the rest of that key's TTL.
+        purposes, with one difference: a clean rejection is guaranteed by
+        TAG_RL_CHECK_AND_INCR_SCRIPT to never have incremented that key (it
+        returns before calling INCRBY), so only the earlier admissions need
+        refunding. A raise gives no such guarantee -- Redis can commit the
+        INCRBY and still have the call raise if the response back to us is
+        lost (a timeout, a dropped connection) -- so that key's own possibly
+        -committed increment is refunded too. Refunding a key that in fact
+        never committed is harmless (floors at 0); skipping one that did
+        commit would leak a permanently-charged counter or concurrency
+        reservation for the rest of that key's TTL.
 
         Returns (failing_index, values). On success, failing_index is None
         and values holds each key's new post-increment value, same order as
@@ -854,16 +860,19 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         admitted_values: Final = []  # mutable-ok: sequential async accumulator, discardable on early rejection; see comment above
         for index, (cache, key, limit, increment, ttl) in enumerate(checks):
             admitted = False
+            completed = False
             try:
                 admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl)
+                completed = True
             finally:
-                # Runs on a normal rejection (admitted stays False) and on
-                # any exception/cancellation from the awaited call above
-                # (admitted never gets assigned, so it's still the False set
-                # just before the try) -- either way, everything admitted so
-                # far in this batch must be refunded before this key's own
-                # outcome is used.
-                if not admitted:
+                # completed=False means the awaited call itself raised or
+                # was cancelled -- refund through this index inclusive, per
+                # the docstring above. completed=True and admitted=False is
+                # a clean rejection -- refund only the earlier ones, since
+                # this key's own increment never happened.
+                if not completed:
+                    await self._refund_admitted(checks, up_to_index=index + 1)
+                elif not admitted:
                     await self._refund_admitted(checks, up_to_index=index)
             if admitted:
                 admitted_values.append(value)  # mutable-ok: see accumulator comment above
