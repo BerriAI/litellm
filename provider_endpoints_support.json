@@ -2809,6 +2809,13 @@
         "vector_stores_search": true
       }
     },
+    "valkey": {
+      "display_name": "Valkey (`valkey`)",
+      "url": "https://docs.litellm.ai/docs/providers/valkey_vector_stores",
+      "endpoints": {
+        "vector_stores_search": true
+      }
+    },
     "helicone": {
       "display_name": "Helicone (`helicone`)",
       "url": "https://docs.litellm.ai/docs/providers/helicone",

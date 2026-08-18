@@ -33,6 +33,23 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
+const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey"]);
+
+export const buildVectorStoreLitellmParams = (
+  provider: string,
+  formValues: Record<string, unknown>,
+): Record<string, unknown> =>
+  Object.fromEntries(
+    getProviderSpecificFields(provider)
+      .filter(isSupportedProviderField)
+      .map((field) => [
+        EMBEDDING_MODEL_RENAME_PROVIDERS.has(provider) && field.name === "embedding_model"
+          ? "litellm_embedding_model"
+          : field.name,
+        formValues[field.name],
+      ]),
+  );
+
 interface VectorStoreFormProps {
   isVisible: boolean;
   onCancel: () => void;
@@ -52,6 +69,12 @@ const PROVIDER_FIELD_NAMES = [
   "vector_bucket_name",
   "index_name",
   "aws_region_name",
+  "valkey_host",
+  "valkey_port",
+  "valkey_password",
+  "valkey_ssl",
+  "valkey_text_field",
+  "valkey_embedding_field",
 ] as const;
 
 type ProviderFieldName = (typeof PROVIDER_FIELD_NAMES)[number];
@@ -77,6 +100,12 @@ const vectorStoreShape = {
   vector_bucket_name: optionalText,
   index_name: optionalText,
   aws_region_name: optionalText,
+  valkey_host: optionalText,
+  valkey_port: optionalText,
+  valkey_password: optionalText,
+  valkey_ssl: optionalText,
+  valkey_text_field: optionalText,
+  valkey_embedding_field: optionalText,
 };
 
 const vectorStoreSchema = z.object(vectorStoreShape).superRefine((values, ctx) => {
@@ -100,6 +129,10 @@ const EMPTY_VALUES: VectorStoreFormValues = {
   custom_llm_provider: "bedrock",
   vector_store_id: "",
   vertex_location: "global",
+  valkey_port: "6379",
+  valkey_ssl: "false",
+  valkey_text_field: "text",
+  valkey_embedding_field: "embedding",
 };
 
 interface CredentialOption {
@@ -193,17 +226,6 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         return;
       }
 
-      const providerFields = getProviderSpecificFields(formValues.custom_llm_provider);
-      const litellmParams = Object.fromEntries(
-        providerFields.filter(isSupportedProviderField).map((field) => {
-          const value = formValues[field.name];
-          if (formValues.custom_llm_provider === "milvus" && field.name === "embedding_model") {
-            return ["litellm_embedding_model", value];
-          }
-          return [field.name, value];
-        }),
-      );
-
       await vectorStoreCreateCall(accessToken, {
         vector_store_id: formValues.vector_store_id,
         custom_llm_provider: formValues.custom_llm_provider,
@@ -211,7 +233,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         vector_store_description: formValues.vector_store_description,
         vector_store_metadata: metadata,
         litellm_credential_name: formValues.litellm_credential_name,
-        litellm_params: litellmParams,
+        litellm_params: buildVectorStoreLitellmParams(formValues.custom_llm_provider, formValues),
       });
       toast.success("Vector store created successfully");
       form.reset(EMPTY_VALUES);
@@ -237,7 +259,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         ? vertexEngineId
           ? "Any identifier you'll use to reference this in LiteLLM"
           : 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)'
-        : "Enter vector store ID from your provider";
+        : selectedProvider === "valkey"
+          ? "my-search-index (FT index name in Valkey)"
+          : "Enter vector store ID from your provider";
 
   return (
     <Modal title="Add New Vector Store" open={isVisible} width={1000} footer={null} onCancel={handleCancel}>
@@ -291,7 +315,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                 description={
                   <div>
                     <p>LiteLLM provides a server to connect to PG Vector. To use this provider:</p>
-                    <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
+                    <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                       <li>
                         Deploy the litellm-pgvector server from:{" "}
                         <a href="https://github.com/BerriAI/litellm-pgvector" target="_blank" rel="noopener noreferrer">
@@ -309,6 +333,44 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
               />
             )}
 
+            {selectedProvider === "valkey" && (
+              <Alert
+                message="Valkey Setup Required"
+                description={
+                  <div>
+                    <p>
+                      LiteLLM searches documents you have already stored in Valkey. It does not create the index or
+                      upload documents for you. Before creating this vector store, make sure:
+                    </p>
+                    <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
+                      <li>
+                        Your Valkey server has vector search enabled (the valkey-search module, included in the
+                        valkey-bundle image and in AWS ElastiCache / MemoryDB for Valkey)
+                      </li>
+                      <li>
+                        You have already created a search index and loaded your documents and their embeddings into it.
+                        Enter that index name as the Vector Store ID
+                      </li>
+                      <li>
+                        You know which embedding model created those stored embeddings. That model must be added to this
+                        proxy under Models so you can pick it below. Using a different model returns wrong results
+                      </li>
+                      <li>
+                        You know the field names your documents use for their text and their embedding. If they are not
+                        &quot;text&quot; and &quot;embedding&quot;, set them below
+                      </li>
+                    </ol>
+                    <p style={{ marginTop: "8px" }}>
+                      When a query comes in, LiteLLM converts it to an embedding with the model below and returns the
+                      closest matching documents from your index.
+                    </p>
+                  </div>
+                }
+                type="info"
+                showIcon
+              />
+            )}
+
             {selectedProvider === "vertex_rag_engine" && (
               <Alert
                 message="Vertex AI RAG Engine Setup"
@@ -319,7 +381,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                       Note: Google Cloud has renamed this to &quot;RAG Engine&quot; in its console — the steps below
                       still apply.
                     </p>
-                    <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
+                    <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                       <li>
                         Set up your Vertex AI RAG Engine corpus following the guide:{" "}
                         <a
@@ -354,7 +416,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                       Note: Google Cloud has renamed this to &quot;Agent Search&quot; in its console — the steps below
                       still apply.
                     </p>
-                    <ol style={{ marginLeft: "16px", marginTop: "8px" }}>
+                    <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                       <li>
                         Enable the Discovery Engine API on your Google Cloud project and create a data store following
                         the guide:{" "}

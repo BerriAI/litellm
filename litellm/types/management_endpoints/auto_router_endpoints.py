@@ -22,6 +22,9 @@ class RequestComplexityRouterConfig(ComplexityRouterConfig):
     """
 
     plugins: None = Field(default=None, description="Not settable over HTTP; routing plugins are runtime objects")
+    classifier_plugin: None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # narrowing to None is the point: runtime objects are not settable over HTTP
+        default=None, description="Not settable over HTTP; the classifier plugin is a runtime object"
+    )
 
 
 class AutoRouterRoutingTestRequest(BaseModel):

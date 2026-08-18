@@ -665,6 +665,53 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  describe("plan-mode override", () => {
+    beforeEach(() => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    });
+
+    const waitForPresetEnabled = async (label: string) => {
+      openTemplateDropdown();
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel(label)!)).toBe(false);
+      });
+    };
+
+    it("omits plan_mode_min_tier from the payload when never touched", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<Harness />);
+
+      await waitForPresetEnabled("Anthropic Family");
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "no-plan-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
+        "plan_mode_min_tier",
+      );
+    });
+
+    it("carries the enabled override through to the create payload", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<Harness />);
+
+      await waitForPresetEnabled("Anthropic Family");
+      fireEvent.click(optionByLabel("Anthropic Family")!);
+      expandDetailedConfiguration();
+      await user.click(screen.getByText("Advanced: Plan-Mode Override"));
+      await user.click(await screen.findByRole("switch", { name: "Route plan-mode requests to a minimum tier" }));
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "plan-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+        plan_mode_min_tier: "REASONING",
+      });
+    });
+  });
+
   describe("deployment-matched presets", () => {
     const renamedDeploymentsFor = (presetKey: string) =>
       [...getRequiredModelsInPreset(getPresetByKey(presetKey)!)].map((model, index) => ({

@@ -1,6 +1,6 @@
 import React from "react";
 import { Form, Select as AntSelect } from "antd";
-import { TextInput, Text } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { Row, Col } from "antd";
 import { Providers } from "../provider_info_helpers";
 
@@ -119,7 +119,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           selectedProvider === Providers.OpenAI_Compatible ||
           selectedProvider === Providers.Ollama ? (
             <>
-              <TextInput
+              <Input
                 placeholder={getPlaceholder(selectedProvider)}
                 onChange={selectedProvider === Providers.Azure ? handleAzureDeploymentNameChange : undefined}
               />
@@ -151,7 +151,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               style={{ width: "100%" }}
             />
           ) : (
-            <TextInput placeholder={getPlaceholder(selectedProvider)} />
+            <Input placeholder={getPlaceholder(selectedProvider)} />
           )}
         </Form.Item>
 
@@ -167,7 +167,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                   rules={[{ required: true, message: "Please enter a custom model name." }]}
                   className="mt-2"
                 >
-                  <TextInput
+                  <Input
                     placeholder={
                       selectedProvider === Providers.Azure ? "Enter Azure deployment name" : "Enter custom model name"
                     }
@@ -182,11 +182,11 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
       <Row>
         <Col span={10}></Col>
         <Col span={14}>
-          <Text className="mb-3 mt-1">
+          <p className="text-sm mb-3 mt-1">
             {selectedProvider === Providers.Azure
               ? "Your deployment name will be saved as the public model name, and LiteLLM will use 'azure/deployment-name' internally"
               : "The model name LiteLLM will send to the LLM API"}
-          </Text>
+          </p>
         </Col>
       </Row>
     </>
