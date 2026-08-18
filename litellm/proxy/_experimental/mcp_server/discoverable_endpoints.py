@@ -1678,10 +1678,17 @@ async def authorize(
     lookup_name: Final[str | None] = mcp_server_name or client_id
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
     mcp_server = (
-        global_mcp_server_manager.get_mcp_server_by_name(lookup_name, client_ip=client_ip) if lookup_name else None
+        await global_mcp_server_manager.get_resolved_mcp_server_by_name(lookup_name, client_ip=client_ip)
+        if lookup_name
+        else None
     )
     if mcp_server is None and mcp_server_name is None:
-        mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
+        unresolved_server: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
+        mcp_server = (
+            await global_mcp_server_manager.ensure_oauth_metadata_discovered(unresolved_server)
+            if unresolved_server is not None
+            else None
+        )
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     _raise_if_not_oauth2(mcp_server)
@@ -1761,9 +1768,14 @@ async def token_endpoint(
 
     lookup_name: Final = mcp_server_name or client_id
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name, client_ip=client_ip)
+    mcp_server = await global_mcp_server_manager.get_resolved_mcp_server_by_name(lookup_name, client_ip=client_ip)
     if mcp_server is None and mcp_server_name is None:
-        mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
+        unresolved_server: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
+        mcp_server = (
+            await global_mcp_server_manager.ensure_oauth_metadata_discovered(unresolved_server)
+            if unresolved_server is not None
+            else None
+        )
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await exchange_token_with_server(
@@ -2565,9 +2577,10 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
             return await register_aggregate_client(request=request, request_body=data)
         resolved: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
+            resolved_server: Final = await global_mcp_server_manager.ensure_oauth_metadata_discovered(resolved)
             return await register_client_with_server(
                 request=request,
-                mcp_server=resolved,
+                mcp_server=resolved_server,
                 client_name=data.get("client_name", ""),
                 grant_types=data.get("grant_types", []),
                 response_types=data.get("response_types", []),
@@ -2577,7 +2590,10 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
             )
         return dummy_return
 
-    mcp_server: Final = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
+    mcp_server: Final = await global_mcp_server_manager.get_resolved_mcp_server_by_name(
+        mcp_server_name,
+        client_ip=client_ip,
+    )
     if mcp_server is None:
         return dummy_return
     return await register_client_with_server(
