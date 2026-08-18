@@ -3207,7 +3207,7 @@ async def view_spend_logs(
                     )
                 return_list: Final[list[dict[str, object]]] = []  # mutable-ok: append the ordered legacy response rows
                 for spend_date in sorted(daily_spend):
-                    day_result: Final[dict[str, object]] = {  # mutable-ok: add per-key totals before emitting the row
+                    day_result: dict[str, object] = {  # mutable-ok: add per-key totals before emitting the row
                         "users": daily_user_spend[spend_date],
                         "models": daily_model_spend[spend_date],
                         "spend": daily_spend[spend_date],
