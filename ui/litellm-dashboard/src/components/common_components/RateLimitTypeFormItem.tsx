@@ -4,7 +4,7 @@ import { CircleHelp } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-export type RateLimitType = "tpm" | "rpm";
+type RateLimitType = "tpm" | "rpm";
 
 interface RateLimitTypeOption {
   value: string;
@@ -60,9 +60,9 @@ const plainLabels: Record<string, string> = {
   dynamic: "Dynamic",
 };
 
-export const rateLimitTypeLabelText = (type: RateLimitType): string => `${type.toUpperCase()} Rate Limit Type`;
+const rateLimitTypeLabelText = (type: RateLimitType): string => `${type.toUpperCase()} Rate Limit Type`;
 
-export const rateLimitTypeTooltip = (type: RateLimitType): string =>
+const rateLimitTypeTooltip = (type: RateLimitType): string =>
   `Select 'guaranteed_throughput' to prevent overallocating ${type.toUpperCase()} limit when the key belongs to a Team with specific ${type.toUpperCase()} limits.`;
 
 export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
@@ -99,13 +99,7 @@ export const RateLimitTypeFormItem: React.FC<RateLimitTypeFormItemProps> = ({
         onValueChange={(next: string | null) => next !== null && onChange?.(next)}
         disabled={disabled}
       >
-        <SelectTrigger
-          id={controlId}
-          className="w-full"
-          aria-invalid={ariaInvalid}
-          aria-describedby={ariaDescribedBy}
-          data-testid={`rate-limit-type-${name}`}
-        >
+        <SelectTrigger id={controlId} className="w-full" aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
           <SelectValue placeholder="Select rate limit type">
             {(selected: string | null) =>
               selected === null ? "Select rate limit type" : plainLabels[selected] ?? selected

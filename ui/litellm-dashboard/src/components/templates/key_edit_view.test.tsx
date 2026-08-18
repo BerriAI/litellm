@@ -1650,8 +1650,48 @@ describe("KeyEditView", () => {
     });
   });
 
+  const UNTOUCHED_SAVE_PAYLOAD = {
+    key_alias: "asdasdas",
+    models: [],
+    max_budget: 0,
+    budget_duration: "30d",
+    tpm_limit: 10,
+    tpm_limit_type: null,
+    rpm_limit: 10,
+    rpm_limit_type: null,
+    throttle_on_budget_exceeded: false,
+    enable_prompt_caching: false,
+    max_parallel_requests: 10,
+    model_tpm_limit: undefined,
+    model_rpm_limit: undefined,
+    guardrails: undefined,
+    disable_global_guardrails: false,
+    policies: undefined,
+    tags: ["test-tag"],
+    prompts: undefined,
+    access_group_ids: [],
+    allowed_passthrough_routes: undefined,
+    vector_stores: [],
+    mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+    mcp_tool_permissions: {},
+    agents_and_groups: { agents: [], accessGroups: [] },
+    organization_id: null,
+    team_id: null,
+    logging_settings: [],
+    metadata: "{}",
+    duration: "30d",
+    token: "test-token-123",
+    disabled_callbacks: [],
+    auto_rotate: false,
+    rotation_interval: undefined,
+    tag_rpm_limit: {},
+  };
+
   describe("submit payload contract", () => {
-    const renderForPayload = (onSubmit: (values: any) => Promise<void>, keyData: KeyResponse = MOCK_KEY_DATA) =>
+    const renderForPayload = (
+      onSubmit: (values: Record<string, unknown>) => Promise<void>,
+      keyData: KeyResponse = MOCK_KEY_DATA,
+    ) =>
       renderWithProviders(
         <KeyEditView
           keyData={keyData}
@@ -1674,42 +1714,33 @@ describe("KeyEditView", () => {
       await waitFor(() => {
         expect(onSubmitMock).toHaveBeenCalled();
       });
-      expect(onSubmitMock.mock.calls[0][0]).toStrictEqual({
-        key_alias: "asdasdas",
-        models: [],
-        max_budget: 0,
-        budget_duration: "30d",
-        tpm_limit: 10,
-        tpm_limit_type: null,
-        rpm_limit: 10,
-        rpm_limit_type: null,
-        throttle_on_budget_exceeded: false,
-        enable_prompt_caching: false,
-        max_parallel_requests: 10,
-        model_tpm_limit: undefined,
-        model_rpm_limit: undefined,
-        guardrails: undefined,
-        disable_global_guardrails: false,
-        policies: undefined,
-        tags: ["test-tag"],
-        prompts: undefined,
-        access_group_ids: [],
-        allowed_passthrough_routes: undefined,
-        vector_stores: [],
-        mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
-        mcp_tool_permissions: {},
-        agents_and_groups: { agents: [], accessGroups: [] },
-        organization_id: null,
-        team_id: null,
-        logging_settings: [],
-        metadata: "{}",
-        duration: "30d",
-        token: "test-token-123",
-        disabled_callbacks: [],
-        auto_rotate: false,
-        rotation_interval: undefined,
-        tag_rpm_limit: {},
+      expect(onSubmitMock.mock.calls[0][0]).toStrictEqual(UNTOUCHED_SAVE_PAYLOAD);
+    });
+
+    it("drops the policy and prompt keys entirely for a role that cannot see those fields", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Internal User"}
+          premiumUser={true}
+        />,
+      );
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
       });
+      const payload = onSubmitMock.mock.calls[0][0];
+      expect(payload).not.toHaveProperty("policies");
+      expect(payload).not.toHaveProperty("prompts");
+      expect(payload).toHaveProperty("guardrails");
     });
 
     it("routes the shared lifecycle and rate-limit-type controls into their own payload keys", async () => {

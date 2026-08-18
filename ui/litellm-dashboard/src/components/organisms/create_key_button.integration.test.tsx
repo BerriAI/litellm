@@ -61,6 +61,17 @@ vi.mock("../mcp_server_management/MCPToolPermissions", () => ({ default: () => n
 vi.mock("../vector_store_management/VectorStoreSelector", () => ({ default: () => null }));
 vi.mock("../CreateUserButton", () => ({ CreateUserButton: () => null }));
 
+const MINIMAL_CREATE_PAYLOAD = {
+  organization_id: undefined,
+  team_id: null,
+  key_alias: "probe-key",
+  models: [],
+  key_type: "llm_api",
+  user_id: "test-user-id",
+  duration: null,
+  metadata: "{}",
+};
+
 describe("CreateKey submit payload contract", () => {
   beforeEach(() => {
     mockKeyCreateCall.mockClear();
@@ -81,16 +92,7 @@ describe("CreateKey submit payload contract", () => {
     await waitFor(() => {
       expect(mockKeyCreateCall).toHaveBeenCalled();
     });
-    expect(mockKeyCreateCall.mock.calls[0][2]).toStrictEqual({
-      organization_id: undefined,
-      team_id: null,
-      key_alias: "probe-key",
-      models: [],
-      key_type: "llm_api",
-      user_id: "test-user-id",
-      duration: null,
-      metadata: "{}",
-    });
+    expect(mockKeyCreateCall.mock.calls[0][2]).toStrictEqual(MINIMAL_CREATE_PAYLOAD);
   });
 
   it("keeps a collapsed Optional Settings section out of the payload entirely", async () => {
