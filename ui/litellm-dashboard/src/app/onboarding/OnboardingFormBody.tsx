@@ -67,7 +67,7 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
             />
           )}
 
-          <form className="mt-10 mb-5" onSubmit={form.handleSubmit(handleSubmit)} noValidate>
+          <form className="mt-10 mb-5" onSubmit={form.handleSubmit(handleSubmit)}>
             <FieldGroup>
               <Field>
                 <FieldLabel htmlFor={emailFieldId}>Email Address</FieldLabel>

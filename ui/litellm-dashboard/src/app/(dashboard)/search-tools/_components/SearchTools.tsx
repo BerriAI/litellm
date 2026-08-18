@@ -168,7 +168,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   };
 
   const renderEditForm = () => (
-    <form onSubmit={(event) => event.preventDefault()} noValidate>
+    <form onSubmit={(event) => event.preventDefault()}>
       <FieldGroup>
         <FormField control={form.control} name="search_tool_name" label="Search Tool Name">
           {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., my-perplexity-search" />}

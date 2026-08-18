@@ -235,7 +235,7 @@ function LoginPageContent() {
 
               {error && <Alert message={error} type="error" showIcon />}
 
-              <form onSubmit={form.handleSubmit(handleSubmit)} noValidate>
+              <form onSubmit={form.handleSubmit(handleSubmit)}>
                 <FieldGroup>
                   {uiConfig?.is_control_plane && workers.length > 0 && (
                     <Field>

@@ -195,7 +195,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
     >
       <div className="mt-6">
         <TooltipProvider>
-          <form onSubmit={form.handleSubmit(handleCreate)} noValidate className="space-y-6">
+          <form onSubmit={form.handleSubmit(handleCreate)} className="space-y-6">
             <FieldGroup>
               <FormField
                 control={form.control}
