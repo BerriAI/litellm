@@ -1000,9 +1000,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   return (
     <Tabs defaultValue="server">
-      <TabsList className="grid w-full grid-cols-2">
-        <TabsTrigger value="server">Server Configuration</TabsTrigger>
-        <TabsTrigger value="cost">Cost Configuration</TabsTrigger>
+      <TabsList variant="line" className="grid h-auto w-full grid-cols-2 rounded-none border-b p-0">
+        <TabsTrigger value="server" className="rounded-none py-2">
+          Server Configuration
+        </TabsTrigger>
+        <TabsTrigger value="cost" className="rounded-none py-2">
+          Cost Configuration
+        </TabsTrigger>
       </TabsList>
       <div className="mt-6">
         <TabsContent value="server" keepMounted>

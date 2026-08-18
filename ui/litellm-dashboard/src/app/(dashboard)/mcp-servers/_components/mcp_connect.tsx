@@ -466,31 +466,33 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         </div>
 
         <Tabs defaultValue="openai" className="w-full">
-          <TabsList className="mt-8 mb-6">
-            <TabsTrigger value="openai" className="flex-none px-6">
-              <span className="flex items-center gap-2 font-medium">
-                <Code size={18} />
-                OpenAI API
-              </span>
-            </TabsTrigger>
-            <TabsTrigger value="litellm" className="flex-none px-6">
-              <span className="flex items-center gap-2 font-medium">
-                <Zap size={18} />
-                LiteLLM Proxy
-              </span>
-            </TabsTrigger>
-            <TabsTrigger value="cursor" className="flex-none px-6">
-              <span className="flex items-center gap-2 font-medium">
-                <Terminal size={18} />
-                Cursor
-              </span>
-            </TabsTrigger>
-            <TabsTrigger value="http" className="flex-none px-6">
-              <span className="flex items-center gap-2 font-medium">
-                <Globe size={18} />
-                Streamable HTTP
-              </span>
-            </TabsTrigger>
+          <TabsList variant="line" className="mt-8 mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+            <div className="flex rounded-lg bg-gray-100 p-1">
+              <TabsTrigger value="openai" className="flex-none px-6 py-3">
+                <span className="flex items-center gap-2 font-medium">
+                  <Code size={18} />
+                  OpenAI API
+                </span>
+              </TabsTrigger>
+              <TabsTrigger value="litellm" className="flex-none px-6 py-3">
+                <span className="flex items-center gap-2 font-medium">
+                  <Zap size={18} />
+                  LiteLLM Proxy
+                </span>
+              </TabsTrigger>
+              <TabsTrigger value="cursor" className="flex-none px-6 py-3">
+                <span className="flex items-center gap-2 font-medium">
+                  <Terminal size={18} />
+                  Cursor
+                </span>
+              </TabsTrigger>
+              <TabsTrigger value="http" className="flex-none px-6 py-3">
+                <span className="flex items-center gap-2 font-medium">
+                  <Globe size={18} />
+                  Streamable HTTP
+                </span>
+              </TabsTrigger>
+            </div>
           </TabsList>
           <TabsContent value="openai" keepMounted className="mt-6">
             <OpenAITab />
