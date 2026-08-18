@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 
+import { SearchProviderLabel } from "./SearchProviderLabel";
 import { AvailableSearchProvider, SearchTool } from "./types";
 
 const CONFIG_EDIT_HINT = "Config search tools cannot be edited on the dashboard. Please edit the config file.";
@@ -120,7 +121,7 @@ export const getSearchToolTableColumns = ({
     cell: ({ row }) => {
       const provider = row.original.litellm_params.search_provider;
       const providerInfo = availableProviders.find((candidate) => candidate.provider_name === provider);
-      return <span className="text-sm">{providerInfo?.ui_friendly_name || provider}</span>;
+      return <SearchProviderLabel providerName={provider} displayName={providerInfo?.ui_friendly_name || provider} />;
     },
   },
   {

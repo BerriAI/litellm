@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { SearchProviderLabel } from "./CreateSearchTools";
+import { SearchProviderLabel } from "./SearchProviderLabel";
 
 describe("SearchProviderLabel", () => {
   it("renders the tavily logo from the static bundle, untouched by server-root prefixing", () => {

@@ -4,42 +4,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Button, TextInput } from "@tremor/react";
 import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useState } from "react";
-import { Logo } from "@/components/molecules/logo/Logo";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
 import SearchConnectionTest from "./SearchConnectionTest";
+import { SearchProviderLabel } from "./SearchProviderLabel";
+import { searchProviderFilterOption } from "./searchProviderFilterOption";
 import { AvailableSearchProvider, SearchTool } from "./types";
-import dataforseoLogo from "../../../../../public/assets/logos/dataforseo.png";
-import exaAiLogo from "../../../../../public/assets/logos/exa_ai.png";
-import googlePseLogo from "../../../../../public/assets/logos/google_pse.png";
-import nimbleLogo from "../../../../../public/assets/logos/nimble.png";
-import parallelAiLogo from "../../../../../public/assets/logos/parallel_ai.png";
-import perplexityLogo from "../../../../../public/assets/logos/perplexity.png";
-import tavilyLogo from "../../../../../public/assets/logos/tavily.png";
 
 const { TextArea } = Input;
-
-const searchProviderLogoMap: Record<string, string> = {
-  perplexity: perplexityLogo.src,
-  tavily: tavilyLogo.src,
-  parallel_ai: parallelAiLogo.src,
-  exa_ai: exaAiLogo.src,
-  google_pse: googlePseLogo.src,
-  dataforseo: dataforseoLogo.src,
-  nimble: nimbleLogo.src,
-};
-
-interface SearchProviderLabelProps {
-  providerName: string;
-  displayName: string;
-}
-
-export const SearchProviderLabel: React.FC<SearchProviderLabelProps> = ({ providerName, displayName }) => (
-  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-    <Logo src={searchProviderLogoMap[providerName]} label={displayName} className="w-5 h-5 object-contain" />
-    <span>{displayName}</span>
-  </div>
-);
 
 interface CreateSearchToolProps {
   userRole: string;
@@ -212,13 +184,14 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                 size="large"
                 loading={isLoadingProviders}
                 showSearch
-                optionFilterProp="children"
+                filterOption={searchProviderFilterOption}
                 optionLabelProp="label"
               >
                 {availableProviders.map((provider) => (
                   <Select.Option
                     key={provider.provider_name}
                     value={provider.provider_name}
+                    title={provider.ui_friendly_name}
                     label={
                       <SearchProviderLabel
                         providerName={provider.provider_name}

@@ -12,6 +12,8 @@ import {
   updateSearchTool,
 } from "@/components/networking";
 import CreateSearchTool from "./CreateSearchTools";
+import { SearchProviderLabel } from "./SearchProviderLabel";
+import { searchProviderFilterOption } from "./searchProviderFilterOption";
 import SearchToolTable from "./SearchToolTable";
 import { SearchToolView } from "./SearchToolView";
 import { AvailableSearchProvider, SearchTool } from "./types";
@@ -168,10 +170,23 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         label="Search Provider"
         rules={[{ required: true, message: "Please select a search provider" }]}
       >
-        <Select placeholder="Select a search provider" loading={isLoadingProviders}>
+        <Select
+          placeholder="Select a search provider"
+          loading={isLoadingProviders}
+          showSearch
+          filterOption={searchProviderFilterOption}
+          optionLabelProp="label"
+        >
           {availableProviders.map((provider) => (
-            <Select.Option key={provider.provider_name} value={provider.provider_name}>
-              {provider.ui_friendly_name}
+            <Select.Option
+              key={provider.provider_name}
+              value={provider.provider_name}
+              title={provider.ui_friendly_name}
+              label={
+                <SearchProviderLabel providerName={provider.provider_name} displayName={provider.ui_friendly_name} />
+              }
+            >
+              <SearchProviderLabel providerName={provider.provider_name} displayName={provider.ui_friendly_name} />
             </Select.Option>
           ))}
         </Select>
