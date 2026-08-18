@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Final
 
 import pytest
 
@@ -82,19 +83,19 @@ def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
     overriding an explicitly provided canonical value."""
     from litellm.types.utils import PromptTokensDetailsWrapper
 
-    nested = PromptTokensDetailsWrapper(
+    nested: Final = PromptTokensDetailsWrapper(
         cached_tokens=0, text_tokens=2059, cache_creation_input_tokens=2048
     )
     assert nested.cache_write_tokens == 2048
     assert nested.cache_creation_tokens == 2048
 
-    explicit = PromptTokensDetailsWrapper(
+    explicit: Final = PromptTokensDetailsWrapper(
         cache_write_tokens=100, cache_creation_input_tokens=2048
     )
     assert explicit.cache_write_tokens == 100
     assert explicit.cache_creation_tokens == 100
 
-    non_int = PromptTokensDetailsWrapper(cache_creation_input_tokens=None)
+    non_int: Final = PromptTokensDetailsWrapper(cache_creation_input_tokens=None)
     assert not hasattr(non_int, "cache_write_tokens")
 
 
