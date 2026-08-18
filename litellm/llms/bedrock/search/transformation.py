@@ -66,6 +66,11 @@ AGENTCORE_DEFAULT_TOOL_NAME: Final = "web-search-tool___WebSearch"
 # with the proxy's credentials.
 AGENTCORE_TOOL_NAME_SUFFIX: Final = "___WebSearch"
 
+# MCP revision this provider speaks. Sent on every request because the gateway is
+# called statelessly, without an initialize handshake to negotiate a version;
+# servers that predate the header ignore it.
+AGENTCORE_MCP_PROTOCOL_VERSION: Final = "2025-06-18"
+
 _GATEWAY_REGION_PATTERN: Final = re.compile(r"\.gateway\.bedrock-agentcore\.([a-z0-9-]+)\.amazonaws\.com")
 
 _SSE_EVENT_SEPARATOR: Final = re.compile(r"\n[ \t]*\n")
@@ -147,7 +152,8 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
     ) -> dict:  # mutable-ok: the handler passes these headers straight to httpx, which wants a dict
         """
         Set MCP transport headers. Per the MCP Streamable HTTP transport spec,
-        the client MUST accept both application/json and text/event-stream.
+        the client MUST accept both application/json and text/event-stream, and
+        declare its protocol revision with MCP-Protocol-Version.
 
         Authentication itself happens in sign_request(): bearer token for
         CUSTOM_JWT gateways, AWS SigV4 for AWS_IAM gateways.
@@ -156,6 +162,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             **headers,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": AGENTCORE_MCP_PROTOCOL_VERSION,
         }
 
     def get_complete_url(

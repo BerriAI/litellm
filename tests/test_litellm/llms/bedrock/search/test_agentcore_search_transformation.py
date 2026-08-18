@@ -13,7 +13,10 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import litellm
-from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
+from litellm.llms.bedrock.search.transformation import (
+    AGENTCORE_MCP_PROTOCOL_VERSION,
+    AgentCoreSearchConfig,
+)
 
 GATEWAY_URL = "https://testgateway-abc123.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
 
@@ -148,11 +151,43 @@ class TestAgentCoreSearch:
         assert config.get_complete_url(api_base=GATEWAY_URL, optional_params={}) == GATEWAY_URL
 
     def test_validate_environment_sets_mcp_headers(self):
-        """MCP Streamable HTTP requires accepting both JSON and SSE."""
+        """MCP Streamable HTTP requires accepting both JSON and SSE, and declaring
+        the protocol revision the client speaks."""
         config = AgentCoreSearchConfig()
         headers = config.validate_environment(headers={})
         assert headers["Accept"] == "application/json, text/event-stream"
         assert headers["Content-Type"] == "application/json"
+        assert headers["MCP-Protocol-Version"] == AGENTCORE_MCP_PROTOCOL_VERSION
+
+    def test_protocol_version_header_survives_signing(self):
+        """Both auth paths must keep the MCP-Protocol-Version header on the wire."""
+        config = AgentCoreSearchConfig()
+        headers = config.validate_environment(headers={})
+
+        bearer_headers, _ = config.sign_request(
+            headers=headers,
+            optional_params={},
+            request_data={"jsonrpc": "2.0"},
+            api_base=GATEWAY_URL,
+            api_key="test-jwt-token",
+        )
+        assert bearer_headers["MCP-Protocol-Version"] == AGENTCORE_MCP_PROTOCOL_VERSION
+
+        with patch.dict(
+            os.environ,
+            {
+                "AWS_ACCESS_KEY_ID": "AKIAIOSFODNN7EXAMPLE",
+                "AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            },
+        ):
+            signed_headers, _ = config.sign_request(
+                headers=headers,
+                optional_params={"aws_region_name": "us-east-1"},
+                request_data={"jsonrpc": "2.0"},
+                api_base=GATEWAY_URL,
+            )
+        assert signed_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert signed_headers["MCP-Protocol-Version"] == AGENTCORE_MCP_PROTOCOL_VERSION
 
     def test_transform_search_response_parses_sse_frame(self):
         """Gateway may answer with an SSE-framed JSON-RPC message."""
