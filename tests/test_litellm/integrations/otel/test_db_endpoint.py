@@ -131,6 +131,21 @@ def test_a_mis_split_authority_never_exports_the_database_username(dsn):
     assert "litellm" not in " ".join(str(v) for v in attrs.values())
 
 
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "postgresql://db.internal:5432/litellm?application_name=svc@prod",
+        "postgresql://db.internal:5432/litellm?user=admin@company.com",
+        "postgresql://u:p@db.internal:5432/litellm?application_name=svc@prod",
+    ],
+)
+def test_an_at_sign_inside_a_query_parameter_is_not_a_mis_split(dsn):
+    """libpq parameters legitimately carry '@', so the guard must key on a query
+    that did not parse as parameters, not on the character alone."""
+    endpoint = parse_database_endpoint(dsn)
+    assert endpoint is not None and endpoint.address == "db.internal"
+
+
 def test_percent_encoded_password_still_resolves_the_endpoint():
     """The encoded spelling is the one a driver accepts, so it must keep working."""
     assert parse_database_endpoint("postgresql://litellm:pa%2Fssw0rd@db.internal:5432/litellm") == DatabaseEndpoint(

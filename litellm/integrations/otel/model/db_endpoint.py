@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
 from litellm.integrations.otel.model.semconv import DB, Server
 from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
@@ -25,10 +25,6 @@ from litellm.secret_managers.main import get_secret_str
 _DEFAULT_POSTGRES_PORT: Final = 5432
 _DEFAULT_POSTGRES_SCHEMA: Final = "public"
 _POSTGRES_SCHEMES: Final = frozenset({"postgres", "postgresql"})
-# An unencoded '/', '#' or '?' in the password truncates the authority, so
-# urlparse hands back the username as the host and the rest of the credential as
-# the path, query or fragment. Either character in the raw database segment, or a
-# userinfo '@' that fell outside the netloc, means that happened.
 _MISPARSED_AUTHORITY_MARKERS: Final = frozenset("@/")
 _EMPTY_ATTRIBUTES: Final[Mapping[str, str | int]] = MappingProxyType({})
 
@@ -55,12 +51,10 @@ def parse_database_endpoint(url: str | None) -> DatabaseEndpoint | None:
         parsed: Final = urlparse(url)
         if parsed.scheme not in _POSTGRES_SCHEMES:
             return None
-        if "@" in url and "@" not in parsed.netloc:
-            return None
-        raw_database: Final = (parsed.path or "").lstrip("/")
-        if _MISPARSED_AUTHORITY_MARKERS & set(raw_database):
-            return None
         query: Final = parse_qs(parsed.query)
+        raw_database: Final = (parsed.path or "").lstrip("/")
+        if _is_misparsed_authority(parsed, raw_database, query):
+            return None
         # ``host=`` beats the netloc: it is how libpq names a Unix socket
         # directory and how the Cloud SQL connector sits behind a localhost
         # netloc, where the netloc is the very answer this module replaces.
@@ -72,6 +66,23 @@ def parse_database_endpoint(url: str | None) -> DatabaseEndpoint | None:
     if address is None and namespace is None:
         return None
     return DatabaseEndpoint(address=address, port=port, namespace=namespace)
+
+
+def _is_misparsed_authority(parsed: ParseResult, raw_database: str, query: Mapping[str, Sequence[str]]) -> bool:
+    """Whether an unencoded character in the password truncated the authority.
+
+    ``/``, ``#`` or ``?`` in a password ends the netloc early, so urlparse hands
+    back the username as the host and strands the real userinfo ``@`` in the
+    path, fragment or query. A PostgreSQL DSN never carries a fragment, and its
+    database name cannot hold an unencoded ``@`` or ``/``. An ``@`` in the query
+    is only suspicious when the query did not parse as parameters, since
+    ``?application_name=svc@prod`` is legitimate.
+    """
+    if parsed.fragment:
+        return True
+    if _MISPARSED_AUTHORITY_MARKERS & set(raw_database):
+        return True
+    return "@" in parsed.query and not query
 
 
 def _first(values: Sequence[str] | None) -> str:
