@@ -6,10 +6,6 @@ import { ModelData } from "@/components/model_dashboard/types";
 
 import { AllModelsTable } from "./AllModelsTable";
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
   ({
     model_name: "gpt-4-public",

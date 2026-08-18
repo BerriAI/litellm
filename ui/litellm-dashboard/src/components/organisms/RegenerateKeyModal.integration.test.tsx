@@ -9,10 +9,6 @@ vi.mock("../networking", () => ({
   regenerateKeyCall: (...args: unknown[]) => mockRegenerateKeyCall(...args),
 }));
 
-vi.mock("../molecules/notifications_manager", () => ({
-  default: { fromBackend: vi.fn(), success: vi.fn() },
-}));
-
 const makeToken = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
   ({
     token: "token-hash-123",

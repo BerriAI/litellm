@@ -7,7 +7,7 @@ import { useWatch } from "react-hook-form";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { z } from "zod/v4";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { regenerateKeyCall } from "../networking";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -96,7 +96,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     try {
       const response = await regenerateKeyCall(accessToken, selectedToken.token || selectedToken.token_id, formValues);
       setRegeneratedKey(response.key);
-      NotificationManager.success("Virtual Key regenerated successfully");
+      toast.success("Virtual Key regenerated successfully");
 
       // Build the update payload. Spread the API response first so any new
       // fields it returns (new token, timestamps, etc.) are captured, then
@@ -123,7 +123,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     } catch (error) {
       setIsRegenerating(false); // Reset regenerating state on error
       console.error("Error regenerating key:", error);
-      NotificationManager.fromBackend(error);
+      toast.fromError(error);
     }
   };
 

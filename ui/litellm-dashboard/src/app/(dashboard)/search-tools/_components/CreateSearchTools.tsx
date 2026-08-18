@@ -5,7 +5,7 @@ import { Button, TextInput } from "@tremor/react";
 import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useState } from "react";
 import { Logo } from "@/components/molecules/logo/Logo";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
 import SearchConnectionTest from "./SearchConnectionTest";
 import { AvailableSearchProvider, SearchTool } from "./types";
@@ -98,14 +98,14 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
       if (accessToken != null) {
         const response = await createSearchTool(accessToken, payload);
 
-        NotificationsManager.success("Search tool created successfully");
+        toast.success("Search tool created successfully");
         form.resetFields();
         setFormValues({});
         setModalVisible(false);
         onCreateSuccess(response);
       }
     } catch (error) {
-      NotificationsManager.error("Error creating search tool: " + error);
+      toast.error("Error creating search tool: " + error);
     } finally {
       setIsLoading(false);
     }
@@ -128,7 +128,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
       // Show the modal with the fresh test
       setIsTestModalVisible(true);
     } catch (error) {
-      NotificationsManager.error("Please fill in Search Provider and API Key before testing");
+      toast.error("Please fill in Search Provider and API Key before testing");
     }
   };
 

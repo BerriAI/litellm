@@ -4,7 +4,7 @@ import { Button, Text, Title } from "@tremor/react";
 import { Form, Input, Modal, Select } from "antd";
 import React, { useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   deleteSearchTool,
   fetchAvailableSearchProviders,
@@ -93,13 +93,13 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     setIsDeleting(true);
     try {
       await deleteSearchTool(accessToken, toolIdToDelete);
-      NotificationsManager.success("Deleted search tool successfully");
+      toast.success("Deleted search tool successfully");
       setIsDeleteModalOpen(false);
       setToolToDelete(null);
       refetch();
     } catch (error) {
       console.error("Error deleting the search tool:", error);
-      NotificationsManager.error("Failed to delete search tool");
+      toast.error("Failed to delete search tool");
     } finally {
       setIsDeleting(false);
     }
@@ -142,14 +142,14 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       };
 
       await updateSearchTool(accessToken, selectedToolId, searchToolData);
-      NotificationsManager.success("Search tool updated successfully");
+      toast.success("Search tool updated successfully");
       setEditModalVisible(false);
       form.resetFields();
       setSelectedToolId(null);
       refetch();
     } catch (error) {
       console.error("Failed to update search tool:", error);
-      NotificationsManager.error("Failed to update search tool");
+      toast.error("Failed to update search tool");
     }
   };
 
