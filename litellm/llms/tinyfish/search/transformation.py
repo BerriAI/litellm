@@ -240,11 +240,11 @@ class TinyfishSearchConfig(BaseSearchConfig):
         _emit_parameter_warnings(parsed)
 
         max_results: Final = self._caller_max_results or _TINYFISH_RESULT_CAP
-        # Truncate in place so all pydantic-populated fields survive — declared and extras.
-        parsed.results = list(parsed.results[:max_results])
-        raw_headers = dict(raw_response.headers)
-        parsed._hidden_params["headers"] = raw_headers
-        parsed._hidden_params["additional_headers"] = process_response_headers(raw_headers)
+        parsed.results = parsed.results[:max_results]
+        raw_headers: Final = dict(raw_response.headers)
+        hidden: Final = parsed._hidden_params  # pyright: ignore[reportPrivateUsage]  # sole hidden-params channel
+        hidden["headers"] = raw_headers
+        hidden["additional_headers"] = process_response_headers(raw_headers)
         return parsed
 
     def _wrap_error(
