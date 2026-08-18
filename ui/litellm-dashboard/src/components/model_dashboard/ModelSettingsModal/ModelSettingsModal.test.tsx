@@ -1,6 +1,6 @@
 import { useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -10,19 +10,13 @@ import ModelSettingsModal from "./ModelSettingsModal";
 
 vi.mock("@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB");
 vi.mock("@/app/(dashboard)/hooks/proxyConfig/useProxyConfig");
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
 vi.mock("@/components/shared/errorUtils", () => ({
   parseErrorMessage: vi.fn(),
 }));
 
 const mockUseStoreModelInDB = vi.mocked(useStoreModelInDB);
 const mockUseProxyConfig = vi.mocked(useProxyConfig);
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 const mockParseErrorMessage = vi.mocked(parseErrorMessage);
 
 describe("ModelSettingsModal", () => {
@@ -155,7 +149,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Model storage settings updated successfully");
+      expect(mockToast.success).toHaveBeenCalledWith("Model storage settings updated successfully");
       expect(mockRefetch).toHaveBeenCalled();
       expect(mockOnSuccess).toHaveBeenCalledTimes(1);
     });
@@ -173,9 +167,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith(
-        "Failed to save model storage settings: Network error",
-      );
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to save model storage settings: Network error");
     });
   });
 
@@ -194,9 +186,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith(
-        "Failed to save model storage settings: Backend error",
-      );
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to save model storage settings: Backend error");
     });
   });
 
@@ -299,7 +289,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.success).toHaveBeenCalled();
+      expect(mockToast.success).toHaveBeenCalled();
     });
   });
 });

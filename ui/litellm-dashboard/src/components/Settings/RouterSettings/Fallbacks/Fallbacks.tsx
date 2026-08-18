@@ -6,7 +6,7 @@ import openai from "openai";
 import React, { useEffect, useState } from "react";
 import DeleteResourceModal from "../../../common_components/DeleteResourceModal";
 import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
-import NotificationsManager from "../../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getCallbacksCall, setCallbacksCall } from "../../../networking";
 import { isProxyAdminRole } from "@/utils/roles";
 import AddFallbacks from "./AddFallbacks";
@@ -87,7 +87,7 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
   });
 
   try {
-    NotificationsManager.info("Testing fallback model response...");
+    toast.info("Testing fallback model response...");
 
     const response = await client.chat.completions.create({
       model: selectedModel,
@@ -101,7 +101,7 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
       mock_testing_fallbacks: true,
     });
 
-    NotificationsManager.success(
+    toast.success(
       <span>
         Test model=<strong>{selectedModel}</strong>, received model=
         <strong>{response.model}</strong>. See{" "}
@@ -115,9 +115,7 @@ async function testFallbackModelResponse(selectedModel: string, accessToken: str
       </span>,
     );
   } catch (error) {
-    NotificationsManager.fromBackend(
-      `Error occurred while generating model response. Please try again. Error: ${error}`,
-    );
+    toast.fromError(`Error occurred while generating model response. Please try again. Error: ${error}`);
   }
 }
 
@@ -195,9 +193,9 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
     try {
       await setCallbacksCall(accessToken, payload);
       setRouterSettings(updatedSettings);
-      NotificationsManager.success("Router settings updated successfully");
+      toast.success("Router settings updated successfully");
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update router settings: " + error);
+      toast.fromError("Failed to update router settings: " + error);
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -234,7 +232,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
       setRouterSettings(updatedSettings);
     } catch (error) {
       // Revert on error by refetching from server
-      NotificationsManager.fromBackend("Failed to update router settings: " + error);
+      toast.fromError("Failed to update router settings: " + error);
       if (accessToken && userRole && userID) {
         getCallbacksCall(accessToken, userID, userRole).then((data) => {
           let router_settings = data.router_settings;

@@ -27,7 +27,7 @@ import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_avail
 import type { Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import BudgetDurationDropdown, {
   getBudgetDurationLabel,
@@ -222,9 +222,9 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
       setIsTeamDeleting(true);
       await teamDeleteCall(accessToken, teamToDelete.team_id);
       await refreshTeams();
-      NotificationsManager.success("Team deleted successfully");
+      toast.success("Team deleted successfully");
     } catch (error) {
-      NotificationsManager.fromBackend("Error deleting the team: " + error);
+      toast.fromError("Error deleting the team: " + error);
     } finally {
       setIsTeamDeleting(false);
       setIsDeleteModalOpen(false);
@@ -269,7 +269,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           formValues.budget_duration = null;
         }
 
-        NotificationsManager.info("Creating Team");
+        toast.info("Creating Team");
 
         const metadataObject = {
           ...metadataPairsToObject(formValues.metadata),
@@ -375,7 +375,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         }
 
         await teamCreateCall(accessToken, { ...formValues, models: normalizeTeamModelSelection(formValues.models) });
-        NotificationsManager.success("Team created");
+        toast.success("Team created");
         await refreshTeams();
         form.resetFields();
         setLoggingSettings([]);
@@ -386,7 +386,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
       }
     } catch (error) {
       console.error("Error creating the team:", error);
-      NotificationsManager.fromBackend("Error creating the team: " + extractProxyErrorMessage(error));
+      toast.fromError("Error creating the team: " + extractProxyErrorMessage(error));
     }
   };
 

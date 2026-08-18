@@ -8,14 +8,6 @@ vi.mock("@/components/networking", () => ({
   ragIngestCall: vi.fn(),
 }));
 
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 // Mock vector_store_providers
 vi.mock("@/components/vector_store_providers", () => ({
   VectorStoreProviders: {

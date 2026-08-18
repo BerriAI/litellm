@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/cva.config";
 import { makeAgentsPublicCall } from "../../networking";
-import NotificationsManager from "../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { AgentHubData } from "@/components/AIHub/AgentHubTableColumns";
 
 const STEP_TITLES = ["Select Agents", "Confirm"];
@@ -39,7 +39,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const handleNext = () => {
     if (currentStep === 0) {
       if (selectedAgents.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one agent to make public");
+        toast.fromError("Please select at least one agent to make public");
         return;
       }
       setCurrentStep(1);
@@ -85,7 +85,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedAgents.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one agent to make public");
+      toast.fromError("Please select at least one agent to make public");
       return;
     }
 
@@ -96,12 +96,12 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
       // Make batch API call for all agents
       await makeAgentsPublicCall(accessToken, agentIdsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${agentIdsToMakePublic.length} agent(s) public!`);
+      toast.success(`Successfully made ${agentIdsToMakePublic.length} agent(s) public!`);
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error making agents public:", error);
-      NotificationsManager.fromBackend("Failed to make agents public. Please try again.");
+      toast.fromError("Failed to make agents public. Please try again.");
     } finally {
       setLoading(false);
     }

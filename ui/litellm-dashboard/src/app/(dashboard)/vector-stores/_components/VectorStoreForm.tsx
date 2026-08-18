@@ -12,7 +12,7 @@ import {
 } from "@/components/vector_store_providers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 interface VectorStoreFormProps {
   isVisible: boolean;
@@ -60,7 +60,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
       try {
         metadata = metadataJson.trim() ? JSON.parse(metadataJson) : {};
       } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in metadata field");
+        toast.fromError("Invalid JSON in metadata field");
         return;
       }
 
@@ -92,13 +92,13 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
       payload["litellm_params"] = litellmParams;
 
       await vectorStoreCreateCall(accessToken, payload);
-      NotificationsManager.success("Vector store created successfully");
+      toast.success("Vector store created successfully");
       form.resetFields();
       setMetadataJson("{}");
       onSuccess();
     } catch (error) {
       console.error("Error creating vector store:", error);
-      NotificationsManager.fromBackend("Error creating vector store: " + error);
+      toast.fromError("Error creating vector store: " + error);
     }
   };
 

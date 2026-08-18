@@ -237,17 +237,6 @@ vi.mock("../networking", () => ({
   getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
 }));
 
-vi.mock("../molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
-    info: vi.fn(),
-    clear: vi.fn(),
-  },
-}));
-
 vi.mock("../agent_management/AgentSelector", () => ({ default: () => null }));
 vi.mock("../common_components/budget_duration_dropdown", () => ({
   NEVER_RESETS_BUDGET_DURATION: "none",

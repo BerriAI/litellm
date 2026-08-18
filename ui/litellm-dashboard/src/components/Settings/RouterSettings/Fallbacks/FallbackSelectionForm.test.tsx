@@ -3,14 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
 import type { FallbackGroup } from "./FallbackGroupConfig";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 
 const mockOnGroupsChange = vi.fn();
 const AVAILABLE_MODELS = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"];
-
-vi.mock("@/components/molecules/message_manager", () => ({
-  default: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn(), destroy: vi.fn() },
-}));
 
 describe("FallbackSelectionForm", () => {
   beforeEach(() => {
@@ -135,7 +131,7 @@ describe("FallbackSelectionForm", () => {
     const [newGroups] = mockOnGroupsChange.mock.calls[0];
     expect(newGroups).toHaveLength(1);
     expect(newGroups[0].id).toBe("2");
-    expect(MessageManager.warning).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 
   it("should render FallbackGroupConfig for each group", () => {

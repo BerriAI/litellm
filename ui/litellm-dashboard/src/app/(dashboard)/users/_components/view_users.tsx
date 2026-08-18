@@ -31,7 +31,7 @@ import {
   SortingState,
 } from "@tanstack/react-table";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { modelAvailableCall, userDeleteCall } from "@/components/networking";
 import { DefaultUserSettingsForm } from "./default-user-settings/DefaultUserSettingsForm";
 import { UsersTable } from "./view_users/UsersTable";
@@ -162,16 +162,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const handleResetPassword = useCallback(
     async (userId: string) => {
       if (!accessToken) {
-        NotificationsManager.fromBackend("Access token not found");
+        toast.fromError("Access token not found");
         return;
       }
       try {
-        NotificationsManager.success("Generating password reset link...");
+        toast.success("Generating password reset link...");
         const data = await invitationCreateCall(accessToken, userId);
         setInvitationLinkData(data);
         setIsInvitationLinkModalVisible(true);
       } catch (error) {
-        NotificationsManager.fromBackend("Failed to generate password reset link");
+        toast.fromError("Failed to generate password reset link");
       }
     },
     [accessToken],
@@ -190,10 +190,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           return { ...previousData, users: updatedUsers };
         });
 
-        NotificationsManager.success("User deleted successfully");
+        toast.success("User deleted successfully");
       } catch (error) {
         console.error("Error deleting user:", error);
-        NotificationsManager.fromBackend("Failed to delete user");
+        toast.fromError("Failed to delete user");
       } finally {
         setIsDeleteModalOpen(false);
         setUserToDelete(null);
@@ -231,7 +231,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         return { ...previousData, users: updatedUsers };
       });
 
-      NotificationsManager.success(`User ${editedUser.user_id} updated successfully`);
+      toast.success(`User ${editedUser.user_id} updated successfully`);
     } catch (error) {
       console.error("There was an error updating the user", error);
     }

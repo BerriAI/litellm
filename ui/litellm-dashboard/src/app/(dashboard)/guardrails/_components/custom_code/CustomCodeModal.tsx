@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -364,15 +364,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   // Save guardrail (create or update)
   const handleSave = async () => {
     if (!guardrailName.trim()) {
-      NotificationsManager.fromBackend("Please enter a guardrail name");
+      toast.fromError("Please enter a guardrail name");
       return;
     }
     if (!code.trim()) {
-      NotificationsManager.fromBackend("Please enter custom code");
+      toast.fromError("Please enter custom code");
       return;
     }
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -400,7 +400,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         }
 
         await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
-        NotificationsManager.success("Custom code guardrail updated successfully");
+        toast.success("Custom code guardrail updated successfully");
       } else {
         // Create new guardrail
         const guardrailData = {
@@ -415,13 +415,13 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         };
 
         await createGuardrailCall(accessToken, guardrailData);
-        NotificationsManager.success("Custom code guardrail created successfully");
+        toast.success("Custom code guardrail created successfully");
       }
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Failed to save guardrail:", error);
-      NotificationsManager.fromBackend(
+      toast.fromError(
         `Failed to ${isEditMode ? "update" : "create"} guardrail: ` +
           (error instanceof Error ? error.message : String(error)),
       );

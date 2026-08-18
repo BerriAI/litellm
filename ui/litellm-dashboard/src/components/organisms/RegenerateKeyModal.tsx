@@ -4,7 +4,7 @@ import { Alert, Button, Col, Flex, Form, Input, InputNumber, Modal, Row, Space, 
 import { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { regenerateKeyCall } from "../networking";
 import { calculateExpiryPreviewFromDuration, formatExpiresUtc, isKeyExpired } from "@/utils/keyExpiryUtils";
 
@@ -62,7 +62,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
 
       const response = await regenerateKeyCall(accessToken, selectedToken.token || selectedToken.token_id, formValues);
       setRegeneratedKey(response.key);
-      NotificationManager.success("Virtual Key regenerated successfully");
+      toast.success("Virtual Key regenerated successfully");
 
       // Build the update payload. Spread the API response first so any new
       // fields it returns (new token, timestamps, etc.) are captured, then
@@ -94,7 +94,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         return;
       }
       console.error("Error regenerating key:", error);
-      NotificationManager.fromBackend(error);
+      toast.fromError(error);
     }
   };
 

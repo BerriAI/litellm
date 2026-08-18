@@ -4,7 +4,7 @@ import { Modal } from "antd";
 import { z } from "zod/v4";
 import { useCreateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { applyBudgetPrecision } from "./budgetPrecision";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -52,18 +52,18 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
 
   const handleCreate = async (formValues: BudgetFormValues) => {
     try {
-      NotificationsManager.info("Making API Call");
+      toast.info("Making API Call");
       await createBudget.mutateAsync(
         applyBudgetPrecision(
           optionalSettingsOpen ? formValues : { ...formValues, max_budget: undefined, budget_duration: undefined },
         ),
       );
-      NotificationsManager.success("Budget Created");
+      toast.success("Budget Created");
       form.reset();
       setIsModalVisible(false);
     } catch (error) {
       console.error("Error creating the budget:", error);
-      NotificationsManager.fromBackend(`Error creating the budget: ${error}`);
+      toast.fromError(`Error creating the budget: ${error}`);
     }
   };
 

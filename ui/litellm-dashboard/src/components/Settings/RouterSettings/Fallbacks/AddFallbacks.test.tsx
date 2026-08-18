@@ -3,14 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddFallbacks, { Fallbacks } from "./AddFallbacks";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
-}));
-
-vi.mock("@/components/molecules/message_manager", () => ({
-  default: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn(), destroy: vi.fn() },
 }));
 
 vi.mock("./FallbackSelectionForm", () => ({
@@ -135,7 +131,7 @@ describe("AddFallbacks", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(MessageManager.error).toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalled();
     });
   });
 
@@ -154,7 +150,7 @@ describe("AddFallbacks", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(MessageManager.error).toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalled();
     });
   });
 

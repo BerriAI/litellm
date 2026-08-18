@@ -98,9 +98,7 @@ const MemberModal = <T extends BaseMember>({
 
       await Promise.resolve(onSubmit(formData));
       form.resetFields();
-      // NotificationsManager.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
     } catch (error) {
-      // NotificationManager.fromBackend('Failed to submit form');
       console.error("Form submission error:", error);
     } finally {
       setIsSubmitting(false);

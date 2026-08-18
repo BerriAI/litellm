@@ -5,16 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { InputSchema, MCPTool } from "@/components/mcp_tools/types";
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    error: vi.fn(),
-  },
-}));
-
 const buildTool = (schema: InputSchema | string): MCPTool => ({
   name: "demo-tool",
   description: "demo",

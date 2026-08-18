@@ -5,7 +5,7 @@ import { Button, Form, Input, Switch } from "antd";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createGuardrailCall, getGuardrailsList } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   buildCompressionGuardrailPayload,
   compressionGuardrailsOf,
@@ -37,7 +37,7 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
       .then((response) => setGuardrails(compressionGuardrailsOf(response as GuardrailListResponse)))
       .catch((error) => {
         console.error("Failed to load compression guardrails:", error);
-        NotificationsManager.fromBackend("Failed to load compression guardrails");
+        toast.fromError("Failed to load compression guardrails");
       })
       .finally(() => setIsLoading(false));
   }, [accessToken]);
@@ -60,12 +60,12 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
           defaultOn: values.defaultOn ?? true,
         }),
       );
-      NotificationsManager.success("Compression guardrail created");
+      toast.success("Compression guardrail created");
       form.resetFields();
       await loadGuardrails();
     } catch (error) {
       console.error("Failed to create compression guardrail:", error);
-      NotificationsManager.fromBackend("Failed to create compression guardrail");
+      toast.fromError("Failed to create compression guardrail");
     } finally {
       setIsSaving(false);
     }
