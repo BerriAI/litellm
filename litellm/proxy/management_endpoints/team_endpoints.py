@@ -5682,6 +5682,12 @@ async def _append_permissions_to_all_teams(prisma_client: PrismaClient, permissi
     return teams_updated
 
 
+def _daily_activity_error(*, status_code: int, message: str) -> HTTPException:
+    """Single construction site for the `{"error": ...}` detail shape the
+    /team/daily/activity endpoints have always returned."""
+    return HTTPException(status_code=status_code, detail={"error": message})  # mutable-ok: FastAPI JSON detail
+
+
 class _TeamDailyActivityScope(NamedTuple):
     team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
     exclude_team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
@@ -5720,10 +5726,7 @@ async def _resolve_team_daily_activity_scope(
             check_db_only=True,
         )
         if user_info is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User= {user_api_key_dict.user_id} not found"},
-            )
+            raise _daily_activity_error(status_code=404, message=f"User= {user_api_key_dict.user_id} not found")
 
         if team_ids_list is None:
             team_ids_list = user_info.teams
@@ -5731,11 +5734,9 @@ async def _resolve_team_daily_activity_scope(
             # check if all team_ids are in user_info.teams
             for team_id in team_ids_list:
                 if team_id not in user_info.teams:
-                    raise HTTPException(
+                    raise _daily_activity_error(
                         status_code=404,
-                        detail={
-                            "error": f"User does not belong to Team= {team_id}. Call `/user/info` to see user's teams"
-                        },
+                        message=f"User does not belong to Team= {team_id}. Call `/user/info` to see user's teams",
                     )
 
     ## Fetch team aliases and check team admin status
@@ -5830,10 +5831,7 @@ async def get_team_daily_activity(
     )
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,
@@ -5864,32 +5862,21 @@ async def get_team_daily_activity(
 _MAX_AGGREGATED_RANGE_DAYS: Final = 400
 
 
-def _validate_aggregated_date_range(start_date: str | None, end_date: str | None) -> None:
-    """The aggregated endpoint has no pagination to bound its work, so reject
-    malformed dates and ranges wider than the UI ever requests before querying."""
+def _aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
+    """The aggregated endpoint has no pagination to bound its work, so malformed
+    dates and ranges wider than the UI ever requests are rejected before querying."""
     if start_date is None or end_date is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Please provide start_date and end_date"},
-        )
+        return "Please provide start_date and end_date"
     try:
         parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "start_date and end_date must be valid YYYY-MM-DD dates"},
-        )
+        return "start_date and end_date must be valid YYYY-MM-DD dates"
     if parsed_end < parsed_start:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "end_date must be on or after start_date"},
-        )
+        return "end_date must be on or after start_date"
     if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"},
-        )
+        return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
+    return None
 
 
 @router.get(
@@ -5932,12 +5919,11 @@ async def get_team_daily_activity_aggregated(
     )
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    _validate_aggregated_date_range(start_date, end_date)
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,

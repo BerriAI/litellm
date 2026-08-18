@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Protocol
@@ -229,6 +230,15 @@ def compute_tag_metadata_totals(records: Sequence[DailySpendRecord]) -> SpendMet
     return metadata_metrics
 
 
+def _entity_metadata(
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    entity_id: str,
+) -> dict[str, object]:
+    """The metadata payload for one entity breakdown bucket, empty when the caller passed none."""
+    stored: Final = entity_metadata_field.get(entity_id) if entity_metadata_field else None
+    return stored if stored is not None else {}  # mutable-ok: payload pydantic validates into its own dict
+
+
 def update_breakdown_metrics(
     breakdown: BreakdownMetrics,
     record: DailySpendRecord,
@@ -400,7 +410,7 @@ def update_breakdown_metrics(
         if entity_value not in breakdown.entities:
             breakdown.entities[entity_value] = MetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=(entity_metadata_field.get(entity_value, {}) if entity_metadata_field else {}),
+                metadata=_entity_metadata(entity_metadata_field, entity_value),
             )
         breakdown.entities[entity_value].metrics = update_metrics(breakdown.entities[entity_value].metrics, record)
 
@@ -424,7 +434,7 @@ def update_breakdown_metrics(
 
 async def get_api_key_metadata(
     prisma_client: PrismaClient,
-    api_keys: set[str],
+    api_keys: AbstractSet[str],
 ) -> dict[str, _KeyMetadataDict]:
     """Get api key metadata, falling back to deleted keys table for keys not found in active table.
 
@@ -1217,9 +1227,7 @@ def _fold_entity_rollups_sync(
         if bucket is None:
             bucket = MetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=(
-                    entity_metadata_field.get(entity_id, {}) if entity_metadata_field else {}
-                ),  # mutable-ok: pydantic metadata payload
+                metadata=_entity_metadata(entity_metadata_field, entity_id),
             )
             entities[entity_id] = bucket
 
@@ -1324,9 +1332,9 @@ async def get_daily_activity_aggregated(
                 r.api_key for r in entity_records if r.api_key and r.api_key != PTU_SENTINEL_API_KEY
             )
             entity_key_metadata: Final = (
-                await get_api_key_metadata(prisma_client, set(entity_api_keys))
+                await get_api_key_metadata(prisma_client, entity_api_keys)
                 if entity_api_keys
-                else {}  # mutable-ok: helper takes set; {} matches its return
+                else {}  # mutable-ok: matches the helper's dict return
             )
             await asyncio.to_thread(
                 _fold_entity_rollups_sync,
