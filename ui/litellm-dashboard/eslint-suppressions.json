@@ -16,7 +16,7 @@
   },
   "src/app/(dashboard)/admin-panel/_components/AdminPanel.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1647,9 +1647,6 @@
     }
   },
   "src/components/SCIM.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1661,7 +1658,7 @@
   },
   "src/components/SSOModals.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/Settings/AdminSettings/HashicorpVault/EditHashicorpVaultModal.tsx": {
@@ -1703,11 +1700,6 @@
   "src/components/Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm.test.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm.tsx": {
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/components/Settings/AdminSettings/SSOSettings/Modals/EditSSOSettingsModal.test.tsx": {
@@ -1760,7 +1752,7 @@
   },
   "src/components/Settings/RouterSettings/Fallbacks/FallbackSelectionForm.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -2024,10 +2016,7 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 4
-    },
-    "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/bulk_create_users_button.tsx": {
@@ -2091,7 +2080,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "no-restricted-syntax": {
       "count": 3
@@ -2453,7 +2442,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/organisms/RegenerateKeyModal.tsx": {
