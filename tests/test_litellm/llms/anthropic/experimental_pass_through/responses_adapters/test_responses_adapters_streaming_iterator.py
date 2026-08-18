@@ -168,7 +168,7 @@ class TestToolUseBlockClosedExactlyOnce:
     """
 
     @staticmethod
-    def _chat_completions_bridge_tool_turn() -> list:
+    def _chat_completions_bridge_tool_turn() -> list[dict[str, object]]:
         return [
             {"type": "response.created"},
             {
