@@ -712,12 +712,6 @@
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/ToolTestPanel.tsx": {
-    "no-nested-ternary": {
-      "count": 3
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
