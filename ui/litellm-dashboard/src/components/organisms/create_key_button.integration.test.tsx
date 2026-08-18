@@ -130,6 +130,23 @@ describe("CreateKey submit payload contract", () => {
     });
   });
 
+  it("carries the shared lifecycle expiry into the payload once its section is open", async () => {
+    await openModal();
+
+    await userEvent.type(screen.getByLabelText(/Key Name/), "probe-key");
+    await userEvent.click(screen.getByText("Optional Settings"));
+    await userEvent.click(await screen.findByText("Key Lifecycle"));
+
+    await userEvent.type(await screen.findByLabelText("Expire Key"), "45d");
+
+    await userEvent.click(screen.getByRole("button", { name: /create key/i }));
+
+    await waitFor(() => {
+      expect(mockKeyCreateCall).toHaveBeenCalled();
+    });
+    expect(mockKeyCreateCall.mock.calls[0][2]).toMatchObject({ duration: "45d" });
+  });
+
   it("preserves a value typed in a section that is collapsed and reopened before submit", async () => {
     await openModal();
 
