@@ -33,6 +33,11 @@ def resolve_fireworks_resource_name(model: str) -> str:
     stripped: Final = model.removeprefix("fireworks_ai/")
     if stripped.startswith("accounts/") or "#" in stripped:
         return stripped
+    # Azure AI Foundry (and similar OpenAI-compat hosts) expose Fireworks
+    # deployments as ids like ``FW-Kimi-K3``. Rewriting those to
+    # ``accounts/fireworks/models/FW-…`` yields DeploymentNotFound.
+    if stripped.startswith("FW-"):
+        return stripped
     if stripped.startswith(("routers/", "models/")):
         return f"accounts/fireworks/{stripped}"
     if stripped.endswith("-fast"):
