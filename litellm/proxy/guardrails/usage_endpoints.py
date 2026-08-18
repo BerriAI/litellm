@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.table_repositories import (
@@ -111,7 +112,16 @@ async def _find_daily_guardrail_usage_units(
     prisma_client: "PrismaClient",
     where: "prisma_types.LiteLLM_DailyGuardrailUsageUnitsWhereInput",
 ) -> "Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]":
-    return await _daily_guardrail_usage_units_table(prisma_client).find_many(where=where)
+    from prisma.errors import TableNotFoundError
+
+    try:
+        return await _daily_guardrail_usage_units_table(prisma_client).find_many(where=where)
+    except TableNotFoundError as e:
+        verbose_proxy_logger.warning(
+            "Guardrail usage units are unavailable until the LiteLLM_DailyGuardrailUsageUnits migration is applied: %s",
+            e,
+        )
+        return ()
 
 
 def _counter_name(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
