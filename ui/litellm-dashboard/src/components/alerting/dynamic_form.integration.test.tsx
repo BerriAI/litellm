@@ -183,9 +183,7 @@ describe("DynamicForm change notifications", () => {
     const user = userEvent.setup();
     const { handleResetField } = renderForm();
 
-    const row = screen.getByText("region_name").closest("tr");
-    const reset = row?.querySelector(".tremor-Icon-root");
-    await user.click(reset as Element);
+    await user.click(screen.getByRole("button", { name: "Reset region_name" }));
 
     expect(handleResetField).toHaveBeenCalledWith("region_name", 1);
   });

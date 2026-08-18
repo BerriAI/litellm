@@ -95,6 +95,33 @@ describe("AddMarginForm", () => {
     expect(onAddProvider).toHaveBeenCalledTimes(1);
   });
 
+  it("should report the edited percentage as the user types", async () => {
+    const onPercentageChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <AddMarginForm {...DEFAULT_PROPS} percentageValue="1" onPercentageChange={onPercentageChange} />,
+    );
+
+    await user.type(screen.getByPlaceholderText("10"), "0");
+    expect(onPercentageChange).toHaveBeenCalledWith("10");
+  });
+
+  it("should report the edited fixed amount as the user types", async () => {
+    const onFixedAmountChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <AddMarginForm
+        {...DEFAULT_PROPS}
+        marginType="fixed"
+        fixedAmountValue="0.00"
+        onFixedAmountChange={onFixedAmountChange}
+      />,
+    );
+
+    await user.type(screen.getByPlaceholderText("0.001"), "1");
+    expect(onFixedAmountChange).toHaveBeenCalledWith("0.001");
+  });
+
   it("should call onMarginTypeChange when the Fixed Amount radio is clicked", async () => {
     const onMarginTypeChange = vi.fn();
     const user = userEvent.setup();

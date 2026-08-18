@@ -1,8 +1,11 @@
 import React from "react";
 import { useForm } from "react-hook-form";
-import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
-import { Button, Badge, Icon, Text, TableRow, TableCell, Switch } from "@tremor/react";
+import { CircleCheck, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { TableCell, TableRow } from "@/components/ui/table";
 
 interface AlertingSetting {
   field_name: string;
@@ -73,7 +76,13 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
       );
     }
     if (setting.field_type === "Boolean") {
-      return <Switch checked={setting.field_value} onChange={(checked) => handleToggle(setting, checked)} />;
+      return (
+        <Switch
+          aria-label={setting.field_name}
+          checked={setting.field_value}
+          onCheckedChange={(checked) => handleToggle(setting, checked)}
+        />
+      );
     }
     return <Input value={setting.field_value ?? ""} onChange={(event) => handleTextChange(setting, event)} />;
   };
@@ -82,8 +91,8 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
     <form onSubmit={form.handleSubmit(onFinish)} noValidate>
       {alertingSettings.map((value, index) => (
         <TableRow key={index}>
-          <TableCell align="center">
-            <Text>{value.field_name}</Text>
+          <TableCell>
+            <p className="text-sm">{value.field_name}</p>
             <p className="mt-1 text-[0.65rem] italic text-muted-foreground">{value.field_description}</p>
           </TableCell>
           {value.premium_field && !premiumUser ? (
@@ -99,19 +108,27 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
           )}
           <TableCell>
             {value.stored_in_db == true ? (
-              <Badge icon={CheckCircleIcon} className="text-white">
+              <Badge variant="secondary">
+                <CircleCheck />
                 In DB
               </Badge>
             ) : value.stored_in_db == false ? (
-              <Badge className="text-gray bg-background outline-solid">In Config</Badge>
+              <Badge variant="outline">In Config</Badge>
             ) : (
-              <Badge className="text-gray bg-background outline-solid">Not Set</Badge>
+              <Badge variant="outline">Not Set</Badge>
             )}
           </TableCell>
           <TableCell>
-            <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
-              Reset
-            </Icon>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Reset ${value.field_name}`}
+              onClick={() => handleResetField(value.field_name, index)}
+              className="text-red-500"
+            >
+              <Trash2 className="size-5" />
+            </Button>
           </TableCell>
         </TableRow>
       ))}
