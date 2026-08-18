@@ -22,7 +22,6 @@ export interface AccessGroupSelectorProps {
  * - Displays the **access_group_name** in the dropdown.
  * - Returns an array of **access_group_id** values.
  * - Always multi-select since users can assign multiple access groups.
- * - Integrates with Ant Design `<Form.Item>` out of the box via `value` / `onChange`.
  */
 const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
   value,
@@ -42,7 +41,7 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
     return (
       <div>
         {showLabel && (
-          <p className="text-sm font-medium block mb-2 text-gray-700 flex items-center">
+          <p className="mb-2 flex items-center text-sm font-medium text-foreground">
             <TeamOutlined className="mr-2" /> {labelText}
           </p>
         )}
@@ -56,7 +55,7 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
     label: (
       <span>
         <span className="font-medium">{group.access_group_name}</span>{" "}
-        <span className="text-gray-400 text-xs">({group.access_group_id})</span>
+        <span className="text-xs text-muted-foreground">({group.access_group_id})</span>
       </span>
     ),
     value: group.access_group_id,
@@ -68,7 +67,7 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
   return (
     <div>
       {showLabel && (
-        <p className="text-sm font-medium block mb-2 text-gray-700 flex items-center">
+        <p className="mb-2 flex items-center text-sm font-medium text-foreground">
           <TeamOutlined className="mr-2" /> {labelText}
         </p>
       )}
@@ -83,7 +82,7 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
         style={{ width: "100%", ...style }}
         className={`rounded-md ${className ?? ""}`}
         notFoundContent={
-          isError ? <span className="text-red-500">Failed to load access groups</span> : "No access groups found"
+          isError ? <span className="text-destructive">Failed to load access groups</span> : "No access groups found"
         }
         filterOption={(input, option) => {
           const searchText = options.find((opt) => opt.value === option?.value)?.searchText ?? "";
