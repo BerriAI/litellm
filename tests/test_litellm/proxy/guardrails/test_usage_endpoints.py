@@ -394,6 +394,17 @@ async def test_overview_rejects_malformed_dates():
 
 
 @pytest.mark.asyncio
+async def test_overview_rejects_non_canonical_date_format():
+    prisma = _prisma()
+    handler = _config_handler()
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2, pytest.raises(HTTPException) as exc:
+        await guardrails_usage_overview(start_date="20260420", end_date=END, user_api_key_dict=ADMIN)
+    assert exc.value.status_code == 400
+    assert "YYYY-MM-DD" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_detail_rejects_reversed_dates():
     prisma = _prisma(find_unique=_db_row())
     handler = _config_handler()
