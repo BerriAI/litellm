@@ -44,7 +44,9 @@ _BASE_SUFFIXES_TO_STRIP: Final = (
 )
 
 # Per Bedrock Mantle Responses API validation errors.
-_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "custom", "namespace", "tool_search"})
+_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
+    {"function", "mcp", "custom", "namespace", "tool_search"}
+)
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 
@@ -110,7 +112,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
                 kept.append(tool)
                 continue
             tool_type = tool.get("type")
-            if tool_type in _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES:
+            if tool_type in _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES or (
+                isinstance(tool_type, str) and tool_type.startswith("web_search")
+            ):
                 kept.append(tool)
             else:
                 dropped_types.append(str(tool_type))

@@ -328,12 +328,44 @@ class TestBedrockMantleResponsesRequestBody:
 
 
 class TestBedrockMantleResponsesTools:
+    @pytest.mark.parametrize(
+        "tool_type", ["web_search", "web_search_preview", "web_search_2025_08_26"]
+    )
+    def test_web_search_tool_family_survives_map_openai_params(self, tool_type):
+        tool = {"type": tool_type, "filters": {"domains": ["example.com"]}}
+        cfg = BedrockMantleResponsesAPIConfig()
+
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [tool]},
+            model="openai.gpt-5.5",
+            drop_params=False,
+        )
+
+        assert params["tools"] == [tool]
+
+    @pytest.mark.parametrize(
+        "tool_type", ["web_search", "web_search_preview", "web_search_2025_08_26"]
+    )
+    def test_web_search_tool_family_survives_transform_responses_api_request(self, tool_type):
+        tool = {"type": tool_type, "filters": {"domains": ["example.com"]}}
+        cfg = BedrockMantleResponsesAPIConfig()
+
+        body = cfg.transform_responses_api_request(
+            model="openai.gpt-5.5",
+            input="hello",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert body["tools"] == [tool]
+
     def test_map_openai_params_drops_unsupported_tools(self):
         cfg = BedrockMantleResponsesAPIConfig()
         params = cfg.map_openai_params(
             response_api_optional_params={
                 "tools": [
-                    {"type": "web_search"},
+                    {"type": "file_search"},
                     {"type": "function", "name": "exec_command"},
                 ]
             },
@@ -342,10 +374,13 @@ class TestBedrockMantleResponsesTools:
         )
         assert params["tools"] == [{"type": "function", "name": "exec_command"}]
 
-    def test_map_openai_params_removes_tools_when_all_unsupported(self):
+    @pytest.mark.parametrize(
+        "tool_type", ["file_search", "image_generation", "code_interpreter"]
+    )
+    def test_map_openai_params_removes_tools_when_all_unsupported(self, tool_type):
         cfg = BedrockMantleResponsesAPIConfig()
         params = cfg.map_openai_params(
-            response_api_optional_params={"tools": [{"type": "web_search"}]},
+            response_api_optional_params={"tools": [{"type": tool_type}]},
             model="openai.gpt-5.5",
             drop_params=False,
         )
@@ -359,12 +394,12 @@ class TestBedrockMantleResponsesTools:
             "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
         ) as mock_warning:
             cfg.map_openai_params(
-                response_api_optional_params={"tools": [{"type": "web_search"}]},
+                response_api_optional_params={"tools": [{"type": "file_search"}]},
                 model="openai.gpt-5.5",
                 drop_params=False,
             )
         assert mock_warning.call_count == 1
-        assert "web_search" in str(mock_warning.call_args)
+        assert "file_search" in str(mock_warning.call_args)
 
 
 def _codex_exec_tool():
@@ -545,14 +580,17 @@ class TestBedrockMantleCodexAdditionalTools:
         )
         assert body["tools"] == [existing_tool, *self._CODEX_TOOLS]
 
-    def test_unsupported_hoisted_tool_types_are_dropped(self):
+    @pytest.mark.parametrize(
+        "tool_type", ["file_search", "image_generation", "code_interpreter"]
+    )
+    def test_unsupported_hoisted_tool_types_are_dropped(self, tool_type):
         body = self._transform(
             input=[
                 {
                     "type": "additional_tools",
                     "role": "developer",
                     "tools": [
-                        {"type": "web_search"},
+                        {"type": tool_type},
                         {"type": "function", "name": "wait"},
                     ],
                 },
@@ -564,7 +602,7 @@ class TestBedrockMantleCodexAdditionalTools:
     def test_item_stripped_even_when_no_hoisted_tool_survives(self):
         body = self._transform(
             input=[
-                {"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]},
+                {"type": "additional_tools", "role": "developer", "tools": [{"type": "file_search"}]},
                 self._USER_MESSAGE,
             ]
         )
