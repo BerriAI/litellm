@@ -1,3 +1,4 @@
+import asyncio
 import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -7,6 +8,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
@@ -16,6 +18,12 @@ from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
 )
 from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    is_collection_route,
+    log_batch_registration_result,
+    optional_str,
+    request_tags_from_metadata,
+)
 from litellm.types.utils import (
     Choices,
     EmbeddingResponse,
@@ -105,7 +113,7 @@ class VertexPassthroughLoggingHandler:
                 litellm_params={},
                 api_key="",
                 request_data={},
-                encoding=litellm.encoding,
+                encoding=getattr(litellm, "encoding", None),
             )
             kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
                 litellm_model_response=litellm_model_response,
@@ -657,11 +665,13 @@ class VertexPassthroughLoggingHandler:
 
                 # Store the managed object for cost tracking
                 # This will be picked up by check_batch_cost polling mechanism
+                is_batch_create: Final = is_collection_route(url_route, VERTEX_BATCH_PREDICTION_JOBS_ROUTE)
                 VertexPassthroughLoggingHandler._store_batch_managed_object(
                     unified_object_id=unified_object_id,
                     batch_object=litellm_batch_response,
                     model_object_id=batch_id,
                     logging_obj=logging_obj,
+                    is_batch_create=is_batch_create,
                     **kwargs,
                 )
 
@@ -785,11 +795,16 @@ class VertexPassthroughLoggingHandler:
         batch_object: LiteLLMBatch,
         model_object_id: str,
         logging_obj: LiteLLMLoggingObj,
+        is_batch_create: bool,
         **kwargs,
     ) -> None:
         """
         Store batch managed object for cost tracking.
         This will be picked up by the check_batch_cost polling mechanism.
+
+        A poll refreshes the batch status and file object but neither creates the row
+        nor writes attribution, so the creating key and its tags are persisted from
+        the create alone.
         """
         try:
             # Get the managed files hook from the logging object
@@ -805,7 +820,7 @@ class VertexPassthroughLoggingHandler:
 
                 user_api_key_dict: Final = UserAPIKeyAuth(
                     user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
-                    api_key="",
+                    api_key=optional_str(_request_metadata.get("user_api_key")),
                     team_id=_request_metadata.get("user_api_key_team_id"),
                     team_alias=None,
                     user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
@@ -827,9 +842,7 @@ class VertexPassthroughLoggingHandler:
                 )
 
                 # Store the unified object for batch cost tracking
-                import asyncio
-
-                asyncio.create_task(
+                task: Final = asyncio.create_task(
                     managed_files_hook.store_unified_object_id(
                         unified_object_id=unified_object_id,
                         file_object=batch_object,
@@ -837,13 +850,15 @@ class VertexPassthroughLoggingHandler:
                         model_object_id=model_object_id,
                         file_purpose="batch",
                         user_api_key_dict=user_api_key_dict,
+                        request_tags=request_tags_from_metadata(_request_metadata),
+                        persist_attribution=is_batch_create,
+                        create_if_missing=is_batch_create,
                     )
                 )
-
-                verbose_proxy_logger.info(
-                    "Stored batch managed object with unified_object_id=%s, batch_id=%s",
-                    unified_object_id,
-                    model_object_id,
+                task.add_done_callback(
+                    lambda finished: log_batch_registration_result(
+                        finished, "Vertex AI", unified_object_id, model_object_id, is_batch_create
+                    )
                 )
             else:
                 verbose_proxy_logger.warning(

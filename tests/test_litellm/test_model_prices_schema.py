@@ -100,6 +100,24 @@ def test_schema_accepts_minimal_and_unknown_optional_fields(committed_schema: di
     assert validator.is_valid({"some-model": {"litellm_provider": "openai", "brand_new_field": {"nested": True}}})
 
 
+def test_schema_accepts_cache_creation_cost_inside_a_pricing_tier(committed_schema: dict):
+    validator = build_validator(committed_schema)
+    entry = {
+        "litellm_provider": "dashscope",
+        "mode": "chat",
+        "tiered_pricing": [
+            {
+                "range": [0, 256000],
+                "input_cost_per_token": 3.25e-07,
+                "output_cost_per_token": 1.95e-06,
+                "cache_creation_input_token_cost": 4.063e-07,
+                "cache_read_input_token_cost": 3.25e-08,
+            }
+        ],
+    }
+    assert validator.is_valid({"some-model": entry})
+
+
 DATED_VARIANT = re.compile(r"^(.*?)-(\d{4}-\d{2}-\d{2})$")
 SERVICE_TIER_SUFFIXES = ("_flex", "_priority")
 

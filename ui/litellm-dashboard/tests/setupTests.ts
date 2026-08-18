@@ -88,17 +88,15 @@ const ensureTestLocalStorage = () => {
 
 ensureTestLocalStorage();
 
-// Global mock for NotificationManager to prevent React rendering issues in tests
-// This avoids "window is not defined" errors when notifications try to render
-// after test environment is torn down
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
+// Global mock so every test can assert on toast calls; toast.test.ts opts back in with vi.unmock
+vi.mock("@/lib/toast", () => ({
+  toast: {
     success: vi.fn(),
-    fromBackend: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
     info: vi.fn(),
-    clear: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    fromError: vi.fn(),
+    dismiss: vi.fn(),
   },
 }));
 

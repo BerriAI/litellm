@@ -290,3 +290,55 @@ tests:
           value:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+  - it: should schedule onto the same nodes as the gateway
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      nodeSelector:
+        karpenter.sh/nodepool: litellm-e2e
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: litellm-e2e
+          effect: NoSchedule
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            karpenter.sh/nodepool: litellm-e2e
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: workload
+              operator: Equal
+              value: litellm-e2e
+              effect: NoSchedule
+
+  - it: bounds the Job with a deadline by default, so a blocked migration cannot stall the release forever
+    set:
+      migrationJob:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 1800
+
+  - it: honours an operator-supplied deadline
+    set:
+      migrationJob:
+        enabled: true
+        activeDeadlineSeconds: 600
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 600
+
+  - it: omits the deadline entirely when it is nulled out, restoring the unbounded behaviour
+    set:
+      migrationJob:
+        enabled: true
+        activeDeadlineSeconds: null
+    asserts:
+      - notExists:
+          path: spec.activeDeadlineSeconds

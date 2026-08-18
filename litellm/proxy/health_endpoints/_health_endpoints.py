@@ -50,6 +50,7 @@ from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
 )
+from litellm.secret_managers.main import get_secret_bool
 
 #### Health ENDPOINTS ####
 
@@ -1447,6 +1448,31 @@ def callback_name(callback):
             return str(callback)
 
 
+DISABLE_NO_REDIS_WARNING_ENV_VAR: Final = "LITELLM_DISABLE_NO_REDIS_WARNING"
+
+
+def _show_no_redis_warning() -> bool:
+    """
+    Whether the UI should warn that no Redis is configured.
+
+    Redis is what makes rate limits, budgets, router state, and cache
+    invalidation consistent across workers, so a proxy running without it is
+    only safe as a single worker. Both places a Redis can land count: the
+    coordination cache (from a Redis response cache, general_settings.
+    coordination_redis, or the REDIS_* env fallback) and the router's own
+    Redis (router_settings.redis_host), which backs cooldowns and usage-based
+    routing on its own. Operators who know they run one worker can silence the
+    warning with LITELLM_DISABLE_NO_REDIS_WARNING=true.
+    """
+    from litellm.proxy.proxy_server import llm_router, redis_usage_cache
+
+    if redis_usage_cache is not None:
+        return False
+    if llm_router is not None and llm_router.cache.redis_cache is not None:
+        return False
+    return get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is not True
+
+
 async def _get_health_readiness_details(
     response: Response | None = None,
 ) -> dict[str, Any]:
@@ -1487,6 +1513,7 @@ async def _get_health_readiness_details(
         # check log level
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
+        show_no_redis_warning: Final = _show_no_redis_warning()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -1506,6 +1533,7 @@ async def _get_health_readiness_details(
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
+                "show_no_redis_warning": show_no_redis_warning,
             }
         else:
             return {
@@ -1517,6 +1545,7 @@ async def _get_health_readiness_details(
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
+                "show_no_redis_warning": show_no_redis_warning,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")

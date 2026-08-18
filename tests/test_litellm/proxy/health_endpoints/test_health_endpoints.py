@@ -21,6 +21,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
+    _show_no_redis_warning,
     get_callback_identifier,
     health_license_endpoint,
     health_services_endpoint,
@@ -2457,3 +2458,91 @@ class TestConfigBaseForHealthCheck:
         )
         assert base["litellm_credential_name"] == "OpenAI-prod"
         assert base["api_key"] == "sk-configured"
+
+
+class TestNoRedisWarning:
+    """`show_no_redis_warning` drives the Admin UI's default-on "no Redis" banner."""
+
+    @staticmethod
+    def _router(redis_cache):
+        return SimpleNamespace(cache=SimpleNamespace(redis_cache=redis_cache))
+
+    def test_warns_when_no_redis_is_configured(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+        ):
+            assert _show_no_redis_warning() is True
+
+    def test_warns_when_there_is_no_router_at_all(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", None),
+        ):
+            assert _show_no_redis_warning() is True
+
+    def test_stays_quiet_when_a_coordination_redis_is_configured(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+        ):
+            assert _show_no_redis_warning() is False
+
+    def test_stays_quiet_when_only_the_router_has_redis(self, monkeypatch):
+        """router_settings.redis_host alone backs cooldowns and usage-based routing."""
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(MagicMock())),
+        ):
+            assert _show_no_redis_warning() is False
+
+    @pytest.mark.parametrize("value", ["true", "True"])
+    def test_env_var_suppresses_the_warning(self, monkeypatch, value):
+        monkeypatch.setenv("LITELLM_DISABLE_NO_REDIS_WARNING", value)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+        ):
+            assert _show_no_redis_warning() is False
+
+    def test_env_var_set_false_keeps_the_warning(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_DISABLE_NO_REDIS_WARNING", "false")
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+        ):
+            assert _show_no_redis_warning() is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("has_prisma_client", [True, False])
+    async def test_readiness_details_carries_the_flag(self, monkeypatch, has_prisma_client):
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        prisma_client = MagicMock() if has_prisma_client else None
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch.object(
+                _health_endpoints_module,
+                "_db_health_readiness_check",
+                AsyncMock(return_value={"status": "connected"}),
+            ),
+        ):
+            details = await _health_endpoints_module._get_health_readiness_details()
+        assert details["show_no_redis_warning"] is True
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.redis_usage_cache", MagicMock()),
+            patch.object(
+                _health_endpoints_module,
+                "_db_health_readiness_check",
+                AsyncMock(return_value={"status": "connected"}),
+            ),
+        ):
+            details = await _health_endpoints_module._get_health_readiness_details()
+        assert details["show_no_redis_warning"] is False

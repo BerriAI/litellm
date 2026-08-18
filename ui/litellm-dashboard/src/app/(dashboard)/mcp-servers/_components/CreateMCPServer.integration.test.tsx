@@ -676,7 +676,7 @@ describe("CreateMCPServer", () => {
     it("clears the DCR ref and the upstream warning when the modal closes so nothing leaks to the next session", async () => {
       const { rerender } = render(<CreateMCPServer {...defaultProps} />);
       await selectAntOption("Transport Type", "Streamable HTTP");
-      await waitFor(() => expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument());
+      expect(await screen.findByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
       const user = userEvent.setup({ delay: null });
       await user.type(getServerNameInput(), "Leak_Server");
       await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");

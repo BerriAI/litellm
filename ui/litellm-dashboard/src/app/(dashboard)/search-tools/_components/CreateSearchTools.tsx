@@ -5,13 +5,14 @@ import { Button, TextInput } from "@tremor/react";
 import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useState } from "react";
 import { Logo } from "@/components/molecules/logo/Logo";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
 import SearchConnectionTest from "./SearchConnectionTest";
 import { AvailableSearchProvider, SearchTool } from "./types";
 import dataforseoLogo from "../../../../../public/assets/logos/dataforseo.png";
 import exaAiLogo from "../../../../../public/assets/logos/exa_ai.png";
 import googlePseLogo from "../../../../../public/assets/logos/google_pse.png";
+import nimbleLogo from "../../../../../public/assets/logos/nimble.png";
 import parallelAiLogo from "../../../../../public/assets/logos/parallel_ai.png";
 import perplexityLogo from "../../../../../public/assets/logos/perplexity.png";
 import tavilyLogo from "../../../../../public/assets/logos/tavily.png";
@@ -25,6 +26,7 @@ const searchProviderLogoMap: Record<string, string> = {
   exa_ai: exaAiLogo.src,
   google_pse: googlePseLogo.src,
   dataforseo: dataforseoLogo.src,
+  nimble: nimbleLogo.src,
 };
 
 interface SearchProviderLabelProps {
@@ -96,14 +98,14 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
       if (accessToken != null) {
         const response = await createSearchTool(accessToken, payload);
 
-        NotificationsManager.success("Search tool created successfully");
+        toast.success("Search tool created successfully");
         form.resetFields();
         setFormValues({});
         setModalVisible(false);
         onCreateSuccess(response);
       }
     } catch (error) {
-      NotificationsManager.error("Error creating search tool: " + error);
+      toast.error("Error creating search tool: " + error);
     } finally {
       setIsLoading(false);
     }
@@ -126,7 +128,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
       // Show the modal with the fresh test
       setIsTestModalVisible(true);
     } catch (error) {
-      NotificationsManager.error("Please fill in Search Provider and API Key before testing");
+      toast.error("Please fill in Search Provider and API Key before testing");
     }
   };
 

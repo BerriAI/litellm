@@ -57,8 +57,12 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
         return LiteLLM_TeamTable.model_validate(data)
 
-    async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> list[Member]:
+    async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> list[Member] | None:
         """Return the team's members_with_roles, locking the row FOR UPDATE.
+
+        ``None`` when the team row is gone, which a caller holding the lock can
+        only see if a delete committed under it, as opposed to ``[]`` for a team
+        that simply has no members.
 
         Must be called inside a transaction so the row lock is held until
         commit. This serializes concurrent membership writers on the team row
@@ -69,7 +73,9 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
             'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
             team_id,
         )
-        raw_value: Final = rows[0]["members_with_roles"] if rows else None
+        if not rows:
+            return None
+        raw_value: Final = rows[0]["members_with_roles"]
         parsed: Final = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
         if not parsed:
             return []
