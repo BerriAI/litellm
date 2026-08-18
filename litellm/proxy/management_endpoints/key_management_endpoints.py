@@ -6351,12 +6351,6 @@ async def _can_user_query_key_info(
 ) -> bool:
     """
     Helper to check if the user has access to the key's info
-
-    Any authenticated caller who presents the raw key value (i.e. a preimage of the
-    stored token hash) is allowed: possession of the raw key already grants the
-    ability to call /key/info with that key as the bearer token, so resolving
-    raw key -> key info discloses nothing new. Lookups by hashed token remain
-    restricted to admins, the key's owner, and the key's teammates.
     """
     if (
         (
@@ -6365,7 +6359,6 @@ async def _can_user_query_key_info(
         )
         or user_api_key_dict.api_key == key
         or key_info.user_id == user_api_key_dict.user_id
-        or (key is not None and hash_token(token=key) == key_info.token)
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,
             existing_key_row=key_info,
