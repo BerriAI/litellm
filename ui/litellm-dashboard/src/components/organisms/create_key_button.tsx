@@ -76,6 +76,10 @@ import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
 
+const SECTION_HEADER_CLASS = "group/section flex w-full items-center justify-between px-4 py-3 text-left";
+const SECTION_CHEVRON_CLASS =
+  "size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180";
+
 /**
  * Interface for pre-filling the create key form from URL parameters
  */
@@ -927,7 +931,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                 ]}
                 help="required"
               >
-                <Input placeholder="" />
+                <Input />
               </Form.Item>
 
               <Form.Item
@@ -1038,10 +1042,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
           {!isFormDisabled && (
             <div className="mb-8">
               <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
-                <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
-                  <span className="text-lg font-medium text-gray-900">Optional Settings</span>
-                  <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
-                </CollapsibleTrigger>
+                <h3 className="m-0 text-lg font-medium text-gray-900">
+                  <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
+                    Optional Settings
+                    <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                  </CollapsibleTrigger>
+                </h3>
                 <CollapsibleContent className="px-4 pb-3">
                   <Form.Item
                     className="mt-4"
@@ -1467,9 +1473,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     />
                   </Form.Item>
                   <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
-                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>MCP Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <Form.Item
@@ -1523,9 +1529,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   </Collapsible>
 
                   <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
-                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>Agent Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <Form.Item
@@ -1552,9 +1558,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
                   {premiumUser ? (
                     <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
-                      <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                      <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                         <b>Logging Settings</b>
-                        <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                        <ChevronDown className={SECTION_CHEVRON_CLASS} />
                       </CollapsibleTrigger>
                       <CollapsibleContent className="px-4 pb-3">
                         <div className="mt-4">
@@ -1583,9 +1589,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <div style={{ position: "relative" }}>
                         <div style={{ opacity: 0.5 }}>
                           <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
-                            <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                            <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                               <b>Logging Settings</b>
-                              <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                              <ChevronDown className={SECTION_CHEVRON_CLASS} />
                             </CollapsibleTrigger>
                             <CollapsibleContent className="px-4 pb-3">
                               <div className="mt-4">
@@ -1609,9 +1615,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     key={`router-settings-accordion-${routerSettingsKey}`}
                     className="mt-4 mb-4 overflow-hidden rounded-lg border"
                   >
-                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>Router Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <div className="mt-4 w-full">
@@ -1631,9 +1637,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   </Collapsible>
 
                   <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
-                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>Model Aliases</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <div className="mt-4">
@@ -1652,9 +1658,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   </Collapsible>
 
                   <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
-                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>Key Lifecycle</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <div className="mt-4">
@@ -1670,7 +1676,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     </CollapsibleContent>
                   </Collapsible>
                   <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
-                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <div className="flex items-center gap-2">
                         <b>Advanced Settings</b>
                         <Tooltip
@@ -1695,7 +1701,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
                         </Tooltip>
                       </div>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <SchemaFormFields
