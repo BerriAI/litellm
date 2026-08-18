@@ -18,6 +18,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     parse_semconv_opt_in,
 )
 from litellm.integrations.otel.model.semconv import Metric
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -1341,18 +1342,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         in ``standard_logging_object.metadata``; propagating that to every
         span only adds noise that makes traces look mis-instrumented.
         """
-        if team_id:
-            self.safe_set_attribute(
-                span=span,
-                key="metadata.user_api_key_team_id",
-                value=team_id,
-            )
-        if team_alias:
-            self.safe_set_attribute(
-                span=span,
-                key="metadata.user_api_key_team_alias",
-                value=team_alias,
-            )
+        team_attributes: Final = redact_user_api_key_info(
+            metadata={
+                "user_api_key_team_id": team_id,
+                "user_api_key_team_alias": team_alias,
+            }
+        )
+        for key, value in team_attributes.items():
+            if value:
+                self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
 
     def _set_team_attributes_from_kwargs(self, span: Span, kwargs: dict) -> None:
         """Pull team_id / team_alias from the standard logging metadata in kwargs and stamp them onto span."""
@@ -1500,7 +1498,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         }
 
         std_log: Final = kwargs.get("standard_logging_object")
-        md: Final = getattr(std_log, "metadata", None) or (std_log or {}).get("metadata", {})
+        md: Final = redact_user_api_key_info(
+            metadata=dict(getattr(std_log, "metadata", None) or (std_log or {}).get("metadata", {}))
+        )
         for key in METRIC_METADATA_KEYS:
             value = md.get(key)
             if value is None:
@@ -2204,7 +2204,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ############ LLM CALL METADATA ##############
             #############################################
-            metadata: Final = standard_logging_payload["metadata"]
+            metadata: Final = redact_user_api_key_info(metadata=dict(standard_logging_payload["metadata"]))
             for key, value in metadata.items():
                 self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
 

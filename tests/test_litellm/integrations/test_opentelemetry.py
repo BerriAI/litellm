@@ -6007,3 +6007,97 @@ class TestOTELServiceTierAttributes(unittest.TestCase):
             response_obj,
         )
         self.assertEqual(attributes[self.RESPONSE_KEY], "tier-added-by-provider-later")
+
+
+class TestOpenTelemetryRedactUserApiKeyInfo(unittest.TestCase):
+    """`litellm_settings.redact_user_api_key_info: true` must keep the key's
+    identity fields (hash, user id/email, team, org) out of everything OTel
+    exports, spans and metrics alike, the way langfuse/logfire/langsmith
+    already honor it. Drives the real _handle_success path off the captured
+    request fixture and reads the exported span/data points."""
+
+    HERE = os.path.dirname(__file__)
+    DURATION_METRIC = "gen_ai.client.operation.duration"
+
+    def setUp(self):
+        self._original_redact = litellm.redact_user_api_key_info
+
+    def tearDown(self):
+        litellm.redact_user_api_key_info = self._original_redact
+
+    def _run_success(self):
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
+            kwargs = json.load(f)
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
+            response_obj = json.load(f)
+
+        exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+        metric_reader = InMemoryMetricReader()
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", enable_metrics=True),
+            tracer_provider=tracer_provider,
+            meter_provider=MeterProvider(metric_readers=[metric_reader]),
+        )
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        start = datetime.utcnow()
+        otel._handle_success(kwargs, response_obj, start, start + timedelta(seconds=1))
+        return exporter, metric_reader
+
+    @staticmethod
+    def _sensitive(keys):
+        return {k for k in keys if k.startswith("metadata.user_api_key")}
+
+    def _span_attribute_keys(self, exporter):
+        spans = [s for s in exporter.get_finished_spans() if s.name == "litellm_request"]
+        self.assertTrue(spans, "litellm_request span was not exported")
+        return set(spans[0].attributes.keys())
+
+    def _metric_attribute_keys(self, reader):
+        data = reader.get_metrics_data()
+        self.assertIsNotNone(data, "no metrics were recorded")
+        return {
+            key
+            for rm in data.resource_metrics
+            for sm in rm.scope_metrics
+            for m in sm.metrics
+            if m.name == self.DURATION_METRIC
+            for dp in m.data.data_points
+            for key in dp.attributes.keys()
+        }
+
+    def test_redaction_off_keeps_user_api_key_attributes(self):
+        litellm.redact_user_api_key_info = False
+        exporter, reader = self._run_success()
+
+        span_keys = self._span_attribute_keys(exporter)
+        self.assertIn("metadata.user_api_key_hash", span_keys)
+        self.assertIn("metadata.user_api_key_end_user_id", span_keys)
+        self.assertIn("metadata.user_api_key_hash", self._metric_attribute_keys(reader))
+
+    def test_redaction_on_strips_user_api_key_attributes_from_span_and_metrics(self):
+        litellm.redact_user_api_key_info = True
+        exporter, reader = self._run_success()
+
+        span_keys = self._span_attribute_keys(exporter)
+        self.assertEqual(set(), self._sensitive(span_keys))
+        self.assertEqual(set(), self._sensitive(self._metric_attribute_keys(reader)))
+        self.assertIn("litellm.model_group", span_keys)
+        self.assertIn("gen_ai.usage.total_tokens", span_keys)
+
+    def test_redaction_on_strips_team_attributes_stamped_on_child_spans(self):
+        litellm.redact_user_api_key_info = True
+        otel = OpenTelemetry()
+        span = MagicMock()
+
+        otel._set_team_attributes_on_span(
+            span=span, team_id="team-123", team_alias="my-team"
+        )
+
+        span.set_attribute.assert_not_called()
