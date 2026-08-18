@@ -56,6 +56,26 @@ describe("VectorStoreInfoView save payload", () => {
     mockUpdate.mockResolvedValue({});
   });
 
+  it("still saves when the server left the nullable name and description null", async () => {
+    const user = userEvent.setup();
+    mockInfo.mockResolvedValue({
+      vector_store: { ...serverRecord, vector_store_name: null, vector_store_description: null },
+    });
+    renderView(true);
+    await screen.findByRole("button", { name: "Save Changes" });
+
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await vi.waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    expect(savedPayload()).toStrictEqual({
+      vector_store_id: "vs-1",
+      custom_llm_provider: "bedrock",
+      vector_store_name: null,
+      vector_store_description: null,
+      vector_store_metadata: { tier: "gold" },
+    });
+  });
+
   it("sends only the five editable keys and drops every server-only field", async () => {
     const user = userEvent.setup();
     renderView(true);
@@ -126,7 +146,9 @@ describe("VectorStoreInfoView save payload", () => {
     await user.type(metadataInput, "not json");
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await vi.waitFor(() => expect(mockNotifications.fromBackend).toHaveBeenCalledWith("Invalid JSON in metadata field"));
+    await vi.waitFor(() =>
+      expect(mockNotifications.fromBackend).toHaveBeenCalledWith("Invalid JSON in metadata field"),
+    );
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 

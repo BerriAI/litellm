@@ -879,7 +879,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       submitForm.reset();
       fetchSubmissions();
     } catch {
-      // error already handled by networking layer
+      return;
     }
   });
 

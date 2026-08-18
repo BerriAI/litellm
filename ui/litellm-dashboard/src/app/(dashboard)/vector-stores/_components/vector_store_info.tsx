@@ -42,8 +42,8 @@ interface VectorStoreInfoViewProps {
 
 const vectorStoreEditShape = {
   vector_store_id: z.string().min(1, "Please input a vector store ID"),
-  vector_store_name: z.string().optional(),
-  vector_store_description: z.string().optional(),
+  vector_store_name: z.string().nullish(),
+  vector_store_description: z.string().nullish(),
   custom_llm_provider: z.string().min(1, "Please select a provider"),
   litellm_credential_name: z.string().nullable().optional(),
 };
