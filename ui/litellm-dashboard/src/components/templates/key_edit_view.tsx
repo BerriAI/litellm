@@ -4,8 +4,10 @@ import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Form, Input, Select, Switch, Tooltip } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { Form, Input as AntdInput, Select, Switch, Tooltip } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { hasCapability } from "../../utils/capabilities";
 import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
@@ -306,7 +308,7 @@ export function KeyEditView({
   return (
     <Form form={form} onFinish={handleSubmit} initialValues={initialValues} layout="vertical">
       <Form.Item label="Key Alias" name="key_alias">
-        <TextInput />
+        <Input />
       </Form.Item>
 
       <Form.Item label="Models" name="models">
@@ -448,7 +450,7 @@ export function KeyEditView({
         }
         name="allowed_routes"
       >
-        <Input placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes" />
+        <AntdInput placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes" />
       </Form.Item>
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -540,11 +542,11 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Model TPM Limit" name="model_tpm_limit">
-        <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
+        <AntdInput.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
       </Form.Item>
 
       <Form.Item label="Model RPM Limit" name="model_rpm_limit">
-        <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
+        <AntdInput.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
       </Form.Item>
 
       <Form.Item
@@ -562,7 +564,7 @@ export function KeyEditView({
         tooltip={estimateTooltip.perModel}
         rules={[estimateRules.perModel]}
       >
-        <Input.TextArea rows={4} placeholder='{"gpt-4": 4096}' disabled={!canEditEstimates} />
+        <AntdInput.TextArea rows={4} placeholder='{"gpt-4": 4096}' disabled={!canEditEstimates} />
       </Form.Item>
 
       <Form.Item
@@ -716,7 +718,7 @@ export function KeyEditView({
 
       {/* Hidden field to register mcp_tool_permissions with the form */}
       <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
-        <Input type="hidden" />
+        <AntdInput type="hidden" />
       </Form.Item>
 
       <Form.Item
@@ -811,7 +813,7 @@ export function KeyEditView({
       </Form.Item>
       {enableProjectsUI && hasProject && (
         <Form.Item label="Project">
-          <Input value={projectDisplay ?? ""} disabled />
+          <AntdInput value={projectDisplay ?? ""} disabled />
         </Form.Item>
       )}
       <Form.Item label="Router Settings">
@@ -839,7 +841,7 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Metadata" name="metadata">
-        <Input.TextArea rows={10} />
+        <AntdInput.TextArea rows={10} />
       </Form.Item>
 
       {/* Auto-Rotation Settings */}
@@ -858,30 +860,31 @@ export function KeyEditView({
 
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
-        <Input />
+        <AntdInput />
       </Form.Item>
 
       {/* Hidden form field for disabled callbacks */}
       <Form.Item name="disabled_callbacks" hidden>
-        <Input />
+        <AntdInput />
       </Form.Item>
 
       {/* Hidden form fields for auto-rotation */}
       <Form.Item name="auto_rotate" hidden>
-        <Input />
+        <AntdInput />
       </Form.Item>
       <Form.Item name="rotation_interval" hidden>
-        <Input />
+        <AntdInput />
       </Form.Item>
 
       <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6">
         <div className="flex justify-end items-center gap-2">
-          <TremorButton variant="secondary" onClick={onCancel} disabled={isKeySaving}>
+          <Button variant="secondary" onClick={onCancel} disabled={isKeySaving}>
             Cancel
-          </TremorButton>
-          <TremorButton type="submit" loading={isKeySaving}>
+          </Button>
+          <Button type="submit" disabled={isKeySaving} aria-busy={isKeySaving}>
+            {isKeySaving && <UiLoadingSpinner className="size-4" />}
             Save Changes
-          </TremorButton>
+          </Button>
         </div>
       </div>
     </Form>
