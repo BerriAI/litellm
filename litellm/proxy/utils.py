@@ -403,24 +403,45 @@ def _exception_changes_request_flow(exc: BaseException) -> bool:
     return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
 
 
-def _count_request_input_tokens(model: str, request_input: object) -> int:
+def _prompt_block_text(block: object) -> str:
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return ""
+    block_text: Final = block.get("text")
+    return block_text if isinstance(block_text, str) else ""
+
+
+def _system_prompt_text(system_input: object) -> str:
+    if isinstance(system_input, str):
+        return system_input
+    if not isinstance(system_input, list):
+        return ""
+    return "".join(_prompt_block_text(block) for block in system_input)
+
+
+def _count_request_input_tokens(model: str, request_input: object, system_input: object) -> int:
+    system_text: Final = _system_prompt_text(system_input)
+    system_tokens: Final = litellm.token_counter(model=model, text=system_text) if system_text else 0
     if isinstance(request_input, str):
-        return litellm.token_counter(model=model, text=request_input)
+        return system_tokens + litellm.token_counter(model=model, text=request_input)
     if not isinstance(request_input, list) or not request_input:
-        return 0
+        return system_tokens
     text_entries: Final = tuple(entry for entry in request_input if isinstance(entry, str))
     if len(text_entries) == len(request_input):
-        return litellm.token_counter(model=model, text="".join(text_entries))
-    return litellm.token_counter(model=model, messages=request_input)
+        return system_tokens + litellm.token_counter(model=model, text="".join(text_entries))
+    return system_tokens + litellm.token_counter(model=model, messages=request_input)
 
 
-def _estimate_dispatched_failure_usage(model: str, request_input: object) -> Usage | None:
+def _estimate_dispatched_failure_usage(model: str, request_input: object, system_input: object) -> Usage | None:
     """A request that failed after dispatch consumed provider-billed input
     tokens, but no provider usage ever came back. Estimate the input side with
     the same tokenizer fallback interrupted streams use, so the spend log's
     failure row records what was sent instead of zero."""
     try:
-        input_tokens: Final = _count_request_input_tokens(model=model, request_input=request_input)
+        input_tokens: Final = _count_request_input_tokens(
+            model=model, request_input=request_input, system_input=system_input
+        )
     except Exception:
         return None
     if input_tokens <= 0:
@@ -440,9 +461,16 @@ def _failure_usage_to_lift(model_call_details: Mapping[str, object], dispatched:
         return recovered_usage, model_call_details.get("response_cost")
     if not dispatched or model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
         return None
+    optional_params: Final = model_call_details.get("optional_params")
+    system_input: Final = (
+        (optional_params.get("system") or optional_params.get("instructions"))
+        if isinstance(optional_params, dict)
+        else None
+    )
     estimated_usage: Final = _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
         request_input=model_call_details.get("messages"),
+        system_input=system_input,
     )
     if estimated_usage is None:
         return None
