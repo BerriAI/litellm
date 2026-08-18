@@ -90,7 +90,7 @@ describe("AddPluginForm", () => {
     await waitFor(() => {
       expect(screen.getByText(/Git repo/)).toBeInTheDocument();
     });
-    expect(screen.getByPlaceholderText(SUBPATH_PLACEHOLDER)).not.toBeDisabled();
+    expect(screen.getByPlaceholderText(SUBPATH_PLACEHOLDER)).toBeEnabled();
   });
 
   it("combines a repo URL with a subfolder into a git-subdir preview", async () => {

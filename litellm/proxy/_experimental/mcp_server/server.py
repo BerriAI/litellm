@@ -2824,6 +2824,7 @@ if MCP_AVAILABLE:
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
                 raw_headers=raw_headers,
+                litellm_logging_obj=litellm_logging_obj,
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -2962,6 +2963,7 @@ if MCP_AVAILABLE:
                     proxy_logging_obj=proxy_logging_obj,
                     server=prefix_server,
                     raw_headers=raw_headers,
+                    litellm_logging_obj=litellm_logging_obj,
                 )
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
@@ -3149,6 +3151,20 @@ if MCP_AVAILABLE:
             traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
             from litellm.proxy.proxy_server import proxy_logging_obj
 
+            # Ordering is load-bearing. ``_ProxyDBLogger.async_post_call_failure_hook``,
+            # reached below, writes the failure spend-log row from this logger's
+            # ``standard_logging_object``, which only exists once the failure handlers
+            # have run. Flush them first or the row lands with
+            # ``guardrail_information=None`` and a guardrail block is never counted.
+            #
+            # Not double-logged: both handlers gate on ``should_run_logging`` and then
+            # mark it, so the ``@client`` wrapper's own post-raise logging no-ops on this
+            # logger, same as ``_fire_mcp_tool_call_logging`` does for ``isError=True``.
+            if litellm_logging_obj is not None:
+                end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match `start_time`, which it is subtracted from
+                litellm_logging_obj.failure_handler(e, traceback_str, start_time, end_time)
+                await litellm_logging_obj.async_failure_handler(e, traceback_str, start_time, end_time)
+
             if proxy_logging_obj and user_api_key_auth:
                 await proxy_logging_obj.post_call_failure_hook(
                     request_data=kwargs,
@@ -3326,6 +3342,7 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
+            litellm_logging_obj=litellm_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result

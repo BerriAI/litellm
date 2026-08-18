@@ -29,6 +29,7 @@ import {
   getSemanticConfigError,
   getTierLabelsError,
 } from "./build_complexity_router_config";
+import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
@@ -88,9 +89,6 @@ const isPresetHintAlarming = (availability: PresetAvailability): boolean => avai
 // getAllPresets() already returns a stable, module-level array (see autorouter_presets.ts), so
 // this is resolved once at import time rather than re-called from inside the component every render.
 const presets = getAllPresets();
-
-const resolveDefaultModel = (tiers: ComplexityTiers): string | undefined =>
-  tiers.MEDIUM[0] || tiers.SIMPLE[0] || tiers.COMPLEX[0] || tiers.REASONING[0];
 
 // A one-line summary of what's configured, shown when the detailed section is collapsed so a
 // caller can see the shape of the config without opening it.
@@ -272,6 +270,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     semanticMatchingEnabled,
     embeddingModel,
+    defaultModel: complexityRouterConfig.default_model,
   };
 
   const submitBlockedReason = getSubmitBlockedReason(
@@ -283,6 +282,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
+    defaultModel: complexityRouterConfig.default_model,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
@@ -303,6 +303,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tierDistancePenalty: complexityRouterConfig.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
     adaptiveEligible: complexityRouterConfig.adaptive_eligible ?? "all",
     returnRawModelName: complexityRouterConfig.return_raw_model_name ?? false,
+    tierBoundaries: complexityRouterConfig.tier_boundaries,
+    tokenThresholds: complexityRouterConfig.token_thresholds,
+    dimensionWeights: complexityRouterConfig.dimension_weights,
   };
 
   const submitRecommendedRouter = (name: string) => {
@@ -353,7 +356,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    const defaultModel = resolveDefaultModel(tiers);
+    const defaultModel = resolveComplexityDefaultModel(tiers, complexityRouterConfig.default_model);
 
     form.setFieldsValue({
       custom_llm_provider: "auto_router",
@@ -365,6 +368,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     form
       .validateFields(requiresTeamScope ? ["auto_router_name", "team_id"] : ["auto_router_name"])
       .then((values) => {
+        // auto_router_default_model (-> litellm_params, read by the backend at init) and
+        // complexity_router_config.default_model (-> the pin marker read back on edit, see
+        // hydratePinnedDefaultModel in edit_auto_router_modal.tsx) must both come from the same
+        // `defaultModel`, or the two fields diverge and hydration's divergence check misfires.
         const submitValues = {
           ...values,
           auto_router_name: name,
@@ -395,11 +402,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const handleTestConnection = () => {
-    const targets = buildAutoRouterTestTargets({
+    const testTargetParams = {
       tiers: complexityRouterConfig.tiers,
       semanticMatchingEnabled,
       embeddingModel,
-    });
+      defaultModel: resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model),
+    };
+    const targets = buildAutoRouterTestTargets(testTargetParams);
 
     if (targets.length === 0) {
       NotificationManager.fromBackend("Please select at least one model for a complexity tier");
@@ -621,7 +630,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           <AutoRouterRoutingTest
             accessToken={accessToken}
             config={buildComplexityRouterConfig(complexityRouterConfigParams)}
-            defaultModel={resolveDefaultModel(complexityRouterConfig.tiers)}
+            defaultModel={resolveComplexityDefaultModel(
+              complexityRouterConfig.tiers,
+              complexityRouterConfig.default_model,
+            )}
             routerName={form.getFieldValue("auto_router_name")}
             teamId={requiresTeamScope ? form.getFieldValue("team_id") : undefined}
           />

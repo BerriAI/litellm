@@ -39,7 +39,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -2767,6 +2767,9 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    # The LLM classifier failed on a router with an operator-defined tier set, so the
+    # request routed to the configured fallback_tier without being classified.
+    "classifier_fallback",
     # The LLM classifier failed and classifier_fallback is 'default_model', so the request
     # went to default_model without being classified. Distinct from "default_fallback",
     # which is a tier having no model configured rather than classification not happening.
@@ -3007,6 +3010,11 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     surface it as a queryable span attribute without parsing the raw
     guardrail_response blob."""
 
+    guardrail_usage: ReadOnly[Mapping[str, int] | None]
+    """Provider-reported billable usage counters for this invocation, keyed by the
+    provider's counter name (e.g. Bedrock's ``contentPolicyUnits``). Kept as a
+    sibling of guardrail_response so spend-log prompt redaction never drops it."""
+
 
 class EvalVerdict(TypedDict, total=False):
     criterion_name: str
@@ -3050,6 +3058,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     risk_score: float | None
     violation_categories: list[str] | None
     guardrail_action: str | None
+    guardrail_usage: ReadOnly[Mapping[str, int] | None]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3519,6 +3528,7 @@ all_litellm_params = (
         "litellm_session_id",
         "use_litellm_proxy",
         "use_chat_completions_api",
+        "rust",
         "prompt_label",
         "shared_session",
         "search_tool_name",

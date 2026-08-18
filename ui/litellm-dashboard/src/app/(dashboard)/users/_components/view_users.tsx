@@ -2,6 +2,7 @@ import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import BulkEditUserModal from "./BulkEditUsers";
+import BulkCreateUsersButton from "@/components/bulk_create_users_button";
 import { CreateUserButton } from "@/components/CreateUserButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -365,12 +366,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           {!userListQuery.isLoading && userID && accessToken && (
             <>
               {isProxyAdmin && (
-                <CreateUserButton
-                  userID={userID}
-                  accessToken={accessToken}
-                  teams={teams}
-                  possibleUIRoles={possibleUIRoles}
-                />
+                <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
+              )}
+
+              {isProxyAdmin && (
+                <BulkCreateUsersButton accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
               )}
 
               {isProxyAdmin && (

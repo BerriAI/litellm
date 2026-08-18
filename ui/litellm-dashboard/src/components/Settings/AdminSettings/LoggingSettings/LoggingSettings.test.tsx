@@ -6,7 +6,7 @@ import {
 import { useStoreRequestInSpendLogs } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
@@ -368,7 +368,7 @@ describe("LoggingSettings", () => {
 
     const saveButton = screen.getByRole("button", { name: /Saving/i });
     expect(saveButton).toBeInTheDocument();
-    expect(saveButton.className).toContain("ant-btn-loading");
+    expect(within(saveButton).getByRole("img", { name: "loading" })).toBeInTheDocument();
   });
 
   it("should show loading state on save button when delete pending", () => {
@@ -381,7 +381,7 @@ describe("LoggingSettings", () => {
 
     const saveButton = screen.getByRole("button", { name: /Saving/i });
     expect(saveButton).toBeInTheDocument();
-    expect(saveButton.className).toContain("ant-btn-loading");
+    expect(within(saveButton).getByRole("img", { name: "loading" })).toBeInTheDocument();
   });
 
   it("should render form with initial values from config data", () => {
@@ -508,6 +508,7 @@ describe("LoggingSettings", () => {
     expect(screen.queryByPlaceholderText("e.g., 7d, 30d")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save Settings" })).not.toBeInTheDocument();
 
+    // eslint-disable-next-line local/no-antd-class-selectors -- antd Skeleton exposes no role, label or aria-busy to query the loading affordance by
     const skeletons = document.querySelectorAll(".ant-skeleton");
     expect(skeletons.length).toBeGreaterThan(0);
   });

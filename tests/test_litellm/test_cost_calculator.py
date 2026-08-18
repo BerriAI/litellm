@@ -20,7 +20,7 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelInfo, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
 
 
@@ -3562,16 +3562,18 @@ def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate(
     """
     from litellm.cost_calculator import batch_cost_calculator
 
+    model_info: ModelInfo = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "cache_read_input_token_cost": 3e-7,
+        "cache_creation_input_token_cost": 3.75e-6,
+    }
     prompt_cost, completion_cost_value = batch_cost_calculator(
         usage=_batch_cache_usage(),
         model="claude-sonnet-4-5-20250929",
         custom_llm_provider="anthropic",
-        model_info={  # type: ignore[arg-type]
-            "input_cost_per_token": 3e-6,
-            "output_cost_per_token": 15e-6,
-            "cache_read_input_token_cost": 3e-7,
-            "cache_creation_input_token_cost": 3.75e-6,
-        },
+        model_info=model_info,
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3.75e-6) / 2)
@@ -3581,18 +3583,67 @@ def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate(
 def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     from litellm.cost_calculator import batch_cost_calculator
 
+    model_info: ModelInfo = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "cache_read_input_token_cost": 3e-7,
+    }
     prompt_cost, _ = batch_cost_calculator(
         usage=_batch_cache_usage(),
         model="claude-sonnet-4-5-20250929",
         custom_llm_provider="anthropic",
-        model_info={  # type: ignore[arg-type]
-            "input_cost_per_token": 3e-6,
-            "output_cost_per_token": 15e-6,
-            "cache_read_input_token_cost": 3e-7,
-        },
+        model_info=model_info,
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+@pytest.mark.parametrize(
+    "batch_rate,expected_prompt,expected_completion",
+    [
+        (0.0, 0.0, 0.0),
+        (1e-6, 1000 * 1e-6, 500 * 1e-6),
+        (None, 1000 * 3e-6 / 2, 500 * 15e-6 / 2),
+    ],
+    ids=["explicit-zero", "explicit-nonzero", "unset"],
+)
+def test_batch_cost_calculator_honors_an_explicitly_zero_batch_rate(
+    batch_rate: float | None,
+    expected_prompt: float,
+    expected_completion: float,
+) -> None:
+    """A batch rate configured as 0.0 means free, not unset.
+
+    Gating the batch fields on truthiness read an explicit 0.0 as absent and
+    charged half the standard rate for that token direction instead.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    base_model_info: ModelInfo = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+    }
+    model_info: ModelInfo = (
+        base_model_info
+        if batch_rate is None
+        else {
+            **base_model_info,
+            "input_cost_per_token_batches": batch_rate,
+            "output_cost_per_token_batches": batch_rate,
+        }
+    )
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost_value == pytest.approx(expected_completion)
 
 
 def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
