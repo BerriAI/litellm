@@ -7576,7 +7576,8 @@ class Router:
         change every restart. Use the class name instead, stable across restarts."""
         return f"{type(value).__module__}.{type(value).__qualname__}"
 
-    def _generate_model_id(self, model_group: str, litellm_params: dict):
+    @staticmethod
+    def _generate_model_id(model_group: str, litellm_params: Mapping[str, object]) -> str:
         """
         Helper function to consistently generate the same id for a deployment
 
@@ -7588,17 +7589,11 @@ class Router:
         # This avoids creating many temporary string objects (O(n) vs O(n²) complexity)
         parts: Final = [model_group]
         for k, v in litellm_params.items():
-            if isinstance(k, str):
-                parts.append(k)
-            elif isinstance(k, dict):
-                parts.append(json.dumps(k, default=self._json_default_stable_id))
-            else:
-                parts.append(str(k))
-
+            parts.append(k)
             if isinstance(v, str):
                 parts.append(v)
             elif isinstance(v, dict):
-                parts.append(json.dumps(v, default=self._json_default_stable_id))
+                parts.append(json.dumps(v, default=Router._json_default_stable_id))
             else:
                 parts.append(str(v))
 

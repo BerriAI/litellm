@@ -962,6 +962,10 @@ class ClassifierPlugin(Protocol):
 
     `classify` returns the name of the tier the request belongs to (a built-in tier value or label,
     or a tier_definitions name), or None to decline and let classifier_fallback decide.
+
+    The context's `candidate_models` is an informational snapshot of every tier's models, unlike
+    the narrowing surface RoutingPlugin filters: the returned tier decides the pool, so mutating
+    the list is a no-op.
     """
 
     async def classify(self, context: RoutingContext) -> str | None: ...
