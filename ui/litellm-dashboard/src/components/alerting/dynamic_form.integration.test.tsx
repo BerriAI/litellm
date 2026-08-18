@@ -170,6 +170,15 @@ describe("DynamicForm change notifications", () => {
     expect(handleInputChange).toHaveBeenCalledWith("daily_report_frequency", 128);
   });
 
+  it("reports a String change to the parent as the typed text, not the change event", async () => {
+    const user = userEvent.setup();
+    const { handleInputChange } = renderForm();
+
+    await user.type(screen.getByDisplayValue("us-east"), "Z");
+
+    expect(handleInputChange).toHaveBeenLastCalledWith("region_name", "us-eastZ");
+  });
+
   it("reports a reset with the field name and its row index", async () => {
     const user = userEvent.setup();
     const { handleResetField } = renderForm();

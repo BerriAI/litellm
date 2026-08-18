@@ -13,9 +13,11 @@ interface AlertingSetting {
   premium_field: boolean;
 }
 
+export type AlertingFieldValue = string | number | boolean | null;
+
 interface DynamicFormProps {
   alertingSettings: AlertingSetting[];
-  handleInputChange: (fieldName: string, newValue: any) => void;
+  handleInputChange: (fieldName: string, newValue: AlertingFieldValue) => void;
   handleResetField: (fieldName: string, index: number) => void;
   handleSubmit: (formValues: Record<string, any>) => void;
   premiumUser: boolean;
@@ -51,7 +53,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
 
   const handleTextChange = (setting: AlertingSetting, event: React.ChangeEvent<HTMLInputElement>) => {
     form.setValue(setting.field_name, event.target.value);
-    handleInputChange(setting.field_name, event);
+    handleInputChange(setting.field_name, event.target.value);
   };
 
   const handleToggle = (setting: AlertingSetting, checked: boolean) => {
