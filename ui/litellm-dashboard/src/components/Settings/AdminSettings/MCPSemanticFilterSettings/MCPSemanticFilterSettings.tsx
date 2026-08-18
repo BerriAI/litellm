@@ -263,6 +263,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                             }))}
                             value={value}
                             onValueChange={(selected) => commitChange(onChange, selected)}
+                            allowClear={false}
                             placeholder={loadingModels ? "Loading models..." : "Select embedding model"}
                             emptyText={loadingModels ? "Loading..." : "No embedding models available"}
                             disabled={isUpdating || loadingModels}

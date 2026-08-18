@@ -93,11 +93,12 @@ const CLAMPED_MIN_PAYLOAD = {
 
 // Helper that renders the component and flushes the fetchAvailableModels effect
 async function renderSettings(props: React.ComponentProps<typeof MCPSemanticFilterSettings>) {
-  render(<MCPSemanticFilterSettings {...props} />);
+  const result = render(<MCPSemanticFilterSettings {...props} />);
   if (props.accessToken) {
     // Let the async fetchAvailableModels effect settle to avoid act() warnings
     await act(async () => {});
   }
+  return result;
 }
 
 describe("MCPSemanticFilterSettings", () => {
@@ -294,5 +295,11 @@ describe("MCPSemanticFilterSettings", () => {
     await user.click(screen.getByRole("button", { name: /save settings/i }));
 
     expect(mockMutate).toHaveBeenCalledWith(CLAMPED_MIN_PAYLOAD, expect.anything());
+  });
+  it("offers no way to clear the embedding model, as the antd Select had no allowClear", async () => {
+    const { container } = await renderSettings({ accessToken: "test-token" });
+
+    expect(screen.getByRole("combobox")).toHaveValue("text-embedding-3-small");
+    expect(container.querySelector('[data-slot="combobox-clear"]')).not.toBeInTheDocument();
   });
 });
