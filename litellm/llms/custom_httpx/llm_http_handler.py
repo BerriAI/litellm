@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import ssl
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from types import ModuleType
@@ -9409,7 +9409,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
         vector_store_id: str,
-        query: str | list[str],
+        query: str | Sequence[str],
     ) -> None:
         """Direct providers have no HTTP request to echo, and an empty api_base makes the debug
         logger fall back to dumping model_call_details, which holds stored provider credentials."""
