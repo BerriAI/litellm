@@ -1574,6 +1574,8 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "cost_discount_config",
     "cost_margin_config",
     "budget_exceeded_throttle_percentage",
+    # Proxy-wide budget stored via POST /config/update; applied to litellm.max_budget on reload.
+    "max_budget",
     # Every field editable from the Admin UI (proxy_server._GENERAL_SETTINGS_UI_LITELLM_FIELDS)
     # must be listed here so a DB write from one worker overrides the live litellm attribute on
     # the others when config reloads; otherwise peer workers stay on their startup value.

@@ -3763,6 +3763,27 @@ def _scrub_guardrail_inner(inner: dict[str, JsonValue]) -> None:
         inner["guardrail"] = None
 
 
+def _apply_safe_db_litellm_setting(key: str, value: object) -> None:
+    """Apply a DB-overlaid ``litellm_settings`` key to the live ``litellm`` module.
+
+    ``max_budget`` is coerced to float to match startup config loading
+    (``ProxyConfig.load_config``). A ``None`` DB value leaves the current
+    runtime attribute unchanged; a non-numeric value is ignored (with a
+    warning) rather than aborting the reload of an already-running proxy.
+    """
+    if key == "max_budget":
+        if value is None:
+            return
+        try:
+            budget = float(value)
+        except (TypeError, ValueError):
+            verbose_proxy_logger.warning("Ignoring non-numeric DB litellm_settings.max_budget override: %r", value)
+            return
+        litellm.max_budget = budget
+        return
+    setattr(litellm, key, value)
+
+
 def _scrub_db_overlay_remote_module_loads(section: str, db_value: JsonValue) -> JsonValue:
     """Strip ``s3://`` / ``gcs://`` entries from the DB-overlay value for
     fields whose contents reach ``get_instance_fn``. The same scheme is
@@ -6405,7 +6426,7 @@ class ProxyConfig:
         elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
             for key, value in db_param_value.items():
                 if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:  # params that are safe to override with db values
-                    setattr(litellm, key, value)
+                    _apply_safe_db_litellm_setting(key, value)
 
         # If param doesn't exist in config, add it
         if param_name not in current_config:

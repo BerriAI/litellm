@@ -9641,6 +9641,67 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+@pytest.mark.parametrize(
+    "db_value, expected",
+    [
+        (10, 10.0),
+        ("10", 10.0),
+        (0.5, 0.5),
+    ],
+)
+def test_max_budget_propagates_on_config_reload(monkeypatch, db_value, expected):
+    """Regression for #36533: a DB-stored litellm_settings.max_budget must overlay the live
+    litellm.max_budget when config reloads (STORE_MODEL_IN_DB=True). It was absent from
+    LITELLM_SETTINGS_SAFE_DB_OVERRIDES, so peer workers kept enforcing the stale config.yaml value."""
+    import litellm.proxy.proxy_server as ps
+
+    # peer worker booted with the stale config.yaml value
+    monkeypatch.setattr(litellm, "max_budget", 0.00001)
+
+    pc = ps.ProxyConfig()
+    pc._update_config_fields(
+        current_config={"litellm_settings": {}},
+        param_name="litellm_settings",
+        db_param_value={"max_budget": db_value},
+    )
+
+    assert litellm.max_budget == expected
+    assert isinstance(litellm.max_budget, float)
+
+
+def test_max_budget_none_db_value_leaves_runtime_unchanged(monkeypatch):
+    """A null DB max_budget must not clobber the running litellm.max_budget."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, "max_budget", 7.5)
+
+    pc = ps.ProxyConfig()
+    pc._update_config_fields(
+        current_config={"litellm_settings": {}},
+        param_name="litellm_settings",
+        db_param_value={"max_budget": None},
+    )
+
+    assert litellm.max_budget == 7.5
+
+
+def test_max_budget_invalid_db_value_is_ignored(monkeypatch):
+    """A non-numeric DB max_budget must be skipped (logged), not abort the reload of a
+    running proxy or clobber the live litellm.max_budget."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, "max_budget", 7.5)
+
+    pc = ps.ProxyConfig()
+    pc._update_config_fields(
+        current_config={"litellm_settings": {}},
+        param_name="litellm_settings",
+        db_param_value={"max_budget": "not-a-number"},
+    )
+
+    assert litellm.max_budget == 7.5
+
+
 def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypatch):
     """The flag defaults to False rather than None, so a plain 'is not None' check would
     report the default as 'In Config' and imply an admin had set it."""
