@@ -1,14 +1,15 @@
 import asyncio
+import contextlib
 import json
 import logging
 import math
 import time
 import traceback
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeAlias, TypeVar, overload
 
 import anyio
 import httpx
@@ -47,7 +48,12 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
-from litellm.proxy.common_utils.sse_keepalive import wrap_sse_stream_with_keepalive_pings
+from litellm.proxy.common_utils.sse_keepalive import (
+    SSE_COMMENT_PING_BYTES,
+    coerce_keepalive_interval,
+    resolve_ttft_keepalive_interval,
+    wrap_sse_stream_with_keepalive_pings,
+)
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
@@ -56,6 +62,100 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
+
+_LateResponseT = TypeVar("_LateResponseT", bound=Response)
+_LlmCallT = TypeVar("_LlmCallT")
+
+ProxyRouteType: TypeAlias = Literal[
+    "acompletion",
+    "aembedding",
+    "aresponses",
+    "_arealtime",
+    "_aresponses_websocket",
+    "acreate_realtime_client_secret",
+    "arealtime_calls",
+    "aget_responses",
+    "adelete_responses",
+    "acancel_responses",
+    "acompact_responses",
+    "acreate_batch",
+    "aretrieve_batch",
+    "alist_batches",
+    "acancel_batch",
+    "afile_content",
+    "afile_retrieve",
+    "afile_delete",
+    "atext_completion",
+    "acreate_fine_tuning_job",
+    "acancel_fine_tuning_job",
+    "alist_fine_tuning_jobs",
+    "aretrieve_fine_tuning_job",
+    "alist_input_items",
+    "aimage_edit",
+    "agenerate_content",
+    "agenerate_content_stream",
+    "allm_passthrough_route",
+    "avector_store_search",
+    "avector_store_create",
+    "avector_store_retrieve",
+    "avector_store_list",
+    "avector_store_update",
+    "avector_store_delete",
+    "avector_store_file_create",
+    "avector_store_file_list",
+    "avector_store_file_retrieve",
+    "avector_store_file_content",
+    "avector_store_file_update",
+    "avector_store_file_delete",
+    "aocr",
+    "asearch",
+    "avideo_generation",
+    "avideo_list",
+    "avideo_status",
+    "avideo_content",
+    "avideo_remix",
+    "avideo_create_character",
+    "avideo_get_character",
+    "avideo_edit",
+    "avideo_extension",
+    "acreate_container",
+    "alist_containers",
+    "aingest",
+    "aretrieve_container",
+    "adelete_container",
+    "aupload_container_file",
+    "alist_container_files",
+    "aretrieve_container_file",
+    "adelete_container_file",
+    "aretrieve_container_file_content",
+    "acreate_skill",
+    "alist_skills",
+    "aget_skill",
+    "adelete_skill",
+    "anthropic_messages",
+    "acreate_interaction",
+    "aget_interaction",
+    "adelete_interaction",
+    "acancel_interaction",
+    "acreate_agent",
+    "alist_agents",
+    "aget_agent",
+    "adelete_agent",
+    "alist_agent_versions",
+    "asend_message",
+    "call_mcp_tool",
+    "acreate_eval",
+    "alist_evals",
+    "aget_eval",
+    "aupdate_eval",
+    "adelete_eval",
+    "acancel_eval",
+    "acreate_run",
+    "alist_runs",
+    "aget_run",
+    "acancel_run",
+    "adelete_run",
+]
 from litellm.types.utils import ServerToolUse
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
@@ -559,6 +659,11 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
         super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
         self._upstream_generator = upstream_generator
 
+    @property
+    def upstream_generator(self) -> AsyncGenerator[str, None] | None:
+        """The upstream LLM stream, for a caller that has to run this response's cleanup itself."""
+        return self._upstream_generator
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
             await super().__call__(scope, receive, send)
@@ -647,6 +752,39 @@ async def _buffer_first_chunk_honoring_disconnect(
             verbose_proxy_logger.debug("create_response: error closing generator on disconnect: %s", exc)
     verbose_proxy_logger.info("create_response: client disconnected before first chunk, upstream LLM request cancelled")
     raise _ClientDisconnectedBeforeFirstChunk()
+
+
+def _sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
+    """Build the ProxyException-shaped ``{"error": ...}`` body used in SSE error frames.
+
+    Matches ``ProxyException.to_dict()`` so streaming and non-streaming error frames
+    are byte-identical.
+    """
+    # Preserve status code from HTTPException (e.g. guardrail blocks)
+    error_status: Final = getattr(exc, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    raw_detail: Final = _getattr_object(exc, "detail", "Error processing stream start")
+    message, structured_fields = _serialize_http_exception_detail(raw_detail)
+
+    existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
+    merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
+
+    # Built in one statement then given its one optional key, rather than spread
+    # conditionally: the spread form costs two extra dict constructions, which
+    # type-discipline-budget.json's LIT002 ceiling has no room for.
+    error_obj: Final = {
+        "message": message,
+        "type": getattr(exc, "type", "None"),
+        "param": getattr(exc, "param", "None"),
+        "code": str(error_status),
+    }
+    if merged_fields:
+        error_obj["provider_specific_fields"] = merged_fields
+    return error_status, error_obj
+
+
+def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
+    """The two frames an SSE stream ends with once it can no longer raise."""
+    return f"data: {json.dumps({'error': error_obj})}\n\n", "data: [DONE]\n\n"
 
 
 async def create_response(
@@ -740,31 +878,11 @@ async def create_response(
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception("Error consuming first chunk from generator: %s", e)
 
-        # Preserve status code from HTTPException (e.g., guardrail blocks)
-        error_status: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
-        raw_detail: Final = _getattr_object(e, "detail", "Error processing stream start")
-        message, structured_fields = _serialize_http_exception_detail(raw_detail)
-
-        existing_fields: Final = getattr(e, "provider_specific_fields", None) or {}
-        if structured_fields:
-            merged_fields: dict | None = {**existing_fields, **structured_fields}
-        else:
-            merged_fields = existing_fields or None
-
-        # Match ProxyException.to_dict() shape so streaming and non-streaming
-        # error frames are byte-identical.
-        error_obj: Final[dict[str, object]] = {
-            "message": message,
-            "type": getattr(e, "type", "None"),
-            "param": getattr(e, "param", "None"),
-            "code": str(error_status),
-        }
-        if merged_fields:
-            error_obj["provider_specific_fields"] = merged_fields
+        error_status, error_obj = _sse_error_payload(e)
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
-            yield f"data: {json.dumps({'error': error_obj})}\n\n"
-            yield "data: [DONE]\n\n"
+            for frame in _sse_error_frames(error_obj):
+                yield frame
 
         return StreamingResponse(
             error_gen_message(),
@@ -794,6 +912,176 @@ async def create_response(
         headers=streaming_headers,
         status_code=final_status_code,
         upstream_generator=generator,
+    )
+
+
+_TTFT_KEEPALIVE_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+)
+
+
+def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Router | None = None) -> float | None:
+    """The operator's keepalive interval, but only for a request that asked to stream.
+
+    Resolved through the deployments the request could land on, so a deployment's
+    `keepalive_seconds: 0` stays the hard disable it is documented to be rather
+    than being switched back on by the global default.
+    """
+    if request_data.get("stream") is not True:
+        return None
+    requested_model: Final = request_data.get("model")
+    deployments: Final = (
+        llm_router.get_model_list(model_name=requested_model) or ()
+        if llm_router is not None and isinstance(requested_model, str)
+        else ()
+    )
+    return resolve_ttft_keepalive_interval(deployments, litellm.sse_keepalive_ping_interval_seconds)
+
+
+async def _aclose_late_response(produced: Response) -> None:
+    """Run the cleanup Starlette would have run, for a response it never called.
+
+    Closing an already-closed async generator is a no-op, so this is safe to call
+    from both the relay's own teardown and the outer one.
+    """
+    if not isinstance(produced, StreamingResponse):
+        return
+    targets: Final = (
+        (produced.body_iterator, produced.upstream_generator)
+        if isinstance(produced, _UpstreamClosingStreamingResponse)
+        else (produced.body_iterator,)
+    )
+    for target in targets:
+        aclose = getattr(target, "aclose", None)
+        if aclose is None:
+            continue
+        try:
+            await aclose()
+        except BaseException as exc:  # noqa: BLE001  # teardown must not mask why the stream ended
+            verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
+
+
+async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
+    """Replay a Response that was built after a keepalive had already opened the wire."""
+    if not isinstance(produced, StreamingResponse):
+        # The status line is already on the wire, so a non-streaming body, an error
+        # body included, can only reach the client as an SSE frame.
+        yield b"data: " + (bytes(produced.body) or b"{}") + b"\n\n"
+        yield b"data: [DONE]\n\n"
+        return
+
+    try:
+        async for chunk in produced.body_iterator:
+            yield chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
+    finally:
+        # Starlette never called this response, so the cleanup its __call__ would
+        # have run has to happen here or the upstream LLM connection leaks.
+        with anyio.CancelScope(shield=True):
+            await _aclose_late_response(produced)
+
+
+async def _sanitized_late_failure(
+    exc: Exception,
+    on_late_failure: "Callable[[Exception], Awaitable[HTTPException | None]] | None",
+) -> Exception:
+    """Report a late failure and return whatever should reach the client.
+
+    ``post_call_failure_hook`` lets a callback replace the client-facing error, by
+    returning a replacement or by raising one, and both are used elsewhere in this
+    module. Serializing the original would leak provider detail a deployment had
+    configured away, so the hook's answer wins. A callback that fails some other
+    way is a bug in the callback, not a reason to lose the real error.
+    """
+    if on_late_failure is None:
+        return exc
+    try:
+        replacement: Final = await on_late_failure(exc)
+    except HTTPException as raised_replacement:
+        return raised_replacement
+    except Exception as hook_failure:  # noqa: BLE001  # a broken callback must not replace the real error
+        verbose_proxy_logger.exception("post_call_failure_hook raised while reporting a late failure: %s", hook_failure)
+        return exc
+    return replacement if replacement is not None else exc
+
+
+async def open_sse_before_first_byte(
+    produce_response: Awaitable[_LateResponseT],
+    ping_interval_seconds: float | str | None,
+    media_type: str = "text/event-stream",
+    on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
+) -> _LateResponseT | StreamingResponse:
+    """Write SSE keepalive comments while the upstream LLM call is still in flight.
+
+    The whole time-to-first-token is spent inside `produce_response`: the upstream
+    withholds its response headers until it emits its first token, so nothing has
+    entered the ASGI response phase yet and the proxy writes zero bytes. An
+    intermediary with an idle read timeout (AWS ALB and nginx both default to 60s)
+    then drops a connection that is perfectly healthy.
+
+    When `produce_response` does not finish within one interval, the response is
+    opened immediately and `: ping` comments, which every conformant SSE client
+    ignores, fill the wire until the real response is ready to be replayed onto it.
+    Committing the status line that early is the cost: a failure discovered after
+    the first ping reaches the client as an SSE error frame under a 200 rather than
+    as an HTTP error status, and LiteLLM's own `x-litellm-*` response headers are
+    not yet known. Both are why this stays off until an operator sets an interval.
+    """
+    interval: Final = coerce_keepalive_interval(ping_interval_seconds)
+    if interval is None:
+        return await produce_response
+
+    produce_task: Final = asyncio.ensure_future(produce_response)
+    await asyncio.wait((produce_task,), timeout=interval)
+    if produce_task.done():
+        # Fast path: the upstream answered inside one interval, so nothing was
+        # written early and this is byte-identical to not being wrapped at all.
+        return produce_task.result()
+
+    async def keepalive_then_relay() -> AsyncGenerator[bytes, None]:
+        try:
+            while not produce_task.done():
+                yield SSE_COMMENT_PING_BYTES
+                await asyncio.wait((produce_task,), timeout=interval)
+            try:
+                produced: Final = produce_task.result()
+            except Exception as exc:  # noqa: BLE001  # the status line is already sent; surface it as a frame
+                verbose_proxy_logger.exception(
+                    "request failed after its SSE keepalive had opened the response: %s", exc
+                )
+                # The caller's own `except` never sees this, so its failure hook
+                # would never fire and the failure would go unaudited. The hook
+                # also gets to sanitize what reaches the client, by returning or
+                # raising a replacement, so its answer decides the frame.
+                _, error_obj = _sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
+                for frame in _sse_error_frames(error_obj):
+                    yield frame.encode()
+                return
+            async for chunk in _relay_late_response(produced):
+                yield chunk
+        finally:
+            if not produce_task.done():
+                produce_task.cancel()
+                with anyio.CancelScope(shield=True):
+                    with contextlib.suppress(BaseException):
+                        await produce_task
+            elif not produce_task.cancelled():
+                # The upstream may have answered while nobody was draining this
+                # relay, e.g. the client vanished first. Nothing else holds that
+                # response, so its stream only gets closed here.
+                with anyio.CancelScope(shield=True):
+                    with contextlib.suppress(BaseException):
+                        await _aclose_late_response(produce_task.result())
+
+    verbose_proxy_logger.info(
+        "no upstream response after %ss, opening the SSE response early and sending keepalives", interval
+    )
+    return StreamingResponse(
+        keepalive_then_relay(),
+        media_type=media_type,
+        headers=_TTFT_KEEPALIVE_HEADERS,
     )
 
 
@@ -1043,7 +1331,7 @@ def _log_llm_api_exception(e: Exception) -> None:
 
 async def _cancel_llm_call_on_client_disconnect(
     request: Request,
-    llm_api_call: "asyncio.Future[object]",
+    llm_api_call: "asyncio.Future[_LlmCallT]",
     disconnect_event: asyncio.Event,
 ) -> None:
     try:
@@ -1062,8 +1350,8 @@ async def _cancel_llm_call_on_client_disconnect(
 
 async def _await_llm_call_cancelling_on_disconnect(
     request: Request,
-    llm_api_call: "asyncio.Future[Any]",
-) -> Any:
+    llm_api_call: "asyncio.Future[_LlmCallT]",
+) -> _LlmCallT:
     disconnect_event: Final = asyncio.Event()
     monitor: Final = asyncio.create_task(_cancel_llm_call_on_client_disconnect(request, llm_api_call, disconnect_event))
     try:
@@ -1714,100 +2002,11 @@ class ProxyBaseLLMRequestProcessing:
         request: Request,
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
-        route_type: Literal[
-            "acompletion",
-            "aembedding",
-            "aresponses",
-            "_arealtime",
-            "_aresponses_websocket",
-            "acreate_realtime_client_secret",
-            "arealtime_calls",
-            "aget_responses",
-            "adelete_responses",
-            "acancel_responses",
-            "acompact_responses",
-            "acreate_batch",
-            "aretrieve_batch",
-            "alist_batches",
-            "acancel_batch",
-            "afile_content",
-            "afile_retrieve",
-            "afile_delete",
-            "atext_completion",
-            "acreate_fine_tuning_job",
-            "acancel_fine_tuning_job",
-            "alist_fine_tuning_jobs",
-            "aretrieve_fine_tuning_job",
-            "alist_input_items",
-            "aimage_edit",
-            "agenerate_content",
-            "agenerate_content_stream",
-            "allm_passthrough_route",
-            "avector_store_search",
-            "avector_store_create",
-            "avector_store_retrieve",
-            "avector_store_list",
-            "avector_store_update",
-            "avector_store_delete",
-            "avector_store_file_create",
-            "avector_store_file_list",
-            "avector_store_file_retrieve",
-            "avector_store_file_content",
-            "avector_store_file_update",
-            "avector_store_file_delete",
-            "aocr",
-            "asearch",
-            "avideo_generation",
-            "avideo_list",
-            "avideo_status",
-            "avideo_content",
-            "avideo_remix",
-            "avideo_create_character",
-            "avideo_get_character",
-            "avideo_edit",
-            "avideo_extension",
-            "acreate_container",
-            "alist_containers",
-            "aingest",
-            "aretrieve_container",
-            "adelete_container",
-            "aupload_container_file",
-            "alist_container_files",
-            "aretrieve_container_file",
-            "adelete_container_file",
-            "aretrieve_container_file_content",
-            "acreate_skill",
-            "alist_skills",
-            "aget_skill",
-            "adelete_skill",
-            "anthropic_messages",
-            "acreate_interaction",
-            "aget_interaction",
-            "adelete_interaction",
-            "acancel_interaction",
-            "acreate_agent",
-            "alist_agents",
-            "aget_agent",
-            "adelete_agent",
-            "alist_agent_versions",
-            "asend_message",
-            "call_mcp_tool",
-            "acreate_eval",
-            "alist_evals",
-            "aget_eval",
-            "aupdate_eval",
-            "adelete_eval",
-            "acancel_eval",
-            "acreate_run",
-            "alist_runs",
-            "aget_run",
-            "acancel_run",
-            "adelete_run",
-        ],
+        route_type: ProxyRouteType,
         proxy_logging_obj: ProxyLogging,
-        general_settings: dict,
+        general_settings: dict[str, object],
         proxy_config: ProxyConfig,
-        select_data_generator: Callable | None = None,
+        select_data_generator: Callable[..., object] | None = None,
         llm_router: Router | None = None,
         model: str | None = None,
         user_model: str | None = None,
@@ -1817,7 +2016,72 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: str | None = None,
         version: str | None = None,
         is_streaming_request: bool | None = False,
-        contents: list | None = None,  # Add contents parameter
+        contents: list[object] | None = None,
+        skip_pre_call_logic: bool = False,
+    ) -> Any:
+        """Run the request, sending SSE keepalives while the upstream is still silent.
+
+        Everything below this point, the upstream call included, happens before the
+        proxy can write a byte, so a slow time-to-first-token leaves the response
+        idle. See ``open_sse_before_first_byte``; unwrapped unless an operator sets
+        ``litellm_settings.sse_keepalive_ping_interval_seconds``.
+        """
+
+        async def _audit_late_failure(exc: Exception) -> HTTPException | None:
+            # Once a keepalive is on the wire this can no longer raise, so the
+            # caller's `except` never runs its own post_call_failure_hook.
+            return await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=exc,
+                request_data=self.data,
+            )
+
+        return await open_sse_before_first_byte(
+            self._process_llm_request(
+                request=request,
+                fastapi_response=fastapi_response,
+                user_api_key_dict=user_api_key_dict,
+                route_type=route_type,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings=general_settings,
+                proxy_config=proxy_config,
+                select_data_generator=select_data_generator,
+                llm_router=llm_router,
+                model=model,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                version=version,
+                is_streaming_request=is_streaming_request,
+                contents=contents,
+                skip_pre_call_logic=skip_pre_call_logic,
+            ),
+            ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
+            on_late_failure=_audit_late_failure,
+        )
+
+    async def _process_llm_request(
+        self,
+        request: Request,
+        fastapi_response: Response,
+        user_api_key_dict: UserAPIKeyAuth,
+        route_type: ProxyRouteType,
+        proxy_logging_obj: ProxyLogging,
+        general_settings: dict[str, object],
+        proxy_config: ProxyConfig,
+        select_data_generator: Callable[..., object] | None = None,
+        llm_router: Router | None = None,
+        model: str | None = None,
+        user_model: str | None = None,
+        user_temperature: float | None = None,
+        user_request_timeout: float | None = None,
+        user_max_tokens: int | None = None,
+        user_api_base: str | None = None,
+        version: str | None = None,
+        is_streaming_request: bool | None = False,
+        contents: list[object] | None = None,  # Add contents parameter
         skip_pre_call_logic: bool = False,
     ) -> Any:
         """
@@ -2039,6 +2303,7 @@ class ProxyBaseLLMRequestProcessing:
                         return StreamingResponse(
                             content=generator,
                             status_code=status.HTTP_200_OK,
+                            media_type=self._passthrough_event_stream_media_type(),
                             headers=custom_headers,
                         )
                     else:
@@ -2494,10 +2759,16 @@ class ProxyBaseLLMRequestProcessing:
 
     def _passthrough_event_stream_media_type(self) -> str | None:
         """
-        Content-type for a buffered passthrough event-stream response, resolved
-        from the provider handler so the proxy stays provider-agnostic. Mirrors
-        the upstream content-type the non-streaming path forwards, since the
-        buffered streaming generator carries no headers of its own.
+        Content-type for a passthrough event-stream response, resolved from the
+        provider handler so the proxy stays provider-agnostic. Mirrors the
+        upstream content-type the non-streaming path forwards, since the
+        streaming generator carries no headers of its own. Used for both the
+        buffered (guardrail-rewritten) and the unbuffered relay paths so
+        clients that enforce the event-stream content-type (e.g. Claude Code on
+        Bedrock invoke-with-response-stream) see the correct header instead of
+        no content-type at all, which they fall back to reading as
+        application/octet-stream. Returns None for providers with no
+        event-stream media type, leaving the response headers unchanged.
         """
         from litellm.llms.pass_through.guardrail_translation.handler import (
             LlmPassthroughRouteHandler,

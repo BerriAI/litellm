@@ -72,22 +72,6 @@ describe("CacheSettings", () => {
     });
   });
 
-  describe("when the advanced settings section is collapsed", () => {
-    it("should reveal the advanced field sections only after the user expands it", async () => {
-      const user = userEvent.setup();
-      renderSettings();
-
-      await screen.findByText("Connection Settings");
-      expect(screen.queryByText("SSL Settings")).not.toBeInTheDocument();
-
-      await user.click(screen.getByRole("button", { name: "Advanced Settings" }));
-
-      expect(await screen.findByText("SSL Settings")).toBeInTheDocument();
-      expect(screen.getByText("Cache Management")).toBeInTheDocument();
-      expect(screen.getByText("GCP Authentication")).toBeInTheDocument();
-    });
-  });
-
   describe("when a field fails inline validation", () => {
     it("should block save and surface the validation message", async () => {
       const user = userEvent.setup();

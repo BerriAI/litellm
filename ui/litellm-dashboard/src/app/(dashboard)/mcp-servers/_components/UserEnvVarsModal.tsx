@@ -1,9 +1,16 @@
 import React from "react";
-import { Modal, Form, Input, Button, Alert, Spin, Tag, Typography } from "antd";
+import { Modal, Alert, Spin, Tag, Typography } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { MCPServer, MCPUserEnvVarsStatus } from "@/components/mcp_tools/types";
+import { z } from "zod/v4";
+import { MCPServer, MCPUserEnvVarsStatus, MCPUserEnvVarSpec } from "@/components/mcp_tools/types";
 import { getMCPUserEnvVars, storeMCPUserEnvVars } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
 
 const { Text, Title } = Typography;
 
@@ -15,6 +22,67 @@ interface UserEnvVarsModalProps {
   onSaved?: (status: MCPUserEnvVarsStatus) => void;
 }
 
+interface UserEnvVarsFormProps {
+  required: readonly MCPUserEnvVarSpec[];
+  isSaving: boolean;
+  onCancel: () => void;
+  onSubmit: (values: Record<string, string>) => void;
+}
+
+const buildSchema = (required: readonly MCPUserEnvVarSpec[]) =>
+  z.object(
+    Object.fromEntries(
+      required.map((spec) => [spec.name, spec.is_set ? z.string() : z.string().min(1, `${spec.name} is required`)]),
+    ),
+  );
+
+const emptyValues = (required: readonly MCPUserEnvVarSpec[]): Record<string, string> =>
+  Object.fromEntries(required.map((spec) => [spec.name, ""]));
+
+const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, onCancel, onSubmit }) => {
+  const form = useZodForm(buildSchema(required), { defaultValues: emptyValues(required) });
+
+  return (
+    <form onSubmit={form.handleSubmit(onSubmit)}>
+      <FieldGroup>
+        {required.map((spec) => (
+          <FormField
+            key={spec.name}
+            control={form.control}
+            name={spec.name}
+            description={spec.description || undefined}
+            label={
+              <span className="flex items-center gap-2">
+                <span className="font-mono text-sm font-semibold">{spec.name}</span>
+                {spec.is_set && <Tag color="green">Set</Tag>}
+              </span>
+            }
+          >
+            {(field) => (
+              <PasswordInput
+                {...field}
+                disabled={isSaving}
+                placeholder={
+                  spec.is_set ? "Enter a new value to overwrite" : spec.description || `Enter your ${spec.name}`
+                }
+              />
+            )}
+          </FormField>
+        ))}
+      </FieldGroup>
+      <div className="mt-6 flex items-center justify-end gap-2 border-t border-border pt-2">
+        <Button type="button" variant="outline" onClick={onCancel} disabled={isSaving}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={isSaving}>
+          {isSaving && <UiLoadingSpinner className="mr-2 size-4" />}
+          Save Credentials
+        </Button>
+      </div>
+    </form>
+  );
+};
+
 /**
  * User-facing modal for filling in per-user MCP environment variables.
  *
@@ -23,7 +91,7 @@ interface UserEnvVarsModalProps {
  * description as the placeholder.
  */
 const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, accessToken, onClose, onSaved }) => {
-  const [form] = Form.useForm();
+  const [formGeneration, setFormGeneration] = React.useState(0);
 
   const {
     data: status,
@@ -38,12 +106,12 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
   const saveMutation = useMutation({
     mutationFn: (values: Record<string, string>) => storeMCPUserEnvVars(accessToken!, server!.server_id, values),
     onSuccess: (saved) => {
-      NotificationsManager.success("Credentials saved");
+      toast.success("Credentials saved");
       onSaved?.(saved);
       onClose();
     },
     onError: (err) => {
-      NotificationsManager.fromBackend(`Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`);
+      toast.fromError(`Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`);
     },
   });
 
@@ -68,7 +136,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
       width={520}
       destroyOnHidden
       afterOpenChange={(opened) => {
-        if (opened) form.resetFields();
+        if (opened) setFormGeneration((generation) => generation + 1);
       }}
       title={
         <div>
@@ -95,42 +163,18 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
           <Alert type="info" showIcon message="No per-user fields configured for this server." />
         ) : (
           <>
-            <Text className="text-sm text-gray-600 block">
+            <Text className="text-sm text-muted-foreground block">
               These values are private to you. Your admin configured this MCP server to require these per-user
               credentials. Saved values are never shown back; leave an already-set field blank to keep it, or enter a
               value to set or change it.
             </Text>
-            <Form form={form} layout="vertical" onFinish={handleSave} disabled={isSaving}>
-              {required.map((spec) => (
-                <Form.Item
-                  key={spec.name}
-                  name={spec.name}
-                  label={
-                    <span className="flex items-center gap-2">
-                      <span className="font-mono text-sm font-semibold">{spec.name}</span>
-                      {spec.is_set && <Tag color="green">Set</Tag>}
-                    </span>
-                  }
-                  extra={spec.description || undefined}
-                  rules={spec.is_set ? undefined : [{ required: true, message: `${spec.name} is required` }]}
-                >
-                  <Input.Password
-                    placeholder={
-                      spec.is_set ? "Enter a new value to overwrite" : spec.description || `Enter your ${spec.name}`
-                    }
-                    visibilityToggle
-                  />
-                </Form.Item>
-              ))}
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
-                <Button onClick={onClose} disabled={isSaving}>
-                  Cancel
-                </Button>
-                <Button type="primary" htmlType="submit" loading={isSaving}>
-                  Save Credentials
-                </Button>
-              </div>
-            </Form>
+            <UserEnvVarsForm
+              key={formGeneration}
+              required={required}
+              isSaving={isSaving}
+              onCancel={onClose}
+              onSubmit={handleSave}
+            />
           </>
         )}
       </div>

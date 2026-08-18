@@ -1,7 +1,6 @@
 import React from "react";
 import { Select, Skeleton } from "antd";
 import { TeamOutlined } from "@ant-design/icons";
-import { Text } from "@tremor/react";
 import { useAccessGroups, AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
 export interface AccessGroupSelectorProps {
@@ -43,9 +42,9 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
     return (
       <div>
         {showLabel && (
-          <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+          <p className="text-sm font-medium block mb-2 text-gray-700 flex items-center">
             <TeamOutlined className="mr-2" /> {labelText}
-          </Text>
+          </p>
         )}
         <Skeleton.Input active block style={{ height: 32, ...style }} />
       </div>
@@ -69,9 +68,9 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
   return (
     <div>
       {showLabel && (
-        <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+        <p className="text-sm font-medium block mb-2 text-gray-700 flex items-center">
           <TeamOutlined className="mr-2" /> {labelText}
-        </Text>
+        </p>
       )}
       <Select
         mode="multiple"

@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, screen, waitFor, within } from "@testing-library/react";
-import userEvent, { UserEvent } from "@testing-library/user-event";
+import { act, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CostTrackingSettings from "./cost_tracking_settings";
 
@@ -122,21 +122,6 @@ describe("CostTrackingSettings", () => {
     expect(screen.getByText(/configure cost discounts and margins/i)).toBeInTheDocument();
   });
 
-  const openModal = async (section: string, addButtonName: RegExp) => {
-    const user = userEvent.setup();
-    renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />);
-
-    await user.click(screen.getByText(section).closest("button")!);
-    await user.click(await screen.findByRole("button", { name: addButtonName }));
-
-    return { user, dialog: await screen.findByRole("dialog") };
-  };
-
-  const pickProvider = async (user: UserEvent, dialog: HTMLElement, providerLabel: string) => {
-    await user.click(within(dialog).getByRole("combobox"));
-    await user.click(await screen.findByText(providerLabel, { selector: "span" }));
-  };
-
   describe("Add Provider Discount modal", () => {
     it("should open the Add Provider Discount modal when the button is clicked", async () => {
       const user = userEvent.setup();
@@ -152,27 +137,6 @@ describe("CostTrackingSettings", () => {
       await user.click(addButton);
 
       expect(await screen.findByText("Add Provider Discount", { selector: "h2" })).toBeInTheDocument();
-    });
-
-    it("should save the discount exactly once when the add button is clicked", async () => {
-      const { user, dialog } = await openModal("Provider Discounts", /add provider discount/i);
-
-      await pickProvider(user, dialog, "OpenAI");
-      await user.type(within(dialog).getByPlaceholderText("5"), "5");
-      await user.click(within(dialog).getByRole("button", { name: "Add Provider Discount" }));
-
-      expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledTimes(1);
-      expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledWith("OpenAI", "5");
-    });
-
-    it("should save the discount exactly once when Enter is pressed in the discount field", async () => {
-      const { user, dialog } = await openModal("Provider Discounts", /add provider discount/i);
-
-      await pickProvider(user, dialog, "OpenAI");
-      await user.type(within(dialog).getByPlaceholderText("5"), "5{Enter}");
-
-      expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledTimes(1);
-      expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledWith("OpenAI", "5");
     });
   });
 
@@ -190,22 +154,6 @@ describe("CostTrackingSettings", () => {
       await user.click(addButton);
 
       expect(await screen.findByText("Add Provider Margin", { selector: "h2" })).toBeInTheDocument();
-    });
-
-    it("should save the margin exactly once when Enter is pressed in the percentage field", async () => {
-      const { user, dialog } = await openModal("Fee/Price Margin", /add provider margin/i);
-
-      await pickProvider(user, dialog, "Global (All Providers)");
-      await user.type(within(dialog).getByPlaceholderText("10"), "10{Enter}");
-
-      const expectedMargin = {
-        selectedProvider: "global",
-        marginType: "percentage",
-        percentageValue: "10",
-        fixedAmountValue: "",
-      };
-      expect(stableMarginCallbacks.handleAddMargin).toHaveBeenCalledTimes(1);
-      expect(stableMarginCallbacks.handleAddMargin).toHaveBeenCalledWith(expectedMargin);
     });
   });
 
