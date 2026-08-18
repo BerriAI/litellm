@@ -3741,3 +3741,82 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == "42 files found"
     assert _image_urls_in_user_messages(result) == []
+
+
+def test_translate_openai_content_to_anthropic_tool_use_no_null_provider_specific_fields():
+    """Regression test: a tool_use block without a signature must not emit
+    ``provider_specific_fields`` at all.
+
+    Previously the block was serialized with ``model_dump()`` (no ``exclude_none``),
+    which leaked ``"provider_specific_fields": null`` into the Anthropic response.
+    Strict Anthropic-compatible backends reject unrecognized keys on tool_use
+    blocks with ``400 ... provider_specific_fields: Extra inputs are not
+    permitted``. Clients (e.g. Claude Code) persist the response, so the stray
+    null later breaks the conversation when it is replayed to the real API.
+    """
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id="call_no_signature",
+                        type="function",
+                        function=Function(
+                            name="get_weather",
+                            arguments='{"city": "SF"}',
+                        ),
+                    )
+                ],
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "call_no_signature"
+    assert result[0]["name"] == "get_weather"
+    assert result[0]["input"] == {"city": "SF"}
+    assert (
+        "provider_specific_fields" not in result[0]
+    ), "tool_use block must not contain a null/empty provider_specific_fields key"
+
+
+def test_translate_openai_content_to_anthropic_tool_use_preserves_signature():
+    """When a thought signature is present, ``provider_specific_fields`` must be
+    preserved on the tool_use block (it carries real data, not a null)."""
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id="call_with_signature",
+                        type="function",
+                        function=Function(
+                            name="get_weather",
+                            arguments='{"city": "SF"}',
+                        ),
+                    )
+                ],
+            )
+        )
+    ]
+    # Pydantic coerces the TypedDict tool_call into ChatCompletionMessageToolCall;
+    # attach the provider-specific thought signature to the coerced object.
+    openai_choices[0].message.tool_calls[0].provider_specific_fields = {
+        "thought_signature": "sigABC123"
+    }
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 1
+    assert result[0]["type"] == "tool_use"
+    assert result[0]["id"] == "call_with_signature"
+    assert result[0].get("provider_specific_fields") == {"signature": "sigABC123"}

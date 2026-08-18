@@ -1246,7 +1246,10 @@ class LiteLLMAnthropicMessagesAdapter:
                     # Add provider_specific_fields if signature is present
                     if provider_specific_fields:
                         tool_use_block.provider_specific_fields = provider_specific_fields
-                    new_content.append(tool_use_block.model_dump())
+                    # exclude_none: avoid emitting ``provider_specific_fields: null`` (and any
+                    # other unset optional field) — strict Anthropic-compatible backends reject
+                    # unrecognized keys on tool_use blocks with 400 "Extra inputs are not permitted".
+                    new_content.append(tool_use_block.model_dump(exclude_none=True))
 
         return new_content
 
