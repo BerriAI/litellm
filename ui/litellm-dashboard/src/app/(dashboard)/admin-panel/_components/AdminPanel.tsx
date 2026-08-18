@@ -14,7 +14,7 @@ import {
   TableHeaderCell,
   TableRow,
 } from "@tremor/react";
-import { Alert, Button as Button2, Form, Input, Modal, Space, Tabs, Typography } from "antd";
+import { Alert, Modal, Space, Tabs, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import NewBadge from "@/components/common_components/NewBadge";
 import { useBaseUrl } from "@/components/constants";
@@ -28,9 +28,43 @@ import UserBannerSettings from "@/components/Settings/AdminSettings/UserBannerSe
 import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import PluginSettings from "@/components/Settings/AdminSettings/PluginSettings/PluginSettings";
 import SSOModals from "@/components/SSOModals";
+import {
+  emptySSOSettingsFormValues,
+  useSSOSettingsForm,
+  type SSOSettingsFormValues,
+} from "@/components/Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm";
 import UIAccessControlForm from "@/components/UIAccessControlForm";
+import { z } from "zod/v4";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button as ShadcnButton } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useZodForm } from "@/lib/forms/useZodForm";
 
 const { Title, Paragraph, Text } = Typography;
+
+const allowedIPSchema = z.object({
+  ip: z.string().min(1, "Please enter an IP address"),
+});
+
+type AllowedIPFormValues = z.infer<typeof allowedIPSchema>;
+
+const AddAllowedIPForm = ({ onSubmit }: { onSubmit: (values: AllowedIPFormValues) => Promise<void> }) => {
+  const form = useZodForm(allowedIPSchema, { defaultValues: { ip: "" } });
+
+  return (
+    <form onSubmit={form.handleSubmit(onSubmit)}>
+      <FieldGroup>
+        <FormField control={form.control} name="ip">
+          {({ ref, ...field }) => <Input ref={ref} placeholder="Enter IP address" {...field} />}
+        </FormField>
+        <div>
+          <ShadcnButton type="submit">Add IP Address</ShadcnButton>
+        </div>
+      </FieldGroup>
+    </form>
+  );
+};
 
 interface AdminPanelProps {
   proxySettings?: any;
@@ -38,7 +72,7 @@ interface AdminPanelProps {
 
 const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   const { premiumUser, accessToken, userId: userID } = useAuthorized();
-  const [form] = Form.useForm();
+  const form = useSSOSettingsForm("admin-panel");
   const [isAddSSOModalVisible, setIsAddSSOModalVisible] = useState(false);
   const [isInstructionsModalVisible, setIsInstructionsModalVisible] = useState(false);
   const [isAllowedIPModalVisible, setIsAllowedIPModalVisible] = useState(false);
@@ -141,7 +175,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   const handleAddSSOOk = () => {
     setIsAddSSOModalVisible(false);
-    form.resetFields();
+    form.reset(emptySSOSettingsFormValues);
     if (accessToken && premiumUser) {
       checkSSOConfiguration();
     }
@@ -149,10 +183,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   const handleAddSSOCancel = () => {
     setIsAddSSOModalVisible(false);
-    form.resetFields();
+    form.reset(emptySSOSettingsFormValues);
   };
 
-  const handleShowInstructions = (formValues: Record<string, any>) => {
+  const handleShowInstructions = (formValues: SSOSettingsFormValues) => {
     setIsAddSSOModalVisible(false);
     setIsInstructionsModalVisible(true);
   };
@@ -293,14 +327,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
               onCancel={() => setIsAddIPModalVisible(false)}
               footer={null}
             >
-              <Form onFinish={handleAddIP}>
-                <Form.Item name="ip" rules={[{ required: true, message: "Please enter an IP address" }]}>
-                  <Input placeholder="Enter IP address" />
-                </Form.Item>
-                <Form.Item>
-                  <Button2 htmlType="submit">Add IP Address</Button2>
-                </Form.Item>
-              </Form>
+              <AddAllowedIPForm onSubmit={handleAddIP} />
             </Modal>
 
             <Modal

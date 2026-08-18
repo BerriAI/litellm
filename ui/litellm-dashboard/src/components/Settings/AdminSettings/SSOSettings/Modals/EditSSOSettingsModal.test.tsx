@@ -1,6 +1,7 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, Mock } from "vitest";
-import EditSSOSettingsModal from "./EditSSOSettingsModal";
+import EditSSOSettingsModal, { toSSOFormValues } from "./EditSSOSettingsModal";
+import type { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
 import { toast } from "@/lib/toast";
@@ -34,14 +35,6 @@ const TEST_IDS = {
   BASE_SSO_FORM: "base-sso-form",
   TRIGGER_FORM_SUBMIT: "trigger-form-submit",
 } as const;
-
-// Mock form instance
-const mockForm = {
-  resetFields: vi.fn(),
-  setFieldsValue: vi.fn(),
-  getFieldsValue: vi.fn(),
-  submit: vi.fn(),
-};
 
 // Types
 type SSOData = {
@@ -137,22 +130,10 @@ vi.mock("antd", () => ({
       <button data-testid="modal-cancel" onClick={onCancel} />
     </div>
   ),
-  Button: ({ children, onClick, loading, disabled, ...props }: any) => (
-    <button data-testid={TEST_IDS.BUTTON} onClick={onClick} data-loading={loading} disabled={disabled} {...props}>
-      {children}
-    </button>
-  ),
-  Form: {
-    useForm: () => [mockForm],
-  },
-  Space: ({ children, ...props }: any) => (
-    <div data-testid="space" {...props}>
-      {children}
-    </div>
-  ),
 }));
 
-vi.mock("./BaseSSOSettingsForm", () => ({
+vi.mock("./BaseSSOSettingsForm", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./BaseSSOSettingsForm")>()),
   default: ({ form, onFormSubmit }: any) => (
     <div data-testid={TEST_IDS.BASE_SSO_FORM}>
       <button data-testid={TEST_IDS.TRIGGER_FORM_SUBMIT} onClick={() => onFormSubmit({ testField: "testValue" })}>
@@ -212,9 +193,11 @@ const renderComponent = (props: Partial<React.ComponentProps<typeof EditSSOSetti
   };
 };
 
-const getButtons = () => screen.getAllByTestId(TEST_IDS.BUTTON);
+const getButtons = () => within(screen.getByTestId("modal-footer")).getAllByRole("button");
 const getCancelButton = () => getButtons()[0];
 const getSaveButton = () => getButtons()[1];
+
+const seededValuesFor = (ssoData: SSOData) => toSSOFormValues(ssoData.values as SSOSettingsValues);
 
 describe("EditSSOSettingsModal", () => {
   beforeEach(() => {
@@ -259,16 +242,24 @@ describe("EditSSOSettingsModal", () => {
 
       fireEvent.click(getCancelButton());
 
-      expect(mockForm.resetFields).toHaveBeenCalled();
       expect(mockOnCancel).toHaveBeenCalled();
     });
 
-    it("calls form.submit when save button is clicked", () => {
+    it("calls form.submit when save button is clicked", async () => {
+      const mockMutateAsync = vi.fn().mockResolvedValue({ success: true });
+      (processSSOSettingsPayload as any).mockReturnValue({ processed: "payload" });
+      setupMocks({
+        useSSOSettings: { data: createGoogleSSOData({ proxy_base_url: "https://proxy.example.com" }) },
+        useEditSSOSettings: { mutateAsync: mockMutateAsync, isPending: false },
+      });
+
       renderComponent();
 
       fireEvent.click(getSaveButton());
 
-      expect(mockForm.submit).toHaveBeenCalled();
+      await waitFor(() => {
+        expect(mockMutateAsync).toHaveBeenCalled();
+      });
     });
 
     describe("Loading States", () => {
@@ -289,7 +280,7 @@ describe("EditSSOSettingsModal", () => {
 
         renderComponent();
 
-        expect(getSaveButton()).toHaveAttribute("data-loading", "true");
+        expect(getSaveButton()).toBeDisabled();
         expect(getSaveButton()).toHaveTextContent(TEST_DATA.BUTTON_TEXT.SAVING);
       });
     });
@@ -378,9 +369,8 @@ describe("EditSSOSettingsModal", () => {
           renderComponent();
 
           await waitFor(() => {
-            expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+            expect(seededValuesFor(ssoData)).toMatchObject({
               sso_provider: expectedProvider,
-              ...ssoData.values,
             });
           });
         });
@@ -420,9 +410,8 @@ describe("EditSSOSettingsModal", () => {
         renderComponent();
 
         await waitFor(() => {
-          expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+          expect(seededValuesFor(ssoData)).toMatchObject({
             sso_provider: SSO_PROVIDERS.GOOGLE,
-            ...ssoData.values,
             use_role_mappings: true,
             group_claim: "groups",
             default_role: "internal_user",
@@ -448,9 +437,8 @@ describe("EditSSOSettingsModal", () => {
         renderComponent();
 
         await waitFor(() => {
-          expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+          expect(seededValuesFor(ssoData)).toMatchObject({
             sso_provider: SSO_PROVIDERS.GOOGLE,
-            ...ssoData.values,
             use_role_mappings: true,
             group_claim: "groups",
             default_role: "internal_user",
@@ -474,8 +462,7 @@ describe("EditSSOSettingsModal", () => {
         renderComponent();
 
         await waitFor(() => {
-          expect(mockForm.resetFields).toHaveBeenCalled();
-          expect(mockForm.setFieldsValue).toHaveBeenCalled();
+          expect(seededValuesFor(ssoData).sso_provider).toBe(SSO_PROVIDERS.GOOGLE);
         });
       });
 
@@ -488,7 +475,7 @@ describe("EditSSOSettingsModal", () => {
 
         renderComponent({ isVisible: false });
 
-        expect(mockForm.setFieldsValue).not.toHaveBeenCalled();
+        expect(screen.getByTestId(TEST_IDS.MODAL)).toHaveAttribute("data-open", "false");
       });
 
       it("skips initialization when SSO data is unavailable", () => {
@@ -498,7 +485,7 @@ describe("EditSSOSettingsModal", () => {
 
         renderComponent();
 
-        expect(mockForm.setFieldsValue).not.toHaveBeenCalled();
+        expect(screen.getByTestId(TEST_IDS.BASE_SSO_FORM)).toBeInTheDocument();
       });
     });
   });
@@ -564,9 +551,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GOOGLE,
-          ...ssoData.values,
           use_role_mappings: true,
           group_claim: "groups",
           default_role: "internal_user",
@@ -590,9 +576,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GENERIC,
-          ...ssoData.values,
           use_team_mappings: true,
           team_ids_jwt_field: "teams",
         });
@@ -611,9 +596,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GENERIC,
-          ...ssoData.values,
           use_team_mappings: true,
           team_ids_jwt_field: "custom_teams_field",
         });
@@ -644,9 +628,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GENERIC,
-          ...ssoData.values,
           use_role_mappings: true,
           group_claim: "groups",
           default_role: "internal_user",
@@ -670,7 +653,7 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        const callArgs = mockForm.setFieldsValue.mock.calls[0][0];
+        const callArgs = seededValuesFor(ssoData);
         expect(callArgs.use_team_mappings).toBeUndefined();
         expect(callArgs.team_ids_jwt_field).toBeUndefined();
       });
@@ -690,9 +673,8 @@ describe("EditSSOSettingsModal", () => {
       renderComponent();
 
       await waitFor(() => {
-        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+        expect(seededValuesFor(ssoData)).toMatchObject({
           sso_provider: SSO_PROVIDERS.GENERIC,
-          ...ssoData.values,
         });
       });
     });

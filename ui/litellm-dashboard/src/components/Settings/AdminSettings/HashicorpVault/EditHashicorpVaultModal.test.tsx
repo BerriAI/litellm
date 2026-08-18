@@ -48,7 +48,7 @@ const setup = (options?: { values?: Record<string, unknown>; fields?: readonly s
       field_schema: { properties: propertiesFor(options?.fields ?? ALL_FIELDS) },
       values: options?.values ?? {},
     },
-  } as ReturnType<typeof useHashicorpVaultConfig>);
+  } as unknown as ReturnType<typeof useHashicorpVaultConfig>);
 
   vi.mocked(useUpdateHashicorpVaultConfig).mockReturnValue({
     mutate,

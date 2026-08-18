@@ -5,14 +5,13 @@ import { useUpdateHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOve
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
 import { Modal } from "antd";
-import { Eye, EyeOff } from "lucide-react";
-import React, { useMemo, useState } from "react";
-import { z } from "zod";
+import React, { useMemo } from "react";
+import { z } from "zod/v4";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Separator } from "@/components/ui/separator";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -61,29 +60,6 @@ const buildSchema = (fields: readonly string[]): z.ZodType<VaultFormValues, Vaul
       ]),
     ),
   ) as unknown as z.ZodType<VaultFormValues, VaultFormValues>;
-
-interface SecretInputProps extends React.ComponentPropsWithoutRef<"input"> {
-  inputRef: React.Ref<HTMLInputElement>;
-}
-
-const SecretInput = ({ inputRef, ...props }: SecretInputProps) => {
-  const [revealed, setRevealed] = useState(false);
-
-  return (
-    <InputGroup>
-      <InputGroupInput ref={inputRef} type={revealed ? "text" : "password"} {...props} />
-      <InputGroupAddon align="inline-end">
-        <InputGroupButton
-          size="icon-xs"
-          aria-label={revealed ? "Hide value" : "Show value"}
-          onClick={() => setRevealed((current) => !current)}
-        >
-          {revealed ? <EyeOff /> : <Eye />}
-        </InputGroupButton>
-      </InputGroupAddon>
-    </InputGroup>
-  );
-};
 
 interface EditHashicorpVaultModalProps {
   isVisible: boolean;
@@ -156,7 +132,7 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVis
       <FormField key={fieldName} control={form.control} name={fieldName} label={FIELD_LABELS[fieldName] ?? fieldName}>
         {({ ref, ...field }) =>
           isSensitive ? (
-            <SecretInput inputRef={ref} placeholder={placeholder} {...field} />
+            <PasswordInput ref={ref} placeholder={placeholder} {...field} />
           ) : (
             <Input ref={ref} placeholder={fieldSchema?.description} {...field} />
           )

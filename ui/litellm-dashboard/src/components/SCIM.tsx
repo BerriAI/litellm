@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Grid, Callout, Divider } from "@tremor/react";
-import { z } from "zod";
+import { z } from "zod/v4";
 import { keyCreateCall } from "./networking";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import {
