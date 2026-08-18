@@ -82,6 +82,22 @@ def _parse_expire_time(expire_time: str | None) -> float | None:
         return None
 
 
+def _memo_scope(
+    custom_llm_provider: str,
+    vertex_project: str | None,
+    vertex_location: str | None,
+    api_base: str | None,
+    cache_key: str,
+) -> str:
+    """Scope a memo entry to the Google resource it belongs to.
+
+    A cachedContents name is a per-project, per-location resource, so the same
+    prompt in a different project or region is a *different* cache. Keying on
+    the prompt alone would hand one deployment another's resource name.
+    """
+    return "|".join((custom_llm_provider, vertex_project or "", vertex_location or "", api_base or "", cache_key))
+
+
 def _remember_cache_name(cache_key: str, cache_name: str | None, expire_time: str | None) -> None:
     """Memoize a resolved cache name until its own expiry."""
     if not cache_name:
@@ -191,7 +207,8 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
-        remembered: Final = _get_remembered_cache_name(cache_key)
+        memo_key: Final = _memo_scope(custom_llm_provider, vertex_project, vertex_location, api_base, cache_key)
+        remembered: Final = _get_remembered_cache_name(memo_key)
         if remembered is not None:
             return remembered
 
@@ -253,7 +270,7 @@ class ContextCachingEndpoints(VertexBase):
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
                     cache_name = cached_item.get("name")  # rebind-ok: per page
-                    _remember_cache_name(cache_key, cache_name, cached_item.get("expireTime"))
+                    _remember_cache_name(memo_key, cache_name, cached_item.get("expireTime"))
                     return cache_name
 
             # Check if there are more pages
@@ -289,7 +306,8 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
-        remembered: Final = _get_remembered_cache_name(cache_key)
+        memo_key: Final = _memo_scope(custom_llm_provider, vertex_project, vertex_location, api_base, cache_key)
+        remembered: Final = _get_remembered_cache_name(memo_key)
         if remembered is not None:
             return remembered
 
@@ -351,7 +369,7 @@ class ContextCachingEndpoints(VertexBase):
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
                     cache_name = cached_item.get("name")  # rebind-ok: per page
-                    _remember_cache_name(cache_key, cache_name, cached_item.get("expireTime"))
+                    _remember_cache_name(memo_key, cache_name, cached_item.get("expireTime"))
                     return cache_name
 
             # Check if there are more pages
@@ -516,7 +534,7 @@ class ContextCachingEndpoints(VertexBase):
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
         _remember_cache_name(
-            generated_cache_key,
+            _memo_scope(custom_llm_provider, vertex_project, vertex_location, api_base, generated_cache_key),
             cached_content_response_obj["name"],
             raw_response_cached.get("expireTime"),
         )
@@ -676,7 +694,7 @@ class ContextCachingEndpoints(VertexBase):
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
         _remember_cache_name(
-            generated_cache_key,
+            _memo_scope(custom_llm_provider, vertex_project, vertex_location, api_base, generated_cache_key),
             cached_content_response_obj["name"],
             raw_response_cached.get("expireTime"),
         )

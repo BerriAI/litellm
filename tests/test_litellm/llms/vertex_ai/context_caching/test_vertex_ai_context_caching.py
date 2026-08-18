@@ -1940,6 +1940,13 @@ class TestResolvedCacheNameMemoization:
     def _expire_time(seconds_from_now: int) -> str:
         return (datetime.now(timezone.utc) + timedelta(seconds=seconds_from_now)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
+    def _named_response(self, cache_key: str, name: str, expire_time: str):
+        response = MagicMock()
+        response.json.return_value = {
+            "cachedContents": [{"name": name, "displayName": cache_key, "expireTime": expire_time}]
+        }
+        return response
+
     def _list_response(self, cache_key: str, expire_time: str | None):
         item = {"name": "cache_1", "displayName": cache_key}
         if expire_time is not None:
@@ -1983,7 +1990,7 @@ class TestResolvedCacheNameMemoization:
         assert self.mock_client.get.call_count == 1
 
         # the cache lapsed while the proxy was up
-        self.ctx_caching._memo["target_key"] = (
+        self.ctx_caching._memo["vertex_ai|test_project|us-central1||target_key"] = (
             "cache_1",
             datetime.now(timezone.utc).timestamp() - 1,
         )
@@ -2010,7 +2017,7 @@ class TestResolvedCacheNameMemoization:
         assert self._check("target_key") == "cache_1"
         assert self._check("target_key") == "cache_1"
         assert self.mock_client.get.call_count == 2
-        assert "target_key" not in self.ctx_caching._memo
+        assert not self.ctx_caching._memo
 
     @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
     def test_distinct_keys_do_not_share_an_entry(self, mock_get_token_url):
@@ -2028,7 +2035,11 @@ class TestResolvedCacheNameMemoization:
             assert self._check(key) == "cache_1"
 
         assert self.mock_client.get.call_count == 2
-        assert set(self.ctx_caching._memo) == {"key_a", "key_b"}
+        # entries are scoped to the Google resource, not the prompt alone
+        assert set(self.ctx_caching._memo) == {
+            "vertex_ai|test_project|us-central1||key_a",
+            "vertex_ai|test_project|us-central1||key_b",
+        }
 
     def test_unparseable_expire_time_is_not_memoized(self):
         """A malformed expiry degrades to today's behaviour rather than guessing."""
@@ -2040,6 +2051,57 @@ class TestResolvedCacheNameMemoization:
         parsed = self.ctx_caching._parse_expire_time("2099-10-02T15:01:23.045123456Z")
         assert parsed is not None
         assert parsed > datetime.now(timezone.utc).timestamp()
+
+    def _check_scoped(self, cache_key: str, project: str, location: str):
+        return self.context_caching.check_cache(
+            cache_key=cache_key,
+            client=self.mock_client,
+            headers={"Authorization": "Bearer token"},
+            api_key="test_key",
+            api_base=None,
+            logging_obj=self.mock_logging,
+            custom_llm_provider="vertex_ai",
+            vertex_project=project,
+            vertex_location=location,
+            vertex_auth_header="Bearer test-token",
+        )
+
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_same_prompt_in_another_project_does_not_reuse_the_name(self, mock_get_token_url):
+        """A cachedContents name belongs to one project/location.
+
+        The same prompt in a different deployment is a *different* Google
+        resource, so reusing the first name would point generateContent at a
+        resource that does not exist in the second project.
+        """
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        expire = self._expire_time(3600)
+        a_name = "projects/project-A/locations/us-central1/cachedContents/aaa"
+        b_name = "projects/project-B/locations/europe-west4/cachedContents/bbb"
+
+        self.mock_client.get.return_value = self._named_response("shared_key", a_name, expire)
+        assert self._check_scoped("shared_key", "project-A", "us-central1") == a_name
+
+        self.mock_client.get.return_value = self._named_response("shared_key", b_name, expire)
+        assert self._check_scoped("shared_key", "project-B", "europe-west4") == b_name
+
+        # the second deployment had to ask Google rather than reuse project-A's entry
+        assert self.mock_client.get.call_count == 2
+
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_same_prompt_in_another_location_does_not_reuse_the_name(self, mock_get_token_url):
+        """Same project, different region is still a different cache resource."""
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        expire = self._expire_time(3600)
+        us = "projects/p/locations/us-central1/cachedContents/us"
+        eu = "projects/p/locations/europe-west4/cachedContents/eu"
+
+        self.mock_client.get.return_value = self._named_response("shared_key", us, expire)
+        assert self._check_scoped("shared_key", "p", "us-central1") == us
+
+        self.mock_client.get.return_value = self._named_response("shared_key", eu, expire)
+        assert self._check_scoped("shared_key", "p", "europe-west4") == eu
+        assert self.mock_client.get.call_count == 2
 
     def test_entry_count_is_bounded(self):
         """A long-lived proxy with many prefixes must not grow without bound."""
