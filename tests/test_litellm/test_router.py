@@ -526,11 +526,6 @@ async def test_async_router_acreate_file_uses_deployment_custom_llm_provider():
 
 @pytest.mark.asyncio
 async def test_async_router_acreate_file_forwards_target_model_names_to_litellm_proxy():
-    """
-    A deployment pointing at a second LiteLLM proxy (litellm_proxy provider) must forward
-    target_model_names downstream so the second proxy can route the upload to the right
-    deployment. Regression test for https://github.com/BerriAI/litellm/issues/36176
-    """
     import json
     from io import BytesIO
     from unittest.mock import MagicMock, patch
@@ -572,10 +567,6 @@ async def test_async_router_acreate_file_forwards_target_model_names_to_litellm_
 
 @pytest.mark.asyncio
 async def test_async_router_acreate_file_does_not_inject_target_model_names_for_other_providers():
-    """
-    target_model_names is a LiteLLM proxy routing hint; it must not leak into uploads
-    sent to non-litellm_proxy providers.
-    """
     from unittest.mock import MagicMock, patch
 
     router = litellm.Router(
@@ -600,12 +591,6 @@ async def test_async_router_acreate_file_does_not_inject_target_model_names_for_
 
 @pytest.mark.asyncio
 async def test_async_router_acreate_file_litellm_proxy_sends_target_model_names_in_multipart_form():
-    """
-    End-to-end through litellm.acreate_file and the OpenAI SDK: the multipart form that
-    reaches the second proxy must carry target_model_names as a form field, since the
-    downstream /v1/files endpoint reads it via Form(). Would raise BadRequestError
-    (unsupported provider) before litellm_proxy was supported for files.
-    """
     import json
     from io import BytesIO
 
