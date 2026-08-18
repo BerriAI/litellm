@@ -1469,6 +1469,32 @@ export const teamDailyActivityCall = async (
   });
 };
 
+export const teamDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  teamIds: string[] | null = null,
+) => {
+  /**
+   * Get aggregated daily team activity with per-team breakdown (no pagination)
+   */
+  try {
+    return await apiClient.get(`/team/daily/activity/aggregated`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
+        exclude_team_ids: "litellm-dashboard",
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch aggregated team daily activity:", error);
+    throw error;
+  }
+};
+
 export const organizationDailyActivityCall = async (
   accessToken: string,
   startTime: Date,

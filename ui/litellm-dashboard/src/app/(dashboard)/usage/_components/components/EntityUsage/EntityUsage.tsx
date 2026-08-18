@@ -32,6 +32,7 @@ import {
   customerDailyActivityCall,
   organizationDailyActivityCall,
   tagDailyActivityCall,
+  teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
   userDailyActivityCall,
 } from "@/components/networking";
@@ -96,6 +97,12 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
   user: userDailyActivityCall,
 };
 
+// Single-shot endpoints returning the whole range in one response; entity types
+// without one fall back to page-draining the paginated endpoint.
+const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, (...args: any[]) => Promise<any>>> = {
+  team: teamDailyActivityAggregatedCall,
+};
+
 const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
   organization: "viewOrganizationUsage",
   agent: "viewAgentUsage",
@@ -126,6 +133,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   }, [entityType, selectedTags]);
 
   const fetchFn = ENTITY_FETCH_FNS[entityType];
+  const aggregatedFetchFn = ENTITY_AGGREGATED_FETCH_FNS[entityType];
   const entityCapability = ENTITY_CAPABILITIES[entityType];
   const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability);
   const showAgentBreakdown = entityType === "team" && hasCapability(userRole, "viewAgentUsage");
@@ -142,6 +150,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     fetchFn,
     args: [accessToken, startTime, endTime, entityFilterArg],
     enabled,
+    aggregatedFetchFn,
   });
 
   const spendData = spendDataRaw as unknown as EntitySpendData;

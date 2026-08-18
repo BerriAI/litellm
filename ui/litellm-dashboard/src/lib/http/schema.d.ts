@@ -14058,6 +14058,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Daily Activity Aggregated
+         * @description Aggregated daily activity for teams without pagination, including per-team breakdown.
+         *
+         *     One SQL GROUPING SETS pass returns every day in the range regardless of row
+         *     volume, so callers never reassemble pages. Same response shape as the
+         *     paginated endpoint with page metadata pinned to a single page.
+         *
+         *     Args:
+         *         team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+         *         start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+         *         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+         *         model (Optional[str]): Filter by model name.
+         *         api_key (Optional[str]): Filter by API key.
+         *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+         *         timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+         *     Returns:
+         *         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
+         */
+        get: operations["get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -26142,7 +26177,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -53752,6 +53787,43 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_team_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_aggregated_team_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
             };
             header?: never;
             path?: never;
