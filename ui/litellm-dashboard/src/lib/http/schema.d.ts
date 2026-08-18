@@ -32334,6 +32334,16 @@ export interface components {
              */
             match_threshold: number;
             /**
+             * Plan Mode Min Tier
+             * @description When set, requests carrying a coding-agent plan-mode sentinel (Claude Code plan mode, VS Code Copilot Plan mode, Copilot CLI's exit_plan_mode tool) are routed to at least this tier: the classified tier still wins when it is higher, and the floor also overrides a session-affinity pin to a lower tier for exactly the turns carrying the sentinel, without rewriting the pin -- the first turn after plan mode exits routes as if plan mode had never happened. Names a built-in tier, or with tier_definitions set, one of the defined tier names (list order is ascending severity, same as keyword_tier_rules). Unset disables detection entirely. The sentinels ride in client-injected prompt text, so a caller who pastes one can spend up to this tier's models -- never down, and never outside the configured pools.
+             */
+            plan_mode_min_tier?: string | null;
+            /**
+             * Plan Mode Patterns
+             * @description Additional case-sensitive literal sentinels that mark a request as plan mode, on top of the built-in Claude Code and Copilot ones. For clients whose plan-mode wording the built-ins don't cover, or after a client release changes its strings.
+             */
+            plan_mode_patterns?: string[] | null;
+            /**
              * Plugins
              * @description Not settable over HTTP; routing plugins are runtime objects
              */
@@ -33317,7 +33327,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
