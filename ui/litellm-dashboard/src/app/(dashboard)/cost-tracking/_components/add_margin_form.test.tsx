@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import AddMarginForm from "./add_margin_form";
 import { MarginConfig } from "./types";
@@ -102,5 +102,17 @@ describe("AddMarginForm", () => {
 
     await user.click(screen.getByText("Fixed Amount"));
     expect(onMarginTypeChange).toHaveBeenCalledWith("fixed");
+  });
+
+  it("should call onProviderChange with the provider key when a provider is picked", async () => {
+    const onProviderChange = vi.fn();
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderWithProviders(<AddMarginForm {...DEFAULT_PROPS} onProviderChange={onProviderChange} />);
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByText("Anthropic"));
+
+    expect(onProviderChange.mock.calls).toHaveLength(1);
+    expect(onProviderChange.mock.calls[0]?.[0]).toBe("Anthropic");
   });
 });

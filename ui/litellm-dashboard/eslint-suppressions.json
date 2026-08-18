@@ -191,25 +191,14 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/cost-optimization/_components/PromptCompressionTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/cost-tracking/_components/add_margin_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/add_provider_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/cost_tracking_settings.tsx": {
@@ -333,12 +322,6 @@
     }
   },
   "src/app/(dashboard)/guardrails/_components/content_filter/CompetitorIntentConfiguration.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1096,7 +1079,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/immutability": {
       "count": 1
@@ -1107,10 +1090,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
-    },
-    "prefer-const": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/immutability": {
       "count": 2
@@ -1213,7 +1193,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/immutability": {
       "count": 1
@@ -1271,7 +1251,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/app/(dashboard)/prompts/_components/index.tsx": {
@@ -1508,9 +1488,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1555,9 +1532,6 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
-    },
-    "react/no-unescaped-entities": {
       "count": 1
     }
   },
@@ -1574,7 +1548,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1670,7 +1644,7 @@
   },
   "src/components/CreateUserButton.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1856,11 +1830,6 @@
       "count": 1
     }
   },
-  "src/components/UIAccessControlForm.tsx": {
-    "no-restricted-imports": {
-      "count": 2
-    }
-  },
   "src/components/UsagePage/components/EntityUsage/TopKeyView.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1943,7 +1912,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/add_model/add_model_modes.tsx": {
@@ -2293,9 +2262,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 2
-    },
     "react-hooks/immutability": {
       "count": 1
     }
@@ -2440,7 +2406,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/model_dashboard/ModelSettingsModal/ModelSettingsModal.tsx": {
@@ -2801,7 +2767,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/team/LoggingSettings.tsx": {
