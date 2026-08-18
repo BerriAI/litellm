@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { TextInput, SelectItem } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 
 import { Button as Button2, Modal, Form, Select as Select2, InputNumber } from "antd";
 
@@ -49,25 +49,25 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
       >
         <>
           <Form.Item className="mt-8" label="User Email" tooltip="Email of the User" name="user_email">
-            <TextInput />
+            <Input />
           </Form.Item>
 
           <Form.Item label="user_id" name="user_id" hidden={true}>
-            <TextInput />
+            <Input />
           </Form.Item>
 
           <Form.Item label="User Role" name="user_role">
             <Select2>
               {possibleUIRoles &&
                 Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
-                  <SelectItem key={role} value={role} title={ui_label}>
+                  <Select2.Option key={role} value={role} title={ui_label}>
                     <div className="flex">
                       {ui_label}{" "}
                       <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
                         {description}
                       </p>
                     </div>
-                  </SelectItem>
+                  </Select2.Option>
                 ))}
             </Select2>
           </Form.Item>

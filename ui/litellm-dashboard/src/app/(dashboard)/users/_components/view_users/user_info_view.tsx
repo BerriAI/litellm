@@ -1,23 +1,8 @@
 import React, { useState } from "react";
-import {
-  Card,
-  Text,
-  Button,
-  Grid,
-  Tab,
-  TabList,
-  TabGroup,
-  TabPanel,
-  TabPanels,
-  Title,
-  Table,
-  TableHead,
-  TableBody,
-  TableRow,
-  TableHeaderCell,
-  TableCell,
-} from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon, PlusIcon } from "@heroicons/react/outline";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   userGetInfoV2,
   UserInfoV2Response,
@@ -39,7 +24,7 @@ import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CopyIcon, CheckIcon } from "lucide-react";
+import { ArrowLeft, CheckIcon, CopyIcon, Plus, RefreshCw, Trash2 } from "lucide-react";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -85,7 +70,7 @@ export default function UserInfoView({
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const [activeTab, setActiveTab] = useState<string>(initialTab === 1 ? "details" : "overview");
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
   const [isAddTeamModalOpen, setIsAddTeamModalOpen] = useState(false);
@@ -338,10 +323,11 @@ export default function UserInfoView({
   if (isLoading) {
     return (
       <div className="p-4">
-        <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft />
           Back to Users
         </Button>
-        <Text>Loading user data...</Text>
+        <p className="text-sm">Loading user data...</p>
       </div>
     );
   }
@@ -349,10 +335,11 @@ export default function UserInfoView({
   if (!userData) {
     return (
       <div className="p-4">
-        <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft />
           Back to Users
         </Button>
-        <Text>User not found</Text>
+        <p className="text-sm">User not found</p>
       </div>
     );
   }
@@ -385,12 +372,13 @@ export default function UserInfoView({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+          <Button variant="ghost" onClick={onClose} className="mb-4">
+            <ArrowLeft />
             Back to Users
           </Button>
-          <Title>{userData.user_email || "User"}</Title>
+          <h2 className="text-xl font-semibold">{userData.user_email || "User"}</h2>
           <div className="flex items-center cursor-pointer">
-            <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
+            <span className="text-sm text-gray-500 font-mono">{userData.user_id}</span>
             <AntdButton
               type="text"
               size="small"
@@ -406,15 +394,16 @@ export default function UserInfoView({
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex items-center space-x-2">
-            <Button icon={RefreshIcon} variant="secondary" onClick={handleResetPassword} className="flex items-center">
+            <Button variant="secondary" onClick={handleResetPassword} className="flex items-center">
+              <RefreshCw />
               Reset Password
             </Button>
             <Button
-              icon={TrashIcon}
               variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}
               className="flex items-center text-red-500 border-red-500 hover:text-red-600 hover:border-red-600"
             >
+              <Trash2 />
               Delete User
             </Button>
           </div>
@@ -443,219 +432,223 @@ export default function UserInfoView({
         confirmLoading={isDeletingUser}
       />
 
-      <TabGroup defaultIndex={activeTab} onIndexChange={setActiveTab}>
-        <TabList className="mb-4">
-          <Tab>Overview</Tab>
-          <Tab>Details</Tab>
-        </TabList>
+      <Tabs value={activeTab} onValueChange={(v: unknown) => setActiveTab(String(v))}>
+        <TabsList className="mb-4">
+          <TabsTrigger value="overview" className="flex-none">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="details" className="flex-none">
+            Details
+          </TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
-          {/* Overview Panel */}
-          <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
-              <Card>
-                <Text>Spend</Text>
-                <div className="mt-2">
-                  <Title>${formatNumberWithCommas(userData.spend || 0, 2)}</Title>
-                  <Text>
-                    of{" "}
-                    {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : "Unlimited"}
-                  </Text>
-                </div>
-              </Card>
+        {/* Overview Panel */}
+        <TabsContent value="overview" keepMounted>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <Card className="block p-6">
+              <p>Spend</p>
+              <div className="mt-2">
+                <h3 className="text-lg font-medium">${formatNumberWithCommas(userData.spend || 0, 2)}</h3>
+                <p>
+                  of {userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : "Unlimited"}
+                </p>
+              </div>
+            </Card>
 
-              <Card>
-                <div className="flex justify-between items-center mb-2">
-                  <Text>Teams</Text>
-                  {isProxyAdmin && (
-                    <Button icon={PlusIcon} variant="light" size="xs" onClick={handleOpenAddTeamModal}>
-                      Add Team
-                    </Button>
-                  )}
-                </div>
-                <div className="mt-2">
-                  {teamDetails.length > 0 ? (
-                    <div className="max-h-60 overflow-y-auto">
-                      <Table>
-                        <TableHead>
-                          <TableRow>
-                            <TableHeaderCell>Team Name</TableHeaderCell>
-                            {isProxyAdmin && <TableHeaderCell className="text-right">Actions</TableHeaderCell>}
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
-                            <TableRow key={team.team_id}>
-                              <TableCell>
-                                <BadgeLink href={teamDetailHref(team.team_id)}>
-                                  {team.team_alias || team.team_id}
-                                </BadgeLink>
-                              </TableCell>
-                              {isProxyAdmin && (
-                                <TableCell className="text-right">
-                                  <Button
-                                    icon={TrashIcon}
-                                    variant="light"
-                                    size="xs"
-                                    color="red"
-                                    onClick={() => handleOpenRemoveTeamModal(team)}
-                                  />
-                                </TableCell>
-                              )}
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  ) : (
-                    <Text>No teams</Text>
-                  )}
-                  {!isTeamsExpanded && teamDetails.length > 20 && (
-                    <Button variant="light" size="xs" className="mt-2" onClick={() => setIsTeamsExpanded(true)}>
-                      +{teamDetails.length - 20} more
-                    </Button>
-                  )}
-                  {isTeamsExpanded && teamDetails.length > 20 && (
-                    <Button variant="light" size="xs" className="mt-2" onClick={() => setIsTeamsExpanded(false)}>
-                      Show Less
-                    </Button>
-                  )}
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Personal Models</Text>
-                <div className="mt-2">
-                  {userData.models?.length && userData.models?.length > 0 ? (
-                    userData.models?.map((model, index) => <Text key={index}>{model}</Text>)
-                  ) : (
-                    <Text>All proxy models</Text>
-                  )}
-                </div>
-              </Card>
-            </Grid>
-          </TabPanel>
-
-          {/* Details Panel */}
-          <TabPanel>
-            <Card>
-              <div className="flex justify-between items-center mb-4">
-                <Title>User Settings</Title>
-                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
-                  <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
+            <Card className="block p-6">
+              <div className="flex justify-between items-center mb-2">
+                <p>Teams</p>
+                {isProxyAdmin && (
+                  <Button variant="ghost" size="sm" onClick={handleOpenAddTeamModal}>
+                    <Plus />
+                    Add Team
+                  </Button>
                 )}
               </div>
-
-              {isEditing && userData ? (
-                <UserEditView
-                  userData={userDataForEdit}
-                  onCancel={() => setIsEditing(false)}
-                  onSubmit={handleUserUpdate}
-                  teams={teamDetails}
-                  accessToken={accessToken}
-                  userID={userId}
-                  userRole={userRole}
-                  userModels={userModels}
-                  possibleUIRoles={possibleUIRoles}
-                  objectPermission={userData.object_permission}
-                />
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <Text className="font-medium">User ID</Text>
-                    <div className="flex items-center cursor-pointer">
-                      <Text className="font-mono">{userData.user_id}</Text>
-                      <AntdButton
-                        type="text"
-                        size="small"
-                        icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                        onClick={() => copyToClipboard(userData.user_id, "user-id")}
-                        className={`left-2 z-10 transition-all duration-200 ${
-                          copiedStates["user-id"]
-                            ? "text-green-600 bg-green-50 border-green-200"
-                            : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                        }`}
-                      />
-                    </div>
+              <div className="mt-2">
+                {teamDetails.length > 0 ? (
+                  <div className="max-h-60 overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Team Name</TableHead>
+                          {isProxyAdmin && <TableHead className="text-right">Actions</TableHead>}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
+                          <TableRow key={team.team_id}>
+                            <TableCell>
+                              <BadgeLink href={teamDetailHref(team.team_id)}>
+                                {team.team_alias || team.team_id}
+                              </BadgeLink>
+                            </TableCell>
+                            {isProxyAdmin && (
+                              <TableCell className="text-right">
+                                <Button
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label={`Remove from ${team.team_alias || team.team_id}`}
+                                  onClick={() => handleOpenRemoveTeamModal(team)}
+                                  className="text-red-500"
+                                >
+                                  <Trash2 />
+                                </Button>
+                              </TableCell>
+                            )}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </div>
+                ) : (
+                  <p>No teams</p>
+                )}
+                {!isTeamsExpanded && teamDetails.length > 20 && (
+                  <Button variant="ghost" size="sm" className="mt-2" onClick={() => setIsTeamsExpanded(true)}>
+                    +{teamDetails.length - 20} more
+                  </Button>
+                )}
+                {isTeamsExpanded && teamDetails.length > 20 && (
+                  <Button variant="ghost" size="sm" className="mt-2" onClick={() => setIsTeamsExpanded(false)}>
+                    Show Less
+                  </Button>
+                )}
+              </div>
+            </Card>
 
-                  <div>
-                    <Text className="font-medium">Email</Text>
-                    <Text>{userData.user_email || "Not Set"}</Text>
-                  </div>
+            <Card className="block p-6">
+              <p>Personal Models</p>
+              <div className="mt-2">
+                {userData.models?.length && userData.models?.length > 0 ? (
+                  userData.models?.map((model, index) => <p key={index}>{model}</p>)
+                ) : (
+                  <p>All proxy models</p>
+                )}
+              </div>
+            </Card>
+          </div>
+        </TabsContent>
 
-                  <div>
-                    <Text className="font-medium">User Alias</Text>
-                    <Text>{userData.user_alias || "Not Set"}</Text>
-                  </div>
+        {/* Details Panel */}
+        <TabsContent value="details" keepMounted>
+          <Card className="block p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium">User Settings</h3>
+              {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
+                <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
+              )}
+            </div>
 
-                  <div>
-                    <Text className="font-medium">Global Proxy Role</Text>
-                    <Text>{userData.user_role || "Not Set"}</Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Created</Text>
-                    <Text>{userData.created_at ? new Date(userData.created_at).toLocaleString() : "Unknown"}</Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Last Updated</Text>
-                    <Text>{userData.updated_at ? new Date(userData.updated_at).toLocaleString() : "Unknown"}</Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Personal Models</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {userData.models?.length && userData.models?.length > 0 ? (
-                        userData.models?.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
-                            {model}
-                          </span>
-                        ))
-                      ) : (
-                        <Text>All proxy models</Text>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Max Budget</Text>
-                    <Text>
-                      {userData.max_budget !== null && userData.max_budget !== undefined
-                        ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                        : "Unlimited"}
-                    </Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Budget Reset</Text>
-                    <Text>{getBudgetDurationLabel(userData.budget_duration ?? null)}</Text>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Metadata</Text>
-                    <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
-                      {JSON.stringify(userData.metadata || {}, null, 2)}
-                    </pre>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium mb-2">MCP Permissions</Text>
-                    <MCPServerPermissions
-                      mcpServers={userData.object_permission?.mcp_servers || []}
-                      mcpAccessGroups={userData.object_permission?.mcp_access_groups || []}
-                      mcpToolPermissions={userData.object_permission?.mcp_tool_permissions || {}}
-                      mcpToolsets={userData.object_permission?.mcp_toolsets || []}
-                      accessToken={accessToken}
+            {isEditing && userData ? (
+              <UserEditView
+                userData={userDataForEdit}
+                onCancel={() => setIsEditing(false)}
+                onSubmit={handleUserUpdate}
+                teams={teamDetails}
+                accessToken={accessToken}
+                userID={userId}
+                userRole={userRole}
+                userModels={userModels}
+                possibleUIRoles={possibleUIRoles}
+                objectPermission={userData.object_permission}
+              />
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <p className="font-medium">User ID</p>
+                  <div className="flex items-center cursor-pointer">
+                    <span className="font-mono">{userData.user_id}</span>
+                    <AntdButton
+                      type="text"
+                      size="small"
+                      icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                      onClick={() => copyToClipboard(userData.user_id, "user-id")}
+                      className={`left-2 z-10 transition-all duration-200 ${
+                        copiedStates["user-id"]
+                          ? "text-green-600 bg-green-50 border-green-200"
+                          : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                      }`}
                     />
                   </div>
                 </div>
-              )}
-            </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+
+                <div>
+                  <p className="font-medium">Email</p>
+                  <p>{userData.user_email || "Not Set"}</p>
+                </div>
+
+                <div>
+                  <p className="font-medium">User Alias</p>
+                  <p>{userData.user_alias || "Not Set"}</p>
+                </div>
+
+                <div>
+                  <p className="font-medium">Global Proxy Role</p>
+                  <p>{userData.user_role || "Not Set"}</p>
+                </div>
+
+                <div>
+                  <p className="font-medium">Created</p>
+                  <p>{userData.created_at ? new Date(userData.created_at).toLocaleString() : "Unknown"}</p>
+                </div>
+
+                <div>
+                  <p className="font-medium">Last Updated</p>
+                  <p>{userData.updated_at ? new Date(userData.updated_at).toLocaleString() : "Unknown"}</p>
+                </div>
+
+                <div>
+                  <p className="font-medium">Personal Models</p>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {userData.models?.length && userData.models?.length > 0 ? (
+                      userData.models?.map((model, index) => (
+                        <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                          {model}
+                        </span>
+                      ))
+                    ) : (
+                      <p>All proxy models</p>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="font-medium">Max Budget</p>
+                  <p>
+                    {userData.max_budget !== null && userData.max_budget !== undefined
+                      ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
+                      : "Unlimited"}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="font-medium">Budget Reset</p>
+                  <p>{getBudgetDurationLabel(userData.budget_duration ?? null)}</p>
+                </div>
+
+                <div>
+                  <p className="font-medium">Metadata</p>
+                  <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
+                    {JSON.stringify(userData.metadata || {}, null, 2)}
+                  </pre>
+                </div>
+
+                <div>
+                  <p className="font-medium mb-2">MCP Permissions</p>
+                  <MCPServerPermissions
+                    mcpServers={userData.object_permission?.mcp_servers || []}
+                    mcpAccessGroups={userData.object_permission?.mcp_access_groups || []}
+                    mcpToolPermissions={userData.object_permission?.mcp_tool_permissions || {}}
+                    mcpToolsets={userData.object_permission?.mcp_toolsets || []}
+                    accessToken={accessToken}
+                  />
+                </div>
+              </div>
+            )}
+          </Card>
+        </TabsContent>
+      </Tabs>
       <OnboardingModal
         isInvitationLinkModalVisible={isInvitationLinkModalVisible}
         setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}

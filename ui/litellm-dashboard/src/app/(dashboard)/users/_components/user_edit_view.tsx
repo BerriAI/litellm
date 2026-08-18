@@ -1,6 +1,8 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, SelectItem, TextInput, Textarea } from "@tremor/react";
-import { Checkbox, Form, Input, Select, Tooltip } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox, Form, Input as AntdInput, Select, Tooltip } from "antd";
 import React, { useState } from "react";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
@@ -99,18 +101,18 @@ export function UserEditView({
     <Form form={form} onFinish={handleSubmit} layout="vertical">
       {!isBulkEdit && (
         <Form.Item label="User ID" name="user_id">
-          <TextInput disabled />
+          <Input disabled />
         </Form.Item>
       )}
 
       {!isBulkEdit && (
         <Form.Item label="Email" name="user_email">
-          <TextInput />
+          <Input />
         </Form.Item>
       )}
 
       <Form.Item label="User Alias" name="user_alias">
-        <TextInput />
+        <Input />
       </Form.Item>
 
       <Form.Item
@@ -127,14 +129,14 @@ export function UserEditView({
         <Select>
           {possibleUIRoles &&
             Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
-              <SelectItem key={role} value={role} title={ui_label}>
+              <Select.Option key={role} value={role} title={ui_label}>
                 <div className="flex">
                   {ui_label}{" "}
                   <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
                     {description}
                   </p>
                 </div>
-              </SelectItem>
+              </Select.Option>
             ))}
         </Select>
       </Form.Item>
@@ -199,7 +201,7 @@ export function UserEditView({
       </Form.Item>
 
       <Form.Item label="Metadata" name="metadata">
-        <Textarea rows={4} placeholder="Enter metadata as JSON" />
+        <Textarea rows={4} placeholder="Enter metadata as JSON" className="field-sizing-fixed" />
       </Form.Item>
 
       {canEditMcpPermissions && (
@@ -224,7 +226,7 @@ export function UserEditView({
           </Form.Item>
 
           <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
-            <Input type="hidden" />
+            <AntdInput type="hidden" />
           </Form.Item>
 
           <Form.Item

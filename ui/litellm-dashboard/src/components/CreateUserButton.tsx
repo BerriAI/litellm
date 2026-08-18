@@ -2,9 +2,21 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { Button } from "@/components/ui/button";
-import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from "@tremor/react";
-import { Alert, Checkbox, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
-import { UserPlus } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
+import {
+  Alert,
+  Checkbox,
+  Form,
+  Input as AntdInput,
+  Modal,
+  Select,
+  Select as Select2,
+  Space,
+  Tooltip,
+  Typography,
+} from "antd";
+import { ChevronDown, UserPlus } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
@@ -192,20 +204,20 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           className="mb-4"
         />
         <Form.Item label="User Email" name="user_email">
-          <TextInput placeholder="" />
+          <Input placeholder="" />
         </Form.Item>
         <Form.Item label="User Role" name="user_role">
           <Select2>
             {possibleUIRoles &&
               Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
-                <SelectItem key={role} value={role} title={ui_label}>
+                <Select2.Option key={role} value={role} title={ui_label}>
                   <div className="flex">
                     {ui_label}{" "}
                     <Text className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
                       {description}
                     </Text>
                   </div>
-                </SelectItem>
+                </Select2.Option>
               ))}
           </Select2>
         </Form.Item>
@@ -214,7 +226,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         </Form.Item>
 
         <Form.Item label="Metadata" name="metadata">
-          <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+          <AntdInput.TextArea rows={4} placeholder="Enter metadata as JSON" />
         </Form.Item>
 
         <Form.Item label="Send invitation email" name="send_invite_email" valuePropName="checked">
@@ -269,7 +281,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           initialValues={{ user_role: "internal_user_viewer", send_invite_email: true }}
         >
           <Form.Item label="User Email" name="user_email">
-            <Input />
+            <AntdInput />
           </Form.Item>
           <Form.Item
             label={
@@ -285,13 +297,13 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             <Select2>
               {possibleUIRoles &&
                 Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
-                  <SelectItem key={role} value={role} title={ui_label}>
+                  <Select2.Option key={role} value={role} title={ui_label}>
                     <Text>{ui_label}</Text>
                     <Text type="secondary">
                       {" - "}
                       {description}
                     </Text>
-                  </SelectItem>
+                  </Select2.Option>
                 ))}
             </Select2>
           </Form.Item>
@@ -320,16 +332,17 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           </Form.Item>
 
           <Form.Item label="Metadata" name="metadata">
-            <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+            <AntdInput.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
           <Form.Item label="Send invitation email" name="send_invite_email" valuePropName="checked">
             <Checkbox />
           </Form.Item>
-          <Accordion>
-            <AccordionHeader>
+          <Collapsible className="overflow-hidden rounded-lg border">
+            <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
               <Text strong>Personal Key Creation</Text>
-            </AccordionHeader>
-            <AccordionBody>
+              <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="px-4 pb-3">
               <Form.Item
                 className="gap-2"
                 label={
@@ -357,8 +370,8 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
                   ))}
                 </Select2>
               </Form.Item>
-            </AccordionBody>
-          </Accordion>
+            </CollapsibleContent>
+          </Collapsible>
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button type="submit">
