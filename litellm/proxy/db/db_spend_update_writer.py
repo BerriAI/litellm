@@ -13,7 +13,7 @@ import random
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -64,12 +64,44 @@ from litellm.proxy.spend_tracking.savings import (
     extract_cache_read_tokens,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
+from litellm.repositories.prisma_protocols import BatchTable
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 else:
     PrismaClient = Any
     ProxyLogging = Any
+
+
+class _SpendBatch(Protocol):
+    litellm_usertable: BatchTable
+    litellm_verificationtoken: BatchTable
+    litellm_teamtable: BatchTable
+    litellm_teammembership: BatchTable
+    litellm_organizationtable: BatchTable
+    litellm_tagtable: BatchTable
+    litellm_agentstable: BatchTable
+
+
+class _SpendBatchManager(Protocol):
+    async def __aenter__(self) -> _SpendBatch: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+class _SpendTransaction(Protocol):
+    def batch_(self) -> _SpendBatchManager: ...
+
+
+class _SpendTransactionManager(Protocol):
+    async def __aenter__(self) -> _SpendTransaction: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
+    tx: Final[_SpendTransactionManager] = prisma_client.db.tx(timeout=timedelta(seconds=60))
+    return tx
 
 
 def _get_llm_router():
@@ -787,8 +819,9 @@ class DBSpendUpdateWriter:
             )
         )
         if prisma_client is not None and spend_logs_url is not None or prisma_client is not None:
-            async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload)
+            from litellm.proxy.utils import enqueue_spend_logs
+
+            await enqueue_spend_logs(prisma_client, (payload,))
         else:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
 
@@ -1194,7 +1227,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                    async with _spend_update_tx(prisma_client) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by ID for consistent lock ordering across pods to prevent deadlocks.
                             # batch_() issues statements sequentially within the tx, so iteration
@@ -1236,7 +1269,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                    async with _spend_update_tx(prisma_client) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by token for consistent lock ordering across pods to prevent deadlocks.
                             for token, response_cost in sorted(key_list_transactions.items()):
@@ -1269,7 +1302,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                    async with _spend_update_tx(prisma_client) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
                             for team_id, response_cost in sorted(team_list_transactions.items()):
@@ -1310,7 +1343,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                    async with _spend_update_tx(prisma_client) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by composite key for consistent lock ordering across pods to prevent deadlocks.
                             # Key format "team_id::<v>::user_id::<v>" makes the string sort equivalent to sorting by (team_id, user_id).
@@ -1361,7 +1394,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                    async with _spend_update_tx(prisma_client) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by org_id for consistent lock ordering across pods to prevent deadlocks.
                             for org_id, response_cost in sorted(org_list_transactions.items()):
@@ -1419,7 +1452,7 @@ class DBSpendUpdateWriter:
     async def _update_entity_spend_in_db(
         entity_name: str,
         transactions: dict[str, float] | None,
-        table_accessor: Any,
+        table_accessor: Literal["litellm_tagtable", "litellm_agentstable"],
         where_field: str,
         n_retry_times: int,
         prisma_client: PrismaClient,
@@ -1444,7 +1477,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                    async with _spend_update_tx(prisma_client) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by entity_id for consistent lock ordering across pods to prevent deadlocks.
                             for entity_id, response_cost in sorted(transactions.items()):

@@ -1,5 +1,6 @@
-"""Shadow Eval Logger: samples a shadowed key's successful chat requests, duplicates each
-against the job's other arm in a detached task (the auto-router for a forward job, the
+"""Shadow Eval Logger: samples a shadowed key's successful LLM requests (chat completions,
+Anthropic Messages, and Responses API surfaces, each normalized to chat shape), duplicates
+each against the job's other arm in a detached task (the auto-router for a forward job, the
 fixed baseline model for a reverse one), blind-judges real vs shadow, and appends one
 ``LiteLLM_ShadowEvalAttempt`` row (verdict or error) as the feature's only hot-path write.
 Counts, status, and spend derive from those rows at read time, so nothing can disagree
@@ -8,15 +9,16 @@ across pods or stop races; the hook reads active jobs through a short-TTL cache.
 import asyncio
 import hashlib
 import random
+import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
 from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator, model_validator
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -31,6 +33,7 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
@@ -54,13 +57,246 @@ _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 
 # The judge answers with a small JSON object; a tighter budget truncates the JSON
 # mid-object and the attempt is lost to an error row.
-JUDGE_MAX_OUTPUT_TOKENS: Final = 500
+JUDGE_MAX_OUTPUT_TOKENS: Final = 1500
 
 _MAX_ERROR_CHARS: Final = 500
 
 _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
-_SAMPLED_CALL_TYPES: Final = frozenset({"completion", "acompletion"})
+# Typed boundaries around the owner transformations, which declare untyped returns:
+# a request or message that fails this lenient shape check is skipped, never sampled.
+_CHAT_REQUEST_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CHAT_MESSAGES_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_MESSAGE_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _chat_messages(kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    raw: Final = kwargs.get("messages")
+    return tuple(m for m in raw if isinstance(m, Mapping)) if isinstance(raw, Sequence) else ()
+
+
+def _proxy_wire_body(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    litellm_params: Final = kwargs.get("litellm_params")
+    request: Final = litellm_params.get("proxy_server_request") if isinstance(litellm_params, Mapping) else None
+    body: Final = request.get("body") if isinstance(request, Mapping) else None
+    return body if isinstance(body, Mapping) else _EMPTY_METADATA
+
+
+def _chat_request_from_chat(
+    kwargs: Mapping[str, object], model_parameters: Mapping[str, object]
+) -> Mapping[str, object]:
+    """Chat requests are already chat-shaped: the logged model_parameters forward as-is."""
+    return MappingProxyType({**model_parameters, "messages": _chat_messages(kwargs)})
+
+
+# Anthropic params the adapter copies through untranslated; the translatable set comes
+# from the adapter itself at call time.
+_ANTHROPIC_SAMPLING_PARAM_KEYS: Final = frozenset(("max_tokens", "temperature", "top_p", "top_k", "reasoning_effort"))
+
+
+def _chat_request_from_anthropic_messages(
+    kwargs: Mapping[str, object], _model_parameters: Mapping[str, object]
+) -> Mapping[str, object]:
+    """/v1/messages logs surface-native block messages with ``system`` top-level: the
+    native provider path carries it in kwargs, the openai-compatible bridge path only in
+    the proxy's snapshot of the client's wire body. Params come from the wire body alone,
+    because the logged optional_params switch dialect per provider path (the bridge's
+    inner completion rewrites them to chat shape mid-flight); the adapter translates
+    them alongside the messages, and sampling params copy through untranslated."""
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+    wire_body: Final = _proxy_wire_body(kwargs)
+    system: Final = kwargs.get("system") or wire_body.get("system")
+    param_keys: Final = (
+        frozenset(adapter.translatable_anthropic_params()) | _ANTHROPIC_SAMPLING_PARAM_KEYS
+    ) - frozenset(("messages", "system"))
+    request: Final = MappingProxyType(
+        dict(
+            (
+                *((k, v) for k, v in wire_body.items() if k in param_keys),
+                ("model", str(kwargs.get("model") or "")),
+                ("messages", _CHAT_MESSAGES_ADAPTER.validate_python(kwargs.get("messages") or ())),
+                *((("system", system),) if system is not None else ()),
+            )
+        )
+    )
+    translated, _ = adapter.translate_anthropic_to_openai(request)  # pyright: ignore[reportArgumentType]  # wire-body mapping is the surface's native request shape; the adapter is duck-typed and read-only here
+    return translated
+
+
+def _chat_request_from_responses(
+    kwargs: Mapping[str, object], _model_parameters: Mapping[str, object]
+) -> Mapping[str, object]:
+    """/v1/responses logs the raw ``input`` under ``kwargs["messages"]``, an alias
+    function_setup creates for responses call types: a bare string, chat-shaped dicts,
+    or item dicts; ``instructions`` is the system prompt. Params come from the wire body
+    for the same reason as the messages surface; the transformer translates them with
+    the input (max_output_tokens to max_tokens, Responses tools to chat tools, reasoning
+    to reasoning_effort) and never reads surface-only keys like previous_response_id."""
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+    wire_body: Final = _proxy_wire_body(kwargs)
+    instructions: Final = kwargs.get("instructions") or wire_body.get("instructions")
+    responses_request: Final = MappingProxyType(
+        dict(
+            (
+                *((k, v) for k, v in wire_body.items() if k in ResponsesAPIOptionalRequestParams.__annotations__),
+                *((("instructions", instructions),) if instructions is not None else ()),
+            )
+        )
+    )
+    return _CHAT_REQUEST_ADAPTER.validate_python(
+        LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(  # pyright: ignore[reportUnknownMemberType]  # transformer declares a bare dict return
+            model=str(kwargs.get("model") or ""),
+            input=kwargs.get("messages"),  # pyright: ignore[reportArgumentType]  # untyped callback kwargs; transformer validates shapes
+            responses_api_request=responses_request,  # pyright: ignore[reportArgumentType]  # wire-body dict filtered to the surface's own request keys; the transformer is duck-typed
+        )
+    )
+
+
+def _chat_final_text(response_obj: object) -> str:
+    """The assistant's text, or empty when the turn carries tool calls: only text-final
+    turns produce a judgeable A/B comparison."""
+    try:
+        message: Final = (
+            response_obj["choices"][0]["message"]
+            if isinstance(response_obj, Mapping)
+            else response_obj.choices[0].message  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
+        )
+    except (AttributeError, KeyError, IndexError, TypeError):
+        return ""
+    read: Final = message.get if isinstance(message, Mapping) else lambda key: getattr(message, key, None)
+    if read("tool_calls") or read("function_call"):
+        return ""
+    return extract_text_from_content(read("content"))
+
+
+def _responses_final_text(response_obj: object) -> str:
+    """The turn's aggregated output text, or empty when the turn carries tool calls. A
+    dict-shaped payload is validated into the owner type first, because ``output_text``
+    is a derived property rather than a serialized field, so it never exists on a dict;
+    a dict the owner type rejects is unjudgeable and skipped."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    try:
+        response: Final = (
+            ResponsesAPIResponse.model_validate(response_obj) if isinstance(response_obj, Mapping) else response_obj
+        )
+    except ValidationError:
+        return ""
+    output: Final = getattr(response, "output", None)
+    if not isinstance(output, Sequence):
+        return ""
+    items: Final = tuple(item.model_dump() if isinstance(item, BaseModel) else item for item in output)
+    if any(
+        not isinstance(item, Mapping) or item.get("type") in ("function_call", "custom_tool_call") for item in items
+    ):
+        return ""
+    return str(getattr(response, "output_text", "") or "")
+
+
+class _SurfaceOps:
+    """One row per sampled call_type: how its logged request becomes a chat-shaped
+    request (messages plus translated generation params) and how its response yields
+    the judgeable final text. Membership in this table IS the sampling allowlist;
+    unknown call types fail closed. ``wire_params`` marks the surfaces whose params
+    come from the proxy's wire-body snapshot, which is taken before the guardrail
+    pre-call hook: those rows must not sample a request a pre-call guardrail rewrote,
+    or the shadow call would replay content (tools, unmasked entities) the guardrail
+    removed."""
+
+    __slots__ = ("chat_request", "final_text", "wire_params")
+
+    def __init__(
+        self,
+        chat_request: Callable[[Mapping[str, object], Mapping[str, object]], Mapping[str, object]],
+        final_text: Callable[[object], str],
+        wire_params: bool,
+    ) -> None:
+        self.chat_request = chat_request
+        self.final_text = final_text
+        self.wire_params = wire_params
+
+
+_CHAT_OPS: Final = _SurfaceOps(_chat_request_from_chat, _chat_final_text, wire_params=False)
+_ANTHROPIC_OPS: Final = _SurfaceOps(_chat_request_from_anthropic_messages, _chat_final_text, wire_params=True)
+_RESPONSES_OPS: Final = _SurfaceOps(_chat_request_from_responses, _responses_final_text, wire_params=True)
+
+# Guardrail hooks that never rewrite the outbound request: they run in parallel with
+# the call, on the response, or on logged copies. Anything else (pre_call, pre_mcp_call,
+# a future mode) counts as request-mutating, failing closed.
+_NON_MUTATING_GUARDRAIL_MODES: Final = frozenset(
+    ("during_call", "post_call", "logging_only", "during_mcp_call", "post_mcp_call", "realtime_input_transcription")
+)
+
+
+def _request_mutating_guardrail_ran(request_metadata: Mapping[str, object]) -> bool:
+    """Whether a guardrail that can rewrite the outbound request ran on this one, read
+    from the same guardrail-information entries spend logging uses. str-enum modes
+    compare equal to their plain-string values, and an entry whose mode is missing or
+    unrecognized counts as mutating."""
+    raw: Final = request_metadata.get("standard_logging_guardrail_information")
+    entries: Final = raw if isinstance(raw, Sequence) else ()
+    modes_per_entry: Final = tuple(entry.get("guardrail_mode") for entry in entries if isinstance(entry, Mapping))
+    return any(
+        not all(
+            mode in _NON_MUTATING_GUARDRAIL_MODES for mode in (modes if isinstance(modes, list | tuple) else (modes,))
+        )
+        for modes in modes_per_entry
+    )
+
+
+# Translated-request keys that never forward to the shadow call: identity and transport,
+# not generation. Empty-list values (e.g. tools) carry nothing and are dropped with them.
+_UNFORWARDED_REQUEST_KEYS: Final = frozenset(("model", "messages", "stream", "stream_options", "metadata"))
+
+
+def _forwards_nothing(value: object) -> bool:
+    return value is None or (isinstance(value, list) and len(value) == 0)
+
+
+def _judgeable_sample(
+    ops: _SurfaceOps,
+    kwargs: Mapping[str, object],
+    model_parameters: Mapping[str, object],
+    response_obj: object,
+) -> tuple[tuple[Mapping[str, object], ...], Mapping[str, object], str] | None:
+    """The normalized chat conversation, the forwardable generation params, and the
+    judgeable final text; None when this request's shapes cannot be sampled (tool-final
+    turn, empty text, or a shape the owner transformations reject)."""
+    try:
+        request: Final = ops.chat_request(kwargs, model_parameters)
+        items: Final = _MESSAGE_ITEMS_ADAPTER.validate_python(request.get("messages"))
+        messages: Final = _CHAT_MESSAGES_ADAPTER.validate_python(
+            tuple(m.model_dump(exclude_none=True) if isinstance(m, BaseModel) else m for m in items)
+        )
+    except Exception as e:  # noqa: BLE001  # a rejected shape is skipped, never sampled
+        verbose_logger.debug("shadow_eval: request normalization failed, skipping: %s", e)
+        return None
+    real_text: Final = ops.final_text(response_obj)
+    if not messages or not real_text:
+        return None
+    params: Final = MappingProxyType(
+        {k: v for k, v in request.items() if k not in _UNFORWARDED_REQUEST_KEYS and not _forwards_nothing(v)}
+    )
+    return messages, params, real_text
+
+
+_SURFACE_OPS: Final[Mapping[str, _SurfaceOps]] = MappingProxyType(
+    {
+        "completion": _CHAT_OPS,
+        "acompletion": _CHAT_OPS,
+        "anthropic_messages": _ANTHROPIC_OPS,
+        "aresponses": _RESPONSES_OPS,
+        "responses": _RESPONSES_OPS,
+    }
+)
 
 PAIRWISE_JUDGE_SYSTEM_PROMPT: Final = """You are an impartial quality judge comparing two responses to the same conversation.
 
@@ -71,16 +307,21 @@ Criteria: correctness, completeness, clarity, conciseness.
 Return ONLY valid JSON in this exact format, no other text:
 {
   "preference": "A" | "B" | "tie",
-  "confidence": <0.0 to 1.0>,
-  "reasoning": "<one sentence>"
+  "confidence": <0.0 to 1.0>
 }"""
 
 
 class PairwiseVerdict(BaseModel):
-    """The judge's blind A/B verdict, validated at the parse boundary."""
+    """The judge's blind A/B verdict: the response_format schema sent with the judge call
+    and the validation contract on its reply. Both fields are required and preference is
+    closed over the prompt's labels, so a malformed or truncated reply is an
+    unparseable-verdict error row, never a defaulted or fabricated verdict."""
 
-    preference: str = "tie"
-    confidence: float = 0.0
+    preference: Literal["A", "B", "tie"]
+    confidence: float
+
+
+PAIRWISE_JUDGE_RESPONSE_FORMAT: Final = type_to_response_format_param(PairwiseVerdict)
 
 
 def _sample_hits(request_id: str, job_id: str, percentage: float) -> bool:
@@ -89,6 +330,14 @@ def _sample_hits(request_id: str, job_id: str, percentage: float) -> bool:
     digest: Final = hashlib.sha256(f"{job_id}:{request_id}".encode()).digest()
     bucket: Final = int.from_bytes(digest[:8], "big") / float(2**64)
     return bucket * 100.0 < percentage
+
+
+def _failure_detail(e: BaseException) -> str:
+    """Exception class, message, and the raising frame, so an attempt's error row names
+    the faulty code path without needing debug logs on the pod."""
+    frames: Final = traceback.extract_tb(e.__traceback__)
+    location: Final = f" at {frames[-1].filename.rsplit('/', 1)[-1]}:{frames[-1].lineno}" if frames else ""
+    return f"{type(e).__name__}{location}: {e}"
 
 
 def _judge_call_cost(response: object) -> float:
@@ -361,25 +610,36 @@ class ShadowEvalLogger(CustomLogger):
             request_id: Final = payload.get("id") or ""
             if not request_id:
                 return
-            if payload.get("call_type") not in _SAMPLED_CALL_TYPES:
-                return  # only known chat-shaped traffic is comparable; unknown or missing types fail closed
-            raw_messages: Final = kwargs.get("messages")
-            messages: Final = (
-                tuple(m for m in raw_messages if isinstance(m, Mapping)) if isinstance(raw_messages, Sequence) else ()
-            )
-            control_tier: Final = _routed_tier(request_metadata)
+            ops: Final = _SURFACE_OPS.get(str(payload.get("call_type") or ""))
+            if ops is None:
+                return  # only surfaces this table can normalize are comparable; unknown types fail closed
+            if ops.wire_params and _request_mutating_guardrail_ran(request_metadata):
+                return  # the wire-body snapshot predates the rewrite; replaying it would resurrect stripped content
             # A key can hold one job per direction, and a request routed by one job's
             # router while bypassing the other's qualifies for both. Each is separately
-            # budgeted, so both fire.
-            for job in (await self._active_jobs()).get(str(api_key_hash), ()):
-                if datetime.now(timezone.utc) >= job.ends_at:
-                    continue
-                if job.attempts + self._job_starts.get(job.id, 0) >= job.max_turns:
-                    continue
-                if not _sample_hits(request_id, job.id, job.shadow_percentage):
-                    continue
-                if _request_was_routed_by(request_metadata, job.router_name) != (job.direction == "reverse"):
-                    continue
+            # budgeted, so both fire; the request is normalized once, and only when at
+            # least one job sampled it.
+            eligible: Final = tuple(
+                job
+                for job in (await self._active_jobs()).get(str(api_key_hash), ())
+                if datetime.now(timezone.utc) < job.ends_at
+                and job.attempts + self._job_starts.get(job.id, 0) < job.max_turns
+                and _sample_hits(request_id, job.id, job.shadow_percentage)
+                and _request_was_routed_by(request_metadata, job.router_name) == (job.direction == "reverse")
+            )
+            if not eligible:
+                return
+            sample: Final = _judgeable_sample(
+                ops,
+                kwargs,
+                MappingProxyType(dict(payload.get("model_parameters") or {})),  # mutable-ok: frozen snapshot
+                response_obj,
+            )
+            if sample is None:
+                return
+            messages, shadow_params, real_text = sample
+            control_tier: Final = _routed_tier(request_metadata)
+            for job in eligible:
                 if self._inflight_shadow_tasks >= _MAX_CONCURRENT_SHADOW_TASKS:
                     return
                 self._job_starts[job.id] = self._job_starts.get(job.id, 0) + 1
@@ -389,12 +649,10 @@ class ShadowEvalLogger(CustomLogger):
                         job=job,
                         request_id=request_id,
                         messages=messages,
-                        response_obj=response_obj,
+                        real_text=real_text,
                         real_model=payload.get("model") or "",
                         control_tier=control_tier,
-                        model_parameters=MappingProxyType(
-                            dict(payload.get("model_parameters") or {})  # mutable-ok: frozen snapshot
-                        ),
+                        shadow_params=shadow_params,
                         parent_metadata=MappingProxyType(dict(request_metadata)),  # mutable-ok: frozen snapshot
                     )
                 ).add_done_callback(self._release_shadow_slot)
@@ -411,10 +669,10 @@ class ShadowEvalLogger(CustomLogger):
         job: ActiveShadowEvalJob,
         request_id: str,
         messages: Sequence[Mapping[str, object]],
-        response_obj: object,
+        real_text: str,
         real_model: str,
         control_tier: str | None,
-        model_parameters: Mapping[str, object],
+        shadow_params: Mapping[str, object],
         parent_metadata: Mapping[str, object],
     ) -> None:
         """Budget gate -> shadow call -> blind judge -> one attempt row. The prisma gate
@@ -424,15 +682,10 @@ class ShadowEvalLogger(CustomLogger):
         try:
             if prisma is None:
                 return
-            real_text: Final = self._extract_response_text(response_obj)
-            if not real_text or not messages:
-                return
             if await _key_or_team_is_over_budget(parent_metadata):
                 return
 
-            shadow: Final = await self._call_router_shadow(
-                job.shadow_target, messages, model_parameters, parent_metadata
-            )
+            shadow: Final = await self._call_router_shadow(job.shadow_target, messages, shadow_params, parent_metadata)
             if isinstance(shadow, _CallFailure):
                 await self._record_attempt(prisma, job, request_id, control_tier, outcome="error", error=shadow.error)
                 return
@@ -510,7 +763,7 @@ class ShadowEvalLogger(CustomLogger):
         self,
         target_model: str,
         messages: Sequence[Mapping[str, object]],
-        model_parameters: Mapping[str, object],
+        shadow_params: Mapping[str, object],
         parent_metadata: Mapping[str, object],
     ) -> "_ShadowResponse | _CallFailure":
         """Send the prompt through the arm nobody was served: the auto-router under
@@ -523,13 +776,12 @@ class ShadowEvalLogger(CustomLogger):
         shadow_metadata: Final[dict[str, object]] = (  # mutable-ok: router writes its routing decision back
             sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN)
         )
-        shadow_params: Final = {  # mutable-ok: splatted as kwargs
-            k: v for k, v in model_parameters.items() if k not in ("stream", "metadata")
-        }
         try:
             response: Final = await router.acompletion(
                 model=target_model,
-                messages=messages,  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
+                messages=[  # mutable-ok: provider transforms rewrite messages in place, so the router gets its own copy
+                    dict(m) for m in messages
+                ],  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
                 metadata=shadow_metadata,
                 num_retries=0,
                 fallbacks=[],  # mutable-ok: SDK kwarg; a failed shadow is a recorded error, never a spend multiplier
@@ -537,8 +789,8 @@ class ShadowEvalLogger(CustomLogger):
             )
         except Exception as e:  # noqa: BLE001  # provider errors become error rows, not crashes
             verbose_logger.debug("shadow_eval: router call failed: %s", e)
-            return _CallFailure(f"shadow router call failed: {e}")
-        text: Final = self._extract_response_text(response)
+            return _CallFailure(f"shadow router call failed: {_failure_detail(e)}")
+        text: Final = _chat_final_text(response)
         if not text:
             return _CallFailure("shadow router returned an empty response")
         return _ShadowResponse(
@@ -580,6 +832,7 @@ class ShadowEvalLogger(CustomLogger):
                 judge_messages,  # pyright: ignore[reportArgumentType]  # plain SDK message dicts
                 temperature=0,
                 max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
+                response_format=PAIRWISE_JUDGE_RESPONSE_FORMAT,
                 metadata=judge_metadata,
             )
         except Exception as e:  # noqa: BLE001  # judge outages become error rows, not crashes
@@ -596,19 +849,6 @@ class ShadowEvalLogger(CustomLogger):
             confidence=max(0.0, min(1.0, verdict.confidence)),
             cost=_judge_call_cost(response),
         )
-
-    @staticmethod
-    def _extract_response_text(response_obj: object) -> str:
-        """Extract the assistant's text from a ModelResponse-shaped object or dict."""
-        try:
-            content: Final = (
-                response_obj["choices"][0]["message"]["content"]
-                if isinstance(response_obj, Mapping)
-                else response_obj.choices[0].message.content  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
-            )
-        except (AttributeError, KeyError, IndexError, TypeError):
-            return ""
-        return extract_text_from_content(content)
 
 
 _EMPTY_JOBS: Final[Mapping[str, tuple[ActiveShadowEvalJob, ...]]] = MappingProxyType({})

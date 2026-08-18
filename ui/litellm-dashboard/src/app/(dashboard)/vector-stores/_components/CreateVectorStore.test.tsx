@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import CreateVectorStore from "./CreateVectorStore";
 import * as networking from "@/components/networking";
@@ -6,14 +7,6 @@ import * as networking from "@/components/networking";
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
   ragIngestCall: vi.fn(),
-}));
-
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 // Mock vector_store_providers
@@ -230,23 +223,16 @@ describe("CreateVectorStore", () => {
     // Find and click the provider dropdown
     const providerSelect = screen.getByRole("combobox");
 
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await userEvent.click(providerSelect);
 
     // Wait for dropdown options to appear
-    await waitFor(() => {
-      const s3Option = screen.queryByText("AWS S3 Vectors");
-      if (s3Option) {
-        fireEvent.click(s3Option);
-      }
-    });
+    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
 
     // Check if S3-specific fields are displayed
     await waitFor(() => {
-      expect(screen.queryByText("Vector Bucket Name")).toBeInTheDocument();
-      expect(screen.queryByText("AWS Region")).toBeInTheDocument();
-      expect(screen.queryByText("Embedding Model")).toBeInTheDocument();
+      expect(screen.getByText("Vector Bucket Name")).toBeInTheDocument();
+      expect(screen.getByText("AWS Region")).toBeInTheDocument();
+      expect(screen.getByText("Embedding Model")).toBeInTheDocument();
     });
   });
 
@@ -270,16 +256,9 @@ describe("CreateVectorStore", () => {
     // Select S3 Vectors provider
     const providerSelect = screen.getByRole("combobox");
 
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await userEvent.click(providerSelect);
 
-    await waitFor(() => {
-      const s3Option = screen.queryByText("AWS S3 Vectors");
-      if (s3Option) {
-        fireEvent.click(s3Option);
-      }
-    });
+    await userEvent.click(await screen.findByText("AWS S3 Vectors"));
 
     // Try to create without filling required fields
     const createButton = screen.getByRole("button", { name: /Create Vector Store/i });

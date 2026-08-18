@@ -29,7 +29,7 @@ describe("VectorStoreForm", () => {
     renderForm();
 
     const logo = screen.getByRole("img", { name: `${VectorStoreProviders.Bedrock} logo` });
-    expect(logo.getAttribute("src")).toBe(providerLogoMap[Providers.Bedrock]);
+    expect(logo).toHaveAttribute("src", providerLogoMap[Providers.Bedrock]);
   });
 });
 

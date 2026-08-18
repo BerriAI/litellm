@@ -286,6 +286,13 @@ def test_semantic_matching_without_an_embedding_model_is_rejected():
         _request("what is 2+2", semantic_keyword_matching=True)
 
 
+def test_classifier_plugin_is_not_settable_over_http():
+    """classifier_plugin holds a live runtime object, closed off like `plugins`; a plugin-mode
+    config is therefore unrepresentable in a request body."""
+    with pytest.raises(ValidationError):
+        _request("what is 2+2", classifier_type="custom", classifier_plugin="my_module.instance")
+
+
 class TestAutoRouterBenchmarks:
     from litellm.proxy.management_endpoints.auto_router_endpoints import _SessionAggRow
 
@@ -521,9 +528,20 @@ def _job_record(**overrides: object) -> MagicMock:
     return record
 
 
+def _key_record(
+    token: str = "key-hash", key_alias: str | None = "prod-alpha", key_name: str | None = "sk-...lpha"
+) -> MagicMock:
+    record = MagicMock(spec=["token", "key_alias", "key_name"])
+    record.token = token
+    record.key_alias = key_alias
+    record.key_name = key_name
+    return record
+
+
 def _shadow_prisma(active_job=None, agg_rows=None) -> MagicMock:
     prisma = MagicMock()
-    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=MagicMock())
+    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=_key_record())
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[_key_record()])
     prisma.db.execute_raw = AsyncMock(return_value=0)
     prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=active_job)
     prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=None)
@@ -789,6 +807,30 @@ async def test_list_shadow_eval_jobs_returns_derived_status_without_aggregates(m
     assert swept.status == "completed"
     assert all(job.judged_count is None and job.results is None for job in jobs)
     assert prisma.db.query_raw.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_shadow_eval_responses_name_the_shadowed_key(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    prisma.db.litellm_shadowevaljob.find_many = AsyncMock(
+        return_value=[_job_record(), _job_record(id="job-2", api_key_id="deleted-key-hash")]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    started = await start_shadow_eval(_start_request(), ADMIN)
+    assert (started.key_alias, started.key_name) == ("prod-alpha", "sk-...lpha")
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+    assert [(job.key_alias, job.key_name) for job in jobs] == [("prod-alpha", "sk-...lpha"), (None, None)]
+    batched_where = prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert batched_where == {"token": {"in": ["deleted-key-hash", "key-hash"]}}
+
+    prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=_job_record())
+    detail = await get_shadow_eval_job("job-1", VIEWER)
+    assert detail.key_alias == "prod-alpha"
 
 
 @pytest.mark.asyncio

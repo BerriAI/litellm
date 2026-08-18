@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -13,6 +13,7 @@ import {
   ComboboxEmpty,
   ComboboxItem,
   ComboboxList,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -190,6 +191,7 @@ interface CustomCodeModalProps {
 }
 
 const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onSuccess, accessToken, editData }) => {
+  const anchor = useComboboxAnchor();
   const isEditMode = !!editData;
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
@@ -362,15 +364,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   // Save guardrail (create or update)
   const handleSave = async () => {
     if (!guardrailName.trim()) {
-      NotificationsManager.fromBackend("Please enter a guardrail name");
+      toast.fromError("Please enter a guardrail name");
       return;
     }
     if (!code.trim()) {
-      NotificationsManager.fromBackend("Please enter custom code");
+      toast.fromError("Please enter custom code");
       return;
     }
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -398,7 +400,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         }
 
         await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
-        NotificationsManager.success("Custom code guardrail updated successfully");
+        toast.success("Custom code guardrail updated successfully");
       } else {
         // Create new guardrail
         const guardrailData = {
@@ -413,13 +415,13 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         };
 
         await createGuardrailCall(accessToken, guardrailData);
-        NotificationsManager.success("Custom code guardrail created successfully");
+        toast.success("Custom code guardrail created successfully");
       }
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Failed to save guardrail:", error);
-      NotificationsManager.fromBackend(
+      toast.fromError(
         `Failed to ${isEditMode ? "update" : "create"} guardrail: ` +
           (error instanceof Error ? error.message : String(error)),
       );
@@ -524,18 +526,15 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
               multiple
             >
-              <ComboboxChips className="w-full">
+              <ComboboxChips render={<div ref={anchor} />} className="w-full">
                 {selectedModeOptions.map((option) => (
                   <ComboboxChip key={option.value} aria-label={option.label}>
                     {option.label}
                   </ComboboxChip>
                 ))}
-                <ComboboxChipsInput
-                  className="border-0 bg-transparent"
-                  placeholder={mode.length === 0 ? "Select modes" : undefined}
-                />
+                <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
               </ComboboxChips>
-              <ComboboxContent>
+              <ComboboxContent anchor={anchor}>
                 <ComboboxEmpty>No matching modes</ComboboxEmpty>
                 <ComboboxList>
                   {(option: ModeOption) => (

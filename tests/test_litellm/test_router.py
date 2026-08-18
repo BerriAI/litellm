@@ -525,6 +525,126 @@ async def test_async_router_acreate_file_uses_deployment_custom_llm_provider():
 
 
 @pytest.mark.asyncio
+async def test_async_router_acreate_file_forwards_target_model_names_to_litellm_proxy():
+    import json
+    from io import BytesIO
+    from unittest.mock import MagicMock, patch
+
+    jsonl_file = BytesIO(
+        json.dumps({"body": {"model": "chained-batch", "messages": [{"role": "user", "content": "hi"}]}}).encode(
+            "utf-8"
+        )
+    )
+    jsonl_file.name = "test.jsonl"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chained-batch",
+                "litellm_params": {
+                    "model": "litellm_proxy/gpt-4.1-batch",
+                    "api_base": "http://localhost:4001/v1",
+                    "api_key": "sk-proxy-b",
+                },
+            },
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(
+            model="chained-batch",
+            purpose="batch",
+            file=jsonl_file,
+        )
+
+        assert mock_acreate_file.call_count == 1
+        call_kwargs = mock_acreate_file.call_args.kwargs
+        assert call_kwargs["custom_llm_provider"] == "litellm_proxy"
+        assert call_kwargs["extra_body"] == {"target_model_names": "gpt-4.1-batch"}
+        uploaded_line = json.loads(call_kwargs["file"].read().decode("utf-8").split("\n")[0])
+        assert uploaded_line["body"]["model"] == "gpt-4.1-batch"
+
+
+@pytest.mark.asyncio
+async def test_async_router_acreate_file_does_not_inject_target_model_names_for_other_providers():
+    from unittest.mock import MagicMock, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-batch",
+                "litellm_params": {"model": "gpt-4.1"},
+            },
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(
+            model="gpt-4.1-batch",
+            purpose="batch",
+            file=MagicMock(),
+        )
+
+        assert mock_acreate_file.call_count == 1
+        assert mock_acreate_file.call_args.kwargs.get("extra_body") is None
+
+
+@pytest.mark.asyncio
+async def test_async_router_acreate_file_litellm_proxy_sends_target_model_names_in_multipart_form():
+    import json
+    from io import BytesIO
+
+    import httpx
+    import respx
+
+    jsonl_file = BytesIO(
+        json.dumps({"body": {"model": "chained-batch", "messages": [{"role": "user", "content": "hi"}]}}).encode(
+            "utf-8"
+        )
+    )
+    jsonl_file.name = "test.jsonl"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chained-batch",
+                "litellm_params": {
+                    "model": "litellm_proxy/gpt-4.1-batch",
+                    "api_base": "http://localhost:4001/v1",
+                    "api_key": "sk-proxy-b",
+                },
+            },
+        ],
+    )
+
+    file_object_json = {
+        "id": "file-abc123",
+        "object": "file",
+        "bytes": 100,
+        "created_at": 1700000000,
+        "filename": "test.jsonl",
+        "purpose": "batch",
+        "status": "processed",
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        create_route = respx_mock.post("http://localhost:4001/v1/files").mock(
+            return_value=httpx.Response(200, json=file_object_json)
+        )
+        response = await router.acreate_file(
+            model="chained-batch",
+            purpose="batch",
+            file=jsonl_file,
+        )
+
+    assert response.id == "file-abc123"
+    request_body = create_route.calls.last.request.content
+    assert b'name="target_model_names"' in request_body
+    assert b"gpt-4.1-batch" in request_body
+    assert b'name="purpose"' in request_body
+
+
+@pytest.mark.asyncio
 async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
     """
     Regression test: Ensure afile_content preserves deployment custom_llm_provider
@@ -7954,3 +8074,45 @@ def test_ensure_deployment_affinity_callback_is_idempotent():
     finally:
         for cb in router.optional_callbacks or []:
             litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+
+def test_get_router_model_info_does_not_wipe_cached_pricing():
+    """A Deployment's model_info declares the mirrored pricing fields with None defaults;
+    merging it must not write those Nones into the lru_cache'd dict get_model_info() owns,
+    or /model/info loses built-in prices for every model a worker serves."""
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    expected = copy.deepcopy(litellm.get_model_info(model="anthropic/claude-sonnet-4-5"))
+
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1"),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5") == expected
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        assert merged[field] == expected[field]
+
+
+def test_get_router_model_info_keeps_explicit_pricing_overrides():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1", input_cost_per_token=1e-08),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert merged["input_cost_per_token"] == 1e-08
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08

@@ -1267,13 +1267,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         import copy
 
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            DEFS_MAX_INLINED_BYTES,
             unpack_defs,
         )
 
         json_schema = copy.deepcopy(json_schema)
         defs: Final = json_schema.pop("$defs", json_schema.pop("definitions", {}))
         if defs:
-            unpack_defs(json_schema, defs)
+            unpack_defs(json_schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
 
         # Filter out unsupported fields for Anthropic's output_format API
         filtered_schema: Final = self.filter_anthropic_output_schema(json_schema)

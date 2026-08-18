@@ -101,13 +101,13 @@ describe("EmailSettings", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser={false} alerts={alerts} />);
 
     expect(inputNamed("EMAIL_LOGO_URL")).toBeDisabled();
-    expect(inputNamed("SMTP_HOST")).not.toBeDisabled();
+    expect(inputNamed("SMTP_HOST")).toBeEnabled();
   });
 
   it("leaves the premium-only fields editable for premium users", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
 
-    expect(inputNamed("EMAIL_LOGO_URL")).not.toBeDisabled();
+    expect(inputNamed("EMAIL_LOGO_URL")).toBeEnabled();
   });
 
   it("triggers a live email health check", async () => {

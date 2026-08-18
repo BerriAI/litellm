@@ -177,8 +177,7 @@ describe("OAuthFormFields", () => {
           <OAuthFormFields isM2M={false} />
         </WithForm>,
       );
-      const authMethodLabel = screen.getByText("Token Endpoint Auth Method (optional)");
-      const selector = authMethodLabel.closest(".ant-form-item")!.querySelector(".ant-select-selector")!;
+      const selector = screen.getByLabelText("Token Endpoint Auth Method (optional)");
       await act(async () => {
         fireEvent.mouseDown(selector);
       });

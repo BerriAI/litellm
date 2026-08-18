@@ -63,7 +63,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
       </div>
 
       <Tabs defaultValue="usage" onValueChange={handleTabChange}>
-        <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+        <TabsList variant="line" className="h-auto w-full justify-start rounded-none p-0">
           <TabsTrigger value="usage" className="flex-none rounded-none px-4 py-2">
             Overall
           </TabsTrigger>

@@ -10,10 +10,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
     get_file_ids_from_messages,
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
+    hoist_images_from_tool_messages,
     split_concatenated_json_objects,
     update_messages_with_model_file_ids,
 )
@@ -751,6 +754,159 @@ class TestTextCompletionPromptToMessages:
 
         with pytest.raises(ValueError, match="non-empty string or a non-empty list of strings"):
             text_completion_prompt_to_messages(prompt)
+
+
+DATA_URI_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+BOUNDARY_PART = {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY}
+
+
+def _tool_msg(content, tool_call_id="call_1"):
+    return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
+
+
+def _assistant_tool_call_msg(*tool_call_ids):
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": tid, "type": "function", "function": {"name": "read_image", "arguments": "{}"}}
+            for tid in tool_call_ids
+        ],
+    }
+
+
+def test_hoist_images_from_tool_messages_bare_data_uri_string_passes_through():
+    messages = [
+        {"role": "user", "content": "read the image"},
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg(DATA_URI_PNG),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result is messages
+
+
+def test_hoist_images_from_tool_messages_structured_image_part():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert len(result) == 3
+    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[2]["role"] == "user"
+    assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
+def test_hoist_images_from_tool_messages_keeps_text_parts_in_tool_message():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg(
+            [
+                {"type": "text", "text": "screenshot follows"},
+                {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
+            ]
+        ),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result[1]["content"] == [{"type": "text", "text": "screenshot follows"}]
+    assert result[2]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
+def test_hoist_images_from_tool_messages_parallel_tool_calls_insert_after_run():
+    messages = [
+        _assistant_tool_call_msg("call_1", "call_2"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}], tool_call_id="call_1"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}}], tool_call_id="call_2"),
+        {"role": "assistant", "content": "looking"},
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    roles = [m["role"] for m in result]
+    assert roles == ["assistant", "tool", "tool", "user", "assistant"]
+    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[2]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[3]["content"] == [
+        BOUNDARY_PART,
+        {"type": "image_url", "image_url": {"url": DATA_URI_PNG}},
+        {"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}},
+    ]
+
+
+def test_hoist_images_from_tool_messages_no_tool_messages_returns_input_unchanged():
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]},
+        {"role": "assistant", "content": "a cat"},
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result is messages
+
+
+def test_hoist_images_from_tool_messages_text_only_tool_message_unchanged():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg("plain text result"),
+        _tool_msg([{"type": "text", "text": "another"}], tool_call_id="call_2"),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert result is messages
+
+
+def test_hoist_images_from_tool_messages_does_not_mutate_input():
+    tool_message = _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}])
+    messages = [_assistant_tool_call_msg("call_1"), tool_message]
+
+    hoist_images_from_tool_messages(messages)
+
+    assert tool_message["content"] == [{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+    assert len(messages) == 2
+
+
+@pytest.mark.parametrize(
+    "sibling_content",
+    [None, [{"type": "text", "text": "42 files"}]],
+    ids=["none_content", "text_only_list"],
+)
+def test_hoist_images_from_tool_messages_imageless_sibling_in_image_run_unchanged(sibling_content):
+    imageless_tool_msg = _tool_msg(sibling_content, tool_call_id="call_2")
+    messages = [
+        _assistant_tool_call_msg("call_1", "call_2"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]),
+        imageless_tool_msg,
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert [m["role"] for m in result] == ["assistant", "tool", "tool", "user"]
+    assert result[1]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[2] is imageless_tool_msg
+    assert result[3]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
+
+
+def test_hoist_images_from_tool_messages_earlier_tool_run_without_images_unchanged():
+    messages = [
+        _assistant_tool_call_msg("call_1"),
+        _tool_msg("plain text result"),
+        _assistant_tool_call_msg("call_2"),
+        _tool_msg([{"type": "image_url", "image_url": {"url": DATA_URI_PNG}}], tool_call_id="call_2"),
+    ]
+
+    result = hoist_images_from_tool_messages(messages)
+
+    assert [m["role"] for m in result] == ["assistant", "tool", "assistant", "tool", "user"]
+    assert result[1]["content"] == "plain text result"
+    assert result[3]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+    assert result[4]["content"] == [BOUNDARY_PART, {"type": "image_url", "image_url": {"url": DATA_URI_PNG}}]
 
 
 class TestCustomToolFormatShapeConversion:
