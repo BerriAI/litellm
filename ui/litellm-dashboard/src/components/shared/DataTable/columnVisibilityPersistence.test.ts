@@ -1,17 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { columnVisibilityStorageKey, readColumnVisibility, writeColumnVisibility } from "./columnVisibilityPersistence";
 
-function memoryStorage(initial: Record<string, string> = {}) {
-  const entries = new Map(Object.entries(initial));
-  return {
-    getItem: (key: string) => entries.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      entries.set(key, value);
-    },
-    dump: () => Object.fromEntries(entries),
-  };
-}
+beforeEach(() => {
+  window.localStorage.clear();
+});
 
 describe("columnVisibilityStorageKey", () => {
   it("is order-insensitive so reordering columns in code keeps saved preferences", () => {
@@ -29,12 +22,12 @@ describe("columnVisibilityStorageKey", () => {
 
 describe("readColumnVisibility", () => {
   it("returns undefined when nothing was stored", () => {
-    expect(readColumnVisibility(memoryStorage(), "missing")).toBeUndefined();
+    expect(readColumnVisibility(window.localStorage, "missing")).toBeUndefined();
   });
 
   it("returns undefined for corrupt JSON instead of breaking the table", () => {
-    const storage = memoryStorage({ k: "{not json" });
-    expect(readColumnVisibility(storage, "k")).toBeUndefined();
+    window.localStorage.setItem("k", "{not json");
+    expect(readColumnVisibility(window.localStorage, "k")).toBeUndefined();
   });
 
   it.each([
@@ -43,13 +36,13 @@ describe("readColumnVisibility", () => {
     ["null", "null"],
     ["non-boolean values", '{"name":"yes"}'],
   ])("returns undefined for %s", (_label, stored) => {
-    const storage = memoryStorage({ k: stored });
-    expect(readColumnVisibility(storage, "k")).toBeUndefined();
+    window.localStorage.setItem("k", stored);
+    expect(readColumnVisibility(window.localStorage, "k")).toBeUndefined();
   });
 
   it("returns an explicitly stored empty state, distinct from a missing entry", () => {
-    const storage = memoryStorage({ k: "{}" });
-    expect(readColumnVisibility(storage, "k")).toEqual({});
+    window.localStorage.setItem("k", "{}");
+    expect(readColumnVisibility(window.localStorage, "k")).toEqual({});
   });
 
   it("returns undefined when storage access throws", () => {
@@ -64,9 +57,8 @@ describe("readColumnVisibility", () => {
 
 describe("writeColumnVisibility", () => {
   it("round-trips a visibility state through storage", () => {
-    const storage = memoryStorage();
-    writeColumnVisibility(storage, "k", { name: true, email: false });
-    expect(readColumnVisibility(storage, "k")).toEqual({ name: true, email: false });
+    writeColumnVisibility(window.localStorage, "k", { name: true, email: false });
+    expect(readColumnVisibility(window.localStorage, "k")).toEqual({ name: true, email: false });
   });
 
   it("does not throw when storage rejects the write", () => {
