@@ -10,7 +10,7 @@ describe("ConfigInfoMessage", () => {
 
   it("should render nothing when show is false", () => {
     const { container } = render(<ConfigInfoMessage show={false} />);
-    expect(container.innerHTML).toBe("");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should display the YAML config snippet", () => {

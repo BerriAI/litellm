@@ -39,11 +39,10 @@ _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
         CallTypes.pass_through.value,
         CallTypes.llm_passthrough_route.value,
         CallTypes.allm_passthrough_route.value,
-        # CheckBatchCost's synthetic logging_obj for a completed managed batch only ever
-        # carries user_api_key_user_id (from LiteLLM_ManagedObjectTable.created_by) and
-        # user_api_key_team_id (from .team_id) -- both are None for batches created with
-        # the master key or a team-less key, since the table never stores the raw key
-        # hash. The batch already incurred real provider cost, so track it regardless.
+        # CheckBatchCost's synthetic logging_obj for a completed managed batch carries
+        # whatever LiteLLM_ManagedObjectTable stored at create time, and all of it is
+        # None for a batch created before those columns were persisted, or by the master
+        # key. The batch already incurred real provider cost, so track it regardless.
         CallTypes.aretrieve_batch.value,
     }
 )
@@ -125,6 +124,15 @@ class _ProxyDBLogger(CustomLogger):
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
         existing_metadata.update(_metadata)
+
+        litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
+        if (
+            isinstance(litellm_metadata_bucket, dict)
+            and "standard_logging_guardrail_information" not in existing_metadata
+        ):
+            guardrail_info: Final = litellm_metadata_bucket.get("standard_logging_guardrail_information")
+            if guardrail_info is not None:
+                existing_metadata["standard_logging_guardrail_information"] = guardrail_info
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}

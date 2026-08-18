@@ -86,6 +86,73 @@ async def test_async_post_call_failure_hook():
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_metadata():
+    """
+    LIT-5650 regression: on a pre_call guardrail block the unified guardrail
+    layer seeds request_data["litellm_metadata"], so the guardrail hook writes
+    standard_logging_guardrail_information there, while the failure spend log
+    is serialized from request_data["metadata"]. Blocked invocations still
+    consume provider usage units, so the info must be carried over or the
+    failure row logs guardrail_information: null.
+    """
+    logger = _ProxyDBLogger()
+    guardrail_info = [
+        {
+            "guardrail_name": "bedrock-guard",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+        }
+    ]
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"original_key": "original_value"},
+        "litellm_metadata": {"standard_logging_guardrail_information": guardrail_info},
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Violated guardrail policy"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+        metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
+        assert metadata["standard_logging_guardrail_information"] == guardrail_info
+        assert metadata["original_key"] == "original_value"
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_metadata():
+    logger = _ProxyDBLogger()
+    metadata_bucket_info = [{"guardrail_name": "from-metadata-bucket"}]
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"standard_logging_guardrail_information": metadata_bucket_info},
+        "litellm_metadata": {"standard_logging_guardrail_information": [{"guardrail_name": "from-litellm-bucket"}]},
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Test exception"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+        metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
+        assert metadata["standard_logging_guardrail_information"] == metadata_bucket_info
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_non_llm_route():
     # Setup
     logger = _ProxyDBLogger()

@@ -1,5 +1,6 @@
 import {
   buildComplexityRouterConfig,
+  getPlanModeTierError,
   normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getMissingTiersError,
@@ -26,6 +27,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierContextIncludeAssistantTurns: undefined,
   classifierFallback: undefined,
   sessionAffinity: false,
+  deploymentAffinity: true,
   customTechnicalKeywords: [],
   keywordTierRules: [],
   semanticMatchingEnabled: false,
@@ -46,6 +48,7 @@ describe("buildComplexityRouterConfig", () => {
       tiers,
       classifier_type: "heuristic",
       session_affinity: false,
+      deployment_affinity: true,
       escalation_keywords: ["LITELLM ESCALATE"],
     });
   });
@@ -445,6 +448,39 @@ describe("classifier prompt and fallback", () => {
     expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
   });
 
+  it("sends the chat preset the operator picked", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, classification_rubric: "chat" },
+    });
+    expect(config.classifier_llm_config).toEqual({
+      model: "haiku-classifier",
+      timeout_ms: 400,
+      classification_rubric: "chat",
+    });
+  });
+
+  it("omits the preset when none is set, leaving an existing router on the rubric it already had", () => {
+    // An unset preset means the pre-calibration rubric on the backend. Materializing a value here
+    // would change the tier decisions, and the bill, of a router the operator only opened to edit.
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
+  });
+
+  it("drops the preset when a custom prompt replaces the rubric, which the backend rejects together", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: {
+        model: "haiku-classifier",
+        timeout_ms: 400,
+        classification_rubric: "chat",
+        system_prompt: "Grade the data sensitivity of the request.",
+      },
+    });
+    expect(config.classifier_llm_config).not.toHaveProperty("classification_rubric");
+    expect(config.classifier_llm_config?.system_prompt).toBe("Grade the data sensitivity of the request.");
+  });
+
   it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
     expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
       model: "m",
@@ -538,5 +574,64 @@ describe("hydrateTierLabels", () => {
   it("returns undefined for a value that is not an object", () => {
     expect(hydrateTierLabels("Cheap")).toBeUndefined();
     expect(hydrateTierLabels(["Cheap"])).toBeUndefined();
+  });
+});
+
+describe("buildComplexityRouterConfig scorer knobs", () => {
+  const BOUNDARIES = { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 };
+  const tuned: BuildComplexityRouterConfigParams = { ...baseParams, tierBoundaries: BOUNDARIES };
+  const llmWithDefaultFallback: BuildComplexityRouterConfigParams = {
+    ...tuned,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifierFallback: "default_model",
+  };
+
+  it("omits untouched knobs so the router tracks the backend defaults", () => {
+    const config = buildComplexityRouterConfig(baseParams);
+
+    expect(config).not.toHaveProperty("tier_boundaries");
+    expect(config).not.toHaveProperty("dimension_weights");
+  });
+
+  it("emits what was set", () => {
+    expect(buildComplexityRouterConfig(tuned).tier_boundaries).toEqual(BOUNDARIES);
+  });
+
+  it("drops them when the classifier falls back to the default model and nothing is scored", () => {
+    expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
+  });
+});
+
+describe("plan-mode minimum tier", () => {
+  it("omits plan_mode_min_tier when unset, so the backend default (off) is preserved", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, planModeMinTier: undefined });
+    expect(config).not.toHaveProperty("plan_mode_min_tier");
+  });
+
+  it("writes the selected tier", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, planModeMinTier: "COMPLEX" });
+    expect(config.plan_mode_min_tier).toBe("COMPLEX");
+  });
+
+  it("never writes an empty string, which the backend rejects instead of treating as off", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, planModeMinTier: "  " });
+    expect(config).not.toHaveProperty("plan_mode_min_tier");
+  });
+});
+
+describe("getPlanModeTierError", () => {
+  const tiersWithEmptyComplex = { SIMPLE: ["m1"], MEDIUM: ["m1"], COMPLEX: [], REASONING: [] };
+
+  it("passes when the override is off", () => {
+    expect(getPlanModeTierError(undefined, tiersWithEmptyComplex)).toBeNull();
+  });
+
+  it("passes when the named tier has models", () => {
+    expect(getPlanModeTierError("MEDIUM", tiersWithEmptyComplex)).toBeNull();
+  });
+
+  it("blocks a tier whose models were removed, which the backend would reject with a 400", () => {
+    expect(getPlanModeTierError("COMPLEX", tiersWithEmptyComplex)).toContain("COMPLEX");
   });
 });

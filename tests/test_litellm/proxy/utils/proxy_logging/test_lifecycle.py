@@ -8,6 +8,7 @@ because they are direct dependents on the lifecycle state.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -129,6 +130,42 @@ def test_startup_event_initializes_slack_and_callbacks(proxy_logging):
     }
 
 
+@pytest.mark.asyncio
+async def test_startup_event_schedules_deprecation_check_before_its_alert_type_is_on(proxy_logging):
+    """Alerting config can enable the deprecation alert after startup, so the loop must already be running"""
+    proxy_logging.alerting = ["slack"]
+    proxy_logging.slack_alerting_instance = MagicMock()
+    proxy_logging.slack_alerting_instance.alert_types = []
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check = AsyncMock()
+    proxy_logging._init_litellm_callbacks = MagicMock()
+
+    proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
+
+    assert proxy_logging.deprecation_check_started is True
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with(
+        pod_lock_manager=proxy_logging.db_spend_update_writer.pod_lock_manager
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_values_schedules_deprecation_check_when_alerting_arrives_later(proxy_logging):
+    """A proxy that boots without alerting still needs the loop once a config reload turns it on"""
+    proxy_logging.slack_alerting_instance = MagicMock()
+    proxy_logging.slack_alerting_instance.alert_types = []
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check = AsyncMock()
+    proxy_logging._init_litellm_callbacks = MagicMock()
+
+    proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
+    assert proxy_logging.deprecation_check_started is False
+
+    proxy_logging.update_values(alerting=["slack"])
+
+    assert proxy_logging.deprecation_check_started is True
+    proxy_logging.slack_alerting_instance.run_scheduled_deprecation_check.assert_called_once_with(
+        pod_lock_manager=proxy_logging.db_spend_update_writer.pod_lock_manager
+    )
+
+
 def test_startup_event_propagates_init_callbacks_failure_raises(proxy_logging):
     proxy_logging.slack_alerting_instance = MagicMock()
     proxy_logging.slack_alerting_instance.alert_types = []
@@ -136,6 +173,41 @@ def test_startup_event_propagates_init_callbacks_failure_raises(proxy_logging):
 
     with pytest.raises(RuntimeError, match="boom"):
         proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
+
+
+@pytest.mark.asyncio
+async def test_startup_event_hands_the_daily_report_this_pods_lock_manager(proxy_logging):
+    """regression: issue #14809 - the daily report's dedupe lock only works if startup_event
+    passes the writer's pod_lock_manager down; dropping the argument silently restores the
+    every-pod-reports behavior."""
+    proxy_logging.slack_alerting_instance = MagicMock()
+    proxy_logging.slack_alerting_instance.alert_types = ["daily_reports"]
+    proxy_logging.slack_alerting_instance._run_scheduled_daily_report = AsyncMock()
+    proxy_logging._init_litellm_callbacks = MagicMock()
+    proxy_logging.update_values = MagicMock()
+    llm_router = MagicMock()
+
+    proxy_logging.startup_event(llm_router=llm_router, redis_usage_cache=None)
+    await asyncio.sleep(0)
+
+    call = proxy_logging.slack_alerting_instance._run_scheduled_daily_report.call_args
+    assert proxy_logging.slack_alerting_instance._run_scheduled_daily_report.call_count == 1
+    assert call.kwargs["pod_lock_manager"] is proxy_logging.db_spend_update_writer.pod_lock_manager
+    assert call.kwargs["llm_router"] is llm_router
+
+
+@pytest.mark.asyncio
+async def test_startup_event_skips_the_daily_report_when_it_is_not_an_alert_type(proxy_logging):
+    proxy_logging.slack_alerting_instance = MagicMock()
+    proxy_logging.slack_alerting_instance.alert_types = []
+    proxy_logging.slack_alerting_instance._run_scheduled_daily_report = AsyncMock()
+    proxy_logging._init_litellm_callbacks = MagicMock()
+    proxy_logging.update_values = MagicMock()
+
+    proxy_logging.startup_event(llm_router=None, redis_usage_cache=None)
+    await asyncio.sleep(0)
+
+    proxy_logging.slack_alerting_instance._run_scheduled_daily_report.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

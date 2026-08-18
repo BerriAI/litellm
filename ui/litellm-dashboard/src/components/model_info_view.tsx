@@ -17,7 +17,22 @@ import {
   Title,
   Button as TremorButton,
 } from "@tremor/react";
-import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
+import { Button, DatePicker, Form, Input, Modal, Select, Tooltip } from "antd";
+import { formatPtuUtcDisplay, utcIsoToPickerValue } from "../utils/ptuDatetime";
+import { applyPtuModelInfo } from "../utils/ptuModelInfo";
+import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
+import {
+  PTU_COUNT_FIELD,
+  PTU_RATE_FIELD,
+  ptuCountRules,
+  ptuNoUsageCostRule,
+  ptuPairRule,
+  ptuRateRules,
+  ptuStartRequiredRule,
+  ptuWindowOrderRule,
+  PTU_END_FIELD,
+  PTU_START_FIELD,
+} from "../utils/ptuValidation";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -26,7 +41,7 @@ import { isMaskedSecret, stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
-import { normalizeTierModels } from "./add_model/complexity_router_tiers";
+import { normalizeTierModels, resolveComplexityDefaultModel } from "./add_model/complexity_router_tiers";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,
@@ -38,7 +53,7 @@ import CacheControlSettings from "./add_model/cache_control_settings";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   CredentialItem,
   credentialCreateCall,
@@ -67,6 +82,68 @@ interface ModelInfoViewProps {
   modelAccessGroups: string[] | null;
 }
 
+interface PtuEditField {
+  name: string;
+  label: string;
+  input: "number" | "datetime";
+  placeholder?: string;
+  isCount?: boolean;
+  isRate?: boolean;
+  isStart?: boolean;
+  pairedWith?: string;
+  windowPeer?: string;
+  bound?: "start" | "end";
+}
+
+const PTU_EDIT_FIELDS: PtuEditField[] = [
+  {
+    name: PTU_COUNT_FIELD,
+    label: "PTU Count",
+    input: "number",
+    placeholder: "e.g. 15",
+    isCount: true,
+    pairedWith: PTU_RATE_FIELD,
+  },
+  {
+    name: PTU_RATE_FIELD,
+    label: "Cost per PTU / Hour (USD)",
+    input: "number",
+    placeholder: "e.g. 2.00",
+    isRate: true,
+    pairedWith: PTU_COUNT_FIELD,
+  },
+  {
+    name: PTU_START_FIELD,
+    label: "PTU Effective From (UTC)",
+    input: "datetime",
+    isStart: true,
+    windowPeer: PTU_END_FIELD,
+    bound: "start",
+  },
+  {
+    name: PTU_END_FIELD,
+    label: "PTU Effective To (UTC)",
+    input: "datetime",
+    windowPeer: PTU_START_FIELD,
+    bound: "end",
+  },
+];
+
+/** Per-1M-token rate for the first rate that is set, so a deliberate 0 seeds the form as 0. */
+const perMillionTokens = (...rates: (number | null | undefined)[]): number | null => {
+  const rate = rates.find((candidate) => candidate != null);
+  return rate == null ? null : rate * 1_000_000;
+};
+
+const ptuFieldDependencies = ({ isStart, pairedWith, windowPeer }: PtuEditField): string[] | undefined => {
+  const deps = [
+    ...(isStart ? [PTU_COUNT_FIELD] : []),
+    ...(pairedWith ? [pairedWith] : []),
+    ...(windowPeer ? [windowPeer] : []),
+  ];
+  return deps.length ? deps : undefined;
+};
+
 interface ComplexityRouterTierConfig {
   tiers?: {
     SIMPLE?: unknown;
@@ -76,6 +153,7 @@ interface ComplexityRouterTierConfig {
   };
   semantic_keyword_matching?: boolean;
   embedding_model?: string;
+  default_model?: string;
 }
 
 interface ComplexityRouterModelData {
@@ -100,25 +178,26 @@ const buildComplexityRouterTestTargets = (
     config = rawConfig;
   }
 
-  const tierTargets = buildAutoRouterTestTargets({
-    tiers: {
-      SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
-      MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
-      COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
-      REASONING: normalizeTierModels(config.tiers?.REASONING),
-    },
+  const tiers = {
+    SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
+    MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
+    COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
+    REASONING: normalizeTierModels(config.tiers?.REASONING),
+  };
+
+  // Mirrors init_complexity_router_deployment (litellm/router.py): litellm_params wins, otherwise
+  // pure tier-derivation. complexity_router_config.default_model is a UI-only marker the backend
+  // never reads — folding it in here could point Test Connection at a model the router never
+  // calls (see PR #36615 discussion).
+  const effectiveDefaultModel = modelData?.litellm_params?.complexity_router_default_model || undefined;
+
+  const testTargetParams = {
+    tiers,
     semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
     embeddingModel: config.embedding_model,
-  });
-
-  const defaultModel = modelData?.litellm_params?.complexity_router_default_model?.trim();
-  if (!defaultModel || tierTargets.some((target) => target.modelGroup === defaultModel)) {
-    return tierTargets;
-  }
-  return [
-    ...tierTargets,
-    { labels: ["Default (unconfigured tiers)"], modelGroup: defaultModel, mode: "chat" as const },
-  ];
+    defaultModel: resolveComplexityDefaultModel(tiers, effectiveDefaultModel),
+  };
+  return buildAutoRouterTestTargets(testTargetParams);
 };
 
 export default function ModelInfoView({
@@ -156,6 +235,9 @@ export default function ModelInfoView({
   const { data: modelCostMapData } = useModelCostMap();
   const { data: modelHubData } = useModelHub();
   const { data: teams } = useTeams();
+  const ptuCostAttributionEnabled = usePtuCostAttributionEnabled();
+  const ptuCostRule = (field: string) =>
+    ptuCostAttributionEnabled ? [ptuNoUsageCostRule(PTU_COUNT_FIELD, field)] : [];
 
   // Transform the model data
   const getProviderFromModel = (model: string) => {
@@ -301,9 +383,9 @@ export default function ModelInfoView({
         custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
       },
     };
-    NotificationsManager.info("Storing credential..");
+    toast.info("Storing credential..");
     let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
-    NotificationsManager.success("Credential stored successfully");
+    toast.success("Credential stored successfully");
   };
 
   const handleModelUpdate = async (values: any) => {
@@ -317,7 +399,7 @@ export default function ModelInfoView({
         parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
         delete parsedExtraParams.litellm_credential_name;
       } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in LiteLLM Params");
+        toast.fromError("Invalid JSON in LiteLLM Params");
         setIsSaving(false);
         return;
       }
@@ -427,8 +509,9 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in Model Info");
+        toast.fromError("Invalid JSON in Model Info");
         return;
       }
 
@@ -460,12 +543,12 @@ export default function ModelInfoView({
         onModelUpdate(updatedModelData);
       }
 
-      NotificationsManager.success("Model settings updated successfully");
+      toast.success("Model settings updated successfully");
       setIsDirty(false);
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      NotificationsManager.fromBackend("Failed to update model settings");
+      toast.fromError("Failed to update model settings");
     } finally {
       setIsSaving(false);
     }
@@ -500,7 +583,7 @@ export default function ModelInfoView({
     if (isComplexityRouterModel) {
       const targets = buildComplexityRouterTestTargets(localModelData ?? modelData);
       if (targets.length === 0) {
-        NotificationsManager.warning("No complexity tiers are configured yet, so there is nothing to test.");
+        toast.warning("No complexity tiers are configured yet, so there is nothing to test.");
         return;
       }
       setAutoRouterTestTargets(targets);
@@ -509,7 +592,7 @@ export default function ModelInfoView({
       return;
     }
     try {
-      NotificationsManager.info("Testing connection...");
+      toast.info("Testing connection...");
       const response = await testConnectionRequest(
         accessToken,
         {
@@ -530,15 +613,15 @@ export default function ModelInfoView({
       );
 
       if (response.status === "success") {
-        NotificationsManager.success("Connection test successful!");
+        toast.success("Connection test successful!");
       } else {
         throw new Error(response?.result?.error || response?.message || "Unknown error");
       }
     } catch (error) {
       if (error instanceof Error) {
-        NotificationsManager.error("Error testing connection: " + truncateString(error.message, 100));
+        toast.error("Error testing connection: " + truncateString(error.message, 100));
       } else {
-        NotificationsManager.error("Error testing connection: " + String(error));
+        toast.error("Error testing connection: " + String(error));
       }
     }
   };
@@ -548,7 +631,7 @@ export default function ModelInfoView({
       setDeleteLoading(true);
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
-      NotificationsManager.success("Model deleted successfully");
+      toast.success("Model deleted successfully");
 
       if (onModelUpdate) {
         onModelUpdate({
@@ -560,7 +643,7 @@ export default function ModelInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);
-      NotificationsManager.fromBackend("Failed to delete model");
+      toast.fromError("Failed to delete model");
     } finally {
       setDeleteLoading(false);
       setIsDeleteModalOpen(false);
@@ -763,12 +846,18 @@ export default function ModelInfoView({
                     max_retries: localModelData.litellm_params.max_retries,
                     timeout: localModelData.litellm_params.timeout,
                     stream_timeout: localModelData.litellm_params.stream_timeout,
-                    input_cost: localModelData.litellm_params.input_cost_per_token
-                      ? localModelData.litellm_params.input_cost_per_token * 1_000_000
-                      : localModelData.model_info?.input_cost_per_token * 1_000_000 || null,
-                    output_cost: localModelData.litellm_params?.output_cost_per_token
-                      ? localModelData.litellm_params.output_cost_per_token * 1_000_000
-                      : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
+                    input_cost: perMillionTokens(
+                      localModelData.litellm_params.input_cost_per_token,
+                      localModelData.model_info?.input_cost_per_token,
+                    ),
+                    output_cost: perMillionTokens(
+                      localModelData.litellm_params?.output_cost_per_token,
+                      localModelData.model_info?.output_cost_per_token,
+                    ),
+                    ptu_count: localModelData.model_info?.ptu_count ?? null,
+                    cost_per_ptu_per_hour: localModelData.model_info?.cost_per_ptu_per_hour ?? null,
+                    ptu_effective_from: utcIsoToPickerValue(localModelData.model_info?.ptu_effective_from),
+                    ptu_effective_to: utcIsoToPickerValue(localModelData.model_info?.ptu_effective_to),
                     cache_read_cost:
                       localModelData.litellm_params?.cache_read_input_token_cost !== undefined &&
                       localModelData.litellm_params?.cache_read_input_token_cost !== null
@@ -841,14 +930,19 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Input Cost (per 1M tokens)</Text>
                         {isEditing ? (
-                          <Form.Item name="input_cost" className="mb-0">
+                          <Form.Item
+                            name="input_cost"
+                            className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("input_cost")}
+                          >
                             <NumericalInput placeholder="Enter input cost" />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
-                            {localModelData?.litellm_params?.input_cost_per_token
-                              ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.input_cost_per_token
+                            {localModelData?.litellm_params?.input_cost_per_token != null
+                              ? (localModelData.litellm_params.input_cost_per_token * 1_000_000).toFixed(4)
+                              : localModelData?.model_info?.input_cost_per_token != null
                                 ? (localModelData.model_info.input_cost_per_token * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
@@ -858,19 +952,65 @@ export default function ModelInfoView({
                       <div>
                         <Text className="font-medium">Output Cost (per 1M tokens)</Text>
                         {isEditing ? (
-                          <Form.Item name="output_cost" className="mb-0">
+                          <Form.Item
+                            name="output_cost"
+                            className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("output_cost")}
+                          >
                             <NumericalInput placeholder="Enter output cost" />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded-sm">
-                            {localModelData?.litellm_params?.output_cost_per_token
+                            {localModelData?.litellm_params?.output_cost_per_token != null
                               ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.output_cost_per_token
+                              : localModelData?.model_info?.output_cost_per_token != null
                                 ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
                                 : "Not Set"}
                           </div>
                         )}
                       </div>
+
+                      {ptuCostAttributionEnabled &&
+                        PTU_EDIT_FIELDS.map((ptuField) => {
+                          const { name, label, input, placeholder, isCount, isRate, isStart, pairedWith } = ptuField;
+                          const { windowPeer, bound } = ptuField;
+                          return (
+                            <div key={name}>
+                              <Text className="font-medium">{label}</Text>
+                              {isEditing ? (
+                                <Form.Item
+                                  name={name}
+                                  className="mb-0"
+                                  dependencies={ptuFieldDependencies(ptuField)}
+                                  rules={[
+                                    ...(isCount ? ptuCountRules : []),
+                                    ...(isRate ? ptuRateRules : []),
+                                    ...(isStart ? [ptuStartRequiredRule(PTU_COUNT_FIELD)] : []),
+                                    ...(pairedWith ? [ptuPairRule(pairedWith)] : []),
+                                    ...(windowPeer && bound ? [ptuWindowOrderRule(windowPeer, bound)] : []),
+                                  ]}
+                                >
+                                  {input === "number" ? (
+                                    <NumericalInput
+                                      placeholder={placeholder}
+                                      step={isCount ? 1 : undefined}
+                                      min={isCount ? 1 : 0}
+                                    />
+                                  ) : (
+                                    <DatePicker showTime style={{ width: "100%" }} />
+                                  )}
+                                </Form.Item>
+                              ) : (
+                                <div className="mt-1 p-2 bg-gray-50 rounded-sm">
+                                  {(input === "datetime"
+                                    ? formatPtuUtcDisplay(localModelData?.model_info?.[name])
+                                    : localModelData?.model_info?.[name]) ?? "Not Set"}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
 
                       <div>
                         <Text className="font-medium">Cache Read Cost (per 1M tokens)</Text>
@@ -878,6 +1018,8 @@ export default function ModelInfoView({
                           <Form.Item
                             name="cache_read_cost"
                             className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("cache_read_cost")}
                             tooltip="If left blank on save, defaults to Input Cost."
                           >
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />
@@ -901,6 +1043,8 @@ export default function ModelInfoView({
                           <Form.Item
                             name="cache_write_cost"
                             className="mb-0"
+                            dependencies={[PTU_COUNT_FIELD]}
+                            rules={ptuCostRule("cache_write_cost")}
                             tooltip="If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token)."
                           >
                             <NumericalInput placeholder="Defaults to Input Cost if blank" />
