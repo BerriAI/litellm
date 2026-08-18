@@ -4,21 +4,15 @@ import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../tests/mocks/complexityScorerDefaults"),
+);
 
 vi.mock("../../utils/dataUtils", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 vi.mock("./networking", () => ({
@@ -52,7 +46,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
   usePtuCostAttributionEnabled: () => mockUsePtuCostAttributionEnabled(),
 }));
 
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 const mockModelInfoV1Call = vi.mocked(networking.modelInfoV1Call);
 const mockCredentialGetCall = vi.mocked(networking.credentialGetCall);
 const mockCredentialListCall = vi.mocked(networking.credentialListCall);
@@ -255,7 +249,7 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockTestConnectionRequest).toHaveBeenCalled();
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Connection test successful!");
+      expect(mockToast.success).toHaveBeenCalledWith("Connection test successful!");
     });
   });
 
@@ -300,7 +294,7 @@ describe("ModelInfoView", () => {
     await user.click(testButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.error).toHaveBeenCalled();
+      expect(mockToast.error).toHaveBeenCalled();
     });
   });
 
@@ -518,7 +512,7 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockModelPatchUpdateCall).toHaveBeenCalled();
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Model settings updated successfully");
+      expect(mockToast.success).toHaveBeenCalledWith("Model settings updated successfully");
       expect(mockOnModelUpdate).toHaveBeenCalled();
     });
   });
@@ -617,9 +611,14 @@ describe("ModelInfoView", () => {
   describe("PTU cost attribution gate", () => {
     const ptuModelData = {
       ...defaultModelData,
+      // Zero per-token pricing is what the backend stores for a PTU deployment, since the flat
+      // cost of its reserved capacity already covers the traffic that capacity serves.
+      litellm_params: { ...defaultModelData.litellm_params, input_cost_per_token: 0, output_cost_per_token: 0 },
       model_info: {
         ...defaultModelData.model_info,
         team_id: "team-1",
+        input_cost_per_token: 0,
+        output_cost_per_token: 0,
         ptu_count: 15,
         cost_per_ptu_per_hour: 2,
         ptu_effective_from: "2026-07-01T00:00:00+00:00",
@@ -681,6 +680,70 @@ describe("ModelInfoView", () => {
       expect(modelInfo).not.toHaveProperty("cost_per_ptu_per_hour");
       expect(modelInfo).not.toHaveProperty("ptu_effective_from");
       expect(modelInfo).not.toHaveProperty("ptu_effective_to");
+    });
+
+    it("shows a zeroed PTU price as 0.0000 rather than Not Set", async () => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      renderWithPtuModel();
+
+      await waitFor(() => {
+        expect(screen.getByText("Input Cost (per 1M tokens)")).toBeInTheDocument();
+      });
+      for (const label of ["Input Cost (per 1M tokens)", "Output Cost (per 1M tokens)"]) {
+        expect(screen.getByText(label).parentElement).toHaveTextContent("0.0000");
+      }
+    });
+
+    it("blocks the save once the operator types a non-zero per-token cost alongside PTU config", async () => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      const user = userEvent.setup();
+      renderWithPtuModel();
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("Enter input cost")).toBeInTheDocument();
+      });
+      await user.clear(screen.getByPlaceholderText("Enter input cost"));
+      await user.type(screen.getByPlaceholderText("Enter input cost"), "2.5");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/bills by reserved capacity/i)).toBeInTheDocument();
+      });
+      expect(mockModelPatchUpdateCall).not.toHaveBeenCalled();
+    });
+
+    it("lets the operator put a cost-map-priced deployment on PTU without clearing the seeded rate", async () => {
+      // A rate the form seeded from /model/info is the server's own, so refusing it blocked
+      // every attempt to enable PTU from the dashboard.
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      const seededModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1", input_cost_per_token: 0.0000003 },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [seededModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [seededModel] });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("e.g. 15")).toBeInTheDocument();
+      });
+      await user.type(screen.getByPlaceholderText("e.g. 15"), "15");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(screen.queryByText(/bills by reserved capacity/i)).not.toBeInTheDocument();
+      });
     });
 
     it("sends the PTU fields on save when enabled", async () => {
@@ -886,8 +949,8 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
-      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
     });
+    expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
     expect(mockTestConnectionRequest).not.toHaveBeenCalled();
   });
 
@@ -919,8 +982,8 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
-      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
     });
+    expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o", "chat");
   });
 
   it("does not duplicate the default model as a test target when it is already covered by a configured tier", async () => {
@@ -980,11 +1043,49 @@ describe("ModelInfoView", () => {
     await userEvent.click(testConnectionButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.warning).toHaveBeenCalledWith(
+      expect(mockToast.warning).toHaveBeenCalledWith(
         "No complexity tiers are configured yet, so there is nothing to test.",
       );
     });
     expect(mockTestModelGroupConnection).not.toHaveBeenCalled();
+  });
+
+  // Bugbot finding on #36615: complexity_router_config.default_model is a UI-only bookkeeping
+  // marker — init_complexity_router_deployment (litellm/router.py) never reads it, falling back
+  // to tier-derivation instead when litellm_params.complexity_router_default_model is absent.
+  // Probing the blob field here would test a model the running router never calls.
+  it("ignores an unused config blob pin when litellm_params has no default, matching the backend's own tier-derivation fallback", async () => {
+    const complexityRouterModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        model: "auto_router/complexity_router",
+        complexity_router_config: {
+          tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          default_model: "unused-blob-pin",
+        },
+        // no complexity_router_default_model
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [complexityRouterModelData],
+      },
+      isLoading: false,
+      error: null,
+    });
+    mockTestModelGroupConnection.mockResolvedValue({ status: "success" });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+    const testConnectionButton = await screen.findByTestId("test-connection-button");
+    await userEvent.click(testConnectionButton);
+
+    await waitFor(() => {
+      expect(mockTestModelGroupConnection).toHaveBeenCalledWith("test-token", "gpt-4o-mini", "chat");
+    });
+    expect(mockTestModelGroupConnection).not.toHaveBeenCalledWith("test-token", "unused-blob-pin", "chat");
+    expect(mockTestModelGroupConnection).toHaveBeenCalledTimes(1);
   });
 
   it("should display model access groups field", async () => {
@@ -1021,7 +1122,7 @@ describe("ModelInfoView", () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
     const logo = await screen.findByAltText("openai logo");
-    expect(logo.getAttribute("src")).toContain("openai_small");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("openai_small"));
   });
 
   it("renders a letter avatar instead of an img for an unknown provider slug", async () => {

@@ -101,8 +101,8 @@ describe("AgentsTable", () => {
     );
 
     const bodyRows = screen.getAllByRole("row").slice(1);
-    expect(bodyRows[0].textContent).toContain("Beta Agent");
-    expect(bodyRows[1].textContent).toContain("Alpha Agent");
+    expect(bodyRows[0]).toHaveTextContent(/Beta Agent/);
+    expect(bodyRows[1]).toHaveTextContent(/Alpha Agent/);
   });
 
   it("sorts agents with no created_at last, never ahead of dated ones", () => {
@@ -118,9 +118,9 @@ describe("AgentsTable", () => {
     );
 
     const bodyRows = screen.getAllByRole("row").slice(1);
-    expect(bodyRows[0].textContent).toContain("Beta Agent");
-    expect(bodyRows[1].textContent).toContain("Alpha Agent");
-    expect(bodyRows[2].textContent).toContain("Undated Agent");
+    expect(bodyRows[0]).toHaveTextContent(/Beta Agent/);
+    expect(bodyRows[1]).toHaveTextContent(/Alpha Agent/);
+    expect(bodyRows[2]).toHaveTextContent(/Undated Agent/);
   });
 
   it("shows a rich empty state when there are no agents", () => {

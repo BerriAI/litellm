@@ -731,6 +731,10 @@
                 "type": "number",
                 "minimum": 0
               },
+              "cache_creation_input_token_cost": {
+                "type": "number",
+                "minimum": 0
+              },
               "input_cost_per_query": {
                 "type": "number",
                 "minimum": 0

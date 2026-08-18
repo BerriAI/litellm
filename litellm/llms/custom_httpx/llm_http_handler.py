@@ -49,13 +49,17 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
+from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
-from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.vector_store.transformation import (
+    BaseDirectVectorStoreConfig,
+    BaseVectorStoreConfig,
+)
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
@@ -1555,12 +1559,14 @@ class BaseLLMHTTPHandler:
         model: str,
         response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        optional_params: Mapping[str, object],
     ) -> OCRResponse:
         """Shared logic for transforming OCR responses."""
         return provider_config.transform_ocr_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     def ocr(
@@ -1636,6 +1642,7 @@ class BaseLLMHTTPHandler:
             model=model,
             response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def async_ocr(
@@ -1698,6 +1705,7 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     def search(
@@ -5930,10 +5938,10 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -5963,10 +5971,10 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -5992,7 +6000,7 @@ class BaseLLMHTTPHandler:
         endpoint: Literal["client_secrets", "transcription_sessions"],
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: Any | None = None,
@@ -9411,6 +9419,24 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
     ) -> VectorStoreSearchResponse:
+        if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
+                    "query": query,
+                    "vector_store_id": vector_store_id,
+                },
+            )
+            return await vector_store_provider_config.aexecute_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                timeout=timeout,
+            )
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -9522,6 +9548,24 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
+            )
+
+        if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
+                    "query": query,
+                    "vector_store_id": vector_store_id,
+                },
+            )
+            return vector_store_provider_config.execute_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                timeout=timeout,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -11077,7 +11121,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
-        system_instruction: Any | None = None,
+        system_instruction: object | None = None,
     ) -> Any:
         """
         Handles Google GenAI generate content requests.
@@ -11208,7 +11252,7 @@ class BaseLLMHTTPHandler:
         client: AsyncHTTPHandler | None = None,
         stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
-        system_instruction: Any | None = None,
+        system_instruction: object | None = None,
     ) -> Any:
         """
         Async version of the generate content handler.

@@ -1,12 +1,19 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
-import { fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamCreateCall } from "./networking";
+import {
+  fetchMCPAccessGroups,
+  getDefaultTeamSettings,
+  getGuardrailsList,
+  getPoliciesList,
+  teamCreateCall,
+} from "./networking";
 import Teams from "./Teams";
 
 const can = vi.fn();
@@ -34,6 +41,7 @@ vi.mock("./networking", () => ({
   v2TeamListCall: vi.fn(),
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
+  getDefaultTeamSettings: vi.fn().mockResolvedValue({ values: {} }),
 }));
 
 // Teams invalidates teamsTableKeys on mutations; the selected team is passed up from the table.
@@ -43,15 +51,6 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
   useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    info: vi.fn(),
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
@@ -200,7 +199,7 @@ describe("Teams - handleCreate organization handling", () => {
     };
 
     // Simulate the handleCreate logic
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -218,7 +217,7 @@ describe("Teams - handleCreate organization handling", () => {
       models: [],
     };
 
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -235,7 +234,7 @@ describe("Teams - handleCreate organization handling", () => {
       models: [],
     };
 
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -252,7 +251,7 @@ describe("Teams - handleCreate organization handling", () => {
       models: [],
     };
 
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -270,7 +269,7 @@ describe("Teams - handleCreate organization handling", () => {
       max_budget: 100,
     };
 
-    let organizationId = formValues?.organization_id || null;
+    const organizationId = formValues?.organization_id || null;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -300,7 +299,7 @@ describe("Teams - handleCreate organization handling", () => {
       models: [],
     };
 
-    let organizationId = formValues?.organization_id || currentOrg?.organization_id;
+    const organizationId = formValues?.organization_id || currentOrg?.organization_id;
     if (organizationId === "" || typeof organizationId !== "string") {
       formValues.organization_id = null;
     } else {
@@ -514,14 +513,13 @@ describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
   });
 
   it("renders the Create Team button inside the tab bar, ahead of the tabs", () => {
-    const { container } = renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     const createButton = screen.getByTestId("create-team-button");
-    const tabNav = container.querySelector(".ant-tabs-nav");
+    const tabBar = screen.getByRole("tablist").parentElement!;
 
     // The CTA lives in the tab bar's left slot, not the standalone page header.
-    expect(tabNav).not.toBeNull();
-    expect(tabNav!.contains(createButton)).toBe(true);
+    expect(tabBar.contains(createButton)).toBe(true);
 
     // It reads as the left end of the cluster: it precedes the first tab in DOM order.
     const firstTab = screen.getByRole("tab", { name: "Your Teams" });
@@ -645,6 +643,105 @@ describe("Teams - access_group_ids in team create", () => {
           models: ["no-default-models"],
         }),
       );
+    });
+  });
+});
+
+describe("Teams - Reset Budget in team create", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(getDefaultTeamSettings).mockResolvedValue({ values: { budget_duration: "30d" } });
+    vi.mocked(teamCreateCall).mockResolvedValue({
+      team_id: "new-team-1",
+      team_alias: "Test Team",
+      models: ["gpt-4"],
+      organization_id: null,
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    });
+    mockUseOrganizations.mockReturnValue({ data: null });
+  });
+
+  const openCreateModal = async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+  };
+
+  const resetBudgetSelect = () => screen.getByLabelText("Reset Budget");
+
+  const submitCreateModal = async () => {
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalled();
+    });
+
+    return vi.mocked(teamCreateCall).mock.calls[0][1];
+  };
+
+  it("should send an explicit null budget_duration when Never resets is selected", async () => {
+    await openCreateModal();
+
+    await userEvent.click(resetBudgetSelect());
+    await userEvent.click(await screen.findByText("Never resets"));
+
+    const payload = await submitCreateModal();
+
+    expect(payload.budget_duration).toBeNull();
+    expect(JSON.stringify(payload)).toContain('"budget_duration":null');
+  });
+
+  it("should omit budget_duration entirely when Reset Budget is left untouched", async () => {
+    await openCreateModal();
+
+    const payload = await submitCreateModal();
+
+    expect(payload.budget_duration).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toContain("budget_duration");
+  });
+
+  it("should send the picked duration when one is selected", async () => {
+    await openCreateModal();
+
+    await userEvent.click(resetBudgetSelect());
+    await userEvent.click(await screen.findByText("weekly"));
+
+    const payload = await submitCreateModal();
+
+    expect(payload.budget_duration).toBe("7d");
+  });
+
+  it("should show the configured server default as the Reset Budget placeholder", async () => {
+    await openCreateModal();
+
+    await waitFor(() => {
+      expect(screen.getByText("Default: monthly (30d)")).toBeInTheDocument();
+    });
+  });
+
+  it("should fall back to the n/a placeholder when the default settings fetch fails", async () => {
+    vi.mocked(getDefaultTeamSettings).mockRejectedValue(new Error("Unauthorized"));
+
+    await openCreateModal();
+
+    await waitFor(() => {
+      expect(screen.getByText("n/a")).toBeInTheDocument();
     });
   });
 });
@@ -812,7 +909,7 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
 
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
+      expect(toast.fromError).toHaveBeenCalledWith(
         "Error creating the team: Cost center CC-9999 is not recognized. Contact the FinOps team.",
       );
     });

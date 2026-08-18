@@ -807,6 +807,99 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/shadow_eval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Shadow Eval Jobs
+         * @description List shadow eval jobs, newest first. Counts and results ride the detail endpoint only.
+         */
+        get: operations["list_shadow_eval_jobs_auto_router_shadow_eval_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Shadow Eval
+         * @description Start a shadow eval: duplicate a sampled slice of a key's live traffic against a second
+         *     arm, judge the two responses blind, and stratify win rates by tier and by the model that
+         *     served the real arm.
+         *
+         *     A forward job answers whether the key should adopt router_name: it samples the requests
+         *     the router did not serve and duplicates them through it. A reverse job answers whether a
+         *     key already on the router still gains from it: it samples the requests the router did
+         *     serve and duplicates them against baseline_model. A key can hold one active job per
+         *     direction, so both questions can run at once.
+         *
+         *     Shadow responses are never served to users. The job samples until it has judged
+         *     max_turns turns, reaches the end of its window, or is stopped; sampling changes
+         *     propagate to pods within about 10 seconds. Shadow and judge calls bill to the
+         *     shadowed key but are excluded from request counts and auto-router adoption metrics.
+         */
+        post: operations["start_shadow_eval_auto_router_shadow_eval_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Shadow Eval Job
+         * @description One job with derived counts, judge spend, latest error, and stratified results.
+         */
+        get: operations["get_shadow_eval_job_auto_router_shadow_eval__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/shadow_eval/{job_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Shadow Eval Job
+         * @description Stop an active shadow eval job. Attempts are kept; sampling halts within ~10s.
+         */
+        post: operations["stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/test_routing": {
         parameters: {
             query?: never;
@@ -1965,6 +2058,55 @@ export interface paths {
          *     - Art. 30: Audit record complete (user_id, model, timestamp, guardrail_results)
          */
         post: operations["check_gdpr_compliance_compliance_gdpr_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/comprehendmedical": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Comprehend Medical Sdk Proxy Route
+         * @description AWS-SDK-shaped pass-through for Amazon Comprehend Medical: point the SDK's
+         *     `endpoint_url` at `/comprehendmedical` and the operation is read from the
+         *     `X-Amz-Target` header, per the AWS JSON 1.1 protocol.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+         */
+        post: operations["comprehend_medical_sdk_proxy_route_comprehendmedical_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/comprehendmedical/{operation}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Comprehend Medical Proxy Route
+         * @description Pass-through for Amazon Comprehend Medical, e.g. `POST /comprehendmedical/DetectEntitiesV2`.
+         *
+         *     The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
+         *     using the proxy's AWS credentials.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+         */
+        post: operations["comprehend_medical_proxy_route_comprehendmedical__operation__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4333,7 +4475,7 @@ export interface paths {
         };
         /**
          * Get Default Team Settings
-         * @description Get all SSO settings from the litellm_settings configuration.
+         * @description Get the default team parameters (litellm_settings.default_team_params).
          *     Returns a structured object with values and descriptions for UI display.
          */
         get: operations["get_default_team_settings_get_default_team_settings_get"];
@@ -7529,6 +7671,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/spend_logs/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Spend Log Users
+         * @description The distinct internal users appearing in spend logs the caller can read.
+         */
+        get: operations["list_spend_log_users_management_v1_spend_logs_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        get: operations["aggregate_mcp_route_mcp_get"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        put: operations["aggregate_mcp_route_mcp_put"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        post: operations["aggregate_mcp_route_mcp_post"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        delete: operations["aggregate_mcp_route_mcp_delete"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        options: operations["aggregate_mcp_route_mcp_options"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        head: operations["aggregate_mcp_route_mcp_head"];
+        /**
+         * Aggregate Mcp Route
+         * @description Serve the aggregate MCP endpoint on the bare ``/mcp`` spelling: the
+         *     ``/mcp`` mount cannot match its bare prefix, and the resulting 307 breaks
+         *     MCP clients behind TLS-terminating proxies.
+         */
+        patch: operations["aggregate_mcp_route_mcp_patch"];
+        trace?: never;
+    };
     "/mcp-rest/test/connection": {
         parameters: {
             query?: never;
@@ -7810,6 +8030,48 @@ export interface paths {
          * @description Allows deleting models in the model list in the config.yaml
          */
         post: operations["delete_model_model_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_model_deprecations_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -8454,6 +8716,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_ocr_post"];
         delete?: never;
@@ -8506,6 +8773,26 @@ export interface paths {
          *     - Pass in user_email if set
          */
         get: operations["onboarding_onboarding_get_token_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openai/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: openai_websocket_proxy_route
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_openai_websocket_proxy_route_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9012,6 +9299,26 @@ export interface paths {
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
         patch: operations["openai_proxy_route_openai__endpoint__patch"];
+        trace?: never;
+    };
+    "/openai_passthrough/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: openai_websocket_proxy_route
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_openai_websocket_proxy_route_get_2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/openai_passthrough/{endpoint}": {
@@ -11077,6 +11384,26 @@ export interface paths {
          *     fields are automatically appended to the agent's credential_fields.
          */
         get: operations["get_agent_fields_public_agents_fields_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/complexity_router/scorer_defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Complexity Scorer Defaults
+         * @description Return the complexity router's shipped heuristic scorer defaults, for the dashboard to prefill with.
+         */
+        get: operations["get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -13731,6 +14058,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Daily Activity Aggregated
+         * @description Aggregated daily activity for teams without pagination, including per-team breakdown.
+         *
+         *     One SQL GROUPING SETS pass returns every day in the range regardless of row
+         *     volume, so callers never reassemble pages. Same response shape as the
+         *     paginated endpoint with page metadata pinned to a single page.
+         *
+         *     Args:
+         *         team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+         *         start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+         *         end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+         *         model (Optional[str]): Filter by model name.
+         *         api_key (Optional[str]): Filter by API key.
+         *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+         *         timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+         *     Returns:
+         *         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
+         */
+        get: operations["get_team_daily_activity_aggregated_team_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -14723,8 +15085,9 @@ export interface paths {
         head?: never;
         /**
          * Update Default Team Settings
-         * @description Update the default team parameters for SSO users.
-         *     These settings will be applied to new teams created from SSO.
+         * @description Update the default team parameters (litellm_settings.default_team_params).
+         *     Applied to every new team for fields not explicitly provided in the create request;
+         *     `models` only applies to teams automatically created via SSO Groups.
          */
         patch: operations["update_default_team_settings_update_default_team_settings_patch"];
         trace?: never;
@@ -17388,6 +17751,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/model/deprecations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Deprecations
+         * @description List models with known deprecation/sunset dates, bucketed by urgency.
+         *
+         *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
+         *     (and any per-deployment `model_info.deprecation_date` overrides) for the
+         *     models configured on this proxy.
+         *
+         *     Parameters:
+         *         warn_within_days: Window (in days) used to bucket "imminent" models,
+         *             30 by default.
+         *
+         *     Returns:
+         *         A payload with three lists of `ModelDeprecationInfo` entries:
+         *
+         *         - `deprecated`: deprecation date is in the past, so these requests may
+         *           fail at any time.
+         *         - `imminent`: deprecation date is within `warn_within_days` from today.
+         *         - `upcoming`: deprecation date is further out.
+         *
+         *     Example:
+         *     ```shell
+         *     curl -X GET 'http://localhost:4000/model/deprecations' \
+         *         -H 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_deprecations_v1_model_deprecations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/model/info": {
         parameters: {
             query?: never;
@@ -17565,6 +17970,11 @@ export interface paths {
          *     ```bash
          *     curl -X POST "http://localhost:4000/v1/ocr"         -H "Authorization: Bearer sk-1234"         -F "model=mistral-ocr"         -F "file=@document.pdf"
          *     ```
+         *
+         *     Response format is normalized to the LiteLLM OCR schema by default. Providers
+         *     that support it (Azure Document Intelligence) can return their own payload
+         *     instead, with cost tracking unchanged, via `x-req-format: native` (or
+         *     `"req_format": "native"` in the body).
          */
         post: operations["ocr_v1_ocr_post"];
         delete?: never;
@@ -21249,7 +21659,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -23054,7 +23464,7 @@ export interface components {
         /** ChatCompletionToolMessage */
         ChatCompletionToolMessage: {
             /** Content */
-            content: string | components["schemas"]["ChatCompletionTextObject"][];
+            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"])[];
             /**
              * Role
              * @constant
@@ -23153,10 +23563,18 @@ export interface components {
             enabled: boolean;
         };
         /**
+         * ClassificationRubric
+         * @description Which calibration examples the built-in classifier rubric carries.
+         * @enum {string}
+         */
+        ClassificationRubric: "legacy" | "agentic" | "chat";
+        /**
          * ClassifierLLMConfig
          * @description Configuration for the LLM-based complexity classifier.
          */
         ClassifierLLMConfig: {
+            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
+            classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
              * Model
              * @description Model name (from the router's model_list) to call for classification
@@ -23307,6 +23725,27 @@ export interface components {
             timezone?: string | null;
         };
         /**
+         * ComplexityScorerDefaults
+         * @description The complexity router's shipped heuristic scorer defaults.
+         *
+         *     The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so
+         *     a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+         */
+        ComplexityScorerDefaults: {
+            /** Dimension Weights */
+            dimension_weights: {
+                [key: string]: number;
+            };
+            /** Tier Boundaries */
+            tier_boundaries: {
+                [key: string]: number;
+            };
+            /** Token Thresholds */
+            token_thresholds: {
+                [key: string]: number;
+            };
+        };
+        /**
          * ComplexityTier
          * @description Complexity tiers for routing decisions.
          * @enum {string}
@@ -23451,6 +23890,11 @@ export interface components {
              * @description proxy level default model for all chat completion calls
              */
             completion_model?: string | null;
+            /**
+             * Control Plane Url
+             * @description Global Control Plane: URL of the control plane whose admin UI manages this instance. Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate against it cross-origin, and restricts the SSO return_to origin to that URL. No state is shared with the control plane
+             */
+            control_plane_url?: string | null;
             /** @description standalone Redis for cross-pod coordination (tpm/rpm rate limits, spend tracking, pod lock manager, shared health checks), configured independently of the response-cache backend; takes precedence over borrowing the `cache_params` Redis and over the REDIS_* env fallback */
             coordination_redis?: components["schemas"]["CoordinationRedisParams"] | null;
             /**
@@ -23579,6 +24023,26 @@ export interface components {
              * @description Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.
              */
             maximum_autorouter_session_retention_period?: string | null;
+            /**
+             * Maximum Spend Logs Cleanup Batch Size
+             * @description Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.
+             */
+            maximum_spend_logs_cleanup_batch_size?: number | null;
+            /**
+             * Maximum Spend Logs Cleanup Batch Timeout
+             * @description Postgres statement_timeout and lock_timeout applied to each spend log cleanup delete batch (e.g. '30s'), so cleanup cannot hold row locks or a connection indefinitely. Defaults to '30s'.
+             */
+            maximum_spend_logs_cleanup_batch_timeout?: string | null;
+            /**
+             * Maximum Spend Logs Cleanup Max Batches
+             * @description Maximum DELETE statements the spend log cleanup job issues per table per run. Defaults to 500.
+             */
+            maximum_spend_logs_cleanup_max_batches?: number | null;
+            /**
+             * Maximum Spend Logs Cleanup Run Budget
+             * @description Wall-clock budget for one spend log cleanup run (e.g. '5m'), shared across every table it prunes. A run that hits the budget stops and the next run resumes from where it left off. Defaults to '5m'.
+             */
+            maximum_spend_logs_cleanup_run_budget?: string | null;
             /**
              * Maximum Spend Logs Retention Period
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
@@ -23784,6 +24248,11 @@ export interface components {
             model_list?: components["schemas"]["ModelParams"][] | null;
             /** @description litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5 */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
+            /**
+             * Worker Registry
+             * @description Global Control Plane: the independent proxy instances this instance's admin UI manages. Setting it makes this a control plane, which serves the UI and does not route LLM requests. Enterprise-only
+             */
+            worker_registry?: components["schemas"]["WorkerRegistryEntry"][] | null;
         };
         /** ConfigurableClientsideParamsCustomAuth */
         "ConfigurableClientsideParamsCustomAuth-Input": {
@@ -24336,22 +24805,23 @@ export interface components {
         };
         /**
          * DefaultTeamSSOParams
-         * @description Default parameters to apply when a new team is automatically created by LiteLLM via SSO Groups
+         * @description Default parameters applied to every /team/new call for fields not explicitly provided in the request.
+         *     `models` is the exception: it only applies to teams automatically created by LiteLLM via SSO Groups.
          */
         DefaultTeamSSOParams: {
             /**
              * Budget Duration
-             * @description Default budget duration for new automatically created teams (e.g. 'daily', 'weekly', 'monthly')
+             * @description Default budget duration for new teams, when not explicitly provided (e.g. '24h', '7d', '30d')
              */
             budget_duration?: string | null;
             /**
              * Max Budget
-             * @description Default maximum budget (in USD) for new automatically created teams
+             * @description Default maximum budget (in USD) for new teams, when not explicitly provided
              */
             max_budget?: number | null;
             /**
              * Models
-             * @description Default list of models that new automatically created teams can access
+             * @description Default list of models for teams automatically created via SSO Groups
              * @default []
              */
             models: string[];
@@ -24362,7 +24832,7 @@ export interface components {
             organization_id?: string | null;
             /**
              * Rpm Limit
-             * @description Default rpm limit for new automatically created teams
+             * @description Default rpm limit for new teams, when not explicitly provided
              */
             rpm_limit?: number | null;
             /**
@@ -24372,7 +24842,7 @@ export interface components {
             team_member_permissions?: components["schemas"]["KeyManagementRoutes"][] | null;
             /**
              * Tpm Limit
-             * @description Default tpm limit for new automatically created teams
+             * @description Default tpm limit for new teams, when not explicitly provided
              */
             tpm_limit?: number | null;
         };
@@ -25707,7 +26177,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -25796,8 +26266,11 @@ export interface components {
              * @description Keywords/phrases that trigger this rule (lexical or semantic match)
              */
             keywords: string[];
-            /** @description Tier to route to when this rule matches */
-            tier: components["schemas"]["ComplexityTier"];
+            /**
+             * Tier
+             * @description Tier to route to when this rule matches: a built-in tier name, or with tier_definitions set, one of the defined tier names
+             */
+            tier: string;
         };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
@@ -26819,6 +27292,8 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Bedrock Tags */
+            bedrock_tags?: unknown[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -27044,6 +27519,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
             /** Search Context Cost Per Query */
@@ -27082,6 +27559,18 @@ export interface components {
              * @default false
              */
             use_xai_oauth: boolean | null;
+            /** Valkey Embedding Field */
+            valkey_embedding_field?: string | null;
+            /** Valkey Host */
+            valkey_host?: string | null;
+            /** Valkey Password */
+            valkey_password?: string | null;
+            /** Valkey Port */
+            valkey_port?: number | null;
+            /** Valkey Ssl */
+            valkey_ssl?: boolean | null;
+            /** Valkey Text Field */
+            valkey_text_field?: string | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -28764,6 +29253,70 @@ export interface components {
             tags: {
                 [key: string]: string | string[];
             };
+        };
+        /** ModelDeprecationInfo */
+        ModelDeprecationInfo: {
+            /**
+             * Days Until Deprecation
+             * @description Days remaining until the deprecation date. Negative if the model is already deprecated.
+             */
+            days_until_deprecation: number;
+            /**
+             * Deprecation Date
+             * Format: date
+             * @description The date (UTC) when the model becomes deprecated.
+             */
+            deprecation_date: string;
+            /**
+             * Litellm Model
+             * @description The underlying litellm model string the deprecation date is sourced from.
+             */
+            litellm_model?: string | null;
+            /**
+             * Litellm Provider
+             * @description The provider this model belongs to.
+             */
+            litellm_provider?: string | null;
+            /**
+             * Model Name
+             * @description The public name of the model on the proxy (model_group).
+             */
+            model_name: string;
+            /**
+             * Status
+             * @description 'deprecated' if the date has passed, 'imminent' if it falls within warn_within_days, 'upcoming' otherwise.
+             * @enum {string}
+             */
+            status: "upcoming" | "imminent" | "deprecated";
+        };
+        /** ModelDeprecationResponse */
+        ModelDeprecationResponse: {
+            /**
+             * Checked At
+             * Format: date-time
+             * @description UTC timestamp when the deprecation snapshot was generated.
+             */
+            checked_at: string;
+            /**
+             * Deprecated
+             * @description Models whose deprecation date has already passed.
+             */
+            deprecated?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Imminent
+             * @description Models whose deprecation date is within warn_within_days from today and require immediate migration planning.
+             */
+            imminent?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Upcoming
+             * @description Models with a future deprecation date outside the warn window.
+             */
+            upcoming?: components["schemas"]["ModelDeprecationInfo"][];
+            /**
+             * Warn Within Days
+             * @description The window (in days) used to bucket 'imminent' models.
+             */
+            warn_within_days: number;
         };
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
@@ -31735,6 +32288,11 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Prompt
+             * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
+             */
+            classification_prompt?: string | null;
+            /**
              * Classifier Context Include Assistant Turns
              * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
              * @default false
@@ -31754,7 +32312,7 @@ export interface components {
             classifier_context_window_size: number;
             /**
              * Classifier Fallback
-             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm'.
+             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm' or 'custom'.
              * @default heuristic
              * @enum {string}
              */
@@ -31762,12 +32320,23 @@ export interface components {
             /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' */
             classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
             /**
+             * Classifier Plugin
+             * @description Not settable over HTTP; the classifier plugin is a runtime object
+             */
+            classifier_plugin?: null;
+            /**
+             * Classifier Plugin Timeout Ms
+             * @description Timeout budget for the classifier plugin call, in milliseconds. On expiry the fallback path decides the tier. Only applies when classifier_type is 'custom'.
+             * @default 3000
+             */
+            classifier_plugin_timeout_ms: number;
+            /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, or an LLM call
+             * @description Classification strategy: local regex/keyword scoring, an LLM call, or a custom classifier plugin
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "llm";
+            classifier_type: "heuristic" | "llm" | "custom";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -31807,6 +32376,11 @@ export interface components {
              */
             escalation_keywords?: string[] | null;
             /**
+             * Fallback Tier
+             * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
+             */
+            fallback_tier?: string | null;
+            /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
              */
@@ -31817,6 +32391,16 @@ export interface components {
              * @default 0.5
              */
             match_threshold: number;
+            /**
+             * Plan Mode Min Tier
+             * @description When set, requests carrying a coding-agent plan-mode sentinel (Claude Code plan mode, VS Code Copilot Plan mode, Copilot CLI's exit_plan_mode tool) are routed to at least this tier: the classified tier still wins when it is higher, and the floor also overrides a session-affinity pin to a lower tier for exactly the turns carrying the sentinel, without rewriting the pin -- the first turn after plan mode exits routes as if plan mode had never happened. Names a built-in tier, or with tier_definitions set, one of the defined tier names (list order is ascending severity, same as keyword_tier_rules). Unset disables detection entirely. The sentinels ride in client-injected prompt text, so a caller who pastes one can spend up to this tier's models -- never down, and never outside the configured pools.
+             */
+            plan_mode_min_tier?: string | null;
+            /**
+             * Plan Mode Patterns
+             * @description Additional case-sensitive literal sentinels that mark a request as plan mode, on top of the built-in Claude Code and Copilot ones. For clients whose plan-mode wording the built-ins don't cover, or after a client release changes its strings.
+             */
+            plan_mode_patterns?: string[] | null;
             /**
              * Plugins
              * @description Not settable over HTTP; routing plugins are runtime objects
@@ -31873,6 +32457,11 @@ export interface components {
             tier_boundaries?: {
                 [key: string]: number;
             };
+            /**
+             * Tier Definitions
+             * @description Operator-defined tier set replacing the built-in SIMPLE/MEDIUM/COMPLEX/REASONING. Each entry's name becomes a value the LLM classifier can return and its description becomes that tier's rubric bullet; entries named after a built-in tier may omit the description and inherit the built-in criteria. List order is ascending severity and decides which tier wins when several keyword_tier_rules match. Requires classifier_type 'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, adaptive selection, session affinity, plugins, tier_labels, and the calibration-example rubric presets are unavailable with a custom tier set: the first four are built on the built-in tier ladder, and the last two rename or exemplify tiers the set replaces.
+             */
+            tier_definitions?: components["schemas"]["TierDefinition"][] | null;
             /**
              * Tier Distance Penalty
              * @description Score penalty per tier-step away from the classified tier when adaptive=True
@@ -32550,6 +33139,131 @@ export interface components {
             timeout?: number | null;
         };
         /**
+         * ShadowEvalJobResponse
+         * @description A shadow-eval job. Validates directly from the prisma record (job_id reads the
+         *     row's id); status is derived from stopped_at and ends_at, never stored, so no writer
+         *     anywhere can produce an inconsistent one. Aggregate fields are populated by the
+         *     detail endpoint only and stay None on list responses.
+         */
+        ShadowEvalJobResponse: {
+            /**
+             * Api Key Id
+             * @description The hashed virtual key whose traffic this job evaluates, and only that key's
+             */
+            api_key_id: string;
+            /** Baseline Model */
+            baseline_model?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Direction
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Ends At
+             * Format: date-time
+             */
+            ends_at: string;
+            /**
+             * Error Count
+             * @description Sampled attempts that errored; detail endpoint only
+             */
+            error_count?: number | null;
+            /** Job Id */
+            job_id: string;
+            /** Judge Model */
+            judge_model: string;
+            /**
+             * Judge Spend
+             * @description Judge cost so far; detail endpoint only
+             */
+            judge_spend?: number | null;
+            /**
+             * Judged Count
+             * @description Verdicts recorded; detail endpoint only
+             */
+            judged_count?: number | null;
+            /**
+             * Key Alias
+             * @description Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted
+             */
+            key_alias?: string | null;
+            /**
+             * Key Name
+             * @description Masked display name (sk-...) of the shadowed key, resolved at read time like key_alias
+             */
+            key_name?: string | null;
+            /**
+             * Last Error
+             * @description Most recent attempt error; detail endpoint only
+             */
+            last_error?: string | null;
+            /** Max Turns */
+            max_turns: number;
+            /** @description Stratified verdicts; detail endpoint only */
+            results?: components["schemas"]["ShadowEvalResult"] | null;
+            /** Router Name */
+            router_name: string;
+            /** Shadow Percentage */
+            shadow_percentage: number;
+            /**
+             * Status
+             * @description A job whose window has passed reads completed even if a later sweep stamped
+             *     stopped_at; stopped means sampling ended before the window did.
+             * @enum {string}
+             */
+            readonly status: "running" | "completed" | "stopped";
+            /** Stopped At */
+            stopped_at?: string | null;
+        };
+        /**
+         * ShadowEvalResult
+         * @description Stratified results of a shadow-eval job's verdicts so far.
+         */
+        ShadowEvalResult: {
+            /**
+             * By Current Model
+             * @description Sliced by the model that served the real arm: the key's incumbent models in forward mode, and in reverse the models the router itself picked
+             */
+            by_current_model: components["schemas"]["ShadowEvalSlice"][];
+            /** By Tier */
+            by_tier: components["schemas"]["ShadowEvalSlice"][];
+            /** Overall Shadow Win Rate Pct */
+            overall_shadow_win_rate_pct: number;
+            /** Overall Tie Rate Pct */
+            overall_tie_rate_pct: number;
+        };
+        /**
+         * ShadowEvalSlice
+         * @description Judge outcomes for one slice of a job's verdicts (a router tier, or one of the
+         *     models that served the real arm).
+         */
+        ShadowEvalSlice: {
+            /** Avg Judge Confidence */
+            avg_judge_confidence: number;
+            /** Group */
+            group: string;
+            /**
+             * Real Win Rate Pct
+             * @description Share of judged turns the real arm won, meaning the response the caller actually received: the key's own model in forward mode, the router's pick in reverse
+             */
+            real_win_rate_pct: number;
+            /**
+             * Shadow Win Rate Pct
+             * @description Share of judged turns the shadow arm won, meaning the duplicated response nobody was served: the router's pick in forward mode, baseline_model in reverse
+             */
+            shadow_win_rate_pct: number;
+            /** Tie Rate Pct */
+            tie_rate_pct: number;
+            /** Turn Count */
+            turn_count: number;
+        };
+        /**
          * Skill
          * @description Represents a skill from the Anthropic Skills API
          */
@@ -32671,7 +33385,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -32721,6 +33435,57 @@ export interface components {
             medium_complex: number;
             /** Simple Medium */
             simple_medium: number;
+        };
+        /**
+         * StartShadowEvalRequest
+         * @description Start duplicating a key's traffic for blind comparison against an auto-router.
+         */
+        StartShadowEvalRequest: {
+            /**
+             * Api Key Id
+             * @description The hashed virtual key whose traffic will be shadowed. Shadow evaluation runs ONLY on this key's traffic; requests made with any other key are not sampled.
+             */
+            api_key_id: string;
+            /**
+             * Baseline Model
+             * @description Required when direction is reverse and rejected otherwise: the fixed model the router's own responses are judged against. Must be a plain model rather than another auto-router
+             */
+            baseline_model?: string | null;
+            /**
+             * Direction
+             * @description forward answers 'should this key adopt router_name': it samples the requests the key did NOT route through the router and duplicates them through it. reverse answers 'is the router still worth it for a key already on it': it samples the requests the router did serve and duplicates them against baseline_model. The response the caller received is always the real arm
+             * @default forward
+             * @enum {string}
+             */
+            direction: "forward" | "reverse";
+            /**
+             * Duration Days
+             * @description How many days the job samples traffic before completing on its own
+             * @default 7
+             */
+            duration_days: number;
+            /**
+             * Judge Model
+             * @description Model used to blindly judge real vs. shadow responses. The judge only compares two answers, so a mid-tier model (Claude Sonnet or GPT-4o class) is the sweet spot: small/nano-class models produce unreliable or malformed verdicts, while frontier reasoning models add cost without changing outcomes.
+             * @default anthropic/claude-sonnet-5
+             */
+            judge_model: string;
+            /**
+             * Max Turns
+             * @description Sample budget: the job judges at most this many turns, then completes. This is also the spend bound; expected judge cost is roughly max_turns times one judge call
+             * @default 200
+             */
+            max_turns: number;
+            /**
+             * Router Name
+             * @description The auto-router under evaluation, in either direction
+             */
+            router_name: string;
+            /**
+             * Shadow Percentage
+             * @description Percentage of the key's requests to duplicate through the router
+             */
+            shadow_percentage: number;
         };
         /**
          * SuccessfulKeyUpdate
@@ -33448,6 +34213,22 @@ export interface components {
             litellm_params: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * TierDefinition
+         * @description An operator-defined tier: the name the LLM classifier must return and its rubric description.
+         */
+        TierDefinition: {
+            /**
+             * Description
+             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which inherits the built-in criteria when omitted
+             */
+            description?: string | null;
+            /**
+             * Name
+             * @description Tier name; becomes a value the LLM classifier can return and a key of `tiers`
+             */
+            name: string;
         };
         /**
          * TokenCountDetailsResponse
@@ -34668,13 +35449,29 @@ export interface components {
             /** Status */
             status: string;
             /** Time Series */
-            time_series: {
-                [key: string]: unknown;
-            }[];
+            time_series: components["schemas"]["UsageChartPoint"][];
             /** Trend */
             trend: string;
             /** Type */
             type: string;
+            /** Usage Units */
+            usage_units: {
+                [key: string]: number;
+            };
+            /** Usage Units By Key */
+            usage_units_by_key: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Usage Units By Team */
+            usage_units_by_team: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Usage Units Daily */
+            usage_units_daily: components["schemas"]["UsageUnitsDailyPoint"][];
         };
         /** UsageLogEntry */
         UsageLogEntry: {
@@ -34711,9 +35508,7 @@ export interface components {
         /** UsageOverviewResponse */
         UsageOverviewResponse: {
             /** Chart */
-            chart: {
-                [key: string]: unknown;
-            }[];
+            chart: components["schemas"]["UsageChartPoint"][];
             /** Passrate */
             passRate: number;
             /** Rows */
@@ -34722,6 +35517,10 @@ export interface components {
             totalBlocked: number;
             /** Totalrequests */
             totalRequests: number;
+            /** Totalusageunits */
+            totalUsageUnits: {
+                [key: string]: number;
+            };
         };
         /** UsageOverviewRow */
         UsageOverviewRow: {
@@ -34745,6 +35544,19 @@ export interface components {
             trend: string;
             /** Type */
             type: string;
+            /** Usageunits */
+            usageUnits: {
+                [key: string]: number;
+            };
+        };
+        /** UsageUnitsDailyPoint */
+        UsageUnitsDailyPoint: {
+            /** Date */
+            date: string;
+            /** Units */
+            units: {
+                [key: string]: number;
+            };
         };
         /**
          * UserAPIKeyAuth
@@ -35483,6 +36295,10 @@ export interface components {
             team_public_model_name?: string | null;
             /** Tier */
             tier?: ("free" | "paid") | null;
+            /** Tiered Pricing */
+            tiered_pricing?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Updated At */
             updated_at?: string | null;
             /** Updated By */
@@ -35558,6 +36374,8 @@ export interface components {
             aws_web_identity_token?: string | null;
             /** Azure Ad Token */
             azure_ad_token?: string | null;
+            /** Bedrock Tags */
+            bedrock_tags?: unknown[] | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -35783,6 +36601,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Output Bucket Name */
+            s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
             /** Search Context Cost Per Query */
@@ -35821,6 +36641,18 @@ export interface components {
              * @default false
              */
             use_xai_oauth: boolean | null;
+            /** Valkey Embedding Field */
+            valkey_embedding_field?: string | null;
+            /** Valkey Host */
+            valkey_host?: string | null;
+            /** Valkey Password */
+            valkey_password?: string | null;
+            /** Valkey Port */
+            valkey_port?: number | null;
+            /** Valkey Ssl */
+            valkey_ssl?: boolean | null;
+            /** Valkey Text Field */
+            valkey_text_field?: string | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -36970,6 +37802,7 @@ export interface operations {
             query?: {
                 context_window_size?: number;
                 tier_labels?: string | null;
+                classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             };
             header?: never;
             path?: never;
@@ -36984,6 +37817,135 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_shadow_eval_jobs_auto_router_shadow_eval_get: {
+        parameters: {
+            query?: {
+                /** @description Filter to jobs shadowing this key */
+                api_key_id?: string | null;
+                /** @description Newest jobs to return */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalJobResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_shadow_eval_auto_router_shadow_eval_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartShadowEvalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_shadow_eval_job_auto_router_shadow_eval__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowEvalJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38872,6 +39834,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ComplianceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    comprehend_medical_sdk_proxy_route_comprehendmedical_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    comprehend_medical_proxy_route_comprehendmedical__operation__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -45400,6 +46413,186 @@ export interface operations {
             };
         };
     };
+    list_spend_log_users_management_v1_spend_logs_users_get: {
+        parameters: {
+            query: {
+                /** @description Window start (UTC when no offset is given) */
+                "filter[startTime][gte]": string;
+                /** @description Window end (UTC when no offset is given) */
+                "filter[startTime][lte]": string;
+                /** @description Case-insensitive partial match on the internal user id */
+                q?: string | null;
+                /** @description Page number */
+                page?: number;
+                /** @description Page size */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    aggregate_mcp_route_mcp_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     test_connection_mcp_rest_test_connection_post: {
         parameters: {
             query?: never;
@@ -45946,6 +47139,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_deprecations_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -46652,6 +47876,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_openai_websocket_proxy_route_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -47511,6 +48753,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_openai_websocket_proxy_route_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -49659,6 +50919,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentCreateInfo"][];
+                };
+            };
+        };
+    };
+    get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplexityScorerDefaults"];
                 };
             };
         };
@@ -52542,6 +53822,43 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_team_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_aggregated_team_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
             };
             header?: never;
             path?: never;
@@ -57736,6 +59053,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    model_deprecations_v1_model_deprecations_get: {
+        parameters: {
+            query?: {
+                warn_within_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeprecationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

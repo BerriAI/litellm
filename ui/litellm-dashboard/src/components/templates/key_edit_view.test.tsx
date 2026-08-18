@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -107,6 +107,25 @@ vi.mock("../common_components/AccessGroupSelector", () => ({
     />
   ),
 }));
+
+/* eslint-disable local/no-antd-class-selectors -- the "Key Type" and "Models" Form.Items wrap a noStyle nested item, so antd renders a label with no associated control and there is no accessible query for these selects */
+const antdSelectorFor = (label: HTMLElement): Element =>
+  label.closest(".ant-form-item")!.querySelector(".ant-select-selector")!;
+/* eslint-enable local/no-antd-class-selectors */
+
+const visibleOptions = (): HTMLElement[] =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd puts role="option" only on a hidden mirror list; the visible, clickable options carry no role or accessible name
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option"));
+
+const isOptionDisabled = (option: HTMLElement): boolean =>
+  // eslint-disable-next-line local/no-antd-class-selectors -- antd signals option disabled state only through this class; the rendered options carry no aria-disabled
+  option.classList.contains("ant-select-item-option-disabled");
+
+const optionByContent = (label: string): HTMLElement | undefined =>
+  visibleOptions().find(
+    // eslint-disable-next-line local/no-antd-class-selectors -- the option's own label text lives in this child node, with no accessible equivalent
+    (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
+  );
 
 describe("KeyEditView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
@@ -879,10 +898,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item");
-    expect(resetBudgetItem).not.toBeNull();
-    const combobox = within(resetBudgetItem as HTMLElement).getByRole("combobox");
-    await userEvent.click(combobox);
+    await userEvent.click(await screen.findByLabelText("Reset Budget"));
 
     const weeklyOption = await screen.findByText("weekly");
     await userEvent.click(weeklyOption);
@@ -960,13 +976,12 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    const clearIcon = resetBudgetItem.querySelector(".ant-select-clear");
-    expect(clearIcon).not.toBeNull();
-    fireEvent.mouseDown(clearIcon as Element);
+    const resetBudget = await screen.findByLabelText("Reset Budget");
+    await userEvent.click(resetBudget);
+    await userEvent.click(await screen.findByText("Never resets"));
 
     await waitFor(() => {
-      expect(within(resetBudgetItem).getByText("Never resets")).toBeInTheDocument();
+      expect(resetBudget).toHaveTextContent("Never resets");
     });
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
@@ -994,8 +1009,8 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const resetBudgetItem = (await screen.findByText("Reset Budget")).closest(".ant-form-item") as HTMLElement;
-    fireEvent.mouseDown(resetBudgetItem.querySelector(".ant-select-clear") as Element);
+    await userEvent.click(await screen.findByLabelText("Reset Budget"));
+    await userEvent.click(await screen.findByText("Never resets"));
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1149,17 +1164,11 @@ describe("KeyEditView", () => {
     });
 
     // The selected key type label should show "AI APIs" (not "LLM API")
-    const keyTypeSection = screen.getByText("Key Type").closest(".ant-form-item")!;
-    expect(keyTypeSection).toBeInTheDocument();
-
-    // Open the dropdown to see all options
-    const selectElement = keyTypeSection.querySelector(".ant-select-selector")!;
-    await userEvent.click(selectElement);
+    await userEvent.click(antdSelectorFor(screen.getByText("Key Type")));
 
     await waitFor(() => {
       // Verify "AI APIs" appears as an option label
-      const options = document.querySelectorAll(".ant-select-item-option");
-      const optionTexts = Array.from(options).map((el) => el.textContent);
+      const optionTexts = visibleOptions().map((el) => el.textContent);
       const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
       expect(hasAIAPIs).toBe(true);
 
@@ -1251,9 +1260,9 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeTruthy();
+      await userEvent.click(screen.getByLabelText("Organization"));
+
+      expect(screen.queryByText("Engineering")).not.toBeInTheDocument();
     });
 
     it("should not disable the organization dropdown for admin users", async () => {
@@ -1273,9 +1282,9 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Organization")).toBeInTheDocument();
       });
 
-      const orgFormItem = screen.getByText("Organization").closest(".ant-form-item");
-      const disabledSelect = orgFormItem?.querySelector(".ant-select-disabled");
-      expect(disabledSelect).toBeFalsy();
+      await userEvent.click(screen.getByLabelText("Organization"));
+
+      expect(await screen.findByText("Engineering")).toBeInTheDocument();
     });
 
     it("should initialize organization from keyData", async () => {
@@ -1297,17 +1306,14 @@ describe("KeyEditView", () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText("Engineering")).toBeInTheDocument();
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
       });
     });
   });
 
   describe("models dropdown team gating", () => {
     const openModelsDropdown = () => {
-      const modelsFormItem = screen.getByText("Models", { selector: "label" }).closest(".ant-form-item");
-      const selector = modelsFormItem?.querySelector(".ant-select-selector");
-      expect(selector).toBeTruthy();
-      fireEvent.mouseDown(selector as Element);
+      fireEvent.mouseDown(antdSelectorFor(screen.getByText("Models", { selector: "label" })));
     };
 
     it("should offer all-proxy-models but not all-team-models for a teamless key", async () => {
@@ -1453,9 +1459,7 @@ describe("KeyEditView", () => {
 
       const clickOption = async (label: string) => {
         const option = await waitFor(() => {
-          const match = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
-            (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
-          );
+          const match = optionByContent(label);
           expect(match).toBeTruthy();
           return match as HTMLElement;
         });
@@ -1492,17 +1496,14 @@ describe("KeyEditView", () => {
 
       openModelsDropdown();
 
-      const findOption = (label: string) =>
-        Array.from(document.querySelectorAll(".ant-select-item-option")).find(
-          (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
-        ) as HTMLElement | undefined;
+      const findOption = (label: string) => optionByContent(label);
 
       const gpt4Before = await waitFor(() => {
         const match = findOption("gpt-4");
         expect(match).toBeTruthy();
         return match!;
       });
-      expect(gpt4Before.classList.contains("ant-select-item-option-disabled")).toBe(false);
+      expect(isOptionDisabled(gpt4Before)).toBe(false);
 
       fireEvent.click(
         await waitFor(() => {
@@ -1513,7 +1514,7 @@ describe("KeyEditView", () => {
       );
 
       await waitFor(() => {
-        expect(findOption("gpt-4")?.classList.contains("ant-select-item-option-disabled")).toBe(true);
+        expect(isOptionDisabled(findOption("gpt-4")!)).toBe(true);
       });
     });
   });
@@ -1646,6 +1647,137 @@ describe("KeyEditView", () => {
         expect(screen.getByLabelText("Estimated Output Tokens")).toBeEnabled();
       });
       expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
+    });
+  });
+
+  const UNTOUCHED_SAVE_PAYLOAD = {
+    key_alias: "asdasdas",
+    models: [],
+    max_budget: 0,
+    budget_duration: "30d",
+    tpm_limit: 10,
+    tpm_limit_type: null,
+    rpm_limit: 10,
+    rpm_limit_type: null,
+    throttle_on_budget_exceeded: false,
+    enable_prompt_caching: false,
+    max_parallel_requests: 10,
+    model_tpm_limit: undefined,
+    model_rpm_limit: undefined,
+    guardrails: undefined,
+    disable_global_guardrails: false,
+    policies: undefined,
+    tags: ["test-tag"],
+    prompts: undefined,
+    access_group_ids: [],
+    allowed_passthrough_routes: undefined,
+    vector_stores: [],
+    mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+    mcp_tool_permissions: {},
+    agents_and_groups: { agents: [], accessGroups: [] },
+    organization_id: null,
+    team_id: null,
+    logging_settings: [],
+    metadata: "{}",
+    duration: "30d",
+    token: "test-token-123",
+    disabled_callbacks: [],
+    auto_rotate: false,
+    rotation_interval: undefined,
+    tag_rpm_limit: {},
+  };
+
+  describe("submit payload contract", () => {
+    const renderForPayload = (
+      onSubmit: (values: Record<string, unknown>) => Promise<void>,
+      keyData: KeyResponse = MOCK_KEY_DATA,
+    ) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyData}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Admin"}
+          premiumUser={true}
+        />,
+      );
+
+    it("sends exactly the bound form fields on an untouched save, and no server-only key data", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toStrictEqual(UNTOUCHED_SAVE_PAYLOAD);
+    });
+
+    it("drops the policy and prompt keys entirely for a role that cannot see those fields", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Internal User"}
+          premiumUser={true}
+        />,
+      );
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const payload = onSubmitMock.mock.calls[0][0];
+      expect(payload).not.toHaveProperty("policies");
+      expect(payload).not.toHaveProperty("prompts");
+      expect(payload).toHaveProperty("guardrails");
+    });
+
+    it("routes the shared lifecycle and rate-limit-type controls into their own payload keys", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      const duration = screen.getByPlaceholderText("e.g., 30d");
+      await userEvent.clear(duration);
+      await userEvent.type(duration, "45d");
+
+      await userEvent.click(screen.getByLabelText(/TPM Rate Limit Type/));
+      await userEvent.click(await screen.findByTitle("Guaranteed throughput"));
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const payload = onSubmitMock.mock.calls[0][0];
+      expect(payload.duration).toBe("45d");
+      expect(payload.tpm_limit_type).toBe("guaranteed_throughput");
+      expect(payload.rpm_limit_type).toBeNull();
+    });
+
+    it("blanks duration rather than dropping the key when Never Expire is ticked", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, { ...MOCK_KEY_DATA, expires: "2026-01-01T00:00:00Z" });
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("checkbox", { name: /never expire/i }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("duration", null);
     });
   });
 });

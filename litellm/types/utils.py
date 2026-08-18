@@ -39,7 +39,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -2767,12 +2767,23 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
-    # The LLM classifier failed and classifier_fallback is 'default_model', so the request
-    # went to default_model without being classified. Distinct from "default_fallback",
+    # The operator's classifier plugin (classifier_type 'custom') decided the tier.
+    "classifier_plugin",
+    # The LLM classifier or classifier plugin failed on a router with an operator-defined
+    # tier set, so the request routed to the configured fallback_tier without being classified.
+    "classifier_fallback",
+    # The LLM classifier or classifier plugin failed and classifier_fallback is
+    # 'default_model', so the request went to default_model without being classified.
+    # Distinct from "default_fallback",
     # which is a tier having no model configured rather than classification not happening.
     "default_model_fallback",
     "literal_keyword_match",
     "semantic_keyword_match",
+    # A plan-mode sentinel (Claude Code / Copilot plan mode) was detected on the request and
+    # plan_mode_min_tier decided the tier: either it raised what the pipeline chose (classifier,
+    # keyword rule, or session pin), or the floor was already the top configured tier and the
+    # classifier was skipped. The matched sentinel rides in matched_keyword.
+    "plan_mode",
     "session_affinity_pin",
     "session_affinity_escalation",
     "default_fallback",
@@ -2782,11 +2793,13 @@ RoutingDecisionCause = Literal[
 ]
 
 
-InternalCallOrigin = Literal["autorouter_classifier"]
+InternalCallOrigin = Literal["autorouter_classifier", "shadow_eval_router", "shadow_eval_judge"]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
 
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
+SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
+SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
@@ -3005,6 +3018,11 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     surface it as a queryable span attribute without parsing the raw
     guardrail_response blob."""
 
+    guardrail_usage: ReadOnly[Mapping[str, int] | None]
+    """Provider-reported billable usage counters for this invocation, keyed by the
+    provider's counter name (e.g. Bedrock's ``contentPolicyUnits``). Kept as a
+    sibling of guardrail_response so spend-log prompt redaction never drops it."""
+
 
 class EvalVerdict(TypedDict, total=False):
     criterion_name: str
@@ -3048,6 +3066,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     risk_score: float | None
     violation_categories: list[str] | None
     guardrail_action: str | None
+    guardrail_usage: ReadOnly[Mapping[str, int] | None]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3260,6 +3279,7 @@ class MirroredPricingParams(BaseModel):
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
+    tiered_pricing: list[dict[str, Any]] | None = None
 
 
 class CustomPricingLiteLLMParams(MirroredPricingParams):
@@ -3327,7 +3347,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
     citation_cost_per_token: float | None = None
-    tiered_pricing: list[dict[str, Any]] | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
     input_cost_per_image_token: float | None = None
@@ -3396,9 +3415,21 @@ agentic_loop_internal_litellm_params: Final = [
 # the provider.
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 
+# Bedrock managed-batch deployment config, read from litellm_params by the batch and
+# files transformations. Listed for the same reason as the fields above: these sit on
+# a deployment that also serves chat, so leaking them into extra_body makes Bedrock
+# reject every non-batch request to that deployment.
+bedrock_batch_litellm_params: Final = (
+    "aws_batch_role_arn",
+    "s3_bucket_name",
+    "s3_region_name",
+    "s3_output_bucket_name",
+    "bedrock_tags",
+)
+
 all_litellm_params = (
     agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD]
+    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params]
     + [
         "metadata",
         "litellm_metadata",
@@ -3448,6 +3479,7 @@ all_litellm_params = (
         "bos_token",
         "eos_token",
         "request_timeout",
+        "client_side_timeout",
         "complete_response",
         "self",
         "client",
@@ -3505,6 +3537,7 @@ all_litellm_params = (
         "litellm_session_id",
         "use_litellm_proxy",
         "use_chat_completions_api",
+        "rust",
         "prompt_label",
         "shared_session",
         "search_tool_name",
@@ -3678,6 +3711,7 @@ class LlmProviders(str, Enum):
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
+    VALKEY = "valkey"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
@@ -3726,9 +3760,10 @@ LlmProvidersSet: Final = {provider.value for provider in LlmProviders}
 OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.OPENAI.value,
     LlmProviders.HOSTED_VLLM.value,
+    LlmProviders.LITELLM_PROXY.value,
 }
 
-ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai"]
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
 
 LIST_BATCHES_SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(get_args(ListBatchesSupportedProvider))
 
@@ -3756,6 +3791,7 @@ class SearchProviders(str, Enum):
     YOU_COM = "you_com"
     APISERPENT = "apiserpent"
     TINYFISH = "tinyfish"
+    NIMBLE = "nimble"
 
 
 # Create a set of all search provider values for quick lookup
