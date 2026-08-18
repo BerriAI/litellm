@@ -116,4 +116,40 @@ describe("CostTrackingSettings submit paths", () => {
     await waitFor(() => expect(stableMarginCallbacks.handleAddMargin).toHaveBeenCalled());
     expect(stableMarginCallbacks.handleAddMargin).toHaveBeenCalledTimes(1);
   });
+
+  it("requests the discount exactly once when Enter is pressed in the discount field", async () => {
+    const user = userEvent.setup();
+    await openDiscountModal(user);
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.click((await screen.findAllByRole("option"))[0]);
+    await user.type(screen.getByLabelText(/Discount Percentage/i), "5{Enter}");
+
+    await waitFor(() => expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalled());
+    expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledTimes(1);
+    expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledWith("OpenAI", "5");
+  });
+
+  it("leaves Enter inert in the margin field while the button still submits", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />);
+    const header = screen.getByText("Fee/Price Margin").closest("button");
+    if (header) await user.click(header);
+    await user.click(await screen.findByRole("button", { name: /add provider margin/i }));
+    await screen.findByText("Add Provider Margin", { selector: "h2" });
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.click((await screen.findAllByRole("option"))[0]);
+    await user.type(screen.getByLabelText(/Margin Percentage/i), "10{Enter}");
+
+    expect(stableMarginCallbacks.handleAddMargin).not.toHaveBeenCalled();
+
+    const submit = screen
+      .getAllByRole("button")
+      .filter((button) => (button.textContent || "").trim() === "Add Provider Margin")
+      .pop()!;
+    await user.click(submit);
+
+    await waitFor(() => expect(stableMarginCallbacks.handleAddMargin).toHaveBeenCalledTimes(1));
+  });
 });

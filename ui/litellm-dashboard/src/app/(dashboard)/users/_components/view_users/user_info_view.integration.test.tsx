@@ -50,15 +50,15 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/components/networking", () => {
   return {
     serverRootPath: "/",
-    userGetInfoV2: (...args: any[]) => mockUserGetInfoV2(...args),
+    userGetInfoV2: (...args: unknown[]) => mockUserGetInfoV2(...args),
     userDeleteCall: vi.fn(),
     userUpdateUserCall: (...args: unknown[]) => mockUserUpdateUserCall(...args),
     modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
     invitationCreateCall: vi.fn(),
-    teamInfoCall: (...args: any[]) => mockTeamInfoCall(...args),
-    teamListCall: (...args: any[]) => mockTeamListCall(...args),
-    teamMemberAddCall: (...args: any[]) => mockTeamMemberAddCall(...args),
-    teamMemberDeleteCall: (...args: any[]) => mockTeamMemberDeleteCall(...args),
+    teamInfoCall: (...args: unknown[]) => mockTeamInfoCall(...args),
+    teamListCall: (...args: unknown[]) => mockTeamListCall(...args),
+    teamMemberAddCall: (...args: unknown[]) => mockTeamMemberAddCall(...args),
+    teamMemberDeleteCall: (...args: unknown[]) => mockTeamMemberDeleteCall(...args),
     getProxyBaseUrl: () => "https://litellm.test",
     fetchMCPServers: (...args: unknown[]) => mockFetchMCPServers(...args),
     fetchMCPToolsets: vi.fn().mockResolvedValue([]),
@@ -132,6 +132,13 @@ describe("UserInfoView add-to-team form", () => {
     expect(await screen.findByTitle("Gamma Team")).toBeInTheDocument();
     expect(screen.queryByTitle("Alpha Team")).not.toBeInTheDocument();
     expect(screen.queryByTitle("Beta Team")).not.toBeInTheDocument();
+  });
+
+  it("shows the default role name on the trigger rather than a blank or raw value", async () => {
+    const user = userEvent.setup();
+    await openAddTeam(user);
+
+    expect(screen.getAllByRole("combobox")[1]).toHaveTextContent("user");
   });
 
   it("adds the user to the chosen team with the default role", async () => {

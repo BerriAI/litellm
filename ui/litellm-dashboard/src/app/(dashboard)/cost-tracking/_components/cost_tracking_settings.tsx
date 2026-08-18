@@ -348,7 +348,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             Select a provider and set its discount percentage. Enter a value between 0% and 100% (e.g., 5 for a 5%
             discount).
           </p>
-          <div className="space-y-6">
+          <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
             <AddProviderForm
               discountConfig={discountConfig}
               selectedProvider={selectedProvider}
@@ -357,7 +357,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
               onDiscountChange={setNewDiscount}
               onAddProvider={handleAddProvider}
             />
-          </div>
+          </form>
         </div>
       </Modal>
 
