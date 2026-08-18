@@ -4,7 +4,7 @@ import { CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
 import { Policy } from "@/components/policies/types";
 import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { FieldGroup, FieldLabel, FieldTitle } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -208,11 +208,11 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
       const failed = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
 
       if (successCount > 0 && failed.length === 0) {
-        NotificationsManager.success(
+        toast.success(
           successCount === 1 ? "Attachment created successfully" : `${successCount} attachments created successfully`,
         );
       } else if (successCount > 0 && failed.length > 0) {
-        NotificationsManager.fromBackend(`${successCount} attachments created, ${failed.length} failed`);
+        toast.fromError(`${successCount} attachments created, ${failed.length} failed`);
       } else {
         throw new Error(failed[0]?.reason instanceof Error ? failed[0].reason.message : "Failed to create attachments");
       }
@@ -222,9 +222,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
       onClose();
     } catch (error) {
       console.error("Failed to create attachment:", error);
-      NotificationsManager.fromBackend(
-        "Failed to create attachment: " + (error instanceof Error ? error.message : String(error)),
-      );
+      toast.fromError("Failed to create attachment: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setIsSubmitting(false);
     }

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Modal, Form, Button, Typography } from "antd";
 import { SaveOutlined } from "@ant-design/icons";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUpdateProject, ProjectUpdateParams } from "@/app/(dashboard)/hooks/projects/useUpdateProject";
 import { ProjectBaseForm, ProjectFormValues } from "./ProjectBaseForm";
@@ -72,12 +72,12 @@ export function EditProjectModal({ isOpen, project, onClose, onSuccess }: EditPr
         { projectId: project.project_id, params },
         {
           onSuccess: () => {
-            MessageManager.success("Project updated successfully");
+            toast.success("Project updated successfully");
             onSuccess?.();
             onClose();
           },
           onError: (error) => {
-            MessageManager.error(error.message || "Failed to update project");
+            toast.error(error.message || "Failed to update project");
           },
         },
       );

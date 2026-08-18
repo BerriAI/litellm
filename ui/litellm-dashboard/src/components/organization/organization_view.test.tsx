@@ -44,10 +44,6 @@ vi.mock("../object_permissions_view", () => ({
   __esModule: true,
   default: () => <div data-testid="object-permissions-view" />,
 }));
-vi.mock("../molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
 vi.mock("../team/edit_membership", () => ({
   __esModule: true,
   default: () => null,

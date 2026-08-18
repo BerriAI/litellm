@@ -3,7 +3,7 @@
 import { Button, Form, Modal, Space } from "antd";
 import React, { useEffect } from "react";
 import BaseSSOSettingsForm from "./BaseSSOSettingsForm";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { detectSSOProvider, processSSOSettingsPayload } from "../utils";
 import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
@@ -86,16 +86,16 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
 
       await mutateAsync(payload, {
         onSuccess: () => {
-          NotificationsManager.success("SSO settings updated successfully");
+          toast.success("SSO settings updated successfully");
           onSuccess();
         },
         onError: (error) => {
-          NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
+          toast.fromError("Failed to save SSO settings: " + parseErrorMessage(error));
         },
       });
     } catch (error) {
       // Handle processing errors gracefully
-      NotificationsManager.fromBackend("Failed to process SSO settings: " + parseErrorMessage(error));
+      toast.fromError("Failed to process SSO settings: " + parseErrorMessage(error));
     }
   };
 
