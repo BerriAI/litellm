@@ -3,8 +3,21 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anyio
 import httpx
 import pytest
+from mcp import McpError
+from mcp.shared.message import SessionMessage
+from mcp.types import (
+    LATEST_PROTOCOL_VERSION,
+    ErrorData,
+    Implementation,
+    InitializeResult,
+    JSONRPCError,
+    JSONRPCMessage,
+    JSONRPCResponse,
+    ServerCapabilities,
+)
 
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../")
@@ -12,7 +25,12 @@ sys.path.insert(0, "../../../")
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
     MCPClient,
+    _as_read_timeout,
     _first_non_cancelled_cause,
+)
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    classify_list_exception,
+    list_fault_http_status,
 )
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 
@@ -35,9 +53,7 @@ class TestMCPClient:
 
     def test_mcp_client_stdio_init(self):
         """Test MCPClient initialization with stdio config"""
-        stdio_config = MCPStdioConfig(
-            command="python", args=["-m", "my_mcp_server"], env={"DEBUG": "1"}
-        )
+        stdio_config = MCPStdioConfig(command="python", args=["-m", "my_mcp_server"], env={"DEBUG": "1"})
 
         client = MCPClient(transport_type=MCPTransport.stdio, stdio_config=stdio_config)
 
@@ -53,9 +69,7 @@ class TestMCPClient:
         # Test missing stdio_config
         client = MCPClient(transport_type=MCPTransport.stdio)
 
-        with pytest.raises(
-            ValueError, match="stdio_config is required for stdio transport"
-        ):
+        with pytest.raises(ValueError, match="stdio_config is required for stdio transport"):
 
             async def _noop(session):
                 return None
@@ -65,9 +79,7 @@ class TestMCPClient:
     @pytest.mark.asyncio
     @patch("litellm.experimental_mcp_client.client.stdio_client")
     @patch("litellm.experimental_mcp_client.client.ClientSession")
-    async def test_mcp_client_stdio_connect_success(
-        self, mock_session, mock_stdio_client
-    ):
+    async def test_mcp_client_stdio_connect_success(self, mock_session, mock_stdio_client):
         """Test successful stdio connection"""
         # Setup mocks - create proper async context manager
         mock_transport = (MagicMock(), MagicMock())
@@ -83,9 +95,7 @@ class TestMCPClient:
         mock_session_ctx.__aexit__.return_value = None
         mock_session.return_value = mock_session_ctx
 
-        stdio_config = MCPStdioConfig(
-            command="python", args=["-m", "my_mcp_server"], env={"DEBUG": "1"}
-        )
+        stdio_config = MCPStdioConfig(command="python", args=["-m", "my_mcp_server"], env={"DEBUG": "1"})
 
         client = MCPClient(transport_type=MCPTransport.stdio, stdio_config=stdio_config)
 
@@ -110,9 +120,7 @@ class TestMCPClient:
             "SSL_CERTIFICATE": "/path/to/client-cert.pem",
         },
     )
-    async def test_mcp_client_ssl_configuration_from_env(
-        self, mock_streamable_http_client
-    ):
+    async def test_mcp_client_ssl_configuration_from_env(self, mock_streamable_http_client):
         """Test that MCP client uses SSL configuration from environment variables"""
         # Setup mocks - create proper async context manager
         mock_transport = (MagicMock(), MagicMock())
@@ -122,9 +130,7 @@ class TestMCPClient:
         mock_streamable_http_client.return_value = mock_http_ctx
 
         # Mock the session
-        with patch(
-            "litellm.experimental_mcp_client.client.ClientSession"
-        ) as mock_session:
+        with patch("litellm.experimental_mcp_client.client.ClientSession") as mock_session:
             mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
             mock_session_ctx = AsyncMock()
@@ -170,9 +176,7 @@ class TestMCPClient:
         mock_sse_client.return_value = mock_sse_ctx
 
         # Mock the session
-        with patch(
-            "litellm.experimental_mcp_client.client.ClientSession"
-        ) as mock_session:
+        with patch("litellm.experimental_mcp_client.client.ClientSession") as mock_session:
             mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
             mock_session_ctx = AsyncMock()
@@ -224,9 +228,7 @@ class TestMCPClient:
         mock_streamable_http_client.return_value = mock_http_ctx
 
         # Mock the session
-        with patch(
-            "litellm.experimental_mcp_client.client.ClientSession"
-        ) as mock_session:
+        with patch("litellm.experimental_mcp_client.client.ClientSession") as mock_session:
             mock_session_instance = AsyncMock()
             mock_session_instance.initialize = AsyncMock()
             mock_session_ctx = AsyncMock()
@@ -451,14 +453,10 @@ class TestFirstNonCancelledCause:
         assert _first_non_cancelled_cause(outer) is target
 
     def test_all_cancelled_returns_none(self):
-        group = _FakeExceptionGroup(
-            "g", [asyncio.CancelledError(), asyncio.CancelledError()]
-        )
+        group = _FakeExceptionGroup("g", [asyncio.CancelledError(), asyncio.CancelledError()])
         assert _first_non_cancelled_cause(group) is None
 
-    @pytest.mark.skipif(
-        sys.version_info < (3, 11), reason="builtin ExceptionGroup requires 3.11+"
-    )
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="builtin ExceptionGroup requires 3.11+")
     def test_unwraps_builtin_exception_group(self):
         target = httpx.ConnectError("refused")
         group = ExceptionGroup("transport failed", [target])  # noqa: F821
@@ -497,9 +495,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
             AsyncMock(side_effect=asyncio.CancelledError("cancelled by group")),
         )
         connect_error = httpx.ConnectError("All connection attempts failed")
-        transport_ctx = self._make_transport(
-            _FakeExceptionGroup("transport", [connect_error])
-        )
+        transport_ctx = self._make_transport(_FakeExceptionGroup("transport", [connect_error]))
 
         async def _op(session):
             return "done"
@@ -511,12 +507,8 @@ class TestExecuteSessionOperationSurfacesTransportError:
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_genuine_cancellation_is_not_replaced(self, mock_session_cls):
         client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
-        self._make_session(
-            mock_session_cls, AsyncMock(side_effect=asyncio.CancelledError())
-        )
-        transport_ctx = self._make_transport(
-            _FakeExceptionGroup("teardown", [asyncio.CancelledError()])
-        )
+        self._make_session(mock_session_cls, AsyncMock(side_effect=asyncio.CancelledError()))
+        transport_ctx = self._make_transport(_FakeExceptionGroup("teardown", [asyncio.CancelledError()]))
 
         async def _op(session):
             return "done"
@@ -531,9 +523,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
         init_result = MagicMock()
         init_result.instructions = None
         self._make_session(mock_session_cls, AsyncMock(return_value=init_result))
-        transport_ctx = self._make_transport(
-            _FakeExceptionGroup("late", [httpx.ConnectError("late cleanup error")])
-        )
+        transport_ctx = self._make_transport(_FakeExceptionGroup("late", [httpx.ConnectError("late cleanup error")]))
 
         async def _op(session):
             return "done"
@@ -548,9 +538,7 @@ class TestMCPClientResolvedAuth:
     @pytest.mark.asyncio
     async def test_resolved_auth_feeds_the_auth_slot(self):
         resolved = httpx.Auth()
-        client = MCPClient(
-            server_url="https://upstream.example.com", resolved_auth=resolved
-        )
+        client = MCPClient(server_url="https://upstream.example.com", resolved_auth=resolved)
         http_client = client._create_httpx_client_factory()()
         try:
             assert http_client.auth is resolved
@@ -582,9 +570,15 @@ class TestMCPClientResolvedAuth:
             await http_client.aclose()
 
 
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
+
+
 def _all_logged_messages(mock_logger):
     return " ".join(
-        str(call.args[0])
+        _rendered_log_message(call)
         for level in ("info", "debug", "warning", "error", "exception")
         for call in getattr(mock_logger, level).call_args_list
         if call.args
@@ -598,9 +592,7 @@ async def test_call_tool_does_not_log_arguments():
     secret = "ssn-123-45-6789"
     client = MCPClient(server_url="http://test-server")
     client.run_with_session = AsyncMock(return_value=MagicMock())
-    params = CallToolRequestParams(
-        name="search_tool", arguments={"input": secret, "model": "gpt-5-mini"}
-    )
+    params = CallToolRequestParams(name="search_tool", arguments={"input": secret, "model": "gpt-5-mini"})
 
     with patch.object(mcp_client_module, "verbose_logger") as mock_logger:
         await client.call_tool(params)
@@ -630,3 +622,268 @@ async def test_get_prompt_does_not_log_arguments():
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.asyncio
+async def test_call_tool_raise_on_error_logs_at_debug_not_error():
+    """When the caller opts into raise_on_error it owns the exception and logs it at the fitting
+    level (an expected pass-through re-auth 401 is info, not error). call_tool must therefore not emit
+    its own error-level line in that mode, so error-rate alerts do not trip on the expected signal;
+    the swallow path (raise_on_error=False) still logs at error since nothing downstream will."""
+    from mcp.types import CallToolRequestParams
+
+    client = MCPClient(transport_type=MCPTransport.stdio)
+    boom = RuntimeError("upstream boom")
+
+    async def _raise(_operation, **_kwargs):
+        raise boom
+
+    params = CallToolRequestParams(name="t", arguments={})
+
+    with patch.object(client, "run_with_session", side_effect=_raise) as mock_rws:
+        with patch.object(mcp_client_module, "verbose_logger") as mock_log:
+            with pytest.raises(RuntimeError):
+                await client.call_tool(params, raise_on_error=True)
+            assert not mock_log.error.called, "raise_on_error path must not log at error"
+            debug_msgs = [str(c.args[0]) for c in mock_log.debug.call_args_list if c.args]
+            assert any("call_tool failed" in m for m in debug_msgs), "the demoted failure line must go to debug"
+            assert mock_rws.call_args.kwargs.get("quiet_on_error") is True, (
+                "call_tool must forward quiet_on_error so run_with_session also demotes its own failure line"
+            )
+
+    with patch.object(client, "run_with_session", side_effect=_raise):
+        with patch.object(mcp_client_module, "verbose_logger") as mock_log:
+            result = await client.call_tool(params, raise_on_error=False)
+            assert result.isError is True
+            assert mock_log.error.called, "swallow path must keep error-level visibility"
+
+
+@pytest.mark.asyncio
+async def test_list_tools_raise_on_error_logs_at_debug_not_error():
+    """list_tools must mirror call_tool: when the caller opts into raise_on_error it owns the
+    exception, so an expected pass-through re-auth 401 does not emit an error/exception line that
+    would trip error-rate alerts. The swallow path still logs the full exception."""
+    client = MCPClient(transport_type=MCPTransport.stdio)
+    boom = RuntimeError("upstream boom")
+
+    async def _raise(_operation, **_kwargs):
+        raise boom
+
+    with patch.object(client, "run_with_session", side_effect=_raise) as mock_rws:
+        with patch.object(mcp_client_module, "verbose_logger") as mock_log:
+            with pytest.raises(RuntimeError):
+                await client.list_tools(raise_on_error=True)
+            assert not mock_log.error.called, "raise_on_error path must not log at error"
+            assert not mock_log.exception.called, "raise_on_error path must not log a traceback"
+            debug_msgs = [str(c.args[0]) for c in mock_log.debug.call_args_list if c.args]
+            assert any("list_tools failed" in m for m in debug_msgs), "the demoted failure line must go to debug"
+            assert mock_rws.call_args.kwargs.get("quiet_on_error") is True, (
+                "list_tools must forward quiet_on_error so run_with_session also demotes its own failure line"
+            )
+
+    with patch.object(client, "run_with_session", side_effect=_raise):
+        with patch.object(mcp_client_module, "verbose_logger") as mock_log:
+            result = await client.list_tools(raise_on_error=False)
+            assert result == []
+            assert mock_log.exception.called, "swallow path must keep full exception visibility"
+
+
+@pytest.mark.asyncio
+async def test_run_with_session_quiet_on_error_demotes_warning_to_debug():
+    """run_with_session logs its failure at warning by default (an operator signal for an unexpected
+    outage), but when the caller owns the exception (quiet_on_error=True, set by call_tool / list_tools
+    under raise_on_error) it must demote that line to debug so an expected pass-through re-auth does not
+    emit a warning per call."""
+    client = MCPClient(transport_type=MCPTransport.stdio)
+    boom = RuntimeError("session boom")
+
+    async def _op(_session):
+        raise boom
+
+    async def _fake_exec(_transport_ctx, _operation):
+        raise boom
+
+    with patch.object(client, "_create_transport_context", return_value=(object(), None)):
+        with patch.object(client, "_execute_session_operation", side_effect=_fake_exec):
+            with patch.object(mcp_client_module, "verbose_logger") as mock_log:
+                with pytest.raises(RuntimeError):
+                    await client.run_with_session(_op, quiet_on_error=True)
+                assert not mock_log.warning.called, "quiet_on_error must not emit a warning"
+                debug_msgs = [str(c.args[0]) for c in mock_log.debug.call_args_list if c.args]
+                assert any("run_with_session failed" in m for m in debug_msgs), "the failure line must go to debug"
+
+            with patch.object(mcp_client_module, "verbose_logger") as mock_log:
+                with pytest.raises(RuntimeError):
+                    await client.run_with_session(_op)
+                warning_msgs = [str(c.args[0]) for c in mock_log.warning.call_args_list if c.args]
+                assert any("run_with_session failed" in m for m in warning_msgs), (
+                    "the default path must keep the operator-visible warning"
+                )
+
+
+class _ScriptedUpstream:
+    """An in-memory MCP upstream that answers ``initialize`` and then follows one script for
+    ``tools/list``.
+
+    ``answer=None`` ends the response stream without a JSON-RPC reply, which is what a
+    streamable-HTTP upstream does when its SSE stream closes early: the SDK drops the message and
+    the request is never resolved and never fails. Anything else is sent back as that JSON-RPC
+    error, the shape an upstream application uses to report its own failure.
+    """
+
+    def __init__(self, tools_list_error: ErrorData | None = None):
+        self._tools_list_error = tools_list_error
+        self._to_client_tx, self._to_client_rx = anyio.create_memory_object_stream(10)
+        self._from_client_tx, self._from_client_rx = anyio.create_memory_object_stream(10)
+        self._task_group = None
+
+    async def __aenter__(self):
+        self._task_group = anyio.create_task_group()
+        await self._task_group.__aenter__()
+        self._task_group.start_soon(self._serve)
+        return self._to_client_rx, self._from_client_tx
+
+    async def __aexit__(self, *_exc_info):
+        self._task_group.cancel_scope.cancel()
+        return await self._task_group.__aexit__(None, None, None)
+
+    async def _send(self, message):
+        await self._to_client_tx.send(SessionMessage(JSONRPCMessage(message)))
+
+    async def _serve(self):
+        async for session_message in self._from_client_rx:
+            request = session_message.message.root
+            method = getattr(request, "method", None)
+            if method == "initialize":
+                result = InitializeResult(
+                    protocolVersion=LATEST_PROTOCOL_VERSION,
+                    capabilities=ServerCapabilities(),
+                    serverInfo=Implementation(name="scripted-upstream", version="1.0.0"),
+                )
+                await self._send(
+                    JSONRPCResponse(
+                        jsonrpc="2.0",
+                        id=request.id,
+                        result=result.model_dump(by_alias=True, mode="json", exclude_none=True),
+                    )
+                )
+            elif method == "tools/list" and self._tools_list_error is not None:
+                await self._send(JSONRPCError(jsonrpc="2.0", id=request.id, error=self._tools_list_error))
+
+
+class _ScriptedClient(MCPClient):
+    """An MCPClient whose transport is a scripted in-memory upstream instead of a real connection,
+    so the real ``ClientSession`` and its real timeout machinery are what run."""
+
+    def __init__(self, *, timeout: float, tools_list_error: ErrorData | None = None):
+        super().__init__(server_url="http://upstream.local/mcp", timeout=timeout)
+        self._upstream = _ScriptedUpstream(tools_list_error=tools_list_error)
+
+    def _create_transport_context(self):
+        return self._upstream, None
+
+
+@pytest.mark.asyncio
+async def test_list_tools_fails_on_its_own_timeout_when_the_upstream_never_answers():
+    """An upstream that accepts the request and never answers must fail the client's own timeout.
+
+    Without a session read timeout the request waits forever, so discovery only ends when an outer
+    cancel scope kills it. That is the reported symptom: a cancelled list_tools, no tools, and a
+    fault that blames the gateway. The outer guard here is 20x the client timeout, so a run that
+    reaches it proves nothing bounded the request.
+
+    The classification is asserted here, off a real ``ClientSession`` running its real read timeout,
+    rather than off a hand-built exception. A hand-built fixture encodes what we currently believe
+    the SDK raises and would keep passing after the SDK stopped raising it, at which point the
+    translation would quietly stop matching and the fault would silently downgrade to ``internal``.
+    Driving the real path makes an SDK bump that breaks the discriminator fail loudly instead.
+    """
+    client = _ScriptedClient(timeout=0.5)
+
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(TimeoutError) as exc_info:
+        await asyncio.wait_for(client.list_tools(raise_on_error=True), timeout=10)
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 5, f"the request must end on the client's own 0.5s timeout, took {elapsed:.2f}s"
+
+    fault = classify_list_exception(exc_info.value)
+    assert fault.tag == "timeout", "an upstream that stopped answering must not be classified as the gateway's fault"
+    assert list_fault_http_status(fault) == 504
+
+
+@pytest.mark.asyncio
+async def test_upstream_json_rpc_error_408_is_not_reported_as_a_client_timeout():
+    """The SDK reports its own elapsed read timeout and relays an upstream JSON-RPC error through
+    the same exception class and the same numeric field, and JSON-RPC error codes are a different
+    namespace from HTTP status codes. An upstream answering with application code 408 must keep
+    travelling as ``McpError`` so it is never blamed on the gateway as a 504.
+
+    This is the other half of the pair: the same real transport and the same real session, so one
+    mechanism pins both directions.
+    """
+    client = _ScriptedClient(
+        timeout=30,
+        tools_list_error=ErrorData(code=int(httpx.codes.REQUEST_TIMEOUT), message="re-authenticate and retry"),
+    )
+
+    with pytest.raises(McpError) as exc_info:
+        await asyncio.wait_for(client.list_tools(raise_on_error=True), timeout=10)
+
+    assert not isinstance(exc_info.value, TimeoutError), "an upstream application error is not a gateway timeout"
+    assert exc_info.value.error.code == int(httpx.codes.REQUEST_TIMEOUT)
+
+    fault = classify_list_exception(exc_info.value)
+    assert fault.tag != "timeout", "an upstream's own application error must never be reported as a gateway timeout"
+    assert list_fault_http_status(fault) != 504
+
+
+def _raise_mcp_error_while_handling_a_timeout(code: int, message: str) -> McpError:
+    """An ``McpError`` carrying the context chain it would have if it were raised while a
+    ``TimeoutError`` was in flight, which is how the SDK raises its own read timeout."""
+    try:
+        try:
+            raise TimeoutError()
+        except TimeoutError:
+            raise McpError(ErrorData(code=code, message=message))
+    except McpError as raised:
+        return raised
+
+
+def test_as_read_timeout_separates_the_sdk_timeout_from_a_relayed_upstream_error():
+    """Neither signal alone is enough. The code alone cannot separate the SDK's own timeout from an
+    upstream JSON-RPC error that happens to use 408, and the context chain alone cannot separate it
+    from any other relayed error that surfaces while a timeout is being handled, so both must hold.
+    """
+    timeout_code = int(httpx.codes.REQUEST_TIMEOUT)
+
+    translated = _as_read_timeout(_raise_mcp_error_while_handling_a_timeout(timeout_code, "Timed out while waiting"))
+    assert isinstance(translated, TimeoutError)
+    assert str(translated) == "Timed out while waiting"
+
+    relayed_408 = McpError(ErrorData(code=timeout_code, message="upstream said 408"))
+    assert _as_read_timeout(relayed_408) is None, "an upstream 408 with no elapsed timeout is not our timeout"
+
+    relayed_other = _raise_mcp_error_while_handling_a_timeout(-32603, "upstream internal error")
+    assert _as_read_timeout(relayed_other) is None, "a non-timeout code is not our timeout, whatever the chain"
+
+    assert _as_read_timeout(McpError(ErrorData(code=-32603, message="boom"))) is None
+    assert _as_read_timeout(RuntimeError("not an McpError")) is None
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_logs_an_actionable_line_that_quiet_on_error_cannot_demote():
+    """The reported failure surfaced only as "MCP Client list_tools was cancelled", which names
+    neither the server nor the elapsed budget. An upstream that stops answering is always
+    operator-actionable, so this line stays at warning even for callers that own the exception."""
+    client = _ScriptedClient(timeout=0.5)
+
+    with patch.object(mcp_client_module, "verbose_logger") as mock_log:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(client.list_tools(raise_on_error=True), timeout=10)
+
+    warnings = [str(call.args[0]) % tuple(call.args[1:]) for call in mock_log.warning.call_args_list if call.args]
+    timeout_lines = [line for line in warnings if "timed out after" in line]
+    assert timeout_lines, f"expected an actionable timeout warning, got {warnings}"
+    assert "http://upstream.local/mcp" in timeout_lines[0], "the line must name the server that stopped answering"
+    assert "0.5s" in timeout_lines[0], "the line must name the budget that elapsed"

@@ -2,12 +2,13 @@ import json
 import os
 import sys
 import traceback
+from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -18,10 +19,14 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
+    _join_url_paths,
+    azure_proxy_route,
     bedrock_llm_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
+    is_azure_ai_search_service_level_index_create,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
@@ -30,7 +35,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -70,7 +75,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test joining base URL with no path and a path
         base_url = httpx.URL("https://api.example.com")
         path = "/v1/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Base URL with no path: '{base_url}' + '{path}' → '{result}'")
@@ -79,7 +84,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test joining base URL with path and another path
         base_url = httpx.URL("https://api.example.com/v1")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Base URL with path: '{base_url}' + '{path}' → '{result}'")
@@ -88,7 +93,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test with path not starting with slash
         base_url = httpx.URL("https://api.example.com/v1")
         path = "chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Path without leading slash: '{base_url}' + '{path}' → '{result}'")
@@ -97,7 +102,7 @@ class TestBaseOpenAIPassThroughHandler:
         # Test with base URL having trailing slash
         base_url = httpx.URL("https://api.example.com/v1/")
         path = "/chat/completions"
-        result = BaseOpenAIPassThroughHandler._join_url_paths(
+        result = _join_url_paths(
             base_url, path, litellm.LlmProviders.OPENAI.value
         )
         print(f"Base URL with trailing slash: '{base_url}' + '{path}' → '{result}'")
@@ -1918,7 +1923,8 @@ class TestForwardHeaders:
         ):
             # Setup mock httpx client
             mock_client = MagicMock()
-            mock_client.request = AsyncMock(return_value=mock_httpx_response)
+            mock_client.build_request = MagicMock(return_value=MagicMock())
+            mock_client.send = AsyncMock(return_value=mock_httpx_response)
             mock_client_obj = MagicMock()
             mock_client_obj.client = mock_client
             mock_get_client.return_value = mock_client_obj
@@ -1942,10 +1948,10 @@ class TestForwardHeaders:
             )
 
             # Verify the httpx client was called
-            assert mock_client.request.called
+            assert mock_client.send.called
 
             # Get the headers that were sent to the target
-            call_args = mock_client.request.call_args
+            call_args = mock_client.build_request.call_args
             sent_headers = call_args[1]["headers"]
 
             # Verify user headers were forwarded (except content-length and host)
@@ -2019,7 +2025,8 @@ class TestForwardHeaders:
         ):
             # Setup mock httpx client
             mock_client = MagicMock()
-            mock_client.request = AsyncMock(return_value=mock_httpx_response)
+            mock_client.build_request = MagicMock(return_value=MagicMock())
+            mock_client.send = AsyncMock(return_value=mock_httpx_response)
             mock_client_obj = MagicMock()
             mock_client_obj.client = mock_client
             mock_get_client.return_value = mock_client_obj
@@ -2043,10 +2050,10 @@ class TestForwardHeaders:
             )
 
             # Verify the httpx client was called
-            assert mock_client.request.called
+            assert mock_client.send.called
 
             # Get the headers that were sent to the target
-            call_args = mock_client.request.call_args
+            call_args = mock_client.build_request.call_args
             sent_headers = call_args[1]["headers"]
 
             # Verify only custom headers were sent
@@ -2812,6 +2819,63 @@ class TestOpenAIPassthroughRoute:
             assert result == {"id": "asst_123", "object": "assistant"}
 
 
+def _resolve_route_name(method: str, path: str) -> str | None:
+    from starlette.routing import Match
+
+    from litellm.proxy.proxy_server import app
+
+    scope: Final = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+        "root_path": "",
+    }
+    for route in app.router.routes:
+        if route.matches(scope)[0] == Match.FULL:
+            return getattr(route, "name", None)
+    return None
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("POST", "/openai_passthrough/v1/files"),
+        ("GET", "/openai_passthrough/v1/files"),
+        ("GET", "/openai_passthrough/v1/files/file-abc123"),
+        ("DELETE", "/openai_passthrough/v1/files/file-abc123"),
+        ("GET", "/openai_passthrough/v1/files/file-abc123/content"),
+        ("POST", "/openai_passthrough/v1/batches"),
+        ("GET", "/openai_passthrough/v1/batches"),
+        ("GET", "/openai_passthrough/v1/batches/batch_abc123"),
+        ("POST", "/openai_passthrough/v1/batches/batch_abc123/cancel"),
+        ("POST", "/openai_passthrough/v1/responses"),
+    ],
+)
+def test_openai_passthrough_prefix_wins_over_native_provider_routes(method, path):
+    """
+    /openai_passthrough exists to guarantee passthrough, so the native
+    /{provider}/v1/files and /{provider}/v1/batches routes must never capture it
+    with provider="openai_passthrough" (which 500s on the LlmProviders lookup).
+    """
+    assert _resolve_route_name(method, path) == "openai_proxy_route"
+
+
+@pytest.mark.parametrize(
+    "method, path, expected_name",
+    [
+        ("POST", "/openai/v1/files", "create_file"),
+        ("GET", "/azure/v1/files", "list_files"),
+        ("POST", "/v1/files", "create_file"),
+        ("POST", "/v1/batches", "create_batch"),
+        ("POST", "/openai/v1/chat/completions", "openai_proxy_route"),
+    ],
+)
+def test_native_provider_routes_are_unchanged(method, path, expected_name):
+    assert _resolve_route_name(method, path) == expected_name
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 
@@ -3020,3 +3084,576 @@ class TestCursorProxyRoute:
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
             assert result["id"] == "bc_abc123"
             assert result["status"] == "CREATING"
+
+
+class TestVertexRawPredictStreamingClassification:
+    """
+    Regression coverage for LIT-4761.
+
+    `_base_vertex_proxy_route` classified any target URL containing "stream" as a
+    streaming request. `:streamRawPredict` carries that substring, so a unary
+    Anthropic-on-Vertex call (no `stream` field in the body) was sent with
+    `?alt=sse` and logged through the streaming chunk collector, which parses
+    Anthropic SSE deltas and finds no usage in a complete `"type": "message"`
+    body; the spend log recorded 0 tokens and $0 cost.
+
+    Streaming for the rawPredict family is decided by the request body, per the
+    Anthropic Messages contract. The Gemini generateContent family stays
+    URL-signalled because the Gemini REST body has no `stream` field.
+    """
+
+    RAW_PREDICT_ENDPOINT = (
+        "v1/projects/test-project/locations/us-east5/publishers/anthropic/models/"
+        "claude-sonnet-4-6:streamRawPredict"
+    )
+    GENERATE_CONTENT_ENDPOINT = (
+        "v1/projects/test-project/locations/us-east5/publishers/google/models/"
+        "gemini-2.5-flash:streamGenerateContent"
+    )
+
+    async def _capture_passthrough_kwargs(self, endpoint: str, body: object) -> dict:
+        raw_body = json.dumps(body).encode("utf-8")
+
+        async def receive():
+            return {"type": "http.request", "body": raw_body, "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/vertex_ai/{endpoint}",
+                "headers": [(b"content-type", b"application/json")],
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+
+        captured: dict = {}
+
+        def fake_create_pass_through_route(**kwargs):
+            captured.update(kwargs)
+            return AsyncMock(return_value={"status": "success"})
+
+        mock_credentials = Mock()
+        mock_credentials.token = "test-token"
+
+        base_url = "https://us-east5-aiplatform.googleapis.com/"
+        mock_handler = Mock()
+        mock_handler.get_default_base_target_url.return_value = base_url
+        mock_handler.update_base_target_url_with_credential_location = Mock(return_value=base_url)
+
+        module = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        with (
+            mock.patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
+                return_value=(mock_credentials, "test-project"),
+            ),
+            mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
+            mock.patch(f"{module}.get_litellm_virtual_key", return_value="Bearer test-key"),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value={"api_key": "test-key"})),
+            mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
+        ):
+            await vertex_proxy_route(
+                endpoint=endpoint,
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(token="test-key"),
+            )
+
+        assert captured, "create_pass_through_route was never called"
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_without_stream_field_is_not_streaming(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body={
+                "anthropic_version": "vertex-2023-10-16",
+                "messages": [{"role": "user", "content": "Explain MLOps"}],
+                "max_tokens": 5000,
+            },
+        )
+
+        assert captured["is_streaming_request"] is False
+        assert "alt=sse" not in captured["target"]
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_with_stream_false_is_not_streaming(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body={
+                "anthropic_version": "vertex-2023-10-16",
+                "stream": False,
+                "messages": [{"role": "user", "content": "Explain MLOps"}],
+                "max_tokens": 5000,
+            },
+        )
+
+        assert captured["is_streaming_request"] is False
+        assert "alt=sse" not in captured["target"]
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_with_stream_true_still_streams(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body={
+                "anthropic_version": "vertex-2023-10-16",
+                "stream": True,
+                "messages": [{"role": "user", "content": "Explain MLOps"}],
+                "max_tokens": 5000,
+            },
+        )
+
+        assert captured["is_streaming_request"] is True
+        assert captured["target"].endswith("?alt=sse")
+
+    @pytest.mark.asyncio
+    async def test_gemini_stream_generate_content_stays_url_signalled(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.GENERATE_CONTENT_ENDPOINT,
+            body={"contents": [{"role": "user", "parts": [{"text": "Explain MLOps"}]}]},
+        )
+
+        assert captured["is_streaming_request"] is True
+        assert captured["target"].endswith("?alt=sse")
+
+    @pytest.mark.asyncio
+    async def test_raw_predict_with_non_object_body_is_not_streaming(self):
+        captured = await self._capture_passthrough_kwargs(
+            endpoint=self.RAW_PREDICT_ENDPOINT,
+            body=[{"role": "user", "content": "Explain MLOps"}],
+        )
+
+        assert captured["is_streaming_request"] is False
+        assert "alt=sse" not in captured["target"]
+
+
+@pytest.mark.parametrize(
+    "request_body, expected",
+    [
+        ({"stream": True}, True),
+        ({"stream": "true"}, True),
+        ({"stream": False}, False),
+        ({}, False),
+        ([{"role": "user"}], False),
+        ([], False),
+        ("stream", False),
+        (7, False),
+        (None, False),
+    ],
+)
+def test_is_passthrough_request_streaming_tolerates_non_object_bodies(request_body, expected):
+    """
+    A JSON request body is not required to be an object. Every passthrough
+    streaming decision funnels through this predicate, so a list or scalar body
+    must answer False instead of raising AttributeError.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        is_passthrough_request_streaming,
+    )
+
+    assert is_passthrough_request_streaming(request_body) is expected
+
+
+class TestGetAzureAISearchIndexFromEndpoint:
+    """The operable index is only the segment right after ``indexes``.
+
+    A doc-write path ends in ``.../docs/index``; the trailing ``index`` must not
+    be mistaken for the target, otherwise a caller could be authorized on one
+    index while Azure applies the write to another.
+    """
+
+    @pytest.mark.parametrize(
+        "endpoint, expected",
+        [
+            ("indexes/my-index/docs/index", "my-index"),
+            ("indexes/my-index/docs/search", "my-index"),
+            ("indexes/my-index", "my-index"),
+            ("indexes/my-index?api-version=2024-07-01", "my-index"),
+            ("/indexes/my-index/docs/index", "my-index"),
+            ("indexes/victim/docs/index", "victim"),
+            ("openai/deployments/gpt-4o/chat/completions", None),
+            ("indexes", None),
+            ("indexes/", None),
+        ],
+    )
+    def test_extracts_positional_index_only(self, endpoint, expected):
+        assert get_azure_ai_search_index_from_endpoint(endpoint) == expected
+
+
+class TestAzureProxyRouteCrossIndexAuthorization:
+    """Regression tests: the passthrough must authorize the index that the request
+    actually targets (the ``/indexes/{name}`` segment), never a different segment
+    that merely happens to match a managed index the caller can access.
+    """
+
+    def _request(self, method: str, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.headers = {"content-type": "application/json"}
+        request.url = MagicMock()
+        request.url.path = path
+        return request
+
+    @pytest.mark.asyncio
+    async def test_authorizes_the_targeted_index(self):
+        index_object = MagicMock()
+        index_object.litellm_params.vector_store_name = "my-store"
+        vector_store = {"litellm_params": {"api_base": "https://svc.search.windows.net"}}
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+                return_value=False,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.ProviderConfigManager.get_provider_vector_stores_config"
+            ) as mock_get_config,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
+            ) as mock_is_allowed,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.assert_user_can_access_vector_store",
+                new=AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                new=AsyncMock(return_value=Response()),
+            ),
+            patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
+            patch.object(litellm, "vector_store_registry") as mock_vector_registry,
+        ):
+            mock_get_config.return_value.get_auth_credentials.return_value = {"headers": {"api-key": "k"}}
+            mock_index_registry.is_vector_store_index.side_effect = lambda vector_store_index_name: (
+                vector_store_index_name == "my-index"
+            )
+            mock_index_registry.get_vector_store_index_by_name.return_value = index_object
+            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = vector_store
+
+            await azure_proxy_route(
+                endpoint="indexes/my-index/docs/index",
+                request=self._request("POST", "/azure_ai/indexes/my-index/docs/index"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+            mock_is_allowed.assert_called_once()
+            assert mock_is_allowed.call_args.kwargs["index_name"] == "my-index"
+            mock_index_registry.get_vector_store_index_by_name.assert_called_once_with(
+                vector_store_index_name="my-index"
+            )
+
+    @pytest.mark.asyncio
+    async def test_trailing_index_segment_does_not_authorize_a_different_index(self):
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+                return_value=False,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
+            ) as mock_is_allowed,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="https://azure-openai.example.com",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="azure-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                new=AsyncMock(return_value=Response()),
+            ) as mock_handler,
+            patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
+        ):
+            mock_index_registry.is_vector_store_index.side_effect = lambda vector_store_index_name: (
+                vector_store_index_name == "index"
+            )
+
+            await azure_proxy_route(
+                endpoint="indexes/victim/docs/index",
+                request=self._request("POST", "/azure_ai/indexes/victim/docs/index"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+            mock_is_allowed.assert_not_called()
+            mock_handler.assert_awaited_once()
+            assert mock_handler.await_args.kwargs["custom_llm_provider"] == litellm.LlmProviders.AZURE
+
+
+class TestAzureProxyRouteServiceLevelIndexCreate:
+    """``POST /indexes`` carries no index name, so the managed-index branch cannot
+    claim it and it would otherwise reach the generic Azure passthrough on the
+    proxy's own credential. The admin-only index management guard has to be
+    enforced on the route itself, not just on the permission gate the route skips.
+    """
+
+    def _request(self, method: str, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.headers = {"content-type": "application/json"}
+        request.url = MagicMock()
+        request.url.path = path
+        return request
+
+    @pytest.mark.parametrize(
+        "method, endpoint, expected",
+        [
+            ("POST", "indexes", True),
+            ("POST", "indexes?api-version=2024-07-01", True),
+            ("POST", "/indexes/", True),
+            ("POST", "indexes/my-index", False),
+            ("POST", "indexes/my-index/docs/index", False),
+            ("GET", "indexes", False),
+            ("POST", "openai/deployments/gpt-4o/chat/completions", False),
+        ],
+    )
+    def test_recognizes_service_level_create(self, method, endpoint, expected):
+        assert is_azure_ai_search_service_level_index_create(method=method, endpoint=endpoint) is expected
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_create_an_index(self):
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="https://svc.search.windows.net",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                new=AsyncMock(return_value=Response()),
+            ) as mock_handler,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await azure_proxy_route(
+                    endpoint="indexes?api-version=2024-07-01",
+                    request=self._request("POST", "/azure_ai/indexes"),
+                    fastapi_response=MagicMock(spec=Response),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        token="sk-team-token",
+                        user_role=LitellmUserRoles.INTERNAL_USER,
+                    ),
+                )
+
+            assert exc_info.value.status_code == 403
+            assert "Only proxy admins can create" in exc_info.value.detail
+            mock_handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_still_create_an_index(self):
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="https://svc.search.windows.net",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="azure-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                new=AsyncMock(return_value=Response()),
+            ) as mock_handler,
+        ):
+            await azure_proxy_route(
+                endpoint="indexes?api-version=2024-07-01",
+                request=self._request("POST", "/azure_ai/indexes"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(
+                    token="sk-admin-token",
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                ),
+            )
+
+            mock_handler.assert_awaited_once()
+
+
+class TestComprehendMedicalProxyRoute:
+    def _mock_request(self, body: object) -> Mock:
+        mock_request = Mock()
+        mock_request.method = "POST"
+        mock_request.json = AsyncMock(return_value=body)
+        return mock_request
+
+    @pytest.mark.asyncio
+    async def test_signs_and_forwards_detect_entities_v2(self):
+        from botocore.credentials import Credentials
+
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_proxy_route,
+        )
+        from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+            LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+            LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+        )
+
+        request_body = {"Text": "Patient was prescribed 40mg atorvastatin daily."}
+        mock_request = self._mock_request(request_body)
+        mock_endpoint_func = AsyncMock(return_value={"Entities": []})
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                side_effect=lambda secret_name: "us-east-1" if secret_name == "AWS_REGION_NAME" else None,
+            ),
+            patch(
+                "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM.get_credentials",
+                return_value=Credentials("test-access-key", "test-secret-key"),
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+                return_value=mock_endpoint_func,
+            ) as mock_create_route,
+        ):
+            result = await comprehend_medical_proxy_route(
+                operation="DetectEntitiesV2",
+                request=mock_request,
+                fastapi_response=Mock(),
+                user_api_key_dict=Mock(),
+            )
+
+        assert result == {"Entities": []}
+        call_kwargs = mock_create_route.call_args.kwargs
+        assert call_kwargs["target"] == "https://comprehendmedical.us-east-1.amazonaws.com/"
+        assert call_kwargs["custom_llm_provider"] == "comprehendmedical"
+        assert "_forward_headers" not in call_kwargs
+        signed_headers = dict(call_kwargs["custom_headers"])
+        assert signed_headers["X-Amz-Target"] == "ComprehendMedical_20181030.DetectEntitiesV2"
+        assert signed_headers["Content-Type"] == "application/x-amz-json-1.1"
+        assert signed_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert "/comprehendmedical/aws4_request" in signed_headers["Authorization"]
+        assert getattr(mock_request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY) == request_body
+        assert json.loads(getattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)) == request_body
+        mock_endpoint_func.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "operation",
+        [
+            "Detect-Entities",
+            "Detect/../secrets",
+            "",
+            "a" * 200,
+            "DetectEntities",
+            "StartEntitiesDetectionV2Job",
+        ],
+    )
+    async def test_rejects_unsupported_operations(self, operation):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_proxy_route,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await comprehend_medical_proxy_route(
+                operation=operation,
+                request=self._mock_request({"Text": "hi"}),
+                fastapi_response=Mock(),
+                user_api_key_dict=Mock(),
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", [{"Text": "hi", "stream": True}, {"Text": "hi", "stream": False}, ["Text"]])
+    async def test_rejects_stream_key_and_non_object_bodies(self, body):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_proxy_route,
+        )
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+            return_value="us-east-1",
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await comprehend_medical_proxy_route(
+                    operation="DetectEntitiesV2",
+                    request=self._mock_request(body),
+                    fastapi_response=Mock(),
+                    user_api_key_dict=Mock(),
+                )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_missing_region_returns_400(self):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_proxy_route,
+        )
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await comprehend_medical_proxy_route(
+                    operation="DetectPHI",
+                    request=self._mock_request({"Text": "hi"}),
+                    fastapi_response=Mock(),
+                    user_api_key_dict=Mock(),
+                )
+        assert exc_info.value.status_code == 400
+
+    def test_comprehendmedical_is_a_mapped_pass_through_route(self):
+        from litellm.proxy._types import LiteLLMRoutes
+
+        assert "/comprehendmedical" in LiteLLMRoutes.mapped_pass_through_routes.value
+
+    @pytest.mark.asyncio
+    async def test_sdk_route_reads_operation_from_x_amz_target(self):
+        from botocore.credentials import Credentials
+
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_sdk_proxy_route,
+        )
+
+        mock_request = self._mock_request({"Text": "hi"})
+        mock_request.headers = {"x-amz-target": "ComprehendMedical_20181030.DetectPHI"}
+        mock_endpoint_func = AsyncMock(return_value={"Entities": []})
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                side_effect=lambda secret_name: "us-east-1" if secret_name == "AWS_REGION_NAME" else None,
+            ),
+            patch(
+                "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM.get_credentials",
+                return_value=Credentials("test-access-key", "test-secret-key"),
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+                return_value=mock_endpoint_func,
+            ) as mock_create_route,
+        ):
+            result = await comprehend_medical_sdk_proxy_route(
+                request=mock_request,
+                fastapi_response=Mock(),
+                user_api_key_dict=Mock(),
+            )
+
+        assert result == {"Entities": []}
+        signed_headers = dict(mock_create_route.call_args.kwargs["custom_headers"])
+        assert signed_headers["X-Amz-Target"] == "ComprehendMedical_20181030.DetectPHI"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "target_header",
+        ["", "ComprehendMedical_20181030", "WrongService.DetectPHI", "ComprehendMedical_20181030."],
+    )
+    async def test_sdk_route_rejects_bad_x_amz_target(self, target_header):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            comprehend_medical_sdk_proxy_route,
+        )
+
+        mock_request = self._mock_request({"Text": "hi"})
+        mock_request.headers = {"x-amz-target": target_header}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await comprehend_medical_sdk_proxy_route(
+                request=mock_request,
+                fastapi_response=Mock(),
+                user_api_key_dict=Mock(),
+            )
+        assert exc_info.value.status_code == 400

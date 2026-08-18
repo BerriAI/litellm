@@ -2,7 +2,8 @@ import TableIconActionButton from "@/components/common_components/IconActionButt
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { isAdminRole } from "@/utils/roles";
 import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, PlusCircleIcon } from "@heroicons/react/outline";
-import { Card, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text, Title } from "@tremor/react";
+import { Card } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
 import { getProxyBaseUrl, getPublicModelHubInfo, updateUsefulLinksCall } from "../networking";
@@ -23,7 +24,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
   const [links, setLinks] = useState<Link[]>([]);
   const [newLink, setNewLink] = useState({ url: "", displayName: "" });
   const [editingLink, setEditingLink] = useState<Link | null>(null);
-  const [loading, setLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
   const [isRearranging, setIsRearranging] = useState(false);
   const [originalLinksOrder, setOriginalLinksOrder] = useState<Link[]>([]);
@@ -32,7 +32,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     if (!accessToken) return;
 
     try {
-      setLoading(true);
       const response = await getPublicModelHubInfo();
 
       if (response && response.useful_links) {
@@ -73,8 +72,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     } catch (error) {
       console.error("Error fetching useful links:", error);
       setLinks([]);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -227,10 +224,10 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
   };
 
   return (
-    <Card className="mb-6">
+    <Card className="mb-6 px-6">
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex flex-col">
-          <Title className="mb-0">Link Management</Title>
+          <h3 className="mb-0 text-lg font-semibold">Link Management</h3>
           <p className="text-sm text-gray-500">
             Manage the links that are displayed under &apos;Useful Links&apos; on the public model hub.
           </p>
@@ -247,7 +244,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
       {isExpanded && (
         <div className="mt-4">
           <div className="mb-6">
-            <Text className="text-sm font-medium text-gray-700 mb-2">Add New Link</Text>
+            <p className="text-sm font-medium text-gray-700 mb-2">Add New Link</p>
             <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Display Name</label>
@@ -292,13 +289,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
             </div>
           </div>
           <div className="flex items-center justify-between mb-2">
-            <Text className="text-sm font-medium text-gray-700">Manage Existing Links</Text>
+            <p className="text-sm font-medium text-gray-700">Manage Existing Links</p>
             <div className="flex items-center space-x-2">
               <Link
                 href={`${getProxyBaseUrl()}/ui/model_hub_table`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded hover:bg-blue-100 flex items-center"
+                className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-sm hover:bg-blue-100 flex items-center"
                 title="Open Public Model Hub"
               >
                 Public Model Hub
@@ -307,7 +304,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
               {!isRearranging ? (
                 <button
                   onClick={handleStartRearranging}
-                  className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded hover:bg-purple-100 flex items-center"
+                  className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded-sm hover:bg-purple-100 flex items-center"
                 >
                   Rearrange Order
                 </button>
@@ -315,13 +312,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                 <div className="flex space-x-2">
                   <button
                     onClick={handleSaveRearranging}
-                    className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700"
+                    className="text-xs bg-green-600 text-white px-3 py-1.5 rounded-sm hover:bg-green-700"
                   >
                     Save Order
                   </button>
                   <button
                     onClick={handleCancelRearranging}
-                    className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-100"
+                    className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded-sm hover:bg-gray-100"
                   >
                     Cancel
                   </button>
@@ -332,13 +329,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
           <div className="rounded-lg custom-border relative">
             <div className="overflow-x-auto">
               <Table className="[&_td]:py-0.5 [&_th]:py-1">
-                <TableHead>
+                <TableHeader>
                   <TableRow>
-                    <TableHeaderCell className="py-1 h-8">Display Name</TableHeaderCell>
-                    <TableHeaderCell className="py-1 h-8">URL</TableHeaderCell>
-                    <TableHeaderCell className="py-1 h-8">Actions</TableHeaderCell>
+                    <TableHead className="py-1 h-8">Display Name</TableHead>
+                    <TableHead className="py-1 h-8">URL</TableHead>
+                    <TableHead className="py-1 h-8">Actions</TableHead>
                   </TableRow>
-                </TableHead>
+                </TableHeader>
                 <TableBody>
                   {links.map((link, index) => (
                     <TableRow key={link.id} className="h-8">
@@ -374,13 +371,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                             <div className="flex space-x-2">
                               <button
                                 onClick={handleUpdateLink}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-sm hover:bg-blue-100"
                               >
                                 Save
                               </button>
                               <button
                                 onClick={handleCancelEdit}
-                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded-sm hover:bg-gray-100"
                               >
                                 Cancel
                               </button>

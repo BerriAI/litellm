@@ -22,10 +22,8 @@ from litellm.proxy.proxy_server import initialize_pass_through_endpoints
 
 
 # Mock the async_client used in the pass_through_request function
-async def mock_request(*args, **kwargs):
-    mock_response = httpx.Response(200, json={"message": "Mocked response"})
-    mock_response.request = Mock(spec=httpx.Request)
-    return mock_response
+async def mock_request(self, request, **kwargs):
+    return httpx.Response(200, json={"message": "Mocked response"}, request=request)
 
 
 def remove_rerank_route(app):
@@ -49,8 +47,8 @@ def client():
 
 @pytest.mark.asyncio
 async def test_pass_through_endpoint_no_headers(client, monkeypatch):
-    # Mock the httpx.AsyncClient.request method
-    monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
+    # Mock the httpx.AsyncClient.send method
+    monkeypatch.setattr("httpx.AsyncClient.send", mock_request)
     import litellm
 
     # Define a pass-through endpoint
@@ -79,8 +77,8 @@ async def test_pass_through_endpoint_no_headers(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pass_through_endpoint(client, monkeypatch):
-    # Mock the httpx.AsyncClient.request method
-    monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
+    # Mock the httpx.AsyncClient.send method
+    monkeypatch.setattr("httpx.AsyncClient.send", mock_request)
     import litellm
 
     # Define a pass-through endpoint
@@ -181,7 +179,7 @@ async def test_pass_through_endpoint_rpm_limit(
     expected_status_codes,
     num_users,
 ):
-    monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
+    monkeypatch.setattr("httpx.AsyncClient.send", mock_request)
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
@@ -285,7 +283,7 @@ async def test_pass_through_endpoint_rpm_limit(
 async def test_pass_through_endpoint_sequential_rpm_limit(
     client, monkeypatch, auth, rpm_limit, requests_to_make, expected_status_codes
 ):
-    monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
+    monkeypatch.setattr("httpx.AsyncClient.send", mock_request)
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
@@ -504,10 +502,10 @@ async def test_pass_through_endpoint_bing(client, monkeypatch):
 
     captured_requests = []
 
-    async def mock_bing_request(*args, **kwargs):
+    async def mock_bing_request(self, request, **kwargs):
 
-        captured_requests.append((args, kwargs))
-        mock_response = httpx.Response(
+        captured_requests.append(request)
+        return httpx.Response(
             200,
             json={
                 "_type": "SearchResponse",
@@ -518,11 +516,10 @@ async def test_pass_through_endpoint_bing(client, monkeypatch):
                     "value": [],
                 },
             },
+            request=request,
         )
-        mock_response.request = Mock(spec=httpx.Request)
-        return mock_response
 
-    monkeypatch.setattr("httpx.AsyncClient.request", mock_bing_request)
+    monkeypatch.setattr("httpx.AsyncClient.send", mock_bing_request)
 
     # Define a pass-through endpoint
     pass_through_endpoints = [
@@ -555,8 +552,8 @@ async def test_pass_through_endpoint_bing(client, monkeypatch):
     client.get("/bing/search?q=bob+barker")
     client.get("/bing/search-no-merge-params?q=bob+barker")
 
-    first_transformed_url = captured_requests[0][1]["url"]
-    second_transformed_url = captured_requests[1][1]["url"]
+    first_transformed_url = captured_requests[0].url
+    second_transformed_url = captured_requests[1].url
 
     # Parse URLs to compare query params order-independently
     # Parse first URL
@@ -573,7 +570,7 @@ async def test_pass_through_endpoint_bing(client, monkeypatch):
         "setLang": ["en-US"],
         "mkt": ["en-US"],
     }
-    expected_second_params = {"setLang": ["en-US"], "mkt": ["en-US"]}
+    expected_second_params = {"q": ["bob barker"]}
 
     # Assert the response - compare base URL and params separately
     assert (

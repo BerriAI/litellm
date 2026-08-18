@@ -21,6 +21,11 @@ from litellm import Router
 from litellm.types.router import LiteLLM_Params, RequestType
 
 
+def _adaptive(r, name):
+    """Registries hold tag-scoped strategy lists; these tests use a single tagless entry."""
+    return r.adaptive_routers[name][0].strategy
+
+
 def _params(**overrides):
     base = {"model": "auto_router/adaptive_router"}
     base.update(overrides)
@@ -122,7 +127,7 @@ def test_init_adaptive_router_reads_cost_from_litellm_params():
         ]
     )
     assert "smart-cheap-router" in r.adaptive_routers
-    assert r.adaptive_routers["smart-cheap-router"].model_to_cost == {
+    assert _adaptive(r, "smart-cheap-router").model_to_cost == {
         "fast": 0.00000015,
         "smart": 0.0000050,
     }
@@ -176,7 +181,7 @@ def _router_with_adaptive() -> Router:
 @pytest.mark.asyncio
 async def test_async_pre_routing_hook_dispatches_to_adaptive_router():
     r = _router_with_adaptive()
-    ar = r.adaptive_routers["smart-cheap-router"]
+    ar = _adaptive(r, "smart-cheap-router")
     ar.pick_model = AsyncMock(return_value="smart")  # type: ignore[assignment]
 
     response = await r.async_pre_routing_hook(
@@ -195,7 +200,7 @@ async def test_async_pre_routing_hook_dispatches_to_adaptive_router():
 @pytest.mark.asyncio
 async def test_async_pre_routing_hook_pick_model_not_passed_session_id():
     r = _router_with_adaptive()
-    ar = r.adaptive_routers["smart-cheap-router"]
+    ar = _adaptive(r, "smart-cheap-router")
     ar.pick_model = AsyncMock(return_value="fast")  # type: ignore[assignment]
 
     response = await r.async_pre_routing_hook(
@@ -211,7 +216,7 @@ async def test_async_pre_routing_hook_pick_model_not_passed_session_id():
 @pytest.mark.asyncio
 async def test_async_pre_routing_hook_returns_none_for_unrelated_model():
     r = _router_with_adaptive()
-    ar = r.adaptive_routers["smart-cheap-router"]
+    ar = _adaptive(r, "smart-cheap-router")
     ar.pick_model = AsyncMock()  # type: ignore[assignment]
     response = await r.async_pre_routing_hook(
         model="some-other-model",
@@ -233,7 +238,7 @@ async def test_async_pre_routing_hook_stashes_chosen_model_in_metadata():
     `x-litellm-adaptive-router-model` response header.
     """
     r = _router_with_adaptive()
-    r.adaptive_routers["smart-cheap-router"].pick_model = AsyncMock(  # type: ignore[assignment]
+    _adaptive(r, "smart-cheap-router").pick_model = AsyncMock(  # type: ignore[assignment]
         return_value="smart"
     )
 
@@ -250,7 +255,7 @@ async def test_async_pre_routing_hook_stashes_chosen_model_in_metadata():
 async def test_async_pre_routing_hook_creates_metadata_when_missing():
     """If no metadata was passed in, the hook should create one to stash the chosen model."""
     r = _router_with_adaptive()
-    r.adaptive_routers["smart-cheap-router"].pick_model = AsyncMock(  # type: ignore[assignment]
+    _adaptive(r, "smart-cheap-router").pick_model = AsyncMock(  # type: ignore[assignment]
         return_value="fast"
     )
 
@@ -300,8 +305,8 @@ def test_two_adaptive_routers_can_coexist_on_one_router():
         ]
     )
     assert set(r.adaptive_routers.keys()) == {"cheap-router", "premium-router"}
-    assert r.adaptive_routers["cheap-router"].config.available_models == ["fast"]
-    assert r.adaptive_routers["premium-router"].config.available_models == ["smart"]
+    assert _adaptive(r, "cheap-router").config.available_models == ["fast"]
+    assert _adaptive(r, "premium-router").config.available_models == ["smart"]
 
 
 @pytest.mark.asyncio
@@ -339,8 +344,8 @@ async def test_async_pre_routing_hook_dispatches_to_correct_router_when_multiple
             },
         ]
     )
-    cheap = r.adaptive_routers["cheap-router"]
-    premium = r.adaptive_routers["premium-router"]
+    cheap = _adaptive(r, "cheap-router")
+    premium = _adaptive(r, "premium-router")
     cheap.pick_model = AsyncMock(return_value="fast")  # type: ignore[assignment]
     premium.pick_model = AsyncMock(return_value="smart")  # type: ignore[assignment]
 
@@ -410,12 +415,12 @@ def test_finalize_adaptive_router_if_configured_initializes_and_is_idempotent():
 
     # Router __init__ already called _finalize_adaptive_router_if_configured.
     assert "my-router" in r.adaptive_routers
-    original = r.adaptive_routers["my-router"]
+    original = _adaptive(r, "my-router")
 
     # Calling again must be idempotent: the existing AdaptiveRouter instance
     # is preserved, not rebuilt.
     r._finalize_adaptive_router_if_configured()
-    assert r.adaptive_routers["my-router"] is original
+    assert _adaptive(r, "my-router") is original
 
 
 def test_finalize_prunes_stale_adaptive_router_hooks_from_callbacks():

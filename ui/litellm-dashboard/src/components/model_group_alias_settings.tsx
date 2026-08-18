@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { PlusCircleIcon, PencilIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { setCallbacksCall } from "./networking";
-import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
+import { Card, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import NotificationsManager from "./molecules/notifications_manager";
 
 type ModelGroupAliasValue = string | { model: string; hidden?: boolean };
@@ -57,7 +58,6 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
         },
       };
 
-      console.log("Saving model group alias:", aliasObject);
       await setCallbacksCall(accessToken, payload);
 
       if (onAliasUpdate) {
@@ -149,10 +149,10 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   );
 
   return (
-    <Card className="mb-6">
+    <Card className="mb-6 px-6">
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
         <div className="flex flex-col">
-          <Title className="mb-0">Model Group Alias Settings</Title>
+          <CardTitle className="mb-0">Model Group Alias Settings</CardTitle>
           <p className="text-sm text-gray-500">
             Create aliases for your model groups to simplify API calls. For example, you can create an alias
             &apos;gpt-4o&apos; that points to &apos;gpt-4o-mini-openai&apos; model group.
@@ -170,7 +170,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
       {isExpanded && (
         <div className="mt-4">
           <div className="mb-6">
-            <Text className="text-sm font-medium text-gray-700 mb-2">Add New Alias</Text>
+            <p className="text-sm font-medium text-gray-700 mb-2">Add New Alias</p>
             <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Alias Name</label>
@@ -215,17 +215,17 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
             </div>
           </div>
 
-          <Text className="text-sm font-medium text-gray-700 mb-2">Manage Existing Aliases</Text>
+          <p className="text-sm font-medium text-gray-700 mb-2">Manage Existing Aliases</p>
           <div className="rounded-lg custom-border relative mb-6">
             <div className="overflow-x-auto">
               <Table className="[&_td]:py-0.5 [&_th]:py-1">
-                <TableHead>
+                <TableHeader>
                   <TableRow>
-                    <TableHeaderCell className="py-1 h-8">Alias Name</TableHeaderCell>
-                    <TableHeaderCell className="py-1 h-8">Target Model Group</TableHeaderCell>
-                    <TableHeaderCell className="py-1 h-8">Actions</TableHeaderCell>
+                    <TableHead className="py-1 h-8">Alias Name</TableHead>
+                    <TableHead className="py-1 h-8">Target Model Group</TableHead>
+                    <TableHead className="py-1 h-8">Actions</TableHead>
                   </TableRow>
-                </TableHead>
+                </TableHeader>
                 <TableBody>
                   {aliases.map((alias) => (
                     <TableRow key={alias.id} className="h-8">
@@ -261,13 +261,13 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                             <div className="flex space-x-2">
                               <button
                                 onClick={handleUpdateAlias}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-sm hover:bg-blue-100"
                               >
                                 Save
                               </button>
                               <button
                                 onClick={handleCancelEdit}
-                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded-sm hover:bg-gray-100"
                               >
                                 Cancel
                               </button>
@@ -276,19 +276,23 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                         </>
                       ) : (
                         <>
-                          <TableCell className="py-0.5 text-sm text-gray-900">{alias.aliasName}</TableCell>
-                          <TableCell className="py-0.5 text-sm text-gray-500">{alias.targetModelGroup}</TableCell>
+                          <TableCell className="py-0.5 text-sm whitespace-normal text-gray-900">
+                            {alias.aliasName}
+                          </TableCell>
+                          <TableCell className="py-0.5 text-sm whitespace-normal text-gray-500">
+                            {alias.targetModelGroup}
+                          </TableCell>
                           <TableCell className="py-0.5 whitespace-nowrap">
                             <div className="flex space-x-2">
                               <button
                                 onClick={() => handleEditAlias(alias)}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-sm hover:bg-blue-100"
                               >
                                 <PencilIcon className="w-3 h-3" />
                               </button>
                               <button
                                 onClick={() => deleteAlias(alias.id)}
-                                className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100"
+                                className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-sm hover:bg-red-100"
                               >
                                 <TrashIcon className="w-3 h-3" />
                               </button>
@@ -300,7 +304,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                   ))}
                   {aliases.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={3} className="py-0.5 text-sm text-gray-500 text-center">
+                      <TableCell colSpan={3} className="py-0.5 text-sm whitespace-normal text-gray-500 text-center">
                         No aliases added yet. Add a new alias above.
                       </TableCell>
                     </TableRow>
@@ -311,11 +315,9 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
           </div>
 
           {/* Configuration Example */}
-          <Card>
-            <Title className="mb-4">Configuration Example</Title>
-            <Text className="text-gray-600 mb-4">
-              Here&apos;s how your current aliases would look in the config.yaml:
-            </Text>
+          <Card className="px-6">
+            <CardTitle className="mb-4">Configuration Example</CardTitle>
+            <p className="text-gray-600 mb-4">Here&apos;s how your current aliases would look in the config.yaml:</p>
             <div className="bg-gray-100 rounded-lg p-4 font-mono text-sm">
               <div className="text-gray-700">
                 router_settings:

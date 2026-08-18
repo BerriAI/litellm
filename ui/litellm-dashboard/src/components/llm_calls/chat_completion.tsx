@@ -1,9 +1,26 @@
 import openai from "openai";
-import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { ChatCompletion, ChatCompletionChunk, ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer, MCPToolset, type MCPEvent } from "@/components/mcp_tools/types";
+import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+
+const completionAsSingleChunk = (completion: ChatCompletion): ChatCompletionChunk =>
+  ({
+    id: completion.id,
+    object: "chat.completion.chunk",
+    created: completion.created,
+    model: completion.model,
+    usage: completion.usage,
+    choices: [
+      {
+        index: 0,
+        finish_reason: completion.choices[0]?.finish_reason ?? null,
+        delta: completion.choices[0]?.message ?? {},
+      },
+    ],
+  }) as unknown as ChatCompletionChunk;
 
 export async function makeOpenAIChatCompletionRequest(
   chatHistory: { role: string; content: string | any[] }[],
@@ -31,13 +48,13 @@ export async function makeOpenAIChatCompletionRequest(
   onMCPEvent?: (event: MCPEvent) => void,
   mockTestFallbacks?: boolean,
   mcpToolsets?: MCPToolset[],
+  streamingEnabled: boolean = true,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal !== true) {
     console.log = function () {};
   }
-  console.log("isLocal:", isLocal);
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
@@ -56,10 +73,6 @@ export async function makeOpenAIChatCompletionRequest(
     const startTime = Date.now();
     let firstTokenReceived = false;
     let timeToFirstToken: number | undefined = undefined;
-
-    // For collecting complete response text
-    let fullResponseContent = "";
-    let fullReasoningContent = "";
 
     // Track MCP metadata cumulatively across chunks
     let mcpMetadata: {
@@ -112,47 +125,38 @@ export async function makeOpenAIChatCompletionRequest(
       }
     }
 
-    // @ts-ignore
-    const response = await client.chat.completions.create(
-      {
-        model: selectedModel,
-        stream: true,
-        stream_options: {
-          include_usage: true,
-        },
-        litellm_trace_id: traceId,
-        messages: chatHistory as ChatCompletionMessageParam[],
-        ...(vector_store_ids ? { vector_store_ids } : {}),
-        ...(guardrails ? { guardrails } : {}),
-        ...(policies ? { policies } : {}),
-        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-        ...(temperature !== undefined ? { temperature } : {}),
-        ...(max_tokens !== undefined ? { max_tokens } : {}),
-        ...(mockTestFallbacks ? { mock_testing_fallbacks: true } : {}),
-      },
-      { signal },
-    );
+    const requestBody = {
+      model: selectedModel,
+      litellm_trace_id: traceId,
+      messages: chatHistory as ChatCompletionMessageParam[],
+      ...(vector_store_ids ? { vector_store_ids } : {}),
+      ...(guardrails ? { guardrails } : {}),
+      ...(policies ? { policies } : {}),
+      ...(tools.length > 0 ? { tools, tool_choice: "auto" as const } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(max_tokens !== undefined ? { max_tokens } : {}),
+      ...(mockTestFallbacks ? { mock_testing_fallbacks: true } : {}),
+    };
+
+    const response: AsyncIterable<ChatCompletionChunk> | ChatCompletionChunk[] = streamingEnabled
+      ? await client.chat.completions.create(
+          { ...requestBody, stream: true, stream_options: { include_usage: true } },
+          { signal },
+        )
+      : [completionAsSingleChunk(await client.chat.completions.create({ ...requestBody, stream: false }, { signal }))];
 
     for await (const chunk of response) {
-      console.log("Stream chunk:", chunk);
-
       // Process content and measure time to first token
       const delta = chunk.choices[0]?.delta as any;
 
       // Debug what's in the delta
-      console.log("Delta content:", chunk.choices[0]?.delta?.content);
-      console.log("Delta reasoning content:", delta?.reasoning_content);
 
       // Measure time to first token for either content or reasoning_content
       if (!firstTokenReceived && (chunk.choices[0]?.delta?.content || (delta && delta.reasoning_content))) {
         firstTokenReceived = true;
         timeToFirstToken = Date.now() - startTime;
-        console.log("First token received! Time:", timeToFirstToken, "ms");
-        if (onTimingData) {
-          console.log("Calling onTimingData with:", timeToFirstToken);
+        if (onTimingData && streamingEnabled) {
           onTimingData(timeToFirstToken);
-        } else {
-          console.log("onTimingData callback is not defined!");
         }
       }
 
@@ -160,12 +164,10 @@ export async function makeOpenAIChatCompletionRequest(
       if (chunk.choices[0]?.delta?.content) {
         const content = chunk.choices[0].delta.content;
         updateUI(content, chunk.model);
-        fullResponseContent += content;
       }
 
       // Process image generation if present
       if (delta && delta.image && onImageGenerated) {
-        console.log("Image generated:", delta.image);
         onImageGenerated(delta.image.url, chunk.model);
       }
 
@@ -175,12 +177,10 @@ export async function makeOpenAIChatCompletionRequest(
         if (onReasoningContent) {
           onReasoningContent(reasoningContent);
         }
-        fullReasoningContent += reasoningContent;
       }
 
       // Check for search results in provider_specific_fields
       if (delta && delta.provider_specific_fields?.search_results && onSearchResults) {
-        console.log("Search results found:", delta.provider_specific_fields.search_results);
         onSearchResults(delta.provider_specific_fields.search_results);
       }
 
@@ -208,7 +208,6 @@ export async function makeOpenAIChatCompletionRequest(
               timestamp: Date.now(),
             };
             onMCPEvent(toolsEvent);
-            console.log("MCP list_tools event sent:", toolsEvent);
           }
         }
 
@@ -219,24 +218,16 @@ export async function makeOpenAIChatCompletionRequest(
         if (providerFields.mcp_call_results) {
           mcpMetadata.mcp_call_results = providerFields.mcp_call_results;
         }
-
-        if (providerFields.mcp_list_tools || providerFields.mcp_tool_calls || providerFields.mcp_call_results) {
-          console.log("MCP metadata found in chunk:", {
-            mcp_list_tools: providerFields.mcp_list_tools ? "present" : "absent",
-            mcp_tool_calls: providerFields.mcp_tool_calls ? "present" : "absent",
-            mcp_call_results: providerFields.mcp_call_results ? "present" : "absent",
-          });
-        }
       }
 
       // Check for usage data using type assertion
       const chunkWithUsage = chunk as any;
       if (chunkWithUsage.usage && onUsageData) {
-        console.log("Usage data found:", chunkWithUsage.usage);
         const usageData: TokenUsage = {
           completionTokens: chunkWithUsage.usage.completion_tokens,
           promptTokens: chunkWithUsage.usage.prompt_tokens,
           totalTokens: chunkWithUsage.usage.total_tokens,
+          ...extractPromptCacheTokens(chunkWithUsage.usage),
         };
 
         // Check for reasoning tokens
@@ -284,7 +275,6 @@ export async function makeOpenAIChatCompletionRequest(
             timestamp: Date.now(),
           };
           onMCPEvent(callEvent);
-          console.log("MCP call event sent:", callEvent);
         });
       }
     }
@@ -295,9 +285,6 @@ export async function makeOpenAIChatCompletionRequest(
       onTotalLatency(totalLatency);
     }
   } catch (error) {
-    if (signal?.aborted) {
-      console.log("Chat completion request was cancelled");
-    }
     throw error; // Re-throw to allow the caller to handle the error
   }
 }

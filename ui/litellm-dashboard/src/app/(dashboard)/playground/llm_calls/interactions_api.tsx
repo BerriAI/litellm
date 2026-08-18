@@ -113,7 +113,6 @@ export async function makeInteractionsRequest(
     }
   } catch (error: unknown) {
     if (signal?.aborted) {
-      console.log("Interactions request was cancelled");
       throw error;
     }
     NotificationManager.fromBackend(`Error occurred while making Interactions API request. Error: ${error}`);
