@@ -1,4 +1,5 @@
 import type { ComplexityTiers } from "./ComplexityRouterConfig";
+import type { ComplexityTier } from "./KeywordTierRules";
 
 /**
  * A complexity tier maps to `str | list[str]` on the backend
@@ -22,3 +23,17 @@ export const normalizeTierModels = (value: unknown): string[] => {
  */
 export const resolveComplexityDefaultModel = (tiers: ComplexityTiers, pinned?: string): string | undefined =>
   pinned?.trim() || tiers.MEDIUM[0] || tiers.SIMPLE[0];
+
+export const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
+  SIMPLE: "Simple",
+  MEDIUM: "Medium",
+  COMPLEX: "Complex",
+  REASONING: "Reasoning",
+};
+
+export const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
+
+export const tierOptions = (
+  tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
+): { value: ComplexityTier; label: string }[] =>
+  TIER_ORDER.map((tier) => ({ value: tier, label: tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier] }));

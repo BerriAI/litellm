@@ -1,5 +1,6 @@
 import {
   buildComplexityRouterConfig,
+  getPlanModeTierError,
   normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getMissingTiersError,
@@ -599,5 +600,38 @@ describe("buildComplexityRouterConfig scorer knobs", () => {
 
   it("drops them when the classifier falls back to the default model and nothing is scored", () => {
     expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
+  });
+});
+
+describe("plan-mode minimum tier", () => {
+  it("omits plan_mode_min_tier when unset, so the backend default (off) is preserved", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, planModeMinTier: undefined });
+    expect(config).not.toHaveProperty("plan_mode_min_tier");
+  });
+
+  it("writes the selected tier", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, planModeMinTier: "COMPLEX" });
+    expect(config.plan_mode_min_tier).toBe("COMPLEX");
+  });
+
+  it("never writes an empty string, which the backend rejects instead of treating as off", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, planModeMinTier: "  " });
+    expect(config).not.toHaveProperty("plan_mode_min_tier");
+  });
+});
+
+describe("getPlanModeTierError", () => {
+  const tiersWithEmptyComplex = { SIMPLE: ["m1"], MEDIUM: ["m1"], COMPLEX: [], REASONING: [] };
+
+  it("passes when the override is off", () => {
+    expect(getPlanModeTierError(undefined, tiersWithEmptyComplex)).toBeNull();
+  });
+
+  it("passes when the named tier has models", () => {
+    expect(getPlanModeTierError("MEDIUM", tiersWithEmptyComplex)).toBeNull();
+  });
+
+  it("blocks a tier whose models were removed, which the backend would reject with a 400", () => {
+    expect(getPlanModeTierError("COMPLEX", tiersWithEmptyComplex)).toContain("COMPLEX");
   });
 });

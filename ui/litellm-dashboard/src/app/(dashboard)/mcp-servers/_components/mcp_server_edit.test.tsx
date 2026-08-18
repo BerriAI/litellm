@@ -2202,3 +2202,50 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
     expect(payload.dcr_bridge).toBe(true);
   });
 });
+
+describe("MCPServerEdit (tab mount contract)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const plainServer = {
+    ...interactiveOAuthServer,
+    auth_type: "none",
+    max_concurrent_requests: 5,
+  };
+
+  it("carries pending server edits into a save triggered from the Cost Configuration tab", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...plainServer,
+      max_concurrent_requests: 2,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={plainServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 10"), { target: { value: "2" } });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Cost Configuration" }));
+    expect(await screen.findByTestId("mcp-cost-config")).toBeInTheDocument();
+
+    const costTabSaveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    expect(costTabSaveButtons).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(costTabSaveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.max_concurrent_requests).toBe(2);
+  });
+});

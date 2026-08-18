@@ -4,7 +4,7 @@
  * Decoupled from form submission logic
  */
 
-import { Button } from "@tremor/react";
+import { Button } from "@/components/ui/button";
 import { Tabs } from "antd";
 import { Plus } from "lucide-react";
 import React, { useEffect, useState } from "react";
@@ -98,7 +98,8 @@ export function FallbackSelectionForm({
     return (
       <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300">
         <p className="text-gray-500 mb-4">No fallback groups configured</p>
-        <Button variant="primary" onClick={handleAddGroup} icon={() => <Plus className="w-4 h-4" />}>
+        <Button onClick={handleAddGroup}>
+          <Plus className="w-4 h-4" />
           Create First Group
         </Button>
       </div>

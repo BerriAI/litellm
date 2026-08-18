@@ -39,6 +39,9 @@ from litellm.llms.fireworks_ai.common_utils import resolve_fireworks_resource_na
             "glm-4p6#accounts/gitlab/deployments/2fb7764c",
             "glm-4p6#accounts/gitlab/deployments/2fb7764c",
         ),
+        ("FW-Kimi-K3", "FW-Kimi-K3"),
+        ("fireworks_ai/FW-Kimi-K3", "FW-Kimi-K3"),
+        ("FW-GLM-5.2-Fast", "FW-GLM-5.2-Fast"),
     ],
 )
 def test_resolve_fireworks_resource_name(model, expected):

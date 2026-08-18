@@ -61,10 +61,16 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    open_sse_before_first_byte,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
+)
+from litellm.proxy.common_utils.sse_keepalive import (
+    wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import normalize_route_for_root_path
@@ -1173,14 +1179,18 @@ async def pass_through_request(
                 _response_headers.update(callback_headers)
 
             return StreamingResponse(
-                PassThroughStreamingHandler.chunk_processor(
-                    response=response,
-                    request_body=_parsed_body,
-                    litellm_logging_obj=logging_obj,
-                    endpoint_type=endpoint_type,
-                    start_time=start_time,
-                    passthrough_success_handler_obj=pass_through_endpoint_logging,
-                    url_route=str(url),
+                wrap_passthrough_sse_bytes_with_keepalive_pings(
+                    stream=PassThroughStreamingHandler.chunk_processor(
+                        response=response,
+                        request_body=_parsed_body,
+                        litellm_logging_obj=logging_obj,
+                        endpoint_type=endpoint_type,
+                        start_time=start_time,
+                        passthrough_success_handler_obj=pass_through_endpoint_logging,
+                        url_route=str(url),
+                    ),
+                    ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+                    upstream_headers=response.headers,
                 ),
                 headers=_response_headers,
                 status_code=response.status_code,
@@ -1245,14 +1255,18 @@ async def pass_through_request(
                 _response_headers.update(callback_headers)
 
             return StreamingResponse(
-                PassThroughStreamingHandler.chunk_processor(
-                    response=response,
-                    request_body=_parsed_body,
-                    litellm_logging_obj=logging_obj,
-                    endpoint_type=endpoint_type,
-                    start_time=start_time,
-                    passthrough_success_handler_obj=pass_through_endpoint_logging,
-                    url_route=str(url),
+                wrap_passthrough_sse_bytes_with_keepalive_pings(
+                    stream=PassThroughStreamingHandler.chunk_processor(
+                        response=response,
+                        request_body=_parsed_body,
+                        litellm_logging_obj=logging_obj,
+                        endpoint_type=endpoint_type,
+                        start_time=start_time,
+                        passthrough_success_handler_obj=pass_through_endpoint_logging,
+                        url_route=str(url),
+                    ),
+                    ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+                    upstream_headers=response.headers,
                 ),
                 headers=_response_headers,
                 status_code=response.status_code,
@@ -1787,28 +1801,39 @@ def create_pass_through_route(
             elif isinstance(custom_body_data, dict):
                 final_custom_body = custom_body_data
 
-            try:
-                return await pass_through_request(
-                    request=request,
-                    target=full_target,
-                    custom_headers=headers_dict,
-                    user_api_key_dict=user_api_key_dict,
-                    forward_headers=cast(bool | None, param_forward_headers),
-                    merge_query_params=cast(bool | None, param_merge_query_params),
-                    query_params=final_query_params,
-                    default_query_params=cast(dict | None, param_default_query_params),
-                    stream=is_streaming_request or stream,
-                    custom_body=final_custom_body,
-                    cost_per_request=cast(float | None, param_cost_per_request),
-                    custom_llm_provider=custom_llm_provider,
-                    guardrails_config=cast(dict | None, param_guardrails),
-                    timeout=cast(float | None, param_timeout),
-                )
-            finally:
-                if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
-                    delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
-                if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
-                    delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
+            is_stream: Final = bool(is_streaming_request or stream)
+
+            async def _relay() -> Response:
+                try:
+                    return await pass_through_request(
+                        request=request,
+                        target=full_target,
+                        custom_headers=headers_dict,
+                        user_api_key_dict=user_api_key_dict,
+                        forward_headers=cast(bool | None, param_forward_headers),
+                        merge_query_params=cast(bool | None, param_merge_query_params),
+                        query_params=final_query_params,
+                        default_query_params=cast(dict | None, param_default_query_params),
+                        stream=is_stream,
+                        custom_body=final_custom_body,
+                        cost_per_request=cast(float | None, param_cost_per_request),
+                        custom_llm_provider=custom_llm_provider,
+                        guardrails_config=cast(dict | None, param_guardrails),
+                        timeout=cast(float | None, param_timeout),
+                    )
+                finally:
+                    if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
+                        delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
+                    if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
+                        delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
+
+            # The upstream withholds its response headers until its first token, so
+            # the whole time-to-first-token is spent inside _relay with nothing on
+            # the wire. Off unless an operator sets an interval.
+            return await open_sse_before_first_byte(
+                _relay(),
+                ping_interval_seconds=(litellm.sse_keepalive_ping_interval_seconds if is_stream else None),
+            )
 
     setattr(endpoint_func, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
     return endpoint_func

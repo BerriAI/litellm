@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "@/components/view_user_spend";
 import { ProxySettings } from "@/components/user_dashboard";
-import UsageDatePicker from "@/components/shared/usage_date_picker";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -796,7 +796,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </p>
           <div className="grid grid-cols-2">
             <div>
-              <UsageDatePicker
+              <AdvancedDatePicker
+                align="left"
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
@@ -862,7 +863,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
         <TabsContent value="tag-based-usage">
           <div className="grid grid-cols-2">
             <div className="col-span-1">
-              <UsageDatePicker
+              <AdvancedDatePicker
+                align="left"
                 className="mb-4"
                 value={dateValue}
                 onValueChange={(value) => {

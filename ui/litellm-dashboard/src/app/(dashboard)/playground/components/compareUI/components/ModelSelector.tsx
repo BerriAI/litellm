@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Select } from "antd";
-import { TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
@@ -68,11 +68,11 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
         <Select.Option value="__custom__">+ Add custom model</Select.Option>
       </Select>
       {isAddingCustom && (
-        <TextInput
+        <Input
           className="mt-2"
           placeholder="Custom Model Name (Enter to add)"
           value={customValue}
-          onValueChange={setCustomValue}
+          onChange={(e) => setCustomValue(e.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();

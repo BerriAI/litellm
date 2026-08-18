@@ -75,32 +75,6 @@ vi.mock("antd", async (importOriginal) => {
   };
 });
 
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  const React = await import("react");
-  const SelectItem = ({ value, children, title }: any) => {
-    const childText = React.Children.toArray(children)
-      .map((child: any) => (typeof child === "string" ? child : child?.props?.children || ""))
-      .join(" ");
-    return React.createElement("option", { value, title }, childText || title || value);
-  };
-  SelectItem.displayName = "SelectItem";
-  // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts.
-  // A file-level vi.mock fully replaces the setup-level mock, so without this
-  // the real Tremor Button leaks through and its useTooltip(300) schedules a
-  // native setTimeout that fires post-teardown -> "window is not defined".
-  const Button = React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-    React.createElement("button", { ...props, ref }, children),
-  );
-  const TremorTooltip = ({ children }: any) => React.createElement(React.Fragment, null, children);
-  return {
-    ...actual,
-    SelectItem,
-    Button,
-    Tooltip: TremorTooltip,
-  };
-});
-
 describe("UserEditView", () => {
   const MOCK_USER_DATA = {
     user_id: "user-123",
