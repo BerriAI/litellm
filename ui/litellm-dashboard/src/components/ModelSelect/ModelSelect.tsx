@@ -135,8 +135,10 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const organizationHasAllProxyModels =
     organization?.models.includes(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value) ||
     organization?.models.length === 0;
+  const teamIsUnscopedByOrganization = context === "team" && !organizationID;
+  const scopeAllowsAllProxyModels = organizationHasAllProxyModels || teamIsUnscopedByOrganization;
   const shouldShowAllProxyModels =
-    showAllProxyModelsOverride || (organizationHasAllProxyModels && includeSpecialOptions) || context === "global";
+    showAllProxyModelsOverride || (scopeAllowsAllProxyModels && includeSpecialOptions) || context === "global";
 
   if (isLoading) {
     return <Skeleton className="h-9 w-full" />;

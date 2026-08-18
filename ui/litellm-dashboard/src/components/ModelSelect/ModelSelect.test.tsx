@@ -384,6 +384,36 @@ describe("ModelSelect", () => {
         },
         shouldShow: false,
       },
+      {
+        name: "when a team has no organization and the caller is not a proxy admin",
+        context: "team" as const,
+        options: { includeSpecialOptions: true },
+        props: { teamID: "team-1" },
+        setup: () => {
+          mockUseTeam.mockReturnValue({
+            data: { team_id: "team-1", team_alias: "Test Team", models: ["gpt-4"] },
+            isLoading: false,
+          } as any);
+        },
+        shouldShow: true,
+      },
+      {
+        name: "when a team belongs to an organization scoped to specific models",
+        context: "team" as const,
+        options: { includeSpecialOptions: true },
+        props: { teamID: "team-1", organizationID: "org-1" },
+        setup: () => {
+          mockUseTeam.mockReturnValue({
+            data: { team_id: "team-1", team_alias: "Test Team", models: ["gpt-4"] },
+            isLoading: false,
+          } as any);
+          mockUseOrganization.mockReturnValue({
+            data: createMockOrganization(["gpt-4"]),
+            isLoading: false,
+          } as any);
+        },
+        shouldShow: false,
+      },
     ];
 
     for (const testCase of testCases) {
