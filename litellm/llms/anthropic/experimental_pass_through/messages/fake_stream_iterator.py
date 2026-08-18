@@ -113,8 +113,31 @@ class FakeAnthropicMessagesStreamIterator:
             }
             chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
 
+        elif block_type == "server_tool_use":
+            server_tool_start: Final = {  # mutable-ok: SSE event dict
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {  # mutable-ok: SSE event dict
+                    "type": "server_tool_use",
+                    "id": block_dict.get("id"),
+                    "name": block_dict.get("name"),
+                    "input": {},  # mutable-ok: protocol sends empty input in content_block_start
+                },
+            }
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(server_tool_start)}\n\n".encode())
+            server_tool_delta: Final = {  # mutable-ok: SSE event dict
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {  # mutable-ok: SSE event dict
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps(block_dict.get("input", {})),  # mutable-ok: json.dumps input default
+                },
+            }
+            chunks.append(f"event: content_block_delta\ndata: {json.dumps(server_tool_delta)}\n\n".encode())
+
         else:
-            passthrough_start: Final = {
+            # Anthropic does not delta server-generated result blocks either
+            passthrough_start: Final = {  # mutable-ok: SSE event dict
                 "type": "content_block_start",
                 "index": index,
                 "content_block": block_dict,
