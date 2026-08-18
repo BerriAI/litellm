@@ -1,7 +1,15 @@
-import type { FormInstance, UploadProps } from "antd";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import type { ComponentProps } from "react";
 
-export function vertexCredentialsUploadProps(form: FormInstance): UploadProps {
+import { toast } from "@/lib/toast";
+import type CredentialsPanel from "@/components/model_add/CredentialsPanel";
+
+interface VertexCredentialsForm {
+  setFieldsValue: (values: { vertex_credentials: string }) => void;
+}
+
+type UploadProps = ComponentProps<typeof CredentialsPanel>["uploadProps"];
+
+export function vertexCredentialsUploadProps(form: VertexCredentialsForm): UploadProps {
   return {
     name: "file",
     accept: ".json",
@@ -20,9 +28,9 @@ export function vertexCredentialsUploadProps(form: FormInstance): UploadProps {
     },
     onChange(info) {
       if (info.file.status === "done") {
-        NotificationsManager.success(`${info.file.name} file uploaded successfully`);
+        toast.success(`${info.file.name} file uploaded successfully`);
       } else if (info.file.status === "error") {
-        NotificationsManager.fromBackend(`${info.file.name} file upload failed.`);
+        toast.fromError(`${info.file.name} file upload failed.`);
       }
     },
   };

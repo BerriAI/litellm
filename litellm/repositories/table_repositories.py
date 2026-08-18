@@ -42,6 +42,10 @@ class AgentsRepository(PrismaTableRepository):
     table_name = "litellm_agentstable"
 
 
+class ObjectPermissionRepository(PrismaTableRepository):
+    table_name = "litellm_objectpermissiontable"
+
+
 class GuardrailsRepository(PrismaTableRepository):
     table_name = "litellm_guardrailstable"
 
@@ -152,6 +156,10 @@ class UISettingsRepository(PrismaTableRepository):
 
 class DailyGuardrailMetricsRepository(PrismaTableRepository):
     table_name = "litellm_dailyguardrailmetrics"
+
+
+class DailyGuardrailUsageUnitsRepository(PrismaTableRepository):
+    table_name = "litellm_dailyguardrailusageunits"
 
 
 class PolicyAttachmentRepository(PrismaTableRepository):

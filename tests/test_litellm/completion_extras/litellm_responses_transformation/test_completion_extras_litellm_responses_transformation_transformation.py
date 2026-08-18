@@ -2474,7 +2474,9 @@ def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
             {"type": "function", "name": "foo", "function": {"name": "bar"}},
             {"type": "function", "name": "foo"},
         ),
-        ({"type": "required"}, {"type": "required"}),
+        ({"type": "auto"}, "auto"),
+        ({"type": "none"}, "none"),
+        ({"type": "required"}, "required"),
         (
             {"type": "custom", "custom": {"name": "ApplyPatch"}},
             {"type": "custom", "name": "ApplyPatch"},
@@ -3400,3 +3402,86 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
     )
     assert chunk.choices[0].delta.tool_calls is None
     assert chunk.choices[0].finish_reason is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice,expected_wire_tool_choice",
+    [
+        ({"type": "auto"}, "auto"),
+        ({"type": "none"}, "none"),
+        ({"type": "required"}, "required"),
+        ("auto", "auto"),
+        ({"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "name": "get_weather"}),
+    ],
+)
+async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
+    tool_choice: str | dict[str, object],
+    expected_wire_tool_choice: str | dict[str, str],
+) -> None:
+    """Object-wrapped tool_choice must never reach /v1/responses."""
+    from unittest.mock import AsyncMock
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    responses_payload = {
+        "id": "resp_bridge_tool_choice",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": None,
+        "temperature": None,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": None,
+        "truncation": None,
+        "user": None,
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = json.dumps(responses_payload)
+    mock_response.headers = httpx.Headers({})
+    mock_response.json.return_value = responses_payload
+
+    with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+
+        await litellm.acompletion(
+            model="openai/responses/gpt-5.5",
+            messages=[{"role": "user", "content": "what is the DJIA today"}],
+            api_key="fake-api-key",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            tool_choice=tool_choice,
+        )
+
+    mock_post.assert_called_once()
+    post_kwargs = mock_post.call_args.kwargs
+    request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+    assert request_body["tool_choice"] == expected_wire_tool_choice

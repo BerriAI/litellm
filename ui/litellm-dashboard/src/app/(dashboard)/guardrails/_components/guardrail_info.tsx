@@ -11,7 +11,7 @@ import { Badge, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, T
 import { Button, Divider, Form, Input, Select, Tooltip } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useCallback, useEffect, useState } from "react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
@@ -147,7 +147,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         setSelectedPiiActions({});
       }
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to load guardrail information");
+      toast.fromError("Failed to load guardrail information");
       console.error("Error fetching guardrail info:", error);
     } finally {
       setLoading(false);
@@ -421,19 +421,19 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
       // Only proceed with update if there are actual changes
       if (Object.keys(updateData).length === 0) {
-        NotificationsManager.info("No changes detected");
+        toast.info("No changes detected");
         setIsEditing(false);
         return;
       }
 
       await updateGuardrailCall(accessToken, guardrailId, updateData);
-      NotificationsManager.success("Guardrail updated successfully");
+      toast.success("Guardrail updated successfully");
       setHasUnsavedContentFilterChanges(false);
       fetchGuardrailInfo();
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating guardrail:", error);
-      NotificationsManager.fromBackend("Failed to update guardrail");
+      toast.fromError("Failed to update guardrail");
     }
   };
 

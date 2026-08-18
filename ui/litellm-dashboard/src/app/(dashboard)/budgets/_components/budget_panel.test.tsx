@@ -25,10 +25,6 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ accessToken: "sk-test", userRole: "Admin", userId: "u1" }),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), info: vi.fn(), fromBackend: vi.fn() },
-}));
-
 interface BudgetSeed {
   budget_id: string;
   max_budget: number | null;

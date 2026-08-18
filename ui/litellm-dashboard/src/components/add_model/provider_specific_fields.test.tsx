@@ -150,17 +150,15 @@ describe("ProviderSpecificFields", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => {
-      const apiKeyLabel = screen.getByLabelText("OpenAI API Key");
-      expect(apiKeyLabel).toBeInTheDocument();
+    const apiKeyLabel = await screen.findByLabelText("OpenAI API Key");
+    expect(apiKeyLabel).toBeInTheDocument();
 
-      const apiBaseInput = screen.getByPlaceholderText("https://api.openai.com/v1");
-      expect(apiBaseInput).toBeInTheDocument();
-      expect(apiBaseInput).toHaveAttribute("type", "text");
+    const apiBaseInput = screen.getByPlaceholderText("https://api.openai.com/v1");
+    expect(apiBaseInput).toBeInTheDocument();
+    expect(apiBaseInput).toHaveAttribute("type", "text");
 
-      const orgInput = screen.getByPlaceholderText("[OPTIONAL] my-unique-org");
-      expect(orgInput).toBeInTheDocument();
-    });
+    const orgInput = screen.getByPlaceholderText("[OPTIONAL] my-unique-org");
+    expect(orgInput).toBeInTheDocument();
   });
 
   it("should render the provider specific fields for vLLM", async () => {
@@ -173,14 +171,12 @@ describe("ProviderSpecificFields", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => {
-      const apiKeyLabel = screen.getByLabelText("vLLM API Key");
-      expect(apiKeyLabel).toBeInTheDocument();
+    const apiKeyLabel = await screen.findByLabelText("vLLM API Key");
+    expect(apiKeyLabel).toBeInTheDocument();
 
-      const apiBaseInput = screen.getByPlaceholderText("https://...");
-      expect(apiBaseInput).toBeInTheDocument();
-      expect(apiBaseInput).toHaveAttribute("type", "text");
-    });
+    const apiBaseInput = screen.getByPlaceholderText("https://...");
+    expect(apiBaseInput).toBeInTheDocument();
+    expect(apiBaseInput).toHaveAttribute("type", "text");
   });
 
   it("should render the provider specific fields for Azure", async () => {
@@ -193,27 +189,25 @@ describe("ProviderSpecificFields", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => {
-      const apiKeyInput = screen.getByLabelText("Azure API Key");
-      expect(apiKeyInput).toBeInTheDocument();
-      expect(apiKeyInput).toHaveAttribute("type", "password");
-      expect(apiKeyInput).toHaveAttribute("placeholder", "Enter your Azure API Key");
+    const apiKeyInput = await screen.findByLabelText("Azure API Key");
+    expect(apiKeyInput).toBeInTheDocument();
+    expect(apiKeyInput).toHaveAttribute("type", "password");
+    expect(apiKeyInput).toHaveAttribute("placeholder", "Enter your Azure API Key");
 
-      const azureAdTokenInput = screen.getByLabelText("Azure AD Token");
-      expect(azureAdTokenInput).toBeInTheDocument();
-      expect(azureAdTokenInput).toHaveAttribute("type", "password");
-      expect(azureAdTokenInput).toHaveAttribute("placeholder", "Enter your Azure AD Token");
+    const azureAdTokenInput = screen.getByLabelText("Azure AD Token");
+    expect(azureAdTokenInput).toBeInTheDocument();
+    expect(azureAdTokenInput).toHaveAttribute("type", "password");
+    expect(azureAdTokenInput).toHaveAttribute("placeholder", "Enter your Azure AD Token");
 
-      const apiBaseInput = screen.getByPlaceholderText("https://...");
-      expect(apiBaseInput).toBeInTheDocument();
-      expect(apiBaseInput).toHaveAttribute("type", "text");
+    const apiBaseInput = screen.getByPlaceholderText("https://...");
+    expect(apiBaseInput).toBeInTheDocument();
+    expect(apiBaseInput).toHaveAttribute("type", "text");
 
-      const apiVersionInput = screen.getByPlaceholderText("2023-07-01-preview");
-      expect(apiVersionInput).toBeInTheDocument();
+    const apiVersionInput = screen.getByPlaceholderText("2023-07-01-preview");
+    expect(apiVersionInput).toBeInTheDocument();
 
-      const baseModelInput = screen.getByPlaceholderText("azure/gpt-3.5-turbo");
-      expect(baseModelInput).toBeInTheDocument();
-    });
+    const baseModelInput = screen.getByPlaceholderText("azure/gpt-3.5-turbo");
+    expect(baseModelInput).toBeInTheDocument();
   });
 
   it("sets Azure API version from the API base query parameter", async () => {

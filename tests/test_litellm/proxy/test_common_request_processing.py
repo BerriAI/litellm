@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import datetime
+import json
 from types import SimpleNamespace
 from typing import AsyncGenerator, Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -833,6 +834,180 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-margin-amount" not in headers
         assert "x-litellm-response-cost-margin-percent" not in headers
 
+    def test_get_custom_headers_per_component_cost_breakdown(self):
+        """Test per-component cost headers against the stored production breakdown.
+
+        cost_calculator stores full prompt cost (cache pricing included) as input_cost
+        and full completion cost (reasoning included) as output_cost. The input header
+        subtracts the cache components so the emitted contract is additive:
+        input + cache_read + cache_creation + output + tool_usage == total, with
+        reasoning remaining a subset of output.
+        """
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-components",
+            function_id="test-function",
+        )
+
+        input_cost: Final = 0.00002
+        output_cost: Final = 0.00004
+        cache_read_cost: Final = 0.000005
+        cache_creation_cost: Final = 0.00001
+        reasoning_cost: Final = 0.000015
+        tool_usage_cost: Final = 0.00003
+        total_cost: Final = input_cost + output_cost + tool_usage_cost
+        uncached_input_cost: Final = input_cost - cache_read_cost - cache_creation_cost
+
+        logging_obj.set_cost_breakdown(
+            input_cost=input_cost,
+            output_cost=output_cost,
+            total_cost=total_cost,
+            cost_for_built_in_tools_cost_usd_dollar=tool_usage_cost,
+            cache_read_cost=cache_read_cost,
+            cache_creation_cost=cache_creation_cost,
+            reasoning_cost=reasoning_cost,
+        )
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-components",
+            response_cost=total_cost,
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert "x-litellm-response-cost" in headers
+        assert float(headers["x-litellm-response-cost"]) == pytest.approx(total_cost)
+
+        assert "x-litellm-response-cost-input" in headers
+        assert float(headers["x-litellm-response-cost-input"]) == pytest.approx(uncached_input_cost)
+
+        assert "x-litellm-response-cost-output" in headers
+        assert float(headers["x-litellm-response-cost-output"]) == pytest.approx(output_cost)
+
+        assert "x-litellm-response-cost-cache-read" in headers
+        assert float(headers["x-litellm-response-cost-cache-read"]) == pytest.approx(cache_read_cost)
+
+        assert "x-litellm-response-cost-cache-creation" in headers
+        assert float(headers["x-litellm-response-cost-cache-creation"]) == pytest.approx(cache_creation_cost)
+
+        assert "x-litellm-response-cost-reasoning" in headers
+        assert float(headers["x-litellm-response-cost-reasoning"]) == pytest.approx(reasoning_cost)
+
+        assert "x-litellm-response-cost-tool-usage" in headers
+        assert float(headers["x-litellm-response-cost-tool-usage"]) == pytest.approx(tool_usage_cost)
+
+        component_sum: Final = (
+            float(headers["x-litellm-response-cost-input"])
+            + float(headers["x-litellm-response-cost-cache-read"])
+            + float(headers["x-litellm-response-cost-cache-creation"])
+            + float(headers["x-litellm-response-cost-output"])
+            + float(headers["x-litellm-response-cost-tool-usage"])
+        )
+        assert component_sum == pytest.approx(float(headers["x-litellm-response-cost"]))
+        assert float(headers["x-litellm-response-cost-reasoning"]) <= float(headers["x-litellm-response-cost-output"])
+
+    def test_get_custom_headers_without_cost_breakdown_omits_component_headers(self):
+        """Test that when litellm_logging_obj has no cost_breakdown, component headers are omitted."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-no-breakdown",
+            function_id="test-function",
+        )
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.0001,
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert "x-litellm-response-cost" in headers
+        assert "x-litellm-response-cost-input" not in headers
+        assert "x-litellm-response-cost-output" not in headers
+        assert "x-litellm-response-cost-cache-read" not in headers
+        assert "x-litellm-response-cost-cache-creation" not in headers
+        assert "x-litellm-response-cost-reasoning" not in headers
+        assert "x-litellm-response-cost-tool-usage" not in headers
+
+    def test_get_custom_headers_per_component_with_discount_and_margin(self):
+        """Test that component headers co-exist accurately with discount and margin headers."""
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-combined",
+            function_id="test-function",
+        )
+
+        logging_obj.set_cost_breakdown(
+            input_cost=0.00006,
+            output_cost=0.00004,
+            total_cost=0.000105,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0001,
+            discount_percent=0.05,
+            discount_amount=0.000005,
+            margin_percent=0.10,
+            margin_total_amount=0.00001,
+        )
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            response_cost=0.000105,
+            litellm_logging_obj=logging_obj,
+        )
+
+        assert float(headers["x-litellm-response-cost"]) == pytest.approx(0.000105)
+        assert float(headers["x-litellm-response-cost-original"]) == pytest.approx(0.0001)
+        assert float(headers["x-litellm-response-cost-discount-amount"]) == pytest.approx(0.000005)
+        assert float(headers["x-litellm-response-cost-margin-amount"]) == pytest.approx(0.00001)
+        assert float(headers["x-litellm-response-cost-margin-percent"]) == pytest.approx(0.10)
+        assert float(headers["x-litellm-response-cost-input"]) == pytest.approx(0.00006)
+        assert float(headers["x-litellm-response-cost-output"]) == pytest.approx(0.00004)
+        assert "x-litellm-response-cost-cache-read" not in headers
+        assert "x-litellm-response-cost-cache-creation" not in headers
+        assert "x-litellm-response-cost-reasoning" not in headers
+        assert float(headers["x-litellm-response-cost-tool-usage"]) == pytest.approx(0.0)
+
     @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
     def test_get_custom_headers_classifier_cost_from_routing_decision(self, metadata_key):
         """The auto-router's LLM classifier cost must surface as its own header.
@@ -918,16 +1093,14 @@ class TestProxyBaseLLMRequestProcessing:
             discount_amount=0.000005,
         )
 
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(logging_obj)
-        assert original_cost == 0.0001
-        assert discount_amount == 0.000005
-        assert margin_total_amount is None
-        assert margin_percent is None
+        breakdown = _get_cost_breakdown_from_logging_obj(logging_obj)
+        assert breakdown.original_cost == 0.0001
+        assert breakdown.discount_amount == 0.000005
+        assert breakdown.margin_total_amount is None
+        assert breakdown.margin_percent is None
+        assert breakdown.input_cost == 0.00005
+        assert breakdown.output_cost == 0.00005
+        assert breakdown.tool_usage_cost == 0.0
 
         # Test with margin info
         logging_obj_with_margin = LiteLLMLoggingObj(
@@ -949,16 +1122,11 @@ class TestProxyBaseLLMRequestProcessing:
             margin_total_amount=0.00001,
         )
 
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
-        assert original_cost == 0.0001
-        assert discount_amount is None
-        assert margin_total_amount == 0.00001
-        assert margin_percent == 0.10
+        breakdown_with_margin = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
+        assert breakdown_with_margin.original_cost == 0.0001
+        assert breakdown_with_margin.discount_amount is None
+        assert breakdown_with_margin.margin_total_amount == 0.00001
+        assert breakdown_with_margin.margin_percent == 0.10
 
         # Test with no discount or margin info
         logging_obj_no_discount = LiteLLMLoggingObj(
@@ -977,28 +1145,42 @@ class TestProxyBaseLLMRequestProcessing:
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
 
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
-        assert original_cost is None
-        assert discount_amount is None
-        assert margin_total_amount is None
-        assert margin_percent is None
+        breakdown_no_discount = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
+        assert breakdown_no_discount.original_cost is None
+        assert breakdown_no_discount.discount_amount is None
+        assert breakdown_no_discount.margin_total_amount is None
+        assert breakdown_no_discount.margin_percent is None
+        assert breakdown_no_discount.input_cost == 0.00005
+        assert breakdown_no_discount.output_cost == 0.00005
+
+        # Test that cache components stored nested inside input_cost are subtracted out
+        logging_obj_with_cache = LiteLLMLoggingObj(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id-cache",
+            function_id="test-function-id-cache",
+        )
+        logging_obj_with_cache.set_cost_breakdown(
+            input_cost=0.00008,
+            output_cost=0.00002,
+            total_cost=0.0001,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            cache_read_cost=0.00003,
+            cache_creation_cost=0.00004,
+        )
+
+        breakdown_with_cache = _get_cost_breakdown_from_logging_obj(logging_obj_with_cache)
+        assert breakdown_with_cache.input_cost == pytest.approx(0.00001)
+        assert breakdown_with_cache.cache_read_cost == 0.00003
+        assert breakdown_with_cache.cache_creation_cost == 0.00004
+        assert breakdown_with_cache.output_cost == 0.00002
 
         # Test with None logging object
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(None)
-        assert original_cost is None
-        assert discount_amount is None
-        assert margin_total_amount is None
-        assert margin_percent is None
+        breakdown_none = _get_cost_breakdown_from_logging_obj(None)
+        assert all(value is None for value in breakdown_none)
 
     def test_get_custom_headers_key_spend_includes_response_cost(self):
         """
@@ -5746,3 +5928,132 @@ class TestPerRequestModelGroupAlias:
         )
 
         assert merged_for == ["group-b"]
+
+
+class TestInjectCostIntoUsageDict:
+    @staticmethod
+    def _expected_cost(model, prompt_tokens, completion_tokens):
+        pricing = litellm.model_cost[model]
+        return prompt_tokens * pricing["input_cost_per_token"] + completion_tokens * pricing["output_cost_per_token"]
+
+    def test_openai_chat_completion_chunk_usage_gets_cost(self):
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 4,
+                "total_tokens": 15,
+                "prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini")
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
+        assert result["usage"]["cost"] > 0
+        assert result["usage"]["prompt_tokens"] == 11
+        assert result["id"] == "chatcmpl-1"
+        assert "cost" not in event["usage"]
+
+    def test_anthropic_message_delta_usage_still_gets_cost(self):
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 11, "output_tokens": 4},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "claude-haiku-4-5")
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(self._expected_cost("claude-haiku-4-5", 11, 4))
+        assert result["usage"]["cost"] > 0
+        assert result["usage"]["output_tokens"] == 4
+
+    def test_openai_chunk_with_flex_service_tier_uses_flex_pricing(self):
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "service_tier": "flex",
+            "choices": [],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-5-mini")
+
+        assert result is not None
+        pricing = litellm.model_cost["gpt-5-mini"]
+        expected_flex_cost = 1000 * pricing["input_cost_per_token_flex"] + 100 * pricing["output_cost_per_token_flex"]
+        assert result["usage"]["cost"] == pytest.approx(expected_flex_cost)
+        assert result["usage"]["cost"] < self._expected_cost("gpt-5-mini", 1000, 100)
+
+    def test_openai_chunk_with_null_usage_is_not_modified(self):
+        event = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": "Hi"}}],
+            "usage": None,
+        }
+
+        assert ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini") is None
+
+    def test_unrecognized_event_shape_with_usage_is_not_modified(self):
+        event = {"kind": "custom", "usage": {"prompt_tokens": 11, "completion_tokens": 4}}
+
+        assert ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, "gpt-4o-mini") is None
+
+    def test_sse_frame_with_coalesced_done_line_injects_into_usage_frame(self):
+        frame = (
+            'data: {"object":"chat.completion.chunk","choices":[],'
+            '"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+            "data: [DONE]\n\n"
+        )
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(frame, "gpt-4o-mini")
+
+        assert result is not None
+        assert "data: [DONE]" in result
+        injected = json.loads(result.split("\n")[0].split("data:", 1)[1].strip())
+        assert injected["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
+
+
+class TestProcessChunkWithCostInjection:
+    def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = (
+            b'data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+        )
+
+        result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini")
+
+        assert result != chunk
+        assert result.endswith(b"\n\n")
+        payload = json.loads(result.decode("utf-8").split("data:", 1)[1].strip())
+        assert payload["usage"]["cost"] > 0
+
+    def test_chunk_ending_in_partial_frame_passes_through_byte_identical(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = (
+            b'data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\ndata: [DO'
+        )
+
+        assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk
+
+    def test_chunk_with_invalid_utf8_passes_through_byte_identical(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = (
+            b'\xa8data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+        )
+
+        assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk

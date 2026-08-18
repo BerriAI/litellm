@@ -13,6 +13,7 @@ import ast
 import asyncio
 import json
 import os
+from collections.abc import Callable, Mapping
 from typing import Any, Final, cast
 
 import litellm
@@ -47,7 +48,7 @@ class RedisSemanticCache(BaseCache):
         similarity_threshold: float | None = None,
         embedding_model: str = "text-embedding-ada-002",
         index_name: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         """
         Initialize the Redis Semantic Cache.
@@ -150,11 +151,11 @@ class RedisSemanticCache(BaseCache):
 
     def _init_semantic_cache(
         self,
-        semantic_cache_cls: Any,
+        semantic_cache_cls: Callable[..., object],
         index_name: str,
         redis_url: str,
-        cache_vectorizer: Any,
-    ) -> Any:
+        cache_vectorizer: object,
+    ) -> object:
         def _is_schema_mismatch(exc: ValueError) -> bool:
             error_message: Final = str(exc).lower()
             return any(phrase in error_message for phrase in ("schema does not match", "index schema"))
@@ -206,12 +207,12 @@ class RedisSemanticCache(BaseCache):
     def _get_cache_filters(self, key: str) -> dict[str, str]:
         return {self.CACHE_KEY_FIELD_NAME: str(key)}
 
-    def _get_cache_key_filter_expression(self, key: str) -> Any:
+    def _get_cache_key_filter_expression(self, key: str) -> object:
         from redisvl.query.filter import Tag
 
         return Tag(self.CACHE_KEY_FIELD_NAME) == str(key)
 
-    def _cache_hit_matches_key(self, cache_hit: dict[str, Any], key: str) -> bool:
+    def _cache_hit_matches_key(self, cache_hit: Mapping[str, object], key: str) -> bool:
         # Pre-isolation entries with no ``litellm_cache_key`` field cannot be
         # safely reassigned to a caller's scope and are treated as misses.
         cached_key = cache_hit.get(self.CACHE_KEY_FIELD_NAME)
@@ -297,7 +298,7 @@ class RedisSemanticCache(BaseCache):
                     return
 
     @staticmethod
-    def _coerce_response_input_value(value: Any) -> Any:
+    def _coerce_response_input_value(value: object) -> object:
         model_dump: Final = getattr(value, "model_dump", None)
         if callable(model_dump):
             return model_dump()
@@ -340,7 +341,7 @@ class RedisSemanticCache(BaseCache):
             )
         return embedding_response["data"][0]["embedding"]
 
-    def _get_cache_logic(self, cached_response: Any) -> Any:
+    def _get_cache_logic(self, cached_response: Any) -> object:
         """
         Process the cached response to prepare it for use.
 
@@ -369,7 +370,7 @@ class RedisSemanticCache(BaseCache):
 
         return cached_response
 
-    def set_cache(self, key: str, value: Any, **kwargs) -> None:
+    def set_cache(self, key: str, value: object, **kwargs) -> None:
         """
         Store a value in the semantic cache.
 
@@ -405,7 +406,7 @@ class RedisSemanticCache(BaseCache):
         except Exception as e:
             print_verbose(f"Error setting {value_str or value} in the Redis semantic cache: {e}")
 
-    def get_cache(self, key: str, **kwargs) -> Any:
+    def get_cache(self, key: str, **kwargs) -> object:
         """
         Retrieve a semantically similar cached response.
 
@@ -428,7 +429,7 @@ class RedisSemanticCache(BaseCache):
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
             prompt_embedding: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
-            check_kwargs: Final[dict[str, Any]] = {
+            check_kwargs: Final[Mapping[str, object]] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
                 "filter_expression": self._get_cache_key_filter_expression(key),
@@ -508,7 +509,7 @@ class RedisSemanticCache(BaseCache):
             print_verbose(f"Error generating async embedding: {e}")
             raise ValueError(f"Failed to generate embedding: {e}") from e
 
-    async def async_set_cache(self, key: str, value: Any, **kwargs) -> None:
+    async def async_set_cache(self, key: str, value: object, **kwargs) -> None:
         """
         Asynchronously store a value in the semantic cache.
 
@@ -548,7 +549,7 @@ class RedisSemanticCache(BaseCache):
         except Exception as e:
             print_verbose(f"Error in async_set_cache: {e}")
 
-    async def async_get_cache(self, key: str, **kwargs) -> Any:
+    async def async_get_cache(self, key: str, **kwargs) -> object:
         """
         Asynchronously retrieve a semantically similar cached response.
 
@@ -573,7 +574,7 @@ class RedisSemanticCache(BaseCache):
 
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
-            check_kwargs: Final[dict[str, Any]] = {
+            check_kwargs: Final[Mapping[str, object]] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
                 "filter_expression": self._get_cache_key_filter_expression(key),
@@ -615,7 +616,7 @@ class RedisSemanticCache(BaseCache):
             print_verbose(f"Error in async_get_cache: {e}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
-    async def _index_info(self) -> dict[str, Any]:
+    async def _index_info(self) -> Mapping[str, object]:
         """
         Get information about the Redis index.
 
@@ -625,7 +626,7 @@ class RedisSemanticCache(BaseCache):
         aindex: Final = await self.llmcache._get_async_index()
         return await aindex.info()
 
-    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, Any]], **kwargs) -> None:
+    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, Any]], **kwargs: object) -> None:
         """
         Asynchronously store multiple values in the semantic cache.
 

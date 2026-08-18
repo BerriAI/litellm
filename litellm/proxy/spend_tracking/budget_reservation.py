@@ -24,6 +24,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key, tag_cache_key
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 
@@ -156,6 +157,7 @@ async def reserve_budget_for_request(
     proxy_logging_obj: ProxyLogging,
     end_user_id: str | None = None,
     end_user_object: Any | None = None,
+    apply_user_budget_to_team_keys: bool = False,
     fail_closed_budget_enforcement: bool = False,
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
@@ -175,6 +177,7 @@ async def reserve_budget_for_request(
         proxy_logging_obj=proxy_logging_obj,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
+        apply_user_budget_to_team_keys=apply_user_budget_to_team_keys,
     )
     if not counters:
         return None
@@ -332,6 +335,7 @@ async def _get_budget_counters(
     proxy_logging_obj: ProxyLogging,
     end_user_id: str | None = None,
     end_user_object: Any | None = None,
+    apply_user_budget_to_team_keys: bool = False,
 ) -> list[_BudgetCounter]:
     counters: Final[list[_BudgetCounter]] = []
 
@@ -380,8 +384,9 @@ async def _get_budget_counters(
             )
         )
 
+    is_team_key: Final = team_object is not None and team_object.team_id is not None
     if (
-        (team_object is None or team_object.team_id is None)
+        (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
         and user_object.user_id is not None
         and user_object.max_budget is not None
@@ -444,7 +449,7 @@ async def _get_end_user_budget_counter(
     if end_user_id is None:
         return None
 
-    source_cache_key: Final = f"end_user_id:{end_user_id}"
+    source_cache_key: Final = end_user_cache_key(end_user_id)
     max_budget = _to_float(valid_token.end_user_max_budget)
     fallback_spend = 0.0
     if end_user_object is not None:
@@ -498,7 +503,7 @@ async def _get_tag_budget_counters(
         counters.append(
             _BudgetCounter(
                 counter_key=f"spend:tag:{tag_name}",
-                source_cache_key=f"tag:{tag_name}",
+                source_cache_key=tag_cache_key(tag_name),
                 max_budget=max_budget,
                 fallback_spend=_to_float(_get_value(tag_object, "spend")) or 0.0,
                 entity_type="Tag",
