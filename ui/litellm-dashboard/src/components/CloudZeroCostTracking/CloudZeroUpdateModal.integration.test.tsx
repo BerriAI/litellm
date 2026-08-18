@@ -105,6 +105,17 @@ describe("CloudZeroUpdateModal submit payload", () => {
     expect(screen.getByLabelText("Timezone")).toHaveValue("UTC");
   });
 
+  it("reports a null connection id from the server as the required field, not as a type error", async () => {
+    const user = userEvent.setup();
+    renderModal({ ...STORED_SETTINGS, connection_id: null, timezone: null });
+
+    await user.click(screen.getByRole("button", { name: "Update" }));
+
+    expect(await screen.findByText("Please enter your CloudZero connection ID")).toBeInTheDocument();
+    expect(screen.queryByText(/expected string, received null/i)).not.toBeInTheDocument();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
   it("blocks submission when the connection id is cleared, and leaves the key optional", async () => {
     const user = userEvent.setup();
     renderModal();
