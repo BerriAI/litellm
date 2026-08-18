@@ -216,6 +216,59 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     },
   };
 
+  const renderFieldControl = (field: ProviderCredentialField) => {
+    if (field.type === "select") {
+      return (
+        <Select placeholder={field.placeholder} defaultValue={field.defaultValue}>
+          {field.options?.map((option) => (
+            <Select.Option key={option} value={option}>
+              {option}
+            </Select.Option>
+          ))}
+        </Select>
+      );
+    }
+
+    if (field.type === "upload") {
+      return (
+        <Upload
+          {...handleUpload}
+          onChange={(info) => {
+            if (uploadProps?.onChange) {
+              uploadProps.onChange(info);
+            }
+          }}
+        >
+          <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
+        </Upload>
+      );
+    }
+
+    if (field.type === "textarea") {
+      return (
+        <AntdInput.TextArea
+          placeholder={field.placeholder}
+          defaultValue={field.defaultValue}
+          rows={6}
+          style={{ fontFamily: "monospace", fontSize: "12px" }}
+        />
+      );
+    }
+
+    if (field.type === "password") {
+      return <AntdInput.Password placeholder={field.placeholder} defaultValue={field.defaultValue} />;
+    }
+
+    return (
+      <Input
+        placeholder={field.placeholder}
+        type="text"
+        defaultValue={field.defaultValue}
+        onChange={field.key === "api_base" ? handleApiBaseChange : undefined}
+      />
+    );
+  };
+
   return (
     <>
       {isLoading && allFields.length === 0 && (
@@ -243,40 +296,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
-            {field.type === "select" ? (
-              <Select placeholder={field.placeholder} defaultValue={field.defaultValue}>
-                {field.options?.map((option) => (
-                  <Select.Option key={option} value={option}>
-                    {option}
-                  </Select.Option>
-                ))}
-              </Select>
-            ) : field.type === "upload" ? (
-              <Upload
-                {...handleUpload}
-                onChange={(info) => {
-                  if (uploadProps?.onChange) {
-                    uploadProps.onChange(info);
-                  }
-                }}
-              >
-                <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
-              </Upload>
-            ) : field.type === "textarea" ? (
-              <AntdInput.TextArea
-                placeholder={field.placeholder}
-                defaultValue={field.defaultValue}
-                rows={6}
-                style={{ fontFamily: "monospace", fontSize: "12px" }}
-              />
-            ) : (
-              <Input
-                placeholder={field.placeholder}
-                type={field.type === "password" ? "password" : "text"}
-                defaultValue={field.defaultValue}
-                onChange={field.key === "api_base" ? handleApiBaseChange : undefined}
-              />
-            )}
+            {renderFieldControl(field)}
           </Form.Item>
 
           {/* Special case for Vertex Credentials help text */}
