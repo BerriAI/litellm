@@ -1,15 +1,8 @@
 import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Text,
-  Title,
-  Button,
-  Badge,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
-  Title as TremorTitle,
-} from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Form, Input, Select as Select2, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
@@ -20,7 +13,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import NumericalInput from "@/components/shared/numerical_input";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, ChevronDown, CopyIcon } from "lucide-react";
 import { Button as AntdButton } from "antd";
 
 interface TagInfoViewProps {
@@ -116,7 +109,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
             ← Back to Tags
           </Button>
           <div className="flex items-center gap-2">
-            <Text className="font-medium">Tag Name:</Text>
+            <span className="text-sm font-medium">Tag Name:</span>
             <span className="font-mono px-2 py-1 bg-gray-100 rounded-sm text-sm border border-gray-200">
               {tagDetails.name}
             </span>
@@ -132,13 +125,13 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               }`}
             />
           </div>
-          <Text className="text-gray-500">{tagDetails.description || "No description"}</Text>
+          <p className="text-sm text-gray-500">{tagDetails.description || "No description"}</p>
         </div>
         {is_admin && !isEditing && <Button onClick={() => setIsEditing(true)}>Edit Tag</Button>}
       </div>
 
       {isEditing ? (
-        <Card>
+        <Card className="block p-6">
           <Form form={form} onFinish={handleSave} layout="vertical" initialValues={tagDetails}>
             <Form.Item label="Tag Name" name="name" rules={[{ required: true, message: "Please input a tag name" }]}>
               <Input className="rounded-md border-gray-300" />
@@ -168,11 +161,12 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               </Select2>
             </Form.Item>
 
-            <Accordion className="mt-4 mb-4">
-              <AccordionHeader>
-                <TremorTitle className="m-0">Budget & Rate Limits</TremorTitle>
-              </AccordionHeader>
-              <AccordionBody>
+            <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+              <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                <span className="text-lg font-medium">Budget & Rate Limits</span>
+                <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="px-4 pb-3">
                 <Form.Item
                   label={
                     <span>
@@ -215,8 +209,8 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                     .
                   </p>
                 </div>
-              </AccordionBody>
-            </Accordion>
+              </CollapsibleContent>
+            </Collapsible>
 
             <div className="flex justify-end space-x-2">
               <Button onClick={() => setIsEditing(false)}>Cancel</Button>
@@ -227,73 +221,77 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
       ) : (
         <div className="space-y-6">
           <Card>
-            <Title>Tag Details</Title>
-            <div className="space-y-4 mt-4">
-              <div>
-                <Text className="font-medium">Name</Text>
-                <Text>{tagDetails.name}</Text>
-              </div>
-              <div>
-                <Text className="font-medium">Description</Text>
-                <Text>{tagDetails.description || "-"}</Text>
-              </div>
-              <div>
-                <Text className="font-medium">Allowed Models</Text>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {!tagDetails.models || tagDetails.models.length === 0 ? (
-                    <Badge color="red">All Models</Badge>
-                  ) : (
-                    tagDetails.models.map((modelId) => (
-                      <Badge key={modelId} color="blue">
-                        <Tooltip title={`ID: ${modelId}`}>{tagDetails.model_info?.[modelId] || modelId}</Tooltip>
-                      </Badge>
-                    ))
-                  )}
+            <CardContent>
+              <CardTitle>Tag Details</CardTitle>
+              <div className="space-y-4 mt-4">
+                <div>
+                  <p className="font-medium">Name</p>
+                  <p>{tagDetails.name}</p>
+                </div>
+                <div>
+                  <p className="font-medium">Description</p>
+                  <p>{tagDetails.description || "-"}</p>
+                </div>
+                <div>
+                  <p className="font-medium">Allowed Models</p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {!tagDetails.models || tagDetails.models.length === 0 ? (
+                      <Badge variant="secondary">All Models</Badge>
+                    ) : (
+                      tagDetails.models.map((modelId) => (
+                        <Badge key={modelId} variant="secondary">
+                          <Tooltip title={`ID: ${modelId}`}>{tagDetails.model_info?.[modelId] || modelId}</Tooltip>
+                        </Badge>
+                      ))
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <p className="font-medium">Created</p>
+                  <p>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</p>
+                </div>
+                <div>
+                  <p className="font-medium">Last Updated</p>
+                  <p>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</p>
                 </div>
               </div>
-              <div>
-                <Text className="font-medium">Created</Text>
-                <Text>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</Text>
-              </div>
-              <div>
-                <Text className="font-medium">Last Updated</Text>
-                <Text>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</Text>
-              </div>
-            </div>
+            </CardContent>
           </Card>
 
           {tagDetails.litellm_budget_table && (
             <Card>
-              <Title>Budget & Rate Limits</Title>
-              <div className="space-y-4 mt-4">
-                {tagDetails.litellm_budget_table.max_budget !== undefined &&
-                  tagDetails.litellm_budget_table.max_budget !== null && (
+              <CardContent>
+                <CardTitle>Budget & Rate Limits</CardTitle>
+                <div className="space-y-4 mt-4">
+                  {tagDetails.litellm_budget_table.max_budget !== undefined &&
+                    tagDetails.litellm_budget_table.max_budget !== null && (
+                      <div>
+                        <p className="font-medium">Max Budget</p>
+                        <p>${tagDetails.litellm_budget_table.max_budget}</p>
+                      </div>
+                    )}
+                  {tagDetails.litellm_budget_table.budget_duration && (
                     <div>
-                      <Text className="font-medium">Max Budget</Text>
-                      <Text>${tagDetails.litellm_budget_table.max_budget}</Text>
+                      <p className="font-medium">Budget Duration</p>
+                      <p>{tagDetails.litellm_budget_table.budget_duration}</p>
                     </div>
                   )}
-                {tagDetails.litellm_budget_table.budget_duration && (
-                  <div>
-                    <Text className="font-medium">Budget Duration</Text>
-                    <Text>{tagDetails.litellm_budget_table.budget_duration}</Text>
-                  </div>
-                )}
-                {tagDetails.litellm_budget_table.tpm_limit !== undefined &&
-                  tagDetails.litellm_budget_table.tpm_limit !== null && (
-                    <div>
-                      <Text className="font-medium">TPM Limit</Text>
-                      <Text>{tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}</Text>
-                    </div>
-                  )}
-                {tagDetails.litellm_budget_table.rpm_limit !== undefined &&
-                  tagDetails.litellm_budget_table.rpm_limit !== null && (
-                    <div>
-                      <Text className="font-medium">RPM Limit</Text>
-                      <Text>{tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}</Text>
-                    </div>
-                  )}
-              </div>
+                  {tagDetails.litellm_budget_table.tpm_limit !== undefined &&
+                    tagDetails.litellm_budget_table.tpm_limit !== null && (
+                      <div>
+                        <p className="font-medium">TPM Limit</p>
+                        <p>{tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}</p>
+                      </div>
+                    )}
+                  {tagDetails.litellm_budget_table.rpm_limit !== undefined &&
+                    tagDetails.litellm_budget_table.rpm_limit !== null && (
+                      <div>
+                        <p className="font-medium">RPM Limit</p>
+                        <p>{tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}</p>
+                      </div>
+                    )}
+                </div>
+              </CardContent>
             </Card>
           )}
         </div>

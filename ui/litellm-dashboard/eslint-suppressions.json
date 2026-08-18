@@ -1366,7 +1366,7 @@
   },
   "src/app/(dashboard)/search-tools/_components/CreateSearchTools.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1377,7 +1377,7 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/static-components": {
       "count": 1
@@ -1408,7 +1408,7 @@
   },
   "src/app/(dashboard)/tag-management/_components/components/CreateTagModal.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/tag-management/_components/index.tsx": {
@@ -1429,7 +1429,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1550,7 +1550,7 @@
   },
   "src/app/(dashboard)/vector-stores/_components/CreateVectorStore.tsx": {
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/app/(dashboard)/vector-stores/_components/S3VectorsConfig.tsx": {
@@ -1563,7 +1563,7 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react/no-unescaped-entities": {
       "count": 1
@@ -1582,7 +1582,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1

@@ -1,12 +1,14 @@
 import { isAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, TextInput } from "@tremor/react";
-import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
+import { Form, Input as AntdInput, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useState } from "react";
 import { Logo } from "@/components/molecules/logo/Logo";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import SearchConnectionTest from "./SearchConnectionTest";
 import { AvailableSearchProvider, SearchTool } from "./types";
 import dataforseoLogo from "../../../../../public/assets/logos/dataforseo.png";
@@ -17,7 +19,7 @@ import parallelAiLogo from "../../../../../public/assets/logos/parallel_ai.png";
 import perplexityLogo from "../../../../../public/assets/logos/perplexity.png";
 import tavilyLogo from "../../../../../public/assets/logos/tavily.png";
 
-const { TextArea } = Input;
+const { TextArea } = AntdInput;
 
 const searchProviderLogoMap: Record<string, string> = {
   perplexity: perplexityLogo.src,
@@ -188,7 +190,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
                 },
               ]}
             >
-              <TextInput
+              <Input
                 placeholder="e.g., perplexity-search, my-tavily-tool"
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
@@ -247,7 +249,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               name="api_key"
               rules={[{ required: false, message: "Please enter an API key" }]}
             >
-              <TextInput
+              <Input
                 type="password"
                 placeholder="Enter your API key"
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
@@ -273,10 +275,12 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               </Typography.Link>
             </Tooltip>
             <div className="space-x-2">
-              <Button onClick={handleTestConnection} loading={isTestingConnection}>
+              <Button onClick={handleTestConnection} disabled={isTestingConnection} aria-busy={isTestingConnection}>
+                {isTestingConnection && <UiLoadingSpinner className="size-4" />}
                 Test Connection
               </Button>
-              <Button loading={isLoading} type="submit">
+              <Button type="submit" disabled={isLoading} aria-busy={isLoading}>
+                {isLoading && <UiLoadingSpinner className="size-4" />}
                 Add Search Tool
               </Button>
             </div>

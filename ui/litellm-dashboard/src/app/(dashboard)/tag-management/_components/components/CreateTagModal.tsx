@@ -1,9 +1,12 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Accordion, AccordionBody, AccordionHeader, Button, TextInput, Title } from "@tremor/react";
-import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
+import { Form, Input as AntdInput, Modal, Select as Select2, Tooltip } from "antd";
+import { ChevronDown } from "lucide-react";
 import React from "react";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import NumericalInput from "@/components/shared/numerical_input";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
 
 interface ModelInfo {
   model_name: string;
@@ -39,11 +42,11 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
     <Modal title="Create New Tag" open={visible} width={800} footer={null} onCancel={handleCancel}>
       <Form form={form} onFinish={handleFinish} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
         <Form.Item label="Tag Name" name="tag_name" rules={[{ required: true, message: "Please input a tag name" }]}>
-          <TextInput />
+          <Input />
         </Form.Item>
 
         <Form.Item label="Description" name="description">
-          <Input.TextArea rows={4} />
+          <AntdInput.TextArea rows={4} />
         </Form.Item>
 
         <Form.Item
@@ -69,11 +72,12 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
           </Select2>
         </Form.Item>
 
-        <Accordion className="mt-4 mb-4">
-          <AccordionHeader>
-            <Title className="m-0">Budget & Rate Limits (Optional)</Title>
-          </AccordionHeader>
-          <AccordionBody>
+        <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+          <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+            <span className="text-lg font-medium">Budget & Rate Limits (Optional)</span>
+            <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="px-4 pb-3">
             <Form.Item
               className="mt-4"
               label={
@@ -117,8 +121,8 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
                 .
               </p>
             </div>
-          </AccordionBody>
-        </Accordion>
+          </CollapsibleContent>
+        </Collapsible>
 
         <div style={{ textAlign: "right", marginTop: "10px" }}>
           <Button type="submit">Create Tag</Button>

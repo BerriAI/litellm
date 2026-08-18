@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Form, Input, Select as Select2, Tooltip, Button as AntButton } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { ArrowLeft } from "lucide-react";
 import {
   vectorStoreInfoCall,
   vectorStoreUpdateCall,
@@ -121,13 +124,14 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   if (loadFailed) {
     return (
       <div className="p-4 max-w-full">
-        <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onClose}>
+        <Button variant="ghost" className="mb-4" onClick={onClose}>
+          <ArrowLeft />
           Back to Vector Stores
         </Button>
-        <Title>Vector store not found</Title>
-        <Text className="text-gray-500">
+        <h1 className="text-xl font-semibold">Vector store not found</h1>
+        <p className="text-sm text-gray-500">
           Vector store {vectorStoreId} could not be loaded. It may have been deleted.
-        </Text>
+        </p>
       </div>
     );
   }
@@ -140,202 +144,203 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onClose}>
+          <Button variant="ghost" className="mb-4" onClick={onClose}>
+            <ArrowLeft />
             Back to Vector Stores
           </Button>
-          <Title>Vector Store ID: {vectorStoreDetails.vector_store_id}</Title>
-          <Text className="text-gray-500">{vectorStoreDetails.vector_store_description || "No description"}</Text>
+          <h1 className="text-xl font-semibold">Vector Store ID: {vectorStoreDetails.vector_store_id}</h1>
+          <p className="text-sm text-gray-500">{vectorStoreDetails.vector_store_description || "No description"}</p>
         </div>
         {is_admin && !isEditing && <Button onClick={() => setIsEditing(true)}>Edit Vector Store</Button>}
       </div>
 
-      <TabGroup>
-        <TabList className="mb-6">
-          <Tab>Details</Tab>
-          <Tab>Test Vector Store</Tab>
-        </TabList>
+      <Tabs defaultValue="details">
+        <TabsList className="mb-6">
+          <TabsTrigger value="details" className="flex-none">
+            Details
+          </TabsTrigger>
+          <TabsTrigger value="test" className="flex-none">
+            Test Vector Store
+          </TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
-          {/* Details Tab */}
-          <TabPanel>
-            {isEditing ? (
-              <div>
-                <div className="flex justify-between items-center mb-4">
-                  <Title>Edit Vector Store</Title>
-                </div>
-                <Card>
-                  <Form form={form} onFinish={handleSave} layout="vertical" initialValues={vectorStoreDetails}>
-                    <Form.Item
-                      label="Vector Store ID"
-                      name="vector_store_id"
-                      rules={[{ required: true, message: "Please input a vector store ID" }]}
-                    >
-                      <Input disabled />
-                    </Form.Item>
-
-                    <Form.Item label="Vector Store Name" name="vector_store_name">
-                      <Input />
-                    </Form.Item>
-
-                    <Form.Item label="Description" name="vector_store_description">
-                      <Input.TextArea rows={4} />
-                    </Form.Item>
-
-                    <Form.Item
-                      label={
-                        <span>
-                          Provider{" "}
-                          <Tooltip title="Select the provider for this vector store">
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </Tooltip>
-                        </span>
-                      }
-                      name="custom_llm_provider"
-                      rules={[{ required: true, message: "Please select a provider" }]}
-                    >
-                      <Select2>
-                        {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
-                          // Currently only showing Bedrock since it's the only supported provider
-                          if (providerEnum === "Bedrock") {
-                            return (
-                              <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
-                                <div className="flex items-center space-x-2">
-                                  <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />
-                                  <span>{providerDisplayName}</span>
-                                </div>
-                              </Select2.Option>
-                            );
-                          }
-                          return null;
-                        })}
-                      </Select2>
-                    </Form.Item>
-
-                    {/* Credentials */}
-                    <div className="mb-4">
-                      <Text className="text-sm text-gray-500 mb-2">
-                        Either select existing credentials OR enter provider credentials below
-                      </Text>
-                    </div>
-
-                    <Form.Item label="Existing Credentials" name="litellm_credential_name">
-                      <Select2
-                        showSearch
-                        placeholder="Select or search for existing credentials"
-                        optionFilterProp="children"
-                        filterOption={(input, option) =>
-                          (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-                        }
-                        options={[
-                          { value: null, label: "None" },
-                          ...credentials.map((credential) => ({
-                            value: credential.credential_name,
-                            label: credential.credential_name,
-                          })),
-                        ]}
-                        allowClear
-                      />
-                    </Form.Item>
-
-                    <div className="flex items-center my-4">
-                      <div className="grow border-t border-gray-200"></div>
-                      <span className="px-4 text-gray-500 text-sm">OR</span>
-                      <div className="grow border-t border-gray-200"></div>
-                    </div>
-
-                    <Form.Item
-                      label={
-                        <span>
-                          Metadata{" "}
-                          <Tooltip title="JSON metadata for the vector store">
-                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                          </Tooltip>
-                        </span>
-                      }
-                    >
-                      <Input.TextArea
-                        rows={4}
-                        value={metadataString}
-                        onChange={(e) => setMetadataString(e.target.value)}
-                        placeholder='{"key": "value"}'
-                      />
-                    </Form.Item>
-
-                    <div className="flex justify-end space-x-2">
-                      <AntButton onClick={() => setIsEditing(false)}>Cancel</AntButton>
-                      <AntButton type="primary" htmlType="submit">
-                        Save Changes
-                      </AntButton>
-                    </div>
-                  </Form>
-                </Card>
+        <TabsContent value="details" keepMounted>
+          {isEditing ? (
+            <div>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Edit Vector Store</h3>
               </div>
-            ) : (
-              <div>
-                <div className="flex justify-between items-center mb-4">
-                  <Title>Vector Store Details</Title>
-                  {is_admin && <Button onClick={() => setIsEditing(true)}>Edit Vector Store</Button>}
-                </div>
-                <Card>
-                  <div className="space-y-4">
-                    <div>
-                      <Text className="font-medium">ID</Text>
-                      <Text>{vectorStoreDetails.vector_store_id}</Text>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Name</Text>
-                      <Text>{vectorStoreDetails.vector_store_name || "-"}</Text>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Description</Text>
-                      <Text>{vectorStoreDetails.vector_store_description || "-"}</Text>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Provider</Text>
-                      <div className="flex items-center space-x-2 mt-1">
-                        {(() => {
-                          const provider = vectorStoreDetails.custom_llm_provider || "bedrock";
-                          const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
+              <Card className="block p-6">
+                <Form form={form} onFinish={handleSave} layout="vertical" initialValues={vectorStoreDetails}>
+                  <Form.Item
+                    label="Vector Store ID"
+                    name="vector_store_id"
+                    rules={[{ required: true, message: "Please input a vector store ID" }]}
+                  >
+                    <Input disabled />
+                  </Form.Item>
 
+                  <Form.Item label="Vector Store Name" name="vector_store_name">
+                    <Input />
+                  </Form.Item>
+
+                  <Form.Item label="Description" name="vector_store_description">
+                    <Input.TextArea rows={4} />
+                  </Form.Item>
+
+                  <Form.Item
+                    label={
+                      <span>
+                        Provider{" "}
+                        <Tooltip title="Select the provider for this vector store">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="custom_llm_provider"
+                    rules={[{ required: true, message: "Please select a provider" }]}
+                  >
+                    <Select2>
+                      {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
+                        // Currently only showing Bedrock since it's the only supported provider
+                        if (providerEnum === "Bedrock") {
                           return (
-                            <>
-                              <Logo src={logo} label={displayName} className="w-5 h-5" />
-                              <Badge color="blue">{displayName}</Badge>
-                            </>
+                            <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
+                              <div className="flex items-center space-x-2">
+                                <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />
+                                <span>{providerDisplayName}</span>
+                              </div>
+                            </Select2.Option>
                           );
-                        })()}
-                      </div>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Metadata</Text>
-                      <div className="bg-gray-50 p-3 rounded-sm mt-2 font-mono text-xs overflow-auto max-h-48">
-                        <pre>{metadataString}</pre>
-                      </div>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Created</Text>
-                      <Text>
-                        {vectorStoreDetails.created_at ? new Date(vectorStoreDetails.created_at).toLocaleString() : "-"}
-                      </Text>
-                    </div>
-                    <div>
-                      <Text className="font-medium">Last Updated</Text>
-                      <Text>
-                        {vectorStoreDetails.updated_at ? new Date(vectorStoreDetails.updated_at).toLocaleString() : "-"}
-                      </Text>
+                        }
+                        return null;
+                      })}
+                    </Select2>
+                  </Form.Item>
+
+                  {/* Credentials */}
+                  <div className="mb-4">
+                    <p className="text-sm text-gray-500 mb-2">
+                      Either select existing credentials OR enter provider credentials below
+                    </p>
+                  </div>
+
+                  <Form.Item label="Existing Credentials" name="litellm_credential_name">
+                    <Select2
+                      showSearch
+                      placeholder="Select or search for existing credentials"
+                      optionFilterProp="children"
+                      filterOption={(input, option) =>
+                        (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                      }
+                      options={[
+                        { value: null, label: "None" },
+                        ...credentials.map((credential) => ({
+                          value: credential.credential_name,
+                          label: credential.credential_name,
+                        })),
+                      ]}
+                      allowClear
+                    />
+                  </Form.Item>
+
+                  <div className="flex items-center my-4">
+                    <div className="grow border-t border-gray-200"></div>
+                    <span className="px-4 text-gray-500 text-sm">OR</span>
+                    <div className="grow border-t border-gray-200"></div>
+                  </div>
+
+                  <Form.Item
+                    label={
+                      <span>
+                        Metadata{" "}
+                        <Tooltip title="JSON metadata for the vector store">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    <Input.TextArea
+                      rows={4}
+                      value={metadataString}
+                      onChange={(e) => setMetadataString(e.target.value)}
+                      placeholder='{"key": "value"}'
+                    />
+                  </Form.Item>
+
+                  <div className="flex justify-end space-x-2">
+                    <AntButton onClick={() => setIsEditing(false)}>Cancel</AntButton>
+                    <AntButton type="primary" htmlType="submit">
+                      Save Changes
+                    </AntButton>
+                  </div>
+                </Form>
+              </Card>
+            </div>
+          ) : (
+            <div>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Vector Store Details</h3>
+                {is_admin && <Button onClick={() => setIsEditing(true)}>Edit Vector Store</Button>}
+              </div>
+              <Card>
+                <CardContent className="space-y-4">
+                  <div>
+                    <p className="font-medium">ID</p>
+                    <p>{vectorStoreDetails.vector_store_id}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Name</p>
+                    <p>{vectorStoreDetails.vector_store_name || "-"}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Description</p>
+                    <p>{vectorStoreDetails.vector_store_description || "-"}</p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Provider</p>
+                    <div className="flex items-center space-x-2 mt-1">
+                      {(() => {
+                        const provider = vectorStoreDetails.custom_llm_provider || "bedrock";
+                        const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
+
+                        return (
+                          <>
+                            <Logo src={logo} label={displayName} className="w-5 h-5" />
+                            <Badge variant="secondary">{displayName}</Badge>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
-                </Card>
-              </div>
-            )}
-          </TabPanel>
+                  <div>
+                    <p className="font-medium">Metadata</p>
+                    <div className="bg-gray-50 p-3 rounded-sm mt-2 font-mono text-xs overflow-auto max-h-48">
+                      <pre>{metadataString}</pre>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="font-medium">Created</p>
+                    <p>
+                      {vectorStoreDetails.created_at ? new Date(vectorStoreDetails.created_at).toLocaleString() : "-"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="font-medium">Last Updated</p>
+                    <p>
+                      {vectorStoreDetails.updated_at ? new Date(vectorStoreDetails.updated_at).toLocaleString() : "-"}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
 
-          {/* Test Tab */}
-          <TabPanel>
-            <VectorStoreTester vectorStoreId={vectorStoreDetails.vector_store_id} accessToken={accessToken || ""} />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+        <TabsContent value="test" keepMounted>
+          <VectorStoreTester vectorStoreId={vectorStoreDetails.vector_store_id} accessToken={accessToken || ""} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

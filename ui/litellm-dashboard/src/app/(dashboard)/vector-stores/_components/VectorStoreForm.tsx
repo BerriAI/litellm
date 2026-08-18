@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Modal, Form, Select, Tooltip, Input, Alert } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Modal, Form, Select, Tooltip, Input as AntdInput, Alert } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { CredentialItem, vectorStoreCreateCall } from "@/components/networking";
 import {
@@ -261,7 +262,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           name="vector_store_id"
           rules={[{ required: true, message: "Please input the vector store ID from your api provider" }]}
         >
-          <TextInput
+          <Input
             placeholder={
               selectedProvider === "vertex_rag_engine"
                 ? '6917529027641081856 (corpus ID from Vertex AI / "RAG Engine" console)'
@@ -330,7 +331,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                 field.required ? [{ required: true, message: `Please input the ${field.label.toLowerCase()}` }] : []
               }
             >
-              <TextInput type={field.type || "text"} placeholder={field.placeholder} />
+              <Input type={field.type || "text"} placeholder={field.placeholder} />
             </Form.Item>
           );
         })}
@@ -346,11 +347,11 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           }
           name="vector_store_name"
         >
-          <TextInput />
+          <Input />
         </Form.Item>
 
         <Form.Item label="Description" name="vector_store_description">
-          <Input.TextArea rows={4} />
+          <AntdInput.TextArea rows={4} />
         </Form.Item>
 
         <Form.Item
@@ -390,7 +391,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
             </span>
           }
         >
-          <Input.TextArea
+          <AntdInput.TextArea
             rows={4}
             value={metadataJson}
             onChange={(e) => setMetadataJson(e.target.value)}
@@ -399,12 +400,10 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         </Form.Item>
 
         <div className="flex justify-end space-x-3">
-          <TremorButton onClick={handleCancel} variant="secondary">
+          <Button onClick={handleCancel} variant="secondary">
             Cancel
-          </TremorButton>
-          <TremorButton variant="primary" type="submit">
-            Create
-          </TremorButton>
+          </Button>
+          <Button type="submit">Create</Button>
         </div>
       </Form>
     </Modal>

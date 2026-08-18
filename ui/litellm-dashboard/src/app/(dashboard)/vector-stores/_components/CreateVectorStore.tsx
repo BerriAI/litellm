@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Card, Title, Text } from "@tremor/react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Upload, Button, Select, Form, Alert, Tooltip, Input } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { InboxOutlined, InfoCircleOutlined } from "@ant-design/icons";
@@ -189,47 +189,51 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
   return (
     <div className="space-y-6">
       <div>
-        <Title>Create Vector Store</Title>
-        <Text className="text-gray-500">
+        <h3 className="text-lg font-medium">Create Vector Store</h3>
+        <p className="text-sm text-gray-500">
           Upload documents and select a provider to create a new vector store with embedded content.
-        </Text>
+        </p>
       </div>
 
       {/* Upload Area */}
       <Card>
-        <div className="mb-4">
-          <Text className="font-medium">Step 1: Upload Documents</Text>
-          <Text className="text-sm text-gray-500 block mt-1">
-            Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.
-          </Text>
-        </div>
-        <Dragger {...uploadProps}>
-          <p className="ant-upload-drag-icon">
-            <InboxOutlined style={{ fontSize: "48px", color: "#1890ff" }} />
-          </p>
-          <p className="ant-upload-text">Click or drag files to this area to upload</p>
-          <p className="ant-upload-hint">Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD</p>
-        </Dragger>
+        <CardContent>
+          <div className="mb-4">
+            <p className="font-medium">Step 1: Upload Documents</p>
+            <p className="text-sm text-gray-500 block mt-1">
+              Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.
+            </p>
+          </div>
+          <Dragger {...uploadProps}>
+            <p className="ant-upload-drag-icon">
+              <InboxOutlined style={{ fontSize: "48px", color: "#1890ff" }} />
+            </p>
+            <p className="ant-upload-text">Click or drag files to this area to upload</p>
+            <p className="ant-upload-hint">Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD</p>
+          </Dragger>
+        </CardContent>
       </Card>
 
       {/* Documents Table */}
       {documents.length > 0 && (
         <Card>
-          <div className="mb-4">
-            <Text className="font-medium">Uploaded Documents ({documents.length})</Text>
-          </div>
-          <DocumentsTable documents={documents} onRemove={handleRemoveDocument} />
+          <CardContent>
+            <div className="mb-4">
+              <p className="font-medium">Uploaded Documents ({documents.length})</p>
+            </div>
+            <DocumentsTable documents={documents} onRemove={handleRemoveDocument} />
+          </CardContent>
         </Card>
       )}
 
       {/* Provider Selection and Vector Store Details */}
       <Card>
-        <div className="space-y-4">
+        <CardContent className="space-y-4">
           <div>
-            <Text className="font-medium">Step 2: Configure Vector Store</Text>
-            <Text className="text-sm text-gray-500 block mt-1">
+            <p className="font-medium">Step 2: Configure Vector Store</p>
+            <p className="text-sm text-gray-500 block mt-1">
               Choose the provider and optionally provide a name and description for your vector store.
-            </Text>
+            </p>
           </div>
 
           <Form form={form} layout="vertical">
@@ -383,7 +387,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
               {isCreating ? "Creating Vector Store..." : "Create Vector Store"}
             </Button>
           </div>
-        </div>
+        </CardContent>
       </Card>
 
       {/* Success Message */}

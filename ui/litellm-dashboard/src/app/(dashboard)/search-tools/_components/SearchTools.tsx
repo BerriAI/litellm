@@ -1,6 +1,5 @@
 import { isAdminRole } from "@/utils/roles";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Text, Title } from "@tremor/react";
 import { Form, Input, Modal, Select } from "antd";
 import React, { useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -11,6 +10,7 @@ import {
   fetchSearchTools,
   updateSearchTool,
 } from "@/components/networking";
+import { Button } from "@/components/ui/button";
 import CreateSearchTool from "./CreateSearchTools";
 import SearchToolTable from "./SearchToolTable";
 import { SearchToolView } from "./SearchToolView";
@@ -273,8 +273,8 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         {renderEditForm()}
       </Modal>
 
-      <Title>Search Tools</Title>
-      <Text className="text-tremor-content mt-2">Configure and manage your search providers</Text>
+      <h1 className="text-xl font-semibold">Search Tools</h1>
+      <p className="mt-2 text-sm text-muted-foreground">Configure and manage your search providers</p>
       {isAdminRole(userRole) && (
         <Button className="mt-4 mb-4" onClick={() => setCreateModalVisible(true)}>
           + Add New Search Tool
