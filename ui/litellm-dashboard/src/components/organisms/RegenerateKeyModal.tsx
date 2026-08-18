@@ -32,7 +32,7 @@ const EMPTY_VALUES: RegenerateKeyFormValues = {
 
 const buildSchema = (keyIsExpired: boolean): z.ZodType<RegenerateKeyFormValues, RegenerateKeyFormValues> => {
   const shape = {
-    key_alias: z.string().optional(),
+    key_alias: z.string().nullish(),
     max_budget: z.number().nullish(),
     tpm_limit: z.number().nullish(),
     rpm_limit: z.number().nullish(),

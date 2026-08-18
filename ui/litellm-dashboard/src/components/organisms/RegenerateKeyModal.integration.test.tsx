@@ -190,6 +190,31 @@ describe("RegenerateKeyModal submit payload", () => {
     expect(JSON.stringify(submittedPayload())).toBe('{"duration":"","grace_period":""}');
   });
 
+  it("regenerates a key whose fields the API returned as null", async () => {
+    const user = userEvent.setup();
+    renderModal(
+      makeToken({
+        key_alias: null,
+        max_budget: null,
+        tpm_limit: null,
+        rpm_limit: null,
+        duration: null,
+      } as unknown as Partial<KeyResponse>),
+    );
+
+    await regenerate(user);
+
+    await waitFor(() => expect(mockRegenerateKeyCall).toHaveBeenCalledOnce());
+    expect(submittedPayload()).toStrictEqual({
+      key_alias: null,
+      max_budget: null,
+      tpm_limit: null,
+      rpm_limit: null,
+      duration: "",
+      grace_period: "",
+    });
+  });
+
   it("targets the key by its token hash", async () => {
     const user = userEvent.setup();
     renderModal();

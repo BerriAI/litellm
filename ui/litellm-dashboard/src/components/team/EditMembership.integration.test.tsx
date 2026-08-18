@@ -92,6 +92,24 @@ describe("EditMembership submit payload", () => {
     expect(submitted()).toStrictEqual({ user_email: "a@b.com", role: "admin" });
   });
 
+  it.each([
+    [
+      { user_id: "u1", user_email: null, role: "user" },
+      { user_email: null, user_id: "u1", role: "user" },
+    ],
+    [
+      { user_id: null, user_email: "a@b.com", role: "user" },
+      { user_email: "a@b.com", user_id: null, role: "user" },
+    ],
+  ])("submits a member whose identity the API returned as null", async (initialData, expected) => {
+    renderEdit(orgMemberConfig, initialData as Member);
+
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(submitted()).toStrictEqual(expected);
+  });
+
   it("collapses falsy budget and limit values to null and a missing model list to an empty array", async () => {
     renderEdit(teamMemberConfig, {
       user_id: "u1",

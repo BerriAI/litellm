@@ -47,8 +47,8 @@ const memberFieldSchema = z.union([z.string(), z.number(), z.null(), z.array(z.s
 
 const buildMemberSchema = (config: ModalConfig): z.ZodType<MemberFormValues, MemberFormValues> => {
   const shape = {
-    user_email: z.string().refine(isEmailish, "Please enter a valid email!").optional(),
-    user_id: z.string().optional(),
+    user_email: z.string().refine(isEmailish, "Please enter a valid email!").nullish(),
+    user_id: z.string().nullish(),
     role: z.string({ error: ROLE_REQUIRED_MESSAGE }).min(1, ROLE_REQUIRED_MESSAGE),
     ...Object.fromEntries((config.additionalFields ?? []).map((field) => [field.name, memberFieldSchema])),
   };
