@@ -145,9 +145,8 @@ class MCPOAuth2TokenCache(InMemoryCache):
             server.server_id,
         )
 
-        post_kwargs: Final = {"data": data, **({"headers": token_request.headers} if token_request.headers else {})}
         try:
-            response: Final = await client.post(server.token_url, **post_kwargs)
+            response: Final = await client.post(server.token_url, data=data, headers=token_request.headers or None)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ValueError(

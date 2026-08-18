@@ -18,7 +18,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
     async_redis_cluster_client = RedisCluster
-    Span = Union[_Span, Any]
+    Span = _Span
 else:
     pipeline = Any
     cluster_pipeline = Any
@@ -625,7 +625,11 @@ class RedisCache(BaseCache):
             f"{self.namespace}-{hashlib.sha256(script.encode()).hexdigest()[:16]}"
         )
 
-        async def run_script(keys: Sequence[str], args: Sequence[Any], client: Any = None) -> Any:
+        async def run_script(
+            keys: Sequence[str],
+            args: Sequence[str | bytes | int | float],
+            client: object = None,
+        ) -> object:
             async def execute() -> object:
                 executor: Callable[..., Awaitable[Any]] | None = litellm.in_memory_llm_clients_cache.get_cache(
                     key=script_cache_key
@@ -650,7 +654,11 @@ class RedisCache(BaseCache):
         if hasattr(_redis_client, "register_script"):
             registered_script: Final = _redis_client.register_script(script)
 
-            async def standalone_executor(keys: Sequence[str], args: Sequence[Any], client: Any = None) -> Any:
+            async def standalone_executor(
+                keys: Sequence[str],
+                args: Sequence[str | bytes | int | float],
+                client: object = None,
+            ) -> object:
                 namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
                 return await registered_script(keys=namespaced_keys, args=args, client=client)
 
@@ -659,7 +667,11 @@ class RedisCache(BaseCache):
         if hasattr(_redis_client, "script_load"):
             script_sha: Final = _redis_client.script_load(script)
 
-            async def cluster_executor(keys: Sequence[str], args: Sequence[Any], client: Any = None) -> Any:
+            async def cluster_executor(
+                keys: Sequence[str],
+                args: Sequence[str | bytes | int | float],
+                client: object = None,
+            ) -> object:
                 namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
                 return await _redis_client.evalsha(script_sha, len(namespaced_keys), *namespaced_keys, *args)
 
@@ -757,7 +769,7 @@ class RedisCache(BaseCache):
     async def _pipeline_helper(
         self,
         pipe: pipeline | cluster_pipeline,
-        cache_list: list[tuple[Any, Any]],
+        cache_list: Sequence[tuple[str, object]],
         ttl: float | None,
     ) -> list:
         """
@@ -783,7 +795,9 @@ class RedisCache(BaseCache):
         return results
 
     @_redis_circuit_breaker_guard
-    async def async_set_cache_pipeline(self, cache_list: list[tuple[Any, Any]], ttl: float | None = None, **kwargs):
+    async def async_set_cache_pipeline(
+        self, cache_list: Sequence[tuple[str, object]], ttl: float | None = None, **kwargs
+    ):
         """
         Use Redis Pipelines for bulk write operations
         """
@@ -795,7 +809,7 @@ class RedisCache(BaseCache):
         start_time: Final = time.time()
 
         print_verbose(f"Set Async Redis Cache: key list: {cache_list}\nttl={ttl}, redis_version={self.redis_version}")
-        cache_value: Final[Any] = None
+        cache_value: Final = None
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
                 results: Final = await self._pipeline_helper(pipe, cache_list, ttl)
@@ -1074,7 +1088,7 @@ class RedisCache(BaseCache):
             # NON blocking - notify users Redis is throwing an exception
             verbose_logger.error("litellm.caching.caching: get() - Got exception from REDIS: ", e)
 
-    def _run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
+    def _run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
         Wrapper to call `mget` on the redis client
 
@@ -1082,7 +1096,7 @@ class RedisCache(BaseCache):
         """
         return self.redis_client.mget(keys=keys)
 
-    async def _async_run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
+    async def _async_run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
         Wrapper to call `mget` on the redis client
 
@@ -1115,7 +1129,7 @@ class RedisCache(BaseCache):
                 cache_key = self.check_and_fix_namespace(key=cache_key or "")
                 _keys.append(cache_key)
             start_time: Final = time.time()
-            results: Final[list] = self._run_redis_mget_operation(keys=_keys)
+            results: Final = self._run_redis_mget_operation(keys=_keys)
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -1522,7 +1536,7 @@ class RedisCache(BaseCache):
     async def async_rpush(
         self,
         key: str,
-        values: list[Any],
+        values: Sequence[str | bytes | int | float],
         parent_otel_span: Span | None = None,
         **kwargs,
     ) -> int:
@@ -1572,7 +1586,7 @@ class RedisCache(BaseCache):
     async def _pipeline_rpush_helper(
         self,
         pipe: pipeline,
-        rpush_list: list[RedisPipelineRpushOperation],
+        rpush_list: Sequence[RedisPipelineRpushOperation],
     ) -> list[int]:
         """Helper function for pipeline rpush operations"""
         for rpush_op in rpush_list:
@@ -1588,7 +1602,7 @@ class RedisCache(BaseCache):
     @_redis_circuit_breaker_guard
     async def async_rpush_pipeline(
         self,
-        rpush_list: list[RedisPipelineRpushOperation],
+        rpush_list: Sequence[RedisPipelineRpushOperation],
     ) -> list[int]:
         """
         Use Redis Pipelines for bulk RPUSH operations

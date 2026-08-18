@@ -1,7 +1,7 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -20,7 +20,7 @@ from .base_routing_strategy import BaseRoutingStrategy
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 

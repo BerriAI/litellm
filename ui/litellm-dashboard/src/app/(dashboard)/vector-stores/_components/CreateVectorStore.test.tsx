@@ -8,14 +8,6 @@ vi.mock("@/components/networking", () => ({
   ragIngestCall: vi.fn(),
 }));
 
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 // Mock vector_store_providers
 vi.mock("@/components/vector_store_providers", () => ({
   VectorStoreProviders: {
@@ -226,9 +218,9 @@ describe("CreateVectorStore", () => {
 
     // Check if S3-specific fields are displayed
     await waitFor(() => {
-      expect(screen.queryByText("Vector Bucket Name")).toBeInTheDocument();
-      expect(screen.queryByText("AWS Region")).toBeInTheDocument();
-      expect(screen.queryByText("Embedding Model")).toBeInTheDocument();
+      expect(screen.getByText("Vector Bucket Name")).toBeInTheDocument();
+      expect(screen.getByText("AWS Region")).toBeInTheDocument();
+      expect(screen.getByText("Embedding Model")).toBeInTheDocument();
     });
   });
 

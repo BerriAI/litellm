@@ -17,7 +17,7 @@ import { Button, Form, Input, Switch, InputNumber, Select } from "antd";
 import { updatePassThroughEndpoint, deletePassThroughEndpointsCall } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
 import RoutePreview from "./route_preview";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
 import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 
@@ -72,7 +72,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   onEndpointUpdated,
 }) => {
   const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(initialEndpointData);
-  const [loading, setLoading] = useState(false);
+  const [loading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [authEnabled, setAuthEnabled] = useState(initialEndpointData?.auth || false);
   const [selectedMethods, setSelectedMethods] = useState<string[]>(initialEndpointData?.methods || []);
@@ -91,7 +91,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         try {
           headers = typeof values.headers === "string" ? JSON.parse(values.headers) : values.headers;
         } catch (e) {
-          NotificationsManager.fromBackend("Invalid JSON format for headers");
+          toast.fromError("Invalid JSON format for headers");
           return;
         }
       }
@@ -122,7 +122,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       }
     } catch (error) {
       console.error("Error updating endpoint:", error);
-      NotificationsManager.fromBackend("Failed to update pass through endpoint");
+      toast.fromError("Failed to update pass through endpoint");
     }
   };
 
@@ -131,14 +131,14 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       if (!accessToken || !endpointData?.id) return;
 
       await deletePassThroughEndpointsCall(accessToken, endpointData.id);
-      NotificationsManager.success("Pass through endpoint deleted successfully");
+      toast.success("Pass through endpoint deleted successfully");
       onClose();
       if (onEndpointUpdated) {
         onEndpointUpdated();
       }
     } catch (error) {
       console.error("Error deleting endpoint:", error);
-      NotificationsManager.fromBackend("Failed to delete pass through endpoint");
+      toast.fromError("Failed to delete pass through endpoint");
     }
   };
 

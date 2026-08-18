@@ -97,7 +97,7 @@ describe("CredentialModal", () => {
       expect(screen.getByText("Add Credential")).toBeInTheDocument();
       const nameInput = screen.getByLabelText("Credential Name:") as HTMLInputElement;
       expect(nameInput.value).toBe("");
-      expect(nameInput.disabled).toBe(false);
+      expect(nameInput).toBeEnabled();
     });
 
     it("shows provider-specific fields for the selected provider", async () => {
@@ -124,7 +124,7 @@ describe("CredentialModal", () => {
       await waitFor(() => {
         const nameInput = screen.getByLabelText("Credential Name:") as HTMLInputElement;
         expect(nameInput.value).toBe("test-credential");
-        expect(nameInput.disabled).toBe(true);
+        expect(nameInput).toBeDisabled();
       });
     });
 
@@ -134,7 +134,7 @@ describe("CredentialModal", () => {
         existingCredential: { ...mockCredential, credential_name: "" },
       });
 
-      expect((screen.getByLabelText("Credential Name:") as HTMLInputElement).disabled).toBe(true);
+      expect(screen.getByLabelText("Credential Name:")).toBeDisabled();
     });
   });
 });

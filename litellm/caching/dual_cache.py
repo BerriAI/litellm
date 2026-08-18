@@ -13,7 +13,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
@@ -29,7 +29,7 @@ from .redis_cache import RedisCache
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 

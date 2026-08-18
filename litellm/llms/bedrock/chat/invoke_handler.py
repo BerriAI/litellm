@@ -57,7 +57,7 @@ class AmazonCohereChatConfig:
     Reference - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-cohere-command-r-plus.html
     """
 
-    documents: List[Document] | None = None
+    documents: list[Document] | None = None
     search_queries_only: bool | None = None
     preamble: str | None = None
     max_tokens: int | None = None
@@ -69,12 +69,12 @@ class AmazonCohereChatConfig:
     presence_penalty: float | None = None
     seed: int | None = None
     return_prompt: bool | None = None
-    stop_sequences: List[str] | None = None
+    stop_sequences: list[str] | None = None
     raw_prompting: bool | None = None
 
     def __init__(
         self,
-        documents: List[Document] | None = None,
+        documents: list[Document] | None = None,
         search_queries_only: bool | None = None,
         preamble: str | None = None,
         max_tokens: int | None = None,
@@ -112,7 +112,7 @@ class AmazonCohereChatConfig:
             and v is not None
         }
 
-    def get_supported_openai_params(self) -> List[str]:
+    def get_supported_openai_params(self) -> list[str]:
         return [
             "max_tokens",
             "max_completion_tokens",
@@ -325,7 +325,7 @@ class AWSEventStreamDecoder:
 
         self.model = model
         self.parser = EventStreamJSONParser()
-        self.content_blocks: List[ContentBlockDeltaEvent] = []
+        self.content_blocks: list[ContentBlockDeltaEvent] = []
         self.tool_calls_index: int | None = None
         self.response_id: str | None = None
         self.json_mode = json_mode
@@ -362,13 +362,13 @@ class AWSEventStreamDecoder:
 
     def translate_thinking_blocks(
         self, thinking_block: BedrockConverseReasoningContentBlockDelta
-    ) -> List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None:
+    ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None:
         """
         Translate the thinking blocks to a string
         """
 
-        thinking_blocks_list: Final[List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]] = []
-        _thinking_block: Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock] | None = None
+        thinking_blocks_list: Final[list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = []
+        _thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock | None = None
 
         if "text" in thinking_block:
             _thinking_block = ChatCompletionThinkingBlock(type="thinking")
@@ -402,12 +402,12 @@ class AWSEventStreamDecoder:
     ) -> tuple[
         ChatCompletionToolCallChunk | None,
         dict,
-        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None,
+        list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
     ]:
         """Handle 'start' event in converse chunk parsing."""
         tool_use: ChatCompletionToolCallChunk | None = None
         provider_specific_fields: dict = {}
-        thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None = None
+        thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 
         self.content_blocks = []  # reset
         if start_obj is not None:
@@ -450,14 +450,14 @@ class AWSEventStreamDecoder:
         ChatCompletionToolCallChunk | None,
         dict,
         str | None,
-        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None,
+        list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
     ]:
         """Handle 'delta' event in converse chunk parsing."""
         text = ""
         tool_use: ChatCompletionToolCallChunk | None = None
         provider_specific_fields: dict = {}
         reasoning_content: str | None = None
-        thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None = None
+        thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 
         self.content_blocks.append(delta_obj)
         if "text" in delta_obj:
@@ -535,7 +535,7 @@ class AWSEventStreamDecoder:
             usage: Usage | None = None
             provider_specific_fields: dict = {}
             reasoning_content: str | None = None
-            thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]] | None = None
+            thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 
             content_block_index: Final = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
@@ -559,7 +559,7 @@ class AWSEventStreamDecoder:
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
             elif "usage" in chunk_data:
-                usage = converse_config._transform_usage(chunk_data.get("usage", {}))
+                usage = converse_config.transform_usage(chunk_data.get("usage", {}))
 
             model_response_provider_specific_fields: Final = {}
             if "trace" in chunk_data:
@@ -590,7 +590,7 @@ class AWSEventStreamDecoder:
         except Exception as e:
             raise Exception(f"Received streaming error - {e}")
 
-    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream, dict]:
+    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -645,7 +645,7 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
-    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[Union[GChunk, ModelResponseStream, dict]]:
+    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GChunk | ModelResponseStream | dict]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -659,9 +659,7 @@ class AWSEventStreamDecoder:
                     _data = json.loads(message)
                     yield self._chunk_parser(chunk_data=_data)
 
-    async def aiter_bytes(
-        self, iterator: AsyncIterator[bytes]
-    ) -> AsyncIterator[Union[GChunk, ModelResponseStream, dict]]:
+    async def aiter_bytes(self, iterator: AsyncIterator[bytes]) -> AsyncIterator[GChunk | ModelResponseStream | dict]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -741,7 +739,7 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
             sync_stream=sync_stream,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> Union[GChunk, ModelResponseStream, dict]:
+    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
@@ -756,7 +754,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         return self
 
     def _handle_json_mode_chunk(
-        self, text: str, tool_calls: List[ChatCompletionToolCallChunk] | None
+        self, text: str, tool_calls: list[ChatCompletionToolCallChunk] | None
     ) -> tuple[str, ChatCompletionToolCallChunk | None]:
         """
         If JSON mode is enabled, convert the tool call to a message.
@@ -789,7 +787,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
             text = chunk_data.choices[0].message.content or ""
             tool_use = None
             _model_response_tool_call: Final = cast(
-                List[ChatCompletionMessageToolCall] | None,
+                list[ChatCompletionMessageToolCall] | None,
                 cast(Choices, chunk_data.choices[0]).message.tool_calls,
             )
             if self.json_mode is True:

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, Mock } from "vitest";
 import EditSSOSettingsModal from "./EditSSOSettingsModal";
 import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { processSSOSettingsPayload } from "../utils";
 
@@ -170,13 +170,6 @@ vi.mock("@/app/(dashboard)/hooks/sso/useEditSSOSettings", () => ({
   useEditSSOSettings: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 vi.mock("@/components/shared/errorUtils", () => ({
   parseErrorMessage: vi.fn(),
 }));
@@ -320,7 +313,7 @@ describe("EditSSOSettingsModal", () => {
         useEditSSOSettings: { mutateAsync: mockMutateAsync, isPending: false },
       });
 
-      const { mockOnSuccess } = renderComponent();
+      renderComponent();
 
       fireEvent.click(screen.getByTestId(TEST_IDS.TRIGGER_FORM_SUBMIT));
 
@@ -348,7 +341,7 @@ describe("EditSSOSettingsModal", () => {
 
       fireEvent.click(screen.getByTestId(TEST_IDS.TRIGGER_FORM_SUBMIT));
 
-      expect(NotificationsManager.success).toHaveBeenCalledWith(TEST_DATA.SUCCESS_MESSAGE);
+      expect(toast.success).toHaveBeenCalledWith(TEST_DATA.SUCCESS_MESSAGE);
       expect(mockOnSuccess).toHaveBeenCalled();
     });
 
@@ -370,9 +363,7 @@ describe("EditSSOSettingsModal", () => {
       fireEvent.click(screen.getByTestId(TEST_IDS.TRIGGER_FORM_SUBMIT));
 
       expect(parseErrorMessage).toHaveBeenCalledWith(error);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        `${TEST_DATA.ERROR_MESSAGE_PREFIX} Parsed error message`,
-      );
+      expect(toast.fromError).toHaveBeenCalledWith(`${TEST_DATA.ERROR_MESSAGE_PREFIX} Parsed error message`);
     });
   });
 
@@ -530,7 +521,7 @@ describe("EditSSOSettingsModal", () => {
 
       fireEvent.click(screen.getByTestId(TEST_IDS.TRIGGER_FORM_SUBMIT));
 
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(`${TEST_DATA.ERROR_MESSAGE_PREFIX} undefined`);
+      expect(toast.fromError).toHaveBeenCalledWith(`${TEST_DATA.ERROR_MESSAGE_PREFIX} undefined`);
     });
 
     it("handles form submission with malformed data", async () => {

@@ -3,7 +3,7 @@
 import re
 import traceback
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from pydantic import BaseModel
 
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     )
     from litellm.types.router import PreRoutingHookResponse
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
     LiteLLMLoggingObj = Any

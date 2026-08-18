@@ -4,7 +4,7 @@ import inspect
 import re
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     )
 
     LiteLLMModelResponse = _ModelResponse
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     LiteLLMModelResponse = Any
     LiteLLMLoggingObject = Any
