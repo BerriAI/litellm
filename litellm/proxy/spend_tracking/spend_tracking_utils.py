@@ -1421,7 +1421,6 @@ def should_store_prompts_and_responses_in_spend_logs() -> bool:
 
 def _should_store_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
-    from litellm.secret_managers.main import get_secret_bool
 
     store_responses_value: Final = general_settings.get("store_responses_in_spend_logs")
     if store_responses_value is not None:
@@ -1429,9 +1428,6 @@ def _should_store_responses_in_spend_logs() -> bool:
             return store_responses_value.lower() == "true"
         return store_responses_value is True
 
-    store_responses_env: Final = get_secret_bool("STORE_RESPONSES_IN_SPEND_LOGS")
-    if store_responses_env is not None:
-        return store_responses_env
     return should_store_prompts_and_responses_in_spend_logs()
 
 
