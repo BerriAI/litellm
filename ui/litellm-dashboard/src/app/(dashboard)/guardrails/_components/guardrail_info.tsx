@@ -6,10 +6,11 @@ import {
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CodeOutlined, EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { Badge, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Button as AntdButton, Tooltip } from "antd";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import React, { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "@/lib/toast";
@@ -509,12 +510,12 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   return (
     <div className="p-4">
       <div>
-        <AntdButton type="text" icon={<ArrowLeftIcon className="w-4 h-4" />} onClick={onClose} className="mb-4">
+        <AntdButton type="text" icon={<ArrowLeft className="w-4 h-4" />} onClick={onClose} className="mb-4">
           Back to Guardrails
         </AntdButton>
-        <Title>{guardrailData.guardrail_name || "Unnamed Guardrail"}</Title>
+        <h1 className="text-2xl font-semibold">{guardrailData.guardrail_name || "Unnamed Guardrail"}</h1>
         <div className="flex items-center cursor-pointer">
-          <Text className="text-muted-foreground font-mono">{guardrailData.guardrail_id}</Text>
+          <p className="text-muted-foreground font-mono">{guardrailData.guardrail_id}</p>
 
           <AntdButton
             type="text"
@@ -530,49 +531,55 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         </div>
       </div>
 
-      <TabGroup>
-        <TabList className="mb-4">
-          <Tab key="overview">Overview</Tab>
-          {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
-        </TabList>
+      <Tabs defaultValue="overview">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
+            Overview
+          </TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+              Settings
+            </TabsTrigger>
+          )}
+        </TabsList>
 
-        <TabPanels>
+        <div>
           {/* Overview Panel */}
-          <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
-              <Card>
-                <Text>Provider</Text>
+          <TabsContent value="overview" keepMounted>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              <Card className="block p-6">
+                <p>Provider</p>
                 <div className="mt-2 flex items-center space-x-2">
                   <Logo src={logo} label={displayName} className="w-6 h-6" />
-                  <Title>{displayName}</Title>
+                  <h3 className="text-lg font-medium">{displayName}</h3>
                 </div>
               </Card>
 
-              <Card>
-                <Text>Mode</Text>
+              <Card className="block p-6">
+                <p>Mode</p>
                 <div className="mt-2">
-                  <Title>{guardrailData.litellm_params?.mode || "-"}</Title>
-                  <Badge color={guardrailData.litellm_params?.default_on ? "green" : "gray"}>
+                  <h3 className="text-lg font-medium">{guardrailData.litellm_params?.mode || "-"}</h3>
+                  <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
                     {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
                   </Badge>
                 </div>
               </Card>
 
-              <Card>
-                <Text>Created At</Text>
+              <Card className="block p-6">
+                <p>Created At</p>
                 <div className="mt-2">
-                  <Title>{formatDate(guardrailData.created_at)}</Title>
-                  <Text>Last Updated: {formatDate(guardrailData.updated_at)}</Text>
+                  <h3 className="text-lg font-medium">{formatDate(guardrailData.created_at)}</h3>
+                  <p>Last Updated: {formatDate(guardrailData.updated_at)}</p>
                 </div>
               </Card>
-            </Grid>
+            </div>
 
             {guardrailData.litellm_params?.pii_entities_config &&
               Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
-                <Card className="mt-6">
+                <Card className="block mt-6 p-6">
                   <div className="flex justify-between items-center">
-                    <Text className="font-medium">PII Protection</Text>
-                    <Badge color="blue">
+                    <p className="font-medium">PII Protection</p>
+                    <Badge variant="secondary">
                       {Object.keys(guardrailData.litellm_params.pii_entities_config).length} PII entities configured
                     </Badge>
                   </div>
@@ -581,18 +588,18 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
             {guardrailData.litellm_params?.pii_entities_config &&
               Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
-                <Card className="mt-6">
-                  <Text className="mb-4 text-lg font-semibold">PII Entity Configuration</Text>
+                <Card className="block mt-6 p-6">
+                  <p className="mb-4 text-lg font-semibold">PII Entity Configuration</p>
                   <div className="border rounded-lg overflow-hidden shadow-xs">
                     <div className="bg-muted px-5 py-3 border-b flex">
-                      <Text className="flex-1 font-semibold text-foreground">Entity Type</Text>
-                      <Text className="flex-1 font-semibold text-foreground">Configuration</Text>
+                      <p className="flex-1 font-semibold text-foreground">Entity Type</p>
+                      <p className="flex-1 font-semibold text-foreground">Configuration</p>
                     </div>
                     <div className="max-h-[400px] overflow-y-auto">
                       {Object.entries(guardrailData.litellm_params?.pii_entities_config).map(([key, value]) => (
                         <div key={key} className="px-5 py-3 flex border-b hover:bg-muted/50 transition-colors">
-                          <Text className="flex-1 font-medium text-foreground">{key}</Text>
-                          <Text className="flex-1">
+                          <p className="flex-1 font-medium text-foreground">{key}</p>
+                          <p className="flex-1">
                             <span
                               className={`inline-flex items-center gap-1.5 ${
                                 value === "MASK" ? "text-blue-600" : "text-red-600"
@@ -601,7 +608,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                               {value === "MASK" ? <EyeInvisibleOutlined /> : <StopOutlined />}
                               {String(value)}
                             </span>
-                          </Text>
+                          </p>
                         </div>
                       ))}
                     </div>
@@ -610,18 +617,18 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               )}
 
             {guardrailData.litellm_params?.guardrail === "tool_permission" && (
-              <Card className="mt-6">
+              <Card className="block mt-6 p-6">
                 <ToolPermissionRulesEditor value={toolPermissionConfig} disabled />
               </Card>
             )}
 
             {/* Custom Code Display */}
             {guardrailData.litellm_params?.guardrail === "custom_code" && guardrailData.litellm_params?.custom_code && (
-              <Card className="mt-6">
+              <Card className="block mt-6 p-6">
                 <div className="flex justify-between items-center mb-4">
                   <div className="flex items-center gap-2">
                     <CodeOutlined className="text-blue-500" />
-                    <Text className="font-medium text-lg">Custom Code</Text>
+                    <p className="font-medium text-lg">Custom Code</p>
                   </div>
                   {isAdmin && !isConfigGuardrail && (
                     <AntdButton size="small" icon={<CodeOutlined />} onClick={() => setCustomCodeModalVisible(true)}>
@@ -647,14 +654,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               isEditing={false}
               accessToken={accessToken}
             />
-          </TabPanel>
+          </TabsContent>
 
           {/* Settings Panel (only for admins) */}
           {isAdmin && (
-            <TabPanel>
-              <Card>
+            <TabsContent value="settings" keepMounted>
+              <Card className="block p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <Title>Guardrail Settings</Title>
+                  <h3 className="text-lg font-medium">Guardrail Settings</h3>
                   {isConfigGuardrail && (
                     <Tooltip title="Guardrail is defined in the config file and cannot be edited.">
                       <InfoCircleOutlined />
@@ -831,24 +838,24 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                 ) : (
                   <div className="space-y-4">
                     <div>
-                      <Text className="font-medium">Guardrail ID</Text>
+                      <p className="font-medium">Guardrail ID</p>
                       <div className="font-mono">{guardrailData.guardrail_id}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Guardrail Name</Text>
+                      <p className="font-medium">Guardrail Name</p>
                       <div>{guardrailData.guardrail_name || "Unnamed Guardrail"}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Provider</Text>
+                      <p className="font-medium">Provider</p>
                       <div>{displayName}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Mode</Text>
+                      <p className="font-medium">Mode</p>
                       <div>{guardrailData.litellm_params?.mode || "-"}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Default On</Text>
-                      <Badge color={guardrailData.litellm_params?.default_on ? "green" : "gray"}>
+                      <p className="font-medium">Default On</p>
+                      <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
                         {guardrailData.litellm_params?.default_on ? "Yes" : "No"}
                       </Badge>
                     </div>
@@ -856,9 +863,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     {guardrailData.litellm_params?.pii_entities_config &&
                       Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
                         <div>
-                          <Text className="font-medium">PII Protection</Text>
+                          <p className="font-medium">PII Protection</p>
                           <div className="mt-2">
-                            <Badge color="blue">
+                            <Badge variant="secondary">
                               {Object.keys(guardrailData.litellm_params.pii_entities_config).length} PII entities
                               configured
                             </Badge>
@@ -867,11 +874,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       )}
 
                     <div>
-                      <Text className="font-medium">Created At</Text>
+                      <p className="font-medium">Created At</p>
                       <div>{formatDate(guardrailData.created_at)}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Last Updated</Text>
+                      <p className="font-medium">Last Updated</p>
                       <div>{formatDate(guardrailData.updated_at)}</div>
                     </div>
 
@@ -881,10 +888,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                   </div>
                 )}
               </Card>
-            </TabPanel>
+            </TabsContent>
           )}
-        </TabPanels>
-      </TabGroup>
+        </div>
+      </Tabs>
 
       {/* Custom Code Editor Modal */}
       <CustomCodeModal

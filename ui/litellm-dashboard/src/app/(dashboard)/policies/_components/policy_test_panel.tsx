@@ -218,7 +218,7 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
             </FormField>
           </FieldGroup>
           <div className="flex space-x-2 mt-4">
-            <Button type="button" onClick={handleTest} disabled={isLoading || !accessToken}>
+            <Button type="button" onClick={handleTest} disabled={isLoading || !accessToken} aria-busy={isLoading}>
               {isLoading && <UiLoadingSpinner className="size-4" />}
               Simulate
             </Button>

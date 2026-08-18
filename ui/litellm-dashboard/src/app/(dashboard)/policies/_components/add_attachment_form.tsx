@@ -417,12 +417,23 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
               Cancel
             </Button>
             {scopeType === "specific" && (
-              <Button type="button" variant="secondary" onClick={handlePreviewImpact} disabled={isEstimating}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handlePreviewImpact}
+                disabled={isEstimating}
+                aria-busy={isEstimating}
+              >
                 {isEstimating && <UiLoadingSpinner className="size-4" />}
                 Estimate Impact
               </Button>
             )}
-            <Button type="button" onClick={form.handleSubmit(handleSubmit)} disabled={isSubmitting}>
+            <Button
+              type="button"
+              onClick={form.handleSubmit(handleSubmit)}
+              disabled={isSubmitting}
+              aria-busy={isSubmitting}
+            >
               {isSubmitting && <UiLoadingSpinner className="size-4" />}
               Create Attachment
             </Button>
