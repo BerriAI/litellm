@@ -4,10 +4,6 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
 vi.mock("@/components/ModelSelect/ModelSelect", () => ({
   ModelSelect: ({ onChange }: { onChange: (values: string[]) => void }) => (
     <button type="button" onClick={() => onChange(["gpt-5.2"])}>

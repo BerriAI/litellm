@@ -51,14 +51,6 @@ vi.mock("./default-user-settings/DefaultUserSettingsForm", () => ({
   },
 }));
 
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const makeUser = (userId: string, email: string) => ({
   user_id: userId,
   user_email: email,

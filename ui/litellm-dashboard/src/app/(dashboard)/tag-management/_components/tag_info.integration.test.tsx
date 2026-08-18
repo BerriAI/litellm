@@ -21,11 +21,6 @@ vi.mock("@/components/organisms/create_key_button", () => ({
   ),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const mockTagInfoCall = vi.mocked(tagInfoCall);
 const mockTagUpdateCall = vi.mocked(tagUpdateCall);
 

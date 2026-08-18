@@ -26,7 +26,7 @@ import {
   updateGuardrailCall,
   type GuardrailSubmissionItem,
 } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { useRegisterGuardrail } from "@/app/(dashboard)/hooks/guardrails/useRegisterGuardrail";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -874,7 +874,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
         litellm_params,
         guardrail_info: values.guardrail_info ? JSON.parse(values.guardrail_info) : undefined,
       });
-      NotificationsManager.success("Guardrail submitted for review");
+      toast.success("Guardrail submitted for review");
       setIsSubmitModalOpen(false);
       submitForm.reset();
       fetchSubmissions();
@@ -900,9 +900,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
         litellm_params: { forward_api_key: newValue },
       });
       setGuardrails((prev) => prev.map((x) => (x.id === id ? { ...x, forwardKey: newValue } : x)));
-      NotificationsManager.success(newValue ? "Forward API key enabled" : "Forward API key disabled");
+      toast.success(newValue ? "Forward API key enabled" : "Forward API key disabled");
     } catch {
-      NotificationsManager.fromBackend("Failed to update forward API key");
+      toast.fromError("Failed to update forward API key");
     }
   }
 
@@ -926,9 +926,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
             : x,
         ),
       );
-      NotificationsManager.success("Static headers updated");
+      toast.success("Static headers updated");
     } catch {
-      NotificationsManager.fromBackend("Failed to update static headers");
+      toast.fromError("Failed to update static headers");
     }
   }
 
@@ -939,9 +939,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
         litellm_params: { extra_headers: extraHeaders },
       });
       setGuardrails((prev) => prev.map((x) => (x.id === id ? { ...x, extraHeaders } : x)));
-      NotificationsManager.success("Forward client headers updated");
+      toast.success("Forward client headers updated");
     } catch {
-      NotificationsManager.fromBackend("Failed to update forward client headers");
+      toast.fromError("Failed to update forward client headers");
     }
   }
 
@@ -952,9 +952,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       setConfirmAction(null);
       if (selectedId === id) setSelectedId(null);
       await fetchSubmissions();
-      NotificationsManager.success("Guardrail approved");
+      toast.success("Guardrail approved");
     } catch {
-      NotificationsManager.fromBackend("Failed to approve guardrail");
+      toast.fromError("Failed to approve guardrail");
     }
   }
 
@@ -965,9 +965,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       setConfirmAction(null);
       if (selectedId === id) setSelectedId(null);
       await fetchSubmissions();
-      NotificationsManager.success("Guardrail rejected");
+      toast.success("Guardrail rejected");
     } catch {
-      NotificationsManager.fromBackend("Failed to reject guardrail");
+      toast.fromError("Failed to reject guardrail");
     }
   }
 

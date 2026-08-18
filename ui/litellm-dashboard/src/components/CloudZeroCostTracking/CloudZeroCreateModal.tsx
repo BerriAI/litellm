@@ -1,5 +1,5 @@
 import { Form, Modal, Input } from "antd";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { useEffect } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCloudZeroCreate } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroCreate";
@@ -32,7 +32,7 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
         },
         {
           onSuccess: () => {
-            MessageManager.success("CloudZero integration created successfully");
+            toast.success("CloudZero integration created successfully");
             form.resetFields();
             onOk();
           },
@@ -40,7 +40,7 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
             if (error?.errorFields) {
               return;
             }
-            MessageManager.error(error?.message || "Failed to create CloudZero integration");
+            toast.error(error?.message || "Failed to create CloudZero integration");
           },
         },
       );
@@ -48,7 +48,7 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
       if (error?.errorFields) {
         return;
       }
-      MessageManager.error(error?.message || "Failed to create CloudZero integration");
+      toast.error(error?.message || "Failed to create CloudZero integration");
     }
   };
 

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { vectorStoreCreateCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 import VectorStoreForm from "./VectorStoreForm";
 
@@ -18,12 +18,8 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
   ]),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const mockCreate = vi.mocked(vectorStoreCreateCall);
-const mockNotifications = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 
 const onSuccess = vi.fn();
 
@@ -179,9 +175,7 @@ describe("VectorStoreForm submit payload", () => {
     await user.type(screen.getByPlaceholderText('{"key": "value"}'), "not json");
     await submit(user);
 
-    await vi.waitFor(() =>
-      expect(mockNotifications.fromBackend).toHaveBeenCalledWith("Invalid JSON in metadata field"),
-    );
+    await vi.waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith("Invalid JSON in metadata field"));
     expect(mockCreate).not.toHaveBeenCalled();
   });
 

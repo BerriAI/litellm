@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { credentialListCall, vectorStoreInfoCall, vectorStoreUpdateCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 import VectorStoreInfoView from "./vector_store_info";
 
@@ -15,14 +15,10 @@ vi.mock("@/components/networking", () => ({
 
 vi.mock("./VectorStoreTester", () => ({ __esModule: true, default: () => null }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const mockInfo = vi.mocked(vectorStoreInfoCall);
 const mockUpdate = vi.mocked(vectorStoreUpdateCall);
 const mockCredentials = vi.mocked(credentialListCall);
-const mockNotifications = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 
 const serverRecord = {
   vector_store_id: "vs-1",
@@ -146,9 +142,7 @@ describe("VectorStoreInfoView save payload", () => {
     await user.type(metadataInput, "not json");
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await vi.waitFor(() =>
-      expect(mockNotifications.fromBackend).toHaveBeenCalledWith("Invalid JSON in metadata field"),
-    );
+    await vi.waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith("Invalid JSON in metadata field"));
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
