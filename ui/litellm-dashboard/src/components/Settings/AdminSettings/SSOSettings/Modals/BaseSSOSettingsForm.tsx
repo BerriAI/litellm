@@ -285,7 +285,7 @@ export const emptySSOSettingsFormValues: SSOSettingsFormValues = {
   generic_userinfo_endpoint: "",
   user_email: "",
   proxy_base_url: "",
-  default_role: "Internal User",
+  default_role: "internal_user",
 };
 
 export const useSSOSettingsForm = (
@@ -351,7 +351,7 @@ export const SSOProviderSelectField = () => {
             aria-describedby={rest["aria-describedby"]}
             className="w-full"
           >
-            <SelectValue />
+            <SelectValue>{(provider: string) => (provider ? providerOptionLabel(provider) : "")}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {Object.entries(ssoProviderLogoMap).map(([optionValue, logo]) => (
@@ -364,10 +364,7 @@ export const SSOProviderSelectField = () => {
                       className="h-6 w-6 mr-3 object-contain"
                     />
                   )}
-                  <span>
-                    {ssoProviderDisplayNames[optionValue] ||
-                      optionValue.charAt(0).toUpperCase() + optionValue.slice(1) + " SSO"}
-                  </span>
+                  <span>{providerOptionLabel(optionValue)}</span>
                 </span>
               </SelectItem>
             ))}
@@ -441,6 +438,16 @@ export const GroupClaimField = () => {
   );
 };
 
+const DEFAULT_ROLE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "internal_user_viewer", label: "Internal Viewer" },
+  { value: "internal_user", label: "Internal User" },
+  { value: "proxy_admin_viewer", label: "Admin Viewer" },
+  { value: "proxy_admin", label: "Proxy Admin" },
+];
+
+const providerOptionLabel = (value: string) =>
+  ssoProviderDisplayNames[value] || value.charAt(0).toUpperCase() + value.slice(1) + " SSO";
+
 export const RoleMappingTeamFields = () => {
   const { control } = useFormContext<SSOSettingsFormValues>();
 
@@ -456,13 +463,16 @@ export const RoleMappingTeamFields = () => {
               aria-describedby={rest["aria-describedby"]}
               className="w-full"
             >
-              <SelectValue />
+              <SelectValue>
+                {(role: string) => DEFAULT_ROLE_OPTIONS.find((option) => option.value === role)?.label ?? role}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="internal_user_viewer">Internal Viewer</SelectItem>
-              <SelectItem value="internal_user">Internal User</SelectItem>
-              <SelectItem value="proxy_admin_viewer">Admin Viewer</SelectItem>
-              <SelectItem value="proxy_admin">Proxy Admin</SelectItem>
+              {DEFAULT_ROLE_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         )}

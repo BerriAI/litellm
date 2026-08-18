@@ -385,4 +385,21 @@ describe("renderProviderFields", () => {
     expect(await screen.findByText("Please enter the google client id")).toBeInTheDocument();
     expect(handleSubmit).not.toHaveBeenCalled();
   });
+
+  it("shows the effective default role on an untouched form", async () => {
+    let form!: ReturnType<typeof useSSOSettingsForm>;
+    const TestWrapper = () => {
+      const formInstance = useSSOSettingsForm("sso-settings");
+      form = formInstance;
+      return <BaseSSOSettingsForm form={formInstance} onFormSubmit={vi.fn()} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    await act(async () => {
+      form.reset({ ...emptySSOSettingsFormValues, sso_provider: "okta", use_role_mappings: true });
+    });
+
+    expect(await screen.findByLabelText("Default Role")).toHaveTextContent("Internal User");
+  });
 });

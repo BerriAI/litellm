@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, Mock } from "vitest";
 import EditSSOSettingsModal, { toSSOFormValues } from "./EditSSOSettingsModal";
+import { ssoProviderConfigs } from "./BaseSSOSettingsForm";
 import type { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
@@ -122,6 +123,8 @@ const createMockHooks = (): {
   },
 });
 
+let lastSeededForm: any;
+
 vi.mock("antd", () => ({
   Modal: ({ children, open, title, footer, onCancel, width, ...props }: any) => (
     <div data-testid={TEST_IDS.MODAL} data-open={open} data-title={title} data-width={width} {...props}>
@@ -134,13 +137,16 @@ vi.mock("antd", () => ({
 
 vi.mock("./BaseSSOSettingsForm", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./BaseSSOSettingsForm")>()),
-  default: ({ form, onFormSubmit }: any) => (
-    <div data-testid={TEST_IDS.BASE_SSO_FORM}>
-      <button data-testid={TEST_IDS.TRIGGER_FORM_SUBMIT} onClick={() => onFormSubmit({ testField: "testValue" })}>
-        Trigger Form Submit
-      </button>
-    </div>
-  ),
+  default: ({ form, onFormSubmit }: any) => {
+    lastSeededForm = form;
+    return (
+      <div data-testid={TEST_IDS.BASE_SSO_FORM}>
+        <button data-testid={TEST_IDS.TRIGGER_FORM_SUBMIT} onClick={() => onFormSubmit({ testField: "testValue" })}>
+          Trigger Form Submit
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/app/(dashboard)/hooks/sso/useSSOSettings", () => ({
@@ -695,6 +701,50 @@ describe("EditSSOSettingsModal", () => {
       }).not.toThrow();
 
       expect(processSSOSettingsPayload).toHaveBeenCalled();
+    });
+  });
+
+  describe("Reseeding", () => {
+    it("replaces every field when reopened against a different stored config", async () => {
+      const first = createGoogleSSOData({
+        google_client_id: "first-tenant-id",
+        proxy_base_url: "https://first.example.com",
+        user_email: "first-admin@example.com",
+      });
+      setupMocks({ useSSOSettings: { data: first, isLoading: false, error: null } });
+      const { rerender } = renderComponent();
+
+      await waitFor(() => {
+        expect(lastSeededForm.getValues().google_client_id).toBe("first-tenant-id");
+      });
+
+      const second = createGoogleSSOData({
+        google_client_id: "second-tenant-id",
+        proxy_base_url: "https://second.example.com",
+        user_email: "second-admin@example.com",
+      });
+      setupMocks({ useSSOSettings: { data: second, isLoading: false, error: null } });
+      rerender(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
+
+      await waitFor(() => {
+        expect(lastSeededForm.getValues().google_client_id).toBe("second-tenant-id");
+      });
+      expect(JSON.stringify(lastSeededForm.getValues())).not.toContain("first");
+    });
+  });
+
+  describe("Seeding completeness", () => {
+    it("seeds every field the provider forms can mount", () => {
+      const allFields = Object.values(ssoProviderConfigs).flatMap((config) => config.fields);
+      const textFieldNames = Array.from(
+        new Set(allFields.filter((field) => field.type !== "checkbox").map((field) => field.name)),
+      );
+      const stored = Object.fromEntries(textFieldNames.map((name) => [name, `stored-${name}`]));
+
+      const seeded = toSSOFormValues({ ...stored, saml_allow_unsolicited: "true" } as unknown as SSOSettingsValues);
+
+      expect(textFieldNames.filter((name) => seeded[name] !== `stored-${name}`)).toEqual([]);
+      expect(seeded.saml_allow_unsolicited).toBe(true);
     });
   });
 });
