@@ -65,6 +65,11 @@ def _resolve_usage_window(start_date: str | None, end_date: str | None) -> tuple
             detail="start_date and end_date must be in YYYY-MM-DD format",
         )
     start_obj, end_obj = parsed
+    if (start_obj.isoformat(), end_obj.isoformat()) != (start, end):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date and end_date must be in YYYY-MM-DD format",
+        )
     if end_obj < start_obj:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
