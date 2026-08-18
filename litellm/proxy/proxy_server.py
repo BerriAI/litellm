@@ -5500,11 +5500,22 @@ class ProxyConfig:
             for plugin_name, plugin_path in classifier_plugins_config.items():
                 if not isinstance(plugin_path, str):
                     raise TypeError(f"classifier_plugins.{plugin_name} must be a dotted-path string")
-                litellm.classifier_plugin_registry[str(plugin_name)] = resolve_classifier_plugin(
-                    plugin_path=plugin_path,
-                    config_file_path=config_file_path,
-                    source_label=f"classifier_plugins.{plugin_name}",
+            resolved_entries: Final = tuple(
+                (
+                    str(plugin_name),
+                    resolve_classifier_plugin(
+                        plugin_path=plugin_path,
+                        config_file_path=config_file_path,
+                        source_label=f"classifier_plugins.{plugin_name}",
+                    ),
                 )
+                for plugin_name, plugin_path in classifier_plugins_config.items()
+            )
+            # Replace, never merge: a config reload that drops a name must evict it, or a
+            # deleted plugin stays selectable until the next restart. Resolution runs before
+            # the clear, so a module broken at reload time keeps the old registry intact.
+            litellm.classifier_plugin_registry.clear()
+            litellm.classifier_plugin_registry.update(resolved_entries)
 
         ## WORKER REGISTRY (Global Control Plane)
         worker_registry_config: Final = config.get("worker_registry", None)

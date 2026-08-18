@@ -123,20 +123,14 @@ def test__scrub_db_overlay_remote_module_loads_invalid_non_dict_returns_input():
 
 def test_resolve_complexity_router_plugins_no_plugins_key_is_a_noop():
     config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
-    resolve_complexity_router_plugins(
-        model_name="smart-router", complexity_router_config=config, config_file_path=None
-    )
+    resolve_complexity_router_plugins(model_name="smart-router", complexity_router_config=config, config_file_path=None)
     assert config == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
 
 
 def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance(tmp_path):
     plugin_file = tmp_path / "my_plugin.py"
     plugin_file.write_text(
-        "class _Plugin:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "my_plugin_instance = _Plugin()\n"
+        "class _Plugin:\n    async def run(self, context):\n        return context\n\nmy_plugin_instance = _Plugin()\n"
     )
     config: Dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
 
@@ -262,6 +256,47 @@ def test_resolve_classifier_plugin_prefers_the_registry_over_dotted_import(monke
     assert resolved is instance
 
 
+def test_classifier_plugins_config_key_replaces_the_registry_on_reload(monkeypatch, tmp_path):
+    """A reload that drops a name must evict it, or a deleted plugin stays selectable."""
+    import asyncio
+
+    import litellm
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    (tmp_path / "reg_classifier.py").write_text(
+        "class _Classifier:\n"
+        "    async def classify(self, context):\n"
+        "        return 'SIMPLE'\n"
+        "\n"
+        "instance = _Classifier()\n"
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "model_list:\n"
+        "  - model_name: gpt-4o-mini\n"
+        "    litellm_params:\n"
+        "      model: gpt-4o-mini\n"
+        "classifier_plugins:\n"
+        "  stale-name: reg_classifier.instance\n"
+    )
+    monkeypatch.setattr(litellm, "classifier_plugin_registry", {}, raising=True)
+    asyncio.get_event_loop_policy()
+    proxy_config = ProxyConfig()
+    asyncio.run(proxy_config.load_config(router=None, config_file_path=str(config_path)))
+    assert set(litellm.classifier_plugin_registry) == {"stale-name"}
+
+    config_path.write_text(
+        "model_list:\n"
+        "  - model_name: gpt-4o-mini\n"
+        "    litellm_params:\n"
+        "      model: gpt-4o-mini\n"
+        "classifier_plugins:\n"
+        "  fresh-name: reg_classifier.instance\n"
+    )
+    asyncio.run(proxy_config.load_config(router=None, config_file_path=str(config_path)))
+    assert set(litellm.classifier_plugin_registry) == {"fresh-name"}
+
+
 def test_resolve_complexity_router_plugins_leaves_live_classifier_instance_alone():
     class _Classifier:
         async def classify(self, context):
@@ -269,9 +304,7 @@ def test_resolve_complexity_router_plugins_leaves_live_classifier_instance_alone
 
     instance = _Classifier()
     config: dict[str, Any] = {"classifier_plugin": instance}
-    resolve_complexity_router_plugins(
-        model_name="smart-router", complexity_router_config=config, config_file_path=None
-    )
+    resolve_complexity_router_plugins(model_name="smart-router", complexity_router_config=config, config_file_path=None)
     assert config["classifier_plugin"] is instance
 
 
@@ -283,11 +316,7 @@ def test_resolve_complexity_router_plugins_leaves_live_classifier_instance_alone
 def test_resolve_routing_plugins_resolves_dotted_paths(tmp_path):
     plugin_file = tmp_path / "rs_plugin.py"
     plugin_file.write_text(
-        "class _Plugin:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "rs_plugin_instance = _Plugin()\n"
+        "class _Plugin:\n    async def run(self, context):\n        return context\n\nrs_plugin_instance = _Plugin()\n"
     )
 
     resolved = resolve_routing_plugins(
@@ -1078,11 +1107,7 @@ async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path
     to `await "some.string".run(context)`."""
     plugin_file = tmp_path / "rs_plugin.py"
     plugin_file.write_text(
-        "class _Plugin:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "rs_plugin_instance = _Plugin()\n"
+        "class _Plugin:\n    async def run(self, context):\n        return context\n\nrs_plugin_instance = _Plugin()\n"
     )
     f = tmp_path / "c.yaml"
     f.write_text(
@@ -1097,9 +1122,7 @@ async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
 
-    router, _model_list, _general_settings = await ProxyConfig().load_config(
-        router=None, config_file_path=str(f)
-    )
+    router, _model_list, _general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(f))
 
     assert len(router.routing_plugins) == 1
     assert type(router.routing_plugins[0]).__name__ == "_Plugin"
@@ -1166,10 +1189,7 @@ async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, mo
 
     f = tmp_path / "c.yaml"
     f.write_text(
-        "model_list: []\n"
-        "general_settings:\n"
-        "  proxy_config_reload_interval_seconds: 47\n"
-        "litellm_settings: {}\n"
+        "model_list: []\ngeneral_settings:\n  proxy_config_reload_interval_seconds: 47\nlitellm_settings: {}\n"
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
@@ -1313,11 +1333,7 @@ async def test_ProxyConfig__init_non_llm_configs_worker_registry_requires_premiu
     pc = ProxyConfig()
     with pytest.raises(ValueError) as exc_info:
         await pc._init_non_llm_configs(
-            config={
-                "worker_registry": [
-                    {"worker_id": "worker-a", "name": "Worker A", "url": "http://localhost:4001"}
-                ]
-            },
+            config={"worker_registry": [{"worker_id": "worker-a", "name": "Worker A", "url": "http://localhost:4001"}]},
             config_file_path=None,
         )
     message = str(exc_info.value)
@@ -1547,9 +1563,7 @@ def test_ProxyConfig__warn_on_misplaced_jwt_keys_warns_even_when_also_under_gene
 
 def test_ProxyConfig__warn_on_misplaced_jwt_keys_silent_when_correctly_placed():
     """Keys living only under general_settings are valid, so no warning fires."""
-    result, warnings = _capture_proxy_warnings(
-        {"general_settings": {"enable_jwt_auth": True, "litellm_jwtauth": {}}}
-    )
+    result, warnings = _capture_proxy_warnings({"general_settings": {"enable_jwt_auth": True, "litellm_jwtauth": {}}})
 
     assert result == ()
     assert warnings == []
