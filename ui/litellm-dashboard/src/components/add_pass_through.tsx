@@ -3,8 +3,11 @@
  */
 
 import React, { useState } from "react";
-import { Button, TextInput, Switch } from "@tremor/react";
-import { Card, Title, Subtitle } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { createPassThroughEndpoint } from "./networking";
 import { Modal, Form, Select as Select2, Tooltip, Alert } from "antd";
 import NumericalInput from "./shared/numerical_input";
@@ -149,11 +152,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             }}
           >
             {/* Route Configuration Section */}
-            <Card className="p-5">
-              <Title className="text-lg font-semibold text-gray-900 mb-2">Route Configuration</Title>
-              <Subtitle className="text-gray-600 mb-5">
+            <Card className="block p-5">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Route Configuration</h3>
+              <p className="text-sm text-gray-600 mb-5">
                 Configure how requests to your domain will be forwarded to the target API
-              </Subtitle>
+              </p>
 
               <div className="space-y-5">
                 <Form.Item
@@ -166,7 +169,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   className="mb-4"
                 >
                   <div className="flex items-center">
-                    <TextInput
+                    <Input
                       placeholder="bria"
                       value={pathValue}
                       onChange={(e) => handlePathChange(e.target.value)}
@@ -185,7 +188,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   extra={<div className="text-xs text-gray-500 mt-1">Example:https://engine.prod.bria-api.com</div>}
                   className="mb-4"
                 >
-                  <TextInput
+                  <Input
                     placeholder="https://engine.prod.bria-api.com"
                     value={targetValue}
                     onChange={(e) => {
@@ -238,7 +241,14 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                     </div>
                   </div>
                   <Form.Item name="include_subpath" valuePropName="checked" className="mb-0">
-                    <Switch checked={includeSubpath} onChange={setIncludeSubpath} />
+                    <Switch
+                      aria-label="Include Subpaths"
+                      checked={includeSubpath}
+                      onCheckedChange={(checked) => {
+                        setIncludeSubpath(checked);
+                        form.setFieldsValue({ include_subpath: checked });
+                      }}
+                    />
                   </Form.Item>
                 </div>
               </div>
@@ -248,11 +258,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             <RoutePreview pathValue={pathValue} targetValue={targetValue} includeSubpath={includeSubpath} />
 
             {/* Headers Section */}
-            <Card className="p-6">
-              <Title className="text-lg font-semibold text-gray-900 mb-2">Headers</Title>
-              <Subtitle className="text-gray-600 mb-6">
+            <Card className="block p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Headers</h3>
+              <p className="text-sm text-gray-600 mb-6">
                 Add headers that will be sent with every request to the target API
-              </Subtitle>
+              </p>
 
               <Form.Item
                 label={
@@ -277,11 +287,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             </Card>
 
             {/* Default Query Parameters Section */}
-            <Card className="p-6">
-              <Title className="text-lg font-semibold text-gray-900 mb-2">Default Query Parameters</Title>
-              <Subtitle className="text-gray-600 mb-6">
+            <Card className="block p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Default Query Parameters</h3>
+              <p className="text-sm text-gray-600 mb-6">
                 Add query parameters that will be automatically sent with every request to the target API
-              </Subtitle>
+              </p>
 
               <Form.Item
                 label={
@@ -318,9 +328,9 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             <PassThroughGuardrailsSection accessToken={accessToken} value={guardrails} onChange={setGuardrails} />
 
             {/* Performance Section */}
-            <Card className="p-6">
-              <Title className="text-lg font-semibold text-gray-900 mb-2">Performance</Title>
-              <Subtitle className="text-gray-600 mb-6">Configure upstream request timeout for this endpoint</Subtitle>
+            <Card className="block p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Performance</h3>
+              <p className="text-sm text-gray-600 mb-6">Configure upstream request timeout for this endpoint</p>
 
               <Form.Item
                 label={
@@ -343,9 +353,9 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             </Card>
 
             {/* Billing Section */}
-            <Card className="p-6">
-              <Title className="text-lg font-semibold text-gray-900 mb-2">Billing</Title>
-              <Subtitle className="text-gray-600 mb-6">Optional cost tracking for this endpoint</Subtitle>
+            <Card className="block p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Billing</h3>
+              <p className="text-sm text-gray-600 mb-6">Optional cost tracking for this endpoint</p>
 
               <Form.Item
                 label={
@@ -372,12 +382,13 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 Cancel
               </Button>
               <Button
-                variant="primary"
-                loading={isLoading}
+                disabled={isLoading}
+                aria-busy={isLoading}
                 onClick={() => {
                   form.submit();
                 }}
               >
+                {isLoading && <UiLoadingSpinner className="size-4" />}
                 {isLoading ? "Creating..." : "Add Pass-Through Endpoint"}
               </Button>
             </div>

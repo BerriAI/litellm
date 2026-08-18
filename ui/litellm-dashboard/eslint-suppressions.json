@@ -2063,7 +2063,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 1
     }
   },
   "src/components/agent_management/AgentSelector.test.tsx": {
@@ -2213,7 +2213,7 @@
   },
   "src/components/common_components/PassThroughGuardrailsSection.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -2221,7 +2221,7 @@
   },
   "src/components/common_components/PassThroughSecuritySection.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/common_components/RateLimitTypeFormItem.test.tsx": {
@@ -2252,7 +2252,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/components/common_components/fetch_teams.tsx": {
@@ -2483,7 +2483,7 @@
       "count": 14
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     },
     "prefer-const": {
       "count": 5
@@ -2593,7 +2593,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/per_user_usage.tsx": {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Subtitle } from "@tremor/react";
+import { Card } from "@/components/ui/card";
 import { Form, Select, Tooltip, Alert } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import GuardrailSelector from "../guardrails/GuardrailSelector";
@@ -69,12 +69,12 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
   };
 
   return (
-    <Card className="p-6">
-      <Title className="text-lg font-semibold text-gray-900 mb-2">Guardrails</Title>
-      <Subtitle className="text-gray-600 mb-6">
+    <Card className="block p-6">
+      <h3 className="text-lg font-semibold text-gray-900 mb-2">Guardrails</h3>
+      <p className="text-sm text-gray-600 mb-6">
         Configure guardrails to enforce policies on requests and responses. Guardrails are opt-in for passthrough
         endpoints.
-      </Subtitle>
+      </p>
 
       <Alert
         message={
@@ -140,7 +140,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
             <div className="text-xs text-gray-500">💡 Tip: Leave empty to check entire payload</div>
           </div>
           {selectedGuardrails.map((guardrailName) => (
-            <Card key={guardrailName} className="p-4 bg-gray-50">
+            <Card key={guardrailName} className="block p-4 bg-gray-50">
               <div className="text-sm font-medium text-gray-900 mb-3">{guardrailName}</div>
               <div className="space-y-3">
                 <div>
