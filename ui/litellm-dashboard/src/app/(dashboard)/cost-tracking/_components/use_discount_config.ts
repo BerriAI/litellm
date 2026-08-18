@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { DiscountConfig } from "./types";
 import { getProviderBackendValue } from "./provider_display_helpers";
 import { Providers } from "@/components/provider_info_helpers";
@@ -43,7 +43,7 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
       }
     } catch (error) {
       console.error("Error fetching discount config:", error);
-      NotificationsManager.fromBackend("Failed to fetch discount configuration");
+      toast.fromError("Failed to fetch discount configuration");
     }
   }, [accessToken]);
 
@@ -63,16 +63,16 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
         });
 
         if (response.ok) {
-          NotificationsManager.success("Discount configuration updated successfully");
+          toast.success("Discount configuration updated successfully");
           await fetchDiscountConfig();
         } else {
           const errorData = await response.json();
           const errorMessage = errorData.detail?.error || errorData.detail || "Failed to update settings";
-          NotificationsManager.fromBackend(errorMessage);
+          toast.fromError(errorMessage);
         }
       } catch (error) {
         console.error("Error updating discount config:", error);
-        NotificationsManager.fromBackend("Failed to update discount configuration");
+        toast.fromError("Failed to update discount configuration");
       }
     },
     [accessToken, fetchDiscountConfig],
@@ -81,25 +81,25 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
   const handleAddProvider = useCallback(
     async (selectedProvider: string | undefined, newDiscount: string): Promise<boolean> => {
       if (!selectedProvider || !newDiscount) {
-        NotificationsManager.fromBackend("Please select a provider and enter discount percentage");
+        toast.fromError("Please select a provider and enter discount percentage");
         return false;
       }
 
       const percentageValue = parseFloat(newDiscount);
       if (isNaN(percentageValue) || percentageValue < 0 || percentageValue > 100) {
-        NotificationsManager.fromBackend("Discount must be between 0% and 100%");
+        toast.fromError("Discount must be between 0% and 100%");
         return false;
       }
 
       const providerValue = getProviderBackendValue(selectedProvider);
 
       if (!providerValue) {
-        NotificationsManager.fromBackend("Invalid provider selected");
+        toast.fromError("Invalid provider selected");
         return false;
       }
 
       if (discountConfig[providerValue]) {
-        NotificationsManager.fromBackend(
+        toast.fromError(
           `Discount for ${Providers[selectedProvider as keyof typeof Providers]} already exists. Edit it in the table above.`,
         );
         return false;

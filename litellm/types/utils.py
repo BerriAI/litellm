@@ -2767,15 +2767,23 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
-    # The LLM classifier failed on a router with an operator-defined tier set, so the
-    # request routed to the configured fallback_tier without being classified.
+    # The operator's classifier plugin (classifier_type 'custom') decided the tier.
+    "classifier_plugin",
+    # The LLM classifier or classifier plugin failed on a router with an operator-defined
+    # tier set, so the request routed to the configured fallback_tier without being classified.
     "classifier_fallback",
-    # The LLM classifier failed and classifier_fallback is 'default_model', so the request
-    # went to default_model without being classified. Distinct from "default_fallback",
+    # The LLM classifier or classifier plugin failed and classifier_fallback is
+    # 'default_model', so the request went to default_model without being classified.
+    # Distinct from "default_fallback",
     # which is a tier having no model configured rather than classification not happening.
     "default_model_fallback",
     "literal_keyword_match",
     "semantic_keyword_match",
+    # A plan-mode sentinel (Claude Code / Copilot plan mode) was detected on the request and
+    # plan_mode_min_tier decided the tier: either it raised what the pipeline chose (classifier,
+    # keyword rule, or session pin), or the floor was already the top configured tier and the
+    # classifier was skipped. The matched sentinel rides in matched_keyword.
+    "plan_mode",
     "session_affinity_pin",
     "session_affinity_escalation",
     "default_fallback",
@@ -3471,6 +3479,7 @@ all_litellm_params = (
         "bos_token",
         "eos_token",
         "request_timeout",
+        "client_side_timeout",
         "complete_response",
         "self",
         "client",
@@ -3702,6 +3711,7 @@ class LlmProviders(str, Enum):
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
+    VALKEY = "valkey"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
@@ -3750,9 +3760,10 @@ LlmProvidersSet: Final = {provider.value for provider in LlmProviders}
 OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.OPENAI.value,
     LlmProviders.HOSTED_VLLM.value,
+    LlmProviders.LITELLM_PROXY.value,
 }
 
-ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai"]
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
 
 LIST_BATCHES_SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(get_args(ListBatchesSupportedProvider))
 

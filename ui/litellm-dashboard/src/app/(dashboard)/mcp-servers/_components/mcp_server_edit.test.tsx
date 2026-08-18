@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { setSecureItem } from "@/utils/secureStorage";
 import * as networking from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { selectAntOption } from "./testUtils";
 
 vi.mock("@/components/networking", () => ({
@@ -13,13 +13,6 @@ vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
   storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
-}));
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 const mockOauth: {
@@ -1390,10 +1383,8 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     await waitFor(() => {
       expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalled();
     });
-    expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-      "MCP Server updated, but failed to persist OAuth token: write failed",
-    );
-    expect(NotificationsManager.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
+    expect(toast.fromError).toHaveBeenCalledWith("MCP Server updated, but failed to persist OAuth token: write failed");
+    expect(toast.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
@@ -2209,5 +2200,52 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
 
     const payload = await saveAndGetPayload();
     expect(payload.dcr_bridge).toBe(true);
+  });
+});
+
+describe("MCPServerEdit (tab mount contract)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const plainServer = {
+    ...interactiveOAuthServer,
+    auth_type: "none",
+    max_concurrent_requests: 5,
+  };
+
+  it("carries pending server edits into a save triggered from the Cost Configuration tab", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...plainServer,
+      max_concurrent_requests: 2,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={plainServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 10"), { target: { value: "2" } });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Cost Configuration" }));
+    expect(await screen.findByTestId("mcp-cost-config")).toBeInTheDocument();
+
+    const costTabSaveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    expect(costTabSaveButtons).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(costTabSaveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.max_concurrent_requests).toBe(2);
   });
 });

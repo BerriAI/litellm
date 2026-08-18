@@ -1,7 +1,7 @@
 import React from "react";
 import { Button, Modal, Typography } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 export interface InvitationLink {
   id: string;
@@ -97,7 +97,7 @@ export default function OnboardingModal({
         <p className="text-sm">{getInvitationUrl()}</p>
       </div>
       <div className="flex justify-end mt-5">
-        <CopyToClipboard text={getInvitationUrl()} onCopy={() => NotificationsManager.success("Copied!")}>
+        <CopyToClipboard text={getInvitationUrl()} onCopy={() => toast.success("Copied!")}>
           <Button type="primary">
             {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
           </Button>
