@@ -2304,9 +2304,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    },
     "max-lines": {
       "count": 1
     },

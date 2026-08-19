@@ -165,7 +165,7 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
   return {
     form,
     registry,
-    mountedValues: () => projectMountedValues(registry, form.getValues()),
+    mountedValues: () => projectMountedValues(registry, form.getValues),
     handleOk: vi.fn().mockResolvedValue(true),
     setSelectedProvider: vi.fn(),
     setProviderModelsFn: vi.fn(),

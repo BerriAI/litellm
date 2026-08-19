@@ -66,7 +66,7 @@ export default function CredentialModal({
     if (!isValid) {
       return;
     }
-    const values = projectMountedValues(registry, form.getValues());
+    const values = projectMountedValues(registry, form.getValues);
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
       if (value !== "" && value !== undefined && value !== null) {
         acc[key] = value;

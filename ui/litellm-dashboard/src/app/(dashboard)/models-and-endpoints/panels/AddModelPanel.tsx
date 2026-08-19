@@ -33,7 +33,7 @@ export default function AddModelPanel() {
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["models", "list"] });
 
-  const mountedValues = () => projectMountedValues(registry, form.getValues());
+  const mountedValues = () => projectMountedValues(registry, form.getValues);
 
   const handleOk = async (): Promise<boolean> => {
     const isValid = await form.trigger(registry.mountedNames() as string[]);

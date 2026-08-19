@@ -1,7 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { Controller, type Control, type ControllerProps, type RegisterOptions } from "react-hook-form";
+import {
+  Controller,
+  type Control,
+  type ControllerProps,
+  type RegisterOptions,
+  type UseFormGetValues,
+} from "react-hook-form";
 
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/shared/form/field";
 
@@ -34,23 +40,34 @@ const MountedFormContext = React.createContext<MountedFormContextValue>({
 export const MountedFormProvider = MountedFormContext.Provider;
 
 export const useMountRegistry = (): MountRegistry => {
-  const names = React.useRef<Set<string>>(new Set());
+  const counts = React.useRef<Map<string, number>>(new Map());
   return React.useMemo(
     () => ({
       register: (name: string) => {
-        names.current.add(name);
+        counts.current.set(name, (counts.current.get(name) ?? 0) + 1);
         return () => {
-          names.current.delete(name);
+          const remaining = (counts.current.get(name) ?? 0) - 1;
+          if (remaining > 0) {
+            counts.current.set(name, remaining);
+          } else {
+            counts.current.delete(name);
+          }
         };
       },
-      mountedNames: () => Array.from(names.current),
+      mountedNames: () => Array.from(counts.current.keys()),
     }),
     [],
   );
 };
 
-export const projectMountedValues = (registry: MountRegistry, store: MountedFormValues): MountedFormValues =>
-  Object.fromEntries(registry.mountedNames().map((name) => [name, store[name]]));
+export const projectMountedValues = (
+  registry: MountRegistry,
+  getValues: UseFormGetValues<MountedFormValues>,
+): MountedFormValues => {
+  const names = [...registry.mountedNames()];
+  const values = getValues(names);
+  return Object.fromEntries(names.map((name, index) => [name, values[index]]));
+};
 
 export type MountedFieldControlProps = {
   readonly id: string;
