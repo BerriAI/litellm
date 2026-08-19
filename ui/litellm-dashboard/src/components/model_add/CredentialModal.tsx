@@ -5,7 +5,7 @@ import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { antdRequired } from "../common_components/antdFormRules";
-import { labelWithHint } from "../common_components/LabelWithHint";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import {
   MountedFormField,
   MountedFormProvider,

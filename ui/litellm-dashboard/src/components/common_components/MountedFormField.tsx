@@ -49,7 +49,6 @@ export const useMountRegistry = (): MountRegistry => {
   );
 };
 
-/** antd submits only the mounted fields; react-hook-form submits the whole store, so the mounted set is reapplied here. */
 export const projectMountedValues = (registry: MountRegistry, store: MountedFormValues): MountedFormValues =>
   Object.fromEntries(registry.mountedNames().map((name) => [name, store[name]]));
 
@@ -67,7 +66,6 @@ export type MountedFieldControlProps = {
 export interface MountedFormFieldProps {
   readonly name: string;
   readonly label?: React.ReactNode;
-  /** antd `help` is always visible and replaces the rule's message, so a helped field never shows one. */
   readonly help?: React.ReactNode;
   readonly required?: boolean;
   readonly rules?: Omit<

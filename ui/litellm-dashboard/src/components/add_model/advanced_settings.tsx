@@ -8,7 +8,7 @@ import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
 import { antdRules } from "../common_components/antdFormRules";
-import { labelWithHint } from "../common_components/LabelWithHint";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MountedFormField } from "../common_components/MountedFormField";
 import CacheControlInjectionPoints, {
   CACHE_CONTROL_LABEL,
@@ -50,9 +50,7 @@ const USAGE_COST_FIELDS = [
   "input_cost_per_second",
 ];
 
-// antd revalidates a field when one of its `dependencies` changes; react-hook-form drives the same
-// edge from the other side, so each entry lists the fields to revalidate when THIS field changes.
-const PTU_COUNT_DEPS = [PTU_RATE_FIELD, PTU_START_FIELD, ...USAGE_COST_FIELDS];
+const REVALIDATED_WHEN_PTU_COUNT_CHANGES = [PTU_RATE_FIELD, PTU_START_FIELD, ...USAGE_COST_FIELDS];
 
 const validateNumber = (_: unknown, value: unknown) => {
   if (!value) {
@@ -197,7 +195,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     "Provisioned throughput units for this deployment. Set together with Cost per PTU / Hour and a Team to attribute a flat daily cost.",
                   )}
                   rules={{
-                    deps: PTU_COUNT_DEPS,
+                    deps: REVALIDATED_WHEN_PTU_COUNT_CHANGES,
                     validate: antdRules({ validator: validateNumber }, ...ptuCountRules, ptuPairRule(PTU_RATE_FIELD)),
                   }}
                   className="mb-4"

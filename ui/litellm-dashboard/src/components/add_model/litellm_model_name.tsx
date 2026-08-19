@@ -4,7 +4,7 @@ import { useFormContext, useWatch } from "react-hook-form";
 import { Input } from "@/components/ui/input";
 import { Row, Col } from "antd";
 import { antdRequired } from "../common_components/antdFormRules";
-import { labelWithHint } from "../common_components/LabelWithHint";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
 import { Providers } from "../provider_info_helpers";
 

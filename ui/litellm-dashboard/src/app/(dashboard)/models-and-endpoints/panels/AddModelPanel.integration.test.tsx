@@ -83,12 +83,6 @@ const PROXY_ADMIN = {
   showSSOBanner: false,
 };
 
-/**
- * Fields that are always mounted for a proxy admin: the provider credential fields, the
- * credential picker (which registers at null via initialValue, not undefined), Mode and
- * Model Access Group. Every scenario below extends this, so a key appearing here that is
- * absent in a scenario means that scenario unmounted it.
- */
 const alwaysMounted = {
   api_key: undefined,
   api_base: undefined,
@@ -306,7 +300,7 @@ describe("AddModelPanel empty-string skip", () => {
     mockAuthorized.mockReturnValue(PROXY_ADMIN);
   });
 
-  it("sends a typed api_base", async () => {
+  it("sends a typed api_base, so the binding behind the next case is known to be live", async () => {
     const { user, fillRequired, submit } = await setup();
     await fillRequired();
     await user.type(screen.getByLabelText("API Base"), "https://example.test");
@@ -318,11 +312,6 @@ describe("AddModelPanel empty-string skip", () => {
     });
   });
 
-  /**
-   * The paired case above is the liveness gate: it proves the field reaches the payload at
-   * all, so this absence cannot pass because the binding is broken. An emptied field must
-   * drop out entirely rather than arrive as "".
-   */
   it("omits api_base entirely once it is cleared, rather than sending an empty string", async () => {
     const { user, fillRequired, submit } = await setup();
     await fillRequired();

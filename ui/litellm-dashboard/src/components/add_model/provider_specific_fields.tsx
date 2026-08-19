@@ -12,7 +12,7 @@ import {
 } from "../common_components/MountedFormField";
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
-import { labelWithHint } from "../common_components/LabelWithHint";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 const { Link } = Typography;
 
 interface ProviderSpecificFieldsProps {
@@ -327,7 +327,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
       {allFields.map((field) => (
         <React.Fragment key={field.key}>
           <MountedFormField
-            label={labelWithHint(field.label, field.tooltip)}
+            label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
             name={field.key}
             required={field.required}
             rules={field.required ? { validate: { required: antdRequired("Required") } } : undefined}

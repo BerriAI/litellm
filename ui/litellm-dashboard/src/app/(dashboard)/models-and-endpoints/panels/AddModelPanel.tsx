@@ -17,8 +17,6 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { vertexCredentialsUploadProps } from "@/app/(dashboard)/models-and-endpoints/vertexCredentialsUpload";
 
-// The credential picker registers at null rather than undefined, so a reset has to restore that
-// value the way antd's per-item `initialValue` did.
 const INITIAL_VALUES: MountedFormValues = { litellm_credential_name: null };
 
 export default function AddModelPanel() {

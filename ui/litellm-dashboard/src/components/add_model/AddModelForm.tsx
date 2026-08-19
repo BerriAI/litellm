@@ -11,7 +11,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 import TeamDropdown from "../common_components/team_dropdown";
 import { antdRequired } from "../common_components/antdFormRules";
-import { labelWithHint } from "../common_components/LabelWithHint";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import {
   MountedFormField,
   MountedFormProvider,

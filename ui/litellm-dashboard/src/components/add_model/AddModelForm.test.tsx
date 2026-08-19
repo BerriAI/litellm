@@ -338,8 +338,6 @@ describe("AddModelForm", () => {
           await user.click(screen.getByLabelText("Cache Control Injection Points"));
           await waitFor(() => expect(screen.queryByText("Add Injection Point")).not.toBeInTheDocument());
         },
-        // AddModelPanel builds the wire payload by projecting the store onto the mounted set.
-        // Reading it the same way keeps this on the real payload path.
         mountedValues: async (): Promise<Record<string, unknown>> => props.mountedValues(),
       };
     };
