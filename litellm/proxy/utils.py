@@ -1574,6 +1574,10 @@ class ProxyLogging:
         1. /chat/completions
         2. /embeddings
         3. /image/generation
+
+        With ``guardrails_only`` the walk is limited to guardrails and guardrail pipelines: rate
+        limiting, budget accounting, prompt templates and hanging-request alerting are skipped.
+        Use it to scan a payload that is not itself a request, such as one record of a batch file.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
