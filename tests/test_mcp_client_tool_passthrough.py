@@ -1,9 +1,12 @@
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler import (
     anthropic_messages_with_mcp,
 )
+
 
 @pytest.mark.asyncio
 async def test_mcp_auto_execute_bypasses_client_side_tools():
@@ -12,21 +15,22 @@ async def test_mcp_auto_execute_bypasses_client_side_tools():
     the auto-execution loop breaks early and passes the response back to the client.
     """
     mock_mcp_references = [{"type": "mcp", "server_url": "http://localhost/mcp", "require_approval": "never"}]
-    
-    # Mocking mcp.types.Tool objects that use dot notation
-    mock_mcp_tools = [
-        SimpleNamespace(name="mcp_tool_1", description="MCP Tool", inputSchema={"type": "object"})
-    ]
+
+    mock_mcp_tools = [SimpleNamespace(name="mcp_tool_1", description="MCP Tool", inputSchema={"type": "object"})]
     mock_tool_server_map = {"mcp_tool_1": "http://localhost/mcp"}
 
-    # Mock response containing both an MCP tool and a client-native tool ('Read')
     mock_anthropic_response = {
         "id": "msg_123",
         "type": "message",
         "role": "assistant",
         "content": [
             {"type": "tool_use", "id": "call_mcp", "name": "mcp_tool_1", "input": {}},
-            {"type": "tool_use", "id": "call_client", "name": "Read", "input": {"file_path": "test.txt"}},
+            {
+                "type": "tool_use",
+                "id": "call_client",
+                "name": "Read",
+                "input": {"file_path": "test.txt"},
+            },
         ],
         "stop_reason": "tool_use",
     }
@@ -41,15 +45,25 @@ async def test_mcp_auto_execute_bypasses_client_side_tools():
     mock_context.raw_headers = None
     mock_context.litellm_call_id = "call_123"
 
-    with patch("litellm.responses.mcp.request_context.MCPRequestContext.resolve", return_value=mock_context), \
-         patch("litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._parse_mcp_tools", return_value=(mock_mcp_references, [])), \
-         patch("litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform", new_callable=AsyncMock) as mock_process, \
-         patch("litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools", return_value=True), \
-         patch("litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._execute_tool_calls", new_callable=AsyncMock) as mock_execute, \
-         patch("litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler._AnthropicMessagesCall") as mock_call:
+    path_resolve = "litellm.responses.mcp.request_context.MCPRequestContext.resolve"
+    path_parse = "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._parse_mcp_tools"
+    path_process = (
+        "litellm.responses.mcp.litellm_proxy_mcp_handler."
+        "LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform"
+    )
+    path_auto = "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools"
+    path_exec = "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._execute_tool_calls"
+    path_call = "litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler._AnthropicMessagesCall"
 
+    with (
+        patch(path_resolve, return_value=mock_context),
+        patch(path_parse, return_value=(mock_mcp_references, [])),
+        patch(path_process, new_callable=AsyncMock) as mock_process,
+        patch(path_auto, return_value=True),
+        patch(path_exec, new_callable=AsyncMock) as mock_execute,
+        patch(path_call) as mock_call,
+    ):
         mock_process.return_value = (mock_mcp_tools, mock_tool_server_map)
-
         mock_fn = AsyncMock(return_value=mock_anthropic_response)
         mock_call.return_value.fn = mock_fn
 
