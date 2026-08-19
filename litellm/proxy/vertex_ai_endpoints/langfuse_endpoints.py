@@ -9,6 +9,7 @@ Logging Pass-Through Endpoints
 """
 
 import base64
+import binascii
 import os
 from base64 import b64encode
 from typing import Final
@@ -146,6 +147,27 @@ def _build_langfuse_proxy_target(
     return str(updated_url), custom_headers
 
 
+def _extract_api_key_from_basic_auth(authorization_header: str) -> str:
+    """Pull the secret half out of a `Basic base64(public_key:secret_key)` header.
+
+    Returns "" for every shape that does not carry one, rather than raising: a
+    missing header, a value that is not base64, base64 that is not utf-8, and a
+    decoded value with no ":" in it. `user_api_key_auth` then rejects the empty
+    key with the normal 401, instead of the route raising IndexError (or
+    binascii.Error, or UnicodeDecodeError) out of an unauthenticated request and
+    turning it into a 500 with a traceback in the proxy log.
+    """
+    encoded: Final = authorization_header.removeprefix("Basic ").strip()
+    if not encoded:
+        return ""
+    try:
+        decoded_str = base64.b64decode(encoded).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return ""
+    _, separator, secret_key = decoded_str.partition(":")
+    return secret_key if separator else ""
+
+
 @router.api_route(
     "/langfuse/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -164,14 +186,8 @@ async def langfuse_proxy_route(
     from litellm.proxy.proxy_server import proxy_config
 
     ## CHECK FOR LITELLM API KEY IN THE QUERY PARAMS - ?..key=LITELLM_API_KEY
-    api_key = request.headers.get("Authorization") or ""
-
-    ## decrypt base64 hash
-    api_key = api_key.replace("Basic ", "")
-
-    decoded_bytes: Final = base64.b64decode(api_key)
-    decoded_str: Final = decoded_bytes.decode("utf-8")
-    api_key = decoded_str.split(":")[1]  # assume api key is passed in as secret key
+    ## decrypt base64 hash; the api key is passed in as the secret key
+    api_key: Final = _extract_api_key_from_basic_auth(request.headers.get("Authorization") or "")
 
     user_api_key_dict: Final = await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
 
