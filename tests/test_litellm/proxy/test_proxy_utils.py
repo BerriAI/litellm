@@ -738,6 +738,46 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         ) + litellm_module.token_counter(model="gpt-3.5-turbo", text=instructions)
         assert estimated.prompt_tokens == expected
 
+    @pytest.mark.asyncio
+    async def test_request_body_system_counted_when_optional_params_empty(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        system_prompt = "You are a meticulous cartographer who labels every landmark."
+        messages = [{"role": "user", "content": "draw me a map"}]
+        request_data = {
+            **self._dispatched_request_data(messages, {}, call_type="aanthropic_messages"),
+            "system": system_prompt,
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", messages=messages) + litellm_module.token_counter(
+            model="gpt-3.5-turbo", text=system_prompt
+        )
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_optional_params_system_wins_over_request_body_system(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        dispatched_system = "short dispatched system prompt"
+        messages = [{"role": "user", "content": "hello"}]
+        request_data = {
+            **self._dispatched_request_data(messages, {"system": dispatched_system}),
+            "system": "a much longer request body system prompt that must not be double counted here",
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", messages=messages) + litellm_module.token_counter(
+            model="gpt-3.5-turbo", text=dispatched_system
+        )
+        assert estimated.prompt_tokens == expected
+
 
 from typing import cast
 
