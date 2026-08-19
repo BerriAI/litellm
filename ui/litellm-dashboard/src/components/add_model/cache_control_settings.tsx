@@ -1,9 +1,10 @@
-import { Minus, Plus } from "lucide-react";
+import { CircleHelp, Minus, Plus } from "lucide-react";
 import React from "react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 import NumericalInput from "../shared/numerical_input";
 
@@ -14,6 +15,10 @@ export const CACHE_CONTROL_TOOLTIP =
 
 export const CACHE_CONTROL_DESCRIPTION =
   "Providers like Anthropic, Bedrock API require users to specify where to inject cache control checkpoints, litellm can automatically add them for you as a cost saving feature.";
+
+export const CACHE_CONTROL_ROLE_HINT = "LiteLLM will mark all messages of this role as cacheable";
+
+export const CACHE_CONTROL_INDEX_HINT = "(Optional) If set litellm will mark the message at this index as cacheable";
 
 export type CacheControlRole = "user" | "system" | "assistant";
 
@@ -32,6 +37,28 @@ const ROLE_ITEMS = [
   { value: "system", label: "System" },
   { value: "assistant", label: "Assistant" },
 ] as const;
+
+const LabelWithHint: React.FC<{ label: string; hint: string }> = ({ label, hint }) => (
+  <div className="flex items-center">
+    <Label>{label}</Label>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label={`${label} help`}
+              className="ml-1 inline-flex cursor-help items-center rounded-sm text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          }
+        >
+          <CircleHelp aria-hidden className="size-4" />
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs whitespace-normal">{hint}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  </div>
+);
 
 interface CacheControlInjectionPointsProps {
   value?: CacheControlInjectionPoint[];
@@ -72,7 +99,7 @@ const CacheControlInjectionPoints: React.FC<CacheControlInjectionPointsProps> = 
           </div>
 
           <div className="w-[180px] space-y-1">
-            <Label>Role</Label>
+            <LabelWithHint label="Role" hint={CACHE_CONTROL_ROLE_HINT} />
             <Select
               items={ROLE_ITEMS}
               value={point.role ?? null}
@@ -95,7 +122,7 @@ const CacheControlInjectionPoints: React.FC<CacheControlInjectionPointsProps> = 
           </div>
 
           <div className="w-[180px] space-y-1">
-            <Label>Index</Label>
+            <LabelWithHint label="Index" hint={CACHE_CONTROL_INDEX_HINT} />
             <NumericalInput
               type="number"
               placeholder="Optional"
