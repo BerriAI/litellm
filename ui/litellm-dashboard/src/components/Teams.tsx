@@ -761,8 +761,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 </FormField>
 
                 <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-                  {({ ref: _ref, value, ...field }) => (
-                    <NumericalInput {...field} value={value ?? ""} step={0.01} precision={2} width={200} />
+                  {({ ref, value, ...field }) => (
+                    <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} width={200} />
                   )}
                 </FormField>
                 <FormField control={form.control} name="budget_duration" className="mt-8" label="Reset Budget">
@@ -777,13 +777,13 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   )}
                 </FormField>
                 <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
-                  {({ ref: _ref, value, ...field }) => (
-                    <NumericalInput {...field} value={value ?? ""} step={1} width={400} />
+                  {({ ref, value, ...field }) => (
+                    <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                   )}
                 </FormField>
                 <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
-                  {({ ref: _ref, value, ...field }) => (
-                    <NumericalInput {...field} value={value ?? ""} step={1} width={400} />
+                  {({ ref, value, ...field }) => (
+                    <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                   )}
                 </FormField>
                 <Field>
@@ -827,9 +827,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           "This is the individual budget for a user in the team.",
                         )}
                       >
-                        {({ ref: _ref, value, onChange, ...field }) => (
+                        {({ ref, value, onChange, ...field }) => (
                           <NumericalInput
                             {...field}
+                            ref={ref}
                             value={value ?? ""}
                             onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
                               onChange(event.target.value ? Number(event.target.value) : undefined)
@@ -860,8 +861,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           "The RPM (Requests Per Minute) limit for individual team members",
                         )}
                       >
-                        {({ ref: _ref, value, ...field }) => (
-                          <NumericalInput {...field} value={value ?? ""} step={1} width={400} />
+                        {({ ref, value, ...field }) => (
+                          <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                         )}
                       </FormField>
                       <FormField
@@ -872,8 +873,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           "The TPM (Tokens Per Minute) limit for individual team members",
                         )}
                       >
-                        {({ ref: _ref, value, ...field }) => (
-                          <NumericalInput {...field} value={value ?? ""} step={1} width={400} />
+                        {({ ref, value, ...field }) => (
+                          <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                         )}
                       </FormField>
                       <FormField

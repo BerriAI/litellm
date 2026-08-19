@@ -1214,14 +1214,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </Field>
 
                         <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-                          {({ ref: _ref, value, ...field }) => (
-                            <NumericalInput {...field} value={value ?? ""} step={0.01} precision={2} />
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
                           )}
                         </FormField>
 
                         <FormField control={form.control} name="soft_budget" label="Soft Budget (USD)">
-                          {({ ref: _ref, value, ...field }) => (
-                            <NumericalInput {...field} value={value ?? ""} step={0.01} precision={2} />
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
                           )}
                         </FormField>
 
@@ -1287,8 +1287,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                   "Default spend budget for each member in this team.",
                                 )}
                               >
-                                {({ ref: _ref, value, ...field }) => (
-                                  <NumericalInput {...field} value={value ?? ""} step={0.01} precision={2} />
+                                {({ ref, value, ...field }) => (
+                                  <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
                                 )}
                               </FormField>
                               <FormField
@@ -1320,8 +1320,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                   "Default tokens per minute limit for each member. Can be overridden per member.",
                                 )}
                               >
-                                {({ ref: _ref, value, ...field }) => (
-                                  <NumericalInput {...field} value={value ?? ""} step={1} placeholder="e.g., 1000" />
+                                {({ ref, value, ...field }) => (
+                                  <NumericalInput
+                                    {...field}
+                                    ref={ref}
+                                    value={value ?? ""}
+                                    step={1}
+                                    placeholder="e.g., 1000"
+                                  />
                                 )}
                               </FormField>
                               <FormField
@@ -1332,8 +1338,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                   "Default requests per minute limit for each member. Can be overridden per member.",
                                 )}
                               >
-                                {({ ref: _ref, value, ...field }) => (
-                                  <NumericalInput {...field} value={value ?? ""} step={1} placeholder="e.g., 100" />
+                                {({ ref, value, ...field }) => (
+                                  <NumericalInput
+                                    {...field}
+                                    ref={ref}
+                                    value={value ?? ""}
+                                    step={1}
+                                    placeholder="e.g., 100"
+                                  />
                                 )}
                               </FormField>
                             </FieldGroup>
@@ -1352,14 +1364,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </FormField>
 
                         <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
-                          {({ ref: _ref, value, ...field }) => (
-                            <NumericalInput {...field} value={value ?? ""} step={1} />
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />
                           )}
                         </FormField>
 
                         <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
-                          {({ ref: _ref, value, ...field }) => (
-                            <NumericalInput {...field} value={value ?? ""} step={1} />
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />
                           )}
                         </FormField>
 
@@ -1406,9 +1418,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                 )}
                               </FormField>
                               <FormField control={form.control} name={`modelLimits.${index}.tpm`}>
-                                {({ ref: _ref, value, onChange, ...field }) => (
+                                {({ ref, value, onChange, ...field }) => (
                                   <NumericalInput
                                     {...field}
+                                    ref={ref}
                                     value={value ?? ""}
                                     onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
                                       onChange(event.target.value === "" ? null : Number(event.target.value))
@@ -1420,9 +1433,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                 )}
                               </FormField>
                               <FormField control={form.control} name={`modelLimits.${index}.rpm`}>
-                                {({ ref: _ref, value, onChange, ...field }) => (
+                                {({ ref, value, onChange, ...field }) => (
                                   <NumericalInput
                                     {...field}
+                                    ref={ref}
                                     value={value ?? ""}
                                     onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
                                       onChange(event.target.value === "" ? null : Number(event.target.value))
@@ -1461,9 +1475,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           name="default_estimated_output_tokens"
                           label={labelWithHint("Estimated Output Tokens", teamEstimateTooltip.estimate)}
                         >
-                          {({ ref: _ref, value, ...field }) => (
+                          {({ ref, value, ...field }) => (
                             <NumericalInput
                               {...field}
+                              ref={ref}
                               value={value ?? ""}
                               min={1}
                               step={1}
