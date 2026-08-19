@@ -27,6 +27,18 @@ class RequestComplexityRouterConfig(ComplexityRouterConfig):
     )
 
 
+class AutoRouterConfigValidationRequest(BaseModel):
+    """A complexity-router config to validate without saving, so a form can surface the
+    backend's own verdict inline instead of a raw 400 at write time."""
+
+    complexity_router_config: Mapping[str, object]
+
+
+class AutoRouterConfigValidationResponse(BaseModel):
+    valid: bool
+    error: str | None = None
+
+
 class AutoRouterRoutingTestRequest(BaseModel):
     """A single prompt to classify against a complexity-router config that need not be saved yet."""
 

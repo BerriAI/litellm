@@ -856,3 +856,49 @@ async def test_stop_shadow_eval_sets_stopped_at_and_rejects_non_running(monkeypa
     with pytest.raises(HTTPException) as forbidden:
         await stop_shadow_eval_job("job-1", VIEWER)
     assert forbidden.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_validate_config_returns_the_write_gates_verdict_without_saving():
+    """The dry-run endpoint must agree with the write gate exactly, so a form showing its
+    verdict inline can never pass a config the save would then reject."""
+    from litellm.proxy.management_endpoints.auto_router_endpoints import (
+        validate_auto_router_config,
+    )
+    from litellm.types.management_endpoints.auto_router_endpoints import (
+        AutoRouterConfigValidationRequest,
+    )
+
+    valid = await validate_auto_router_config(
+        AutoRouterConfigValidationRequest(
+            complexity_router_config={
+                "tiers": {"CASUAL": "m1", "AUDIT": "m2"},
+                "tier_definitions": [
+                    {"name": "CASUAL", "description": "casual chat"},
+                    {"name": "AUDIT", "description": "security audits"},
+                ],
+                "fallback_tier": "AUDIT",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "clf"},
+            }
+        )
+    )
+    assert valid.valid is True
+    assert valid.error is None
+
+    rejected = await validate_auto_router_config(
+        AutoRouterConfigValidationRequest(
+            complexity_router_config={
+                "tiers": {"CASUAL": "m1", "AUDIT": "m2"},
+                "tier_definitions": [
+                    {"name": "CASUAL", "description": "casual chat"},
+                    {"name": "AUDIT", "description": "security\naudits"},
+                ],
+                "fallback_tier": "AUDIT",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "clf"},
+            }
+        )
+    )
+    assert rejected.valid is False
+    assert rejected.error is not None and "newline" in rejected.error

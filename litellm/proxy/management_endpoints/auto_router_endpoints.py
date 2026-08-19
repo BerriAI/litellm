@@ -37,6 +37,8 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarkTotals,
     AutoRouterCacheBucket,
     AutoRouterCacheStats,
+    AutoRouterConfigValidationRequest,
+    AutoRouterConfigValidationResponse,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     RequestComplexityRouterConfig,
@@ -167,6 +169,29 @@ async def _authorize_models_this_test_can_call(
             param=None,
             code=status.HTTP_400_BAD_REQUEST,
         ) from e
+
+
+@router.post(
+    "/auto_router/validate_config",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    response_model=AutoRouterConfigValidationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def validate_auto_router_config(data: AutoRouterConfigValidationRequest) -> AutoRouterConfigValidationResponse:
+    """
+    Validate a complexity-router config without saving it.
+
+    Runs the same check every write path runs (the router's own pydantic model), so a form can
+    show the backend's exact verdict while the operator is still editing rather than after a
+    rejected save. Nothing is created, routed, or billed.
+    """
+    from litellm.router_utils.auto_router_model_naming import (
+        validate_complexity_router_config_write,
+    )
+
+    error: Final = validate_complexity_router_config_write(data.complexity_router_config)
+    return AutoRouterConfigValidationResponse(valid=error is None, error=error)
 
 
 @router.post(
