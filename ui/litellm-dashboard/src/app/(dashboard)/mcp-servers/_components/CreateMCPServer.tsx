@@ -57,7 +57,7 @@ import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { antdValidator, validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { antdValidator, asFormSnapshot, validateMCPServerUrl, validateMCPServerName } from "./utils";
 import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -170,7 +170,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const persistCreateUiState = () => {
     writeCreateUiSnapshot({
       modalVisible: isModalVisible,
-      formValues: form.getValues() as Record<string, any>,
+      formValues: form.getValues(),
       transportType,
       costConfig,
       allowedTools,
@@ -197,7 +197,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       ...(dcrClientRef.current ?? {}),
     }),
     getTemporaryPayload: () => {
-      const values: Record<string, any> = form.getValues();
+      const values = asFormSnapshot(form.getValues());
       const transport = values.transport || transportType;
       // For OpenAPI transport the form has spec_path instead of url.
       // We pass the spec_path as url so the temp-session endpoint has something
@@ -518,7 +518,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (isHeldOAuthTokenStale(form.getValues(), authorizedIdentity)) {
       clearHeldOAuthToken();
     }
-    setFormValues(form.getValues() as Record<string, any>);
+    setFormValues(form.getValues());
   };
 
   // Generate options with existing groups and potential new group
@@ -616,7 +616,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     if (isHeldOAuthTokenStale(form.getValues(), authorizedIdentity)) {
       clearHeldOAuthToken(changedValues);
-      setFormValues(form.getValues() as Record<string, any>);
+      setFormValues(form.getValues());
       return;
     }
     setFormValues(allValues);

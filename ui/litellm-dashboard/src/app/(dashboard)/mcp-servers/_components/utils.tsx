@@ -116,3 +116,32 @@ export const normalizeToolOverrideMap = (
   }
   return value;
 };
+
+export interface StaticHeaderEntry {
+  readonly header?: string;
+  readonly value?: string;
+}
+
+export interface ServerFormSnapshot {
+  readonly alias?: string;
+  readonly args?: string;
+  readonly auth_type?: string;
+  readonly authorization_url?: string;
+  readonly command?: string;
+  readonly credentials?: Record<string, unknown>;
+  readonly delegate_auth_to_upstream?: boolean;
+  readonly description?: string;
+  readonly env?: Record<string, string>;
+  readonly issuer?: string;
+  readonly mcp_access_groups?: readonly string[];
+  readonly oauth_flow_type?: string;
+  readonly registration_url?: string;
+  readonly server_name?: string;
+  readonly spec_path?: string;
+  readonly static_headers?: readonly StaticHeaderEntry[];
+  readonly token_url?: string;
+  readonly transport?: string;
+  readonly url?: string;
+}
+
+export const asFormSnapshot = (values: Record<string, unknown>): ServerFormSnapshot => values as ServerFormSnapshot;

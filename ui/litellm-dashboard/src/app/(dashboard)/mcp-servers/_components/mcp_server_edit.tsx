@@ -53,7 +53,13 @@ import IdJagFormFields from "./IdJagFormFields";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
-import { antdValidator, validateMCPServerUrl, validateMCPServerName, normalizeToolOverrideMap } from "./utils";
+import {
+  antdValidator,
+  asFormSnapshot,
+  validateMCPServerUrl,
+  validateMCPServerName,
+  normalizeToolOverrideMap,
+} from "./utils";
 import { buildEditServerPayload, editPayloadErrorMessage } from "./editServerPayload";
 import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
@@ -222,7 +228,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       return;
     }
     try {
-      const values: Record<string, any> = form.getValues();
+      const values = asFormSnapshot(form.getValues());
       setSecureItem(
         EDIT_OAUTH_UI_STATE_KEY,
         JSON.stringify({
@@ -261,7 +267,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     accessToken,
     getCredentials: () => form.getValues("credentials") as Record<string, unknown> | undefined,
     getTemporaryPayload: () => {
-      const values: Record<string, any> = form.getValues();
+      const values = asFormSnapshot(form.getValues());
       const url = values.url || mcpServer.url;
       const transport = values.transport || mcpServer.transport;
       if (!url || !transport) {
@@ -535,7 +541,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     setIsLoadingTools(true);
     setToolsError(null);
     try {
-      const values: Record<string, any> = form.getValues();
+      const values = asFormSnapshot(form.getValues());
       const rawTransport = values.transport || mcpServer.transport;
       // oauth2_flow must be explicit: the preview endpoint infers client_credentials from the
       // inherited client_id/client_secret/token_url (common once DCR or discovery filled them) and
