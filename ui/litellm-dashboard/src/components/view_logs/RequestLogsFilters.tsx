@@ -25,6 +25,12 @@ import { ERROR_CODE_OPTIONS } from "./constants";
 import { LOG_FILTER_IDS, type LogsWindow } from "./log_filter_logic";
 
 const ALL_VALUE = "all";
+
+const STATUS_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Statuses" },
+  { value: "success", label: "Success" },
+  { value: "failure", label: "Failure" },
+] as const;
 const PAGE_SIZE = 50;
 
 const asString = (value: unknown): string => (typeof value === "string" ? value : "");
@@ -305,6 +311,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
 
       <DataTableFilterField label="Status">
         <Select
+          items={STATUS_FILTER_ITEMS}
           value={valueOf(LOG_FILTER_IDS.STATUS) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.STATUS)}
           onValueChange={(next) => set(LOG_FILTER_IDS.STATUS, next === null || next === ALL_VALUE ? undefined : next)}
         >
@@ -312,9 +319,11 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
             <SelectValue placeholder="All Statuses" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ALL_VALUE}>All Statuses</SelectItem>
-            <SelectItem value="success">Success</SelectItem>
-            <SelectItem value="failure">Failure</SelectItem>
+            {STATUS_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </DataTableFilterField>

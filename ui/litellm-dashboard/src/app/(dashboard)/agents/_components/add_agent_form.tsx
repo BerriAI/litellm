@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { Form, Modal, Select, Steps, Tag } from "antd";
+import { Modal, Select, Steps, Tag } from "antd";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { Button } from "@tremor/react";
 import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined } from "@ant-design/icons";
 import CreatedKeyDisplay from "@/components/shared/CreatedKeyDisplay";
-import { Button as ShadButton } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
@@ -679,12 +679,12 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const renderConfigureStep = () => (
     <>
-      <Form.Item
-        label={<span className="text-sm font-medium text-foreground">Agent Type</span>}
-        required
-        tooltip="Select the type of agent you want to create"
-      >
+      <Field className="gap-1">
+        <FieldLabel htmlFor="agent-type">
+          {labelWithHint("Agent Type", "Select the type of agent you want to create")}
+        </FieldLabel>
         <Select
+          id="agent-type"
           value={agentType}
           onChange={handleAgentTypeChange}
           size="large"
@@ -744,7 +744,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             </Select.Option>
           ))}
         </Select>
-      </Form.Item>
+      </Field>
 
       <div className="mt-4">
         {agentType === CUSTOM_AGENT_TYPE ? (
@@ -1025,9 +1025,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div className="mt-6 flex items-center justify-between border-t border-border pt-6">
             <div>
               {currentStep > 0 && currentStep < 4 && (
-                <ShadButton type="button" variant="outline" onClick={handleBack}>
+                <Button type="button" variant="outline" onClick={handleBack}>
                   ← Back
-                </ShadButton>
+                </Button>
               )}
             </div>
             <div className="flex gap-3">
@@ -1036,21 +1036,14 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                   Cancel
                 </Button>
               )}
-              {currentStep < 3 && (
-                <Button variant="primary" onClick={handleNext}>
-                  Next →
-                </Button>
-              )}
+              {currentStep < 3 && <Button onClick={handleNext}>Next →</Button>}
               {currentStep === 3 && (
-                <Button variant="primary" loading={isSubmitting} onClick={handleCreateAgent}>
+                <Button disabled={isSubmitting} aria-busy={isSubmitting} onClick={handleCreateAgent}>
+                  {isSubmitting && <UiLoadingSpinner className="size-4" />}
                   {isSubmitting ? "Creating..." : "Create Agent →"}
                 </Button>
               )}
-              {currentStep === 4 && (
-                <Button variant="primary" onClick={handleClose}>
-                  Done
-                </Button>
-              )}
+              {currentStep === 4 && <Button onClick={handleClose}>Done</Button>}
             </div>
           </div>
         </div>

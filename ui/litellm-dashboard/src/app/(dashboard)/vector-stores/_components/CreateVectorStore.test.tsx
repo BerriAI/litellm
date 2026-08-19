@@ -85,6 +85,19 @@ describe("CreateVectorStore", () => {
     expect(screen.getByText(/Support for single or bulk upload/)).toBeInTheDocument();
   });
 
+  it("should show the provider display name on the trigger rather than its wire value", async () => {
+    const user = userEvent.setup();
+    render(<CreateVectorStore accessToken="test-token" />);
+
+    const providerSelect = screen.getByRole("combobox", { name: /Provider/ });
+    expect(providerSelect).toHaveTextContent("Amazon Bedrock");
+
+    await user.click(providerSelect);
+    await user.click(await screen.findByText("AWS S3 Vectors"));
+
+    expect(screen.getByRole("combobox", { name: /Provider/ })).toHaveTextContent("AWS S3 Vectors");
+  });
+
   it("should have provider selection dropdown", () => {
     render(<CreateVectorStore accessToken="test-token" />);
 

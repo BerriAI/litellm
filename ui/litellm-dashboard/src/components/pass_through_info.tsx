@@ -1,17 +1,4 @@
 import React, { useState } from "react";
-import {
-  Card,
-  Title,
-  Text,
-  Grid,
-  Badge,
-  Button as TremorButton,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-} from "@tremor/react";
 import { updatePassThroughEndpoint, deletePassThroughEndpointsCall } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
 import { useWatch } from "react-hook-form";
@@ -21,11 +8,14 @@ import { toast } from "@/lib/toast";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
 import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 import { FormField } from "@/components/shared/form/FormField";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
@@ -128,7 +118,12 @@ const PasswordField: React.FC<{ value: Record<string, any> }> = ({ value }) => {
       <pre className="font-mono text-xs bg-gray-50 p-2 rounded-sm max-w-md overflow-auto">
         {showPassword ? headerString : "••••••••"}
       </pre>
-      <button onClick={() => setShowPassword(!showPassword)} className="p-1 hover:bg-gray-100 rounded-sm" type="button">
+      <button
+        onClick={() => setShowPassword(!showPassword)}
+        className="p-1 hover:bg-gray-100 rounded-sm"
+        type="button"
+        aria-label={showPassword ? "Hide headers" : "Show headers"}
+      >
         {showPassword ? <EyeOff className="w-4 h-4 text-gray-500" /> : <Eye className="w-4 h-4 text-gray-500" />}
       </button>
     </div>
@@ -243,54 +238,60 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
           <Button onClick={onClose} className="mb-4">
             ← Back
           </Button>
-          <Title>Pass Through Endpoint: {endpointData.path}</Title>
-          <Text className="text-gray-500 font-mono">{endpointData.id}</Text>
+          <h2 className="text-xl font-semibold">Pass Through Endpoint: {endpointData.path}</h2>
+          <p className="text-sm text-gray-500 font-mono">{endpointData.id}</p>
         </div>
       </div>
 
-      <TabGroup>
-        <TabList className="mb-4">
-          <Tab key="overview">Overview</Tab>
-          {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
-        </TabList>
+      <Tabs defaultValue="overview">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
+            Overview
+          </TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+              Settings
+            </TabsTrigger>
+          )}
+        </TabsList>
 
-        <TabPanels>
+        <div>
           {/* Overview Panel */}
-          <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
-              <Card>
-                <Text>Path</Text>
+          <TabsContent value="overview" keepMounted>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              <Card className="block p-6">
+                <p className="text-sm">Path</p>
                 <div className="mt-2">
-                  <Title className="font-mono">{endpointData.path}</Title>
+                  <h3 className="text-lg font-medium font-mono">{endpointData.path}</h3>
                 </div>
               </Card>
 
-              <Card>
-                <Text>Target</Text>
+              <Card className="block p-6">
+                <p className="text-sm">Target</p>
                 <div className="mt-2">
-                  <Title>{endpointData.target}</Title>
+                  <h3 className="text-lg font-medium">{endpointData.target}</h3>
                 </div>
               </Card>
 
-              <Card>
-                <Text>Configuration</Text>
+              <Card className="block p-6">
+                <p className="text-sm">Configuration</p>
                 <div className="mt-2 space-y-2">
                   <div>
-                    <Badge color={endpointData.include_subpath ? "green" : "gray"}>
+                    <Badge variant={endpointData.include_subpath ? "secondary" : "outline"}>
                       {endpointData.include_subpath ? "Include Subpath" : "Exact Path"}
                     </Badge>
                   </div>
                   <div>
-                    <Badge color={endpointData.auth ? "blue" : "gray"}>
+                    <Badge variant={endpointData.auth ? "secondary" : "outline"}>
                       {endpointData.auth ? "Auth Required" : "No Auth"}
                     </Badge>
                   </div>
                   {endpointData.methods && endpointData.methods.length > 0 && (
                     <div>
-                      <Text className="text-xs text-gray-500">HTTP Methods:</Text>
+                      <p className="text-xs text-gray-500">HTTP Methods:</p>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {endpointData.methods.map((method) => (
-                          <Badge key={method} color="indigo" size="sm">
+                          <Badge key={method} variant="secondary">
                             {method}
                           </Badge>
                         ))}
@@ -299,17 +300,17 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                   )}
                   {(!endpointData.methods || endpointData.methods.length === 0) && (
                     <div>
-                      <Text className="text-xs text-gray-500">All HTTP methods supported</Text>
+                      <p className="text-xs text-gray-500">All HTTP methods supported</p>
                     </div>
                   )}
                   {endpointData.cost_per_request !== undefined && (
                     <div>
-                      <Text>Cost per request: ${endpointData.cost_per_request}</Text>
+                      <p className="text-sm">Cost per request: ${endpointData.cost_per_request}</p>
                     </div>
                   )}
                 </div>
               </Card>
-            </Grid>
+            </div>
 
             {/* Route Preview Section */}
             <div className="mt-6">
@@ -321,10 +322,10 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
             </div>
 
             {endpointData.headers && Object.keys(endpointData.headers).length > 0 && (
-              <Card className="mt-6">
+              <Card className="block mt-6 p-6">
                 <div className="flex justify-between items-center">
-                  <Text className="font-medium">Headers</Text>
-                  <Badge color="blue">{Object.keys(endpointData.headers).length} headers configured</Badge>
+                  <p className="text-sm font-medium">Headers</p>
+                  <Badge variant="secondary">{Object.keys(endpointData.headers).length} headers configured</Badge>
                 </div>
                 <div className="mt-4">
                   <PasswordField value={endpointData.headers} />
@@ -333,10 +334,10 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
             )}
 
             {endpointData.guardrails && Object.keys(endpointData.guardrails).length > 0 && (
-              <Card className="mt-6">
+              <Card className="block mt-6 p-6">
                 <div className="flex justify-between items-center">
-                  <Text className="font-medium">Guardrails</Text>
-                  <Badge color="purple">{Object.keys(endpointData.guardrails).length} guardrails configured</Badge>
+                  <p className="text-sm font-medium">Guardrails</p>
+                  <Badge variant="secondary">{Object.keys(endpointData.guardrails).length} guardrails configured</Badge>
                 </div>
                 <div className="mt-4 space-y-2">
                   {Object.entries(endpointData.guardrails).map(([name, settings]) => (
@@ -356,21 +357,21 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                 </div>
               </Card>
             )}
-          </TabPanel>
+          </TabsContent>
 
           {/* Settings Panel (only for admins) */}
           {isAdmin && (
-            <TabPanel>
-              <Card>
+            <TabsContent value="settings" keepMounted>
+              <Card className="block p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <Title>Pass Through Endpoint Settings</Title>
+                  <h3 className="text-lg font-medium">Pass Through Endpoint Settings</h3>
                   <div className="space-x-2">
                     {!isEditing && (
                       <>
-                        <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
-                        <TremorButton onClick={handleDeleteEndpoint} variant="secondary" color="red">
+                        <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
+                        <Button onClick={handleDeleteEndpoint} variant="destructive">
                           Delete Endpoint
-                        </TremorButton>
+                        </Button>
                       </>
                     )}
                   </div>
@@ -493,37 +494,39 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                 ) : (
                   <div className="space-y-4">
                     <div>
-                      <Text className="font-medium">Path</Text>
+                      <p className="text-sm font-medium">Path</p>
                       <div className="font-mono">{endpointData.path}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Target URL</Text>
+                      <p className="text-sm font-medium">Target URL</p>
                       <div>{endpointData.target}</div>
                     </div>
                     <div>
-                      <Text className="font-medium">Include Subpath</Text>
-                      <Badge color={endpointData.include_subpath ? "green" : "gray"}>
+                      <p className="text-sm font-medium">Include Subpath</p>
+                      <Badge variant={endpointData.include_subpath ? "secondary" : "outline"}>
                         {endpointData.include_subpath ? "Yes" : "No"}
                       </Badge>
                     </div>
                     {endpointData.cost_per_request !== undefined && (
                       <div>
-                        <Text className="font-medium">Cost per Request</Text>
+                        <p className="text-sm font-medium">Cost per Request</p>
                         <div>${endpointData.cost_per_request}</div>
                       </div>
                     )}
                     {endpointData.timeout !== undefined && endpointData.timeout !== null && (
                       <div>
-                        <Text className="font-medium">Request Timeout</Text>
+                        <p className="text-sm font-medium">Request Timeout</p>
                         <div>{endpointData.timeout}s</div>
                       </div>
                     )}
                     <div>
-                      <Text className="font-medium">Authentication Required</Text>
-                      <Badge color={endpointData.auth ? "green" : "gray"}>{endpointData.auth ? "Yes" : "No"}</Badge>
+                      <p className="text-sm font-medium">Authentication Required</p>
+                      <Badge variant={endpointData.auth ? "secondary" : "outline"}>
+                        {endpointData.auth ? "Yes" : "No"}
+                      </Badge>
                     </div>
                     <div>
-                      <Text className="font-medium">Headers</Text>
+                      <p className="text-sm font-medium">Headers</p>
                       {endpointData.headers && Object.keys(endpointData.headers).length > 0 ? (
                         <div className="mt-2">
                           <PasswordField value={endpointData.headers} />
@@ -535,10 +538,10 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                   </div>
                 )}
               </Card>
-            </TabPanel>
+            </TabsContent>
           )}
-        </TabPanels>
-      </TabGroup>
+        </div>
+      </Tabs>
     </div>
   );
 };

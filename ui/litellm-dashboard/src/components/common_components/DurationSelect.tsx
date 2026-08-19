@@ -15,6 +15,7 @@ const DURATION_OPTIONS = [
 export default function DurationSelect({ className, value, onChange }: DurationSelectProps) {
   return (
     <Select
+      items={DURATION_OPTIONS}
       value={value}
       onValueChange={(nextValue) => {
         const selectedOption = DURATION_OPTIONS.find((option) => option.value === nextValue);
