@@ -1,0 +1,357 @@
+"""
+Enqueued-token accounting for batch submissions.
+
+Opt-in via ``batch_enqueued_token_limit`` in key or team metadata: batch
+submissions reserve their estimated token count against a long-lived
+enqueued-token allowance instead of the per-minute rate-limit windows, and
+the reservation is refunded when the batch reaches a terminal state
+(completed, failed, expired, or cancelled).
+"""
+
+import asyncio
+from collections.abc import Awaitable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+
+from litellm._logging import verbose_proxy_logger
+from litellm.constants import BATCH_ENQUEUED_TOKEN_TTL_SECONDS
+from litellm.proxy._types import UserAPIKeyAuth
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
+
+    Span = _Span
+    InternalUsageCache = _InternalUsageCache
+
+BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+
+BATCH_ENQUEUED_REFUND_STATUSES: Final[frozenset[str]] = frozenset(
+    {"completed", "complete", "failed", "expired", "cancelled", "cancelling"}
+)
+
+ScopeKey: TypeAlias = Literal["api_key", "team"]
+
+RESERVE_ENQUEUED_TOKENS_SCRIPT: Final = """
+local amount = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+for i = 1, #KEYS do
+    local limit = tonumber(ARGV[2 + i])
+    local current = tonumber(redis.call('GET', KEYS[i]) or '0')
+    if current + amount > limit then
+        return {0, i - 1, current}
+    end
+end
+for i = 1, #KEYS do
+    redis.call('INCRBY', KEYS[i], amount)
+    redis.call('EXPIRE', KEYS[i], ttl)
+end
+return {1, -1, 0}
+"""
+
+REFUND_ENQUEUED_TOKENS_SCRIPT: Final = """
+local amount = tonumber(ARGV[1])
+for i = 1, #KEYS do
+    local updated = redis.call('DECRBY', KEYS[i], amount)
+    if updated <= 0 then
+        redis.call('DEL', KEYS[i])
+    end
+end
+return 1
+"""
+
+SAVE_RESERVATION_SCRIPT: Final = """
+redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+return 1
+"""
+
+POP_RESERVATION_SCRIPT: Final = """
+local value = redis.call('GET', KEYS[1])
+if value then
+    redis.call('DEL', KEYS[1])
+end
+return value
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class BatchEnqueuedTokenScope:
+    key: ScopeKey
+    value: str
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class BatchEnqueuedTokenReservation:
+    tokens: int
+    scopes: tuple[BatchEnqueuedTokenScope, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BatchEnqueuedTokenOverLimit:
+    scope: BatchEnqueuedTokenScope
+    enqueued: int
+
+
+BatchEnqueuedTokenOutcome: TypeAlias = BatchEnqueuedTokenReservation | BatchEnqueuedTokenOverLimit
+
+_LIMIT_ADAPTER: Final = TypeAdapter(Annotated[int, Field(gt=0)])
+_RESERVE_RESULT_ADAPTER: Final = TypeAdapter(tuple[int, int, int])
+_POPPED_VALUE_ADAPTER: Final = TypeAdapter(str | bytes | None)
+_STORED_COUNTER_ADAPTER: Final = TypeAdapter(int | None)
+_RESERVATION_ADAPTER: Final = TypeAdapter(BatchEnqueuedTokenReservation)
+
+
+class _ScriptRunner(Protocol):
+    def __call__(self, keys: Sequence[str], args: Sequence[str | bytes | int | float]) -> Awaitable[object]: ...
+
+
+def _read_metadata_limit(metadata: Mapping[str, object] | None) -> int | None:
+    if not metadata:
+        return None
+    raw: Final = metadata.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY)
+    if raw is None:
+        return None
+    try:
+        return _LIMIT_ADAPTER.validate_python(raw)
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "Ignoring invalid %s value %r; expected a positive integer",
+            BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+            raw,
+        )
+        return None
+
+
+def resolve_batch_enqueued_token_scopes(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[BatchEnqueuedTokenScope, ...]:
+    key_limit: Final = _read_metadata_limit(user_api_key_dict.metadata)
+    team_limit: Final = _read_metadata_limit(user_api_key_dict.team_metadata)
+    candidates: Final = (
+        BatchEnqueuedTokenScope(key="api_key", value=user_api_key_dict.api_key, limit=key_limit)
+        if key_limit is not None and user_api_key_dict.api_key
+        else None,
+        BatchEnqueuedTokenScope(key="team", value=user_api_key_dict.team_id, limit=team_limit)
+        if team_limit is not None and user_api_key_dict.team_id
+        else None,
+    )
+    return tuple(scope for scope in candidates if scope is not None)
+
+
+def canonical_provider_batch_id(batch_id: str) -> str:
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage]  # canonical unified-id decoder has no public wrapper
+        get_batch_id_from_unified_batch_id,
+        get_original_file_id,
+    )
+
+    decoded: Final = _is_base64_encoded_unified_file_id(batch_id)
+    if isinstance(decoded, str):
+        if "llm_batch_id" in decoded or "generic_response_id" in decoded:
+            return get_batch_id_from_unified_batch_id(decoded)
+        return decoded
+    return get_original_file_id(batch_id)
+
+
+class _BatchResponseView(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    status: str
+    object: Literal["batch"]
+
+
+def batch_response_view(response: object) -> _BatchResponseView | None:
+    try:
+        return _BatchResponseView.model_validate(response, from_attributes=True)
+    except ValidationError:
+        return None
+
+
+class BatchEnqueuedTokenStore:
+    """Tracks enqueued batch tokens per scope, plus per-batch reservation records for refunds.
+
+    Counters and records live in Redis (via atomic Lua scripts) when Redis is
+    configured; otherwise a single-process in-memory fallback guarded by one
+    asyncio lock is used. Everything expires after
+    ``BATCH_ENQUEUED_TOKEN_TTL_SECONDS`` so a crash between submission and the
+    terminal-state refund can never leak tokens forever.
+    """
+
+    def __init__(self, internal_usage_cache: "InternalUsageCache") -> None:
+        self.internal_usage_cache = internal_usage_cache
+        self._lock = asyncio.Lock()
+        redis_cache = internal_usage_cache.dual_cache.redis_cache
+        self._reserve_script: _ScriptRunner | None = (
+            redis_cache.async_register_script(RESERVE_ENQUEUED_TOKENS_SCRIPT) if redis_cache is not None else None
+        )
+        self._refund_script: _ScriptRunner | None = (
+            redis_cache.async_register_script(REFUND_ENQUEUED_TOKENS_SCRIPT) if redis_cache is not None else None
+        )
+        self._save_script: _ScriptRunner | None = (
+            redis_cache.async_register_script(SAVE_RESERVATION_SCRIPT) if redis_cache is not None else None
+        )
+        self._pop_script: _ScriptRunner | None = (
+            redis_cache.async_register_script(POP_RESERVATION_SCRIPT) if redis_cache is not None else None
+        )
+
+    @staticmethod
+    def _counter_key(scope: BatchEnqueuedTokenScope) -> str:
+        return f"batch_enqueued_tokens:{scope.key}:{scope.value}"
+
+    @staticmethod
+    def _record_key(batch_id: str) -> str:
+        return f"batch_enqueued_token_reservation:{batch_id}"
+
+    async def reserve(
+        self,
+        tokens: int,
+        scopes: tuple[BatchEnqueuedTokenScope, ...],
+        litellm_parent_otel_span: "Span | None" = None,
+    ) -> BatchEnqueuedTokenOutcome:
+        if tokens <= 0 or not scopes:
+            return BatchEnqueuedTokenReservation(tokens=max(tokens, 0), scopes=scopes)
+        if self._reserve_script is not None:
+            try:
+                raw_result = await self._reserve_script(
+                    tuple(self._counter_key(scope) for scope in scopes),
+                    (tokens, BATCH_ENQUEUED_TOKEN_TTL_SECONDS, *(scope.limit for scope in scopes)),
+                )
+                result = _RESERVE_RESULT_ADAPTER.validate_python(raw_result)
+                if result[0] == 1:
+                    return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes)
+                return BatchEnqueuedTokenOverLimit(scope=scopes[result[1]], enqueued=result[2])
+            except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory counters
+                verbose_proxy_logger.warning(
+                    "Redis enqueued-token reserve failed, falling back to in-memory: %s", str(e)
+                )
+        return await self._reserve_in_memory(tokens=tokens, scopes=scopes, span=litellm_parent_otel_span)
+
+    async def _reserve_in_memory(
+        self,
+        tokens: int,
+        scopes: tuple[BatchEnqueuedTokenScope, ...],
+        span: "Span | None",
+    ) -> BatchEnqueuedTokenOutcome:
+        async with self._lock:
+            currents: Final = tuple([await self._get_local_counter(scope, span) for scope in scopes])
+            for scope, current in zip(scopes, currents):
+                if current + tokens > scope.limit:
+                    return BatchEnqueuedTokenOverLimit(scope=scope, enqueued=current)
+            for scope, current in zip(scopes, currents):
+                await self._set_local_counter(scope, current + tokens, span)
+        return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes)
+
+    async def refund(
+        self,
+        reservation: BatchEnqueuedTokenReservation,
+        litellm_parent_otel_span: "Span | None" = None,
+    ) -> None:
+        if reservation.tokens <= 0 or not reservation.scopes:
+            return
+        if self._refund_script is not None:
+            try:
+                await self._refund_script(
+                    tuple(self._counter_key(scope) for scope in reservation.scopes),
+                    (reservation.tokens,),
+                )
+            except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory counters
+                verbose_proxy_logger.warning(
+                    "Redis enqueued-token refund failed, falling back to in-memory: %s", str(e)
+                )
+            else:
+                return
+        async with self._lock:
+            for scope in reservation.scopes:
+                current = await self._get_local_counter(scope, litellm_parent_otel_span)
+                remaining = current - reservation.tokens
+                if remaining <= 0:
+                    self.internal_usage_cache.dual_cache.in_memory_cache.delete_cache(key=self._counter_key(scope))
+                else:
+                    await self._set_local_counter(scope, remaining, litellm_parent_otel_span)
+
+    async def save_reservation(
+        self,
+        batch_id: str,
+        reservation: BatchEnqueuedTokenReservation,
+        litellm_parent_otel_span: "Span | None" = None,
+    ) -> None:
+        serialized: Final = _RESERVATION_ADAPTER.dump_json(reservation).decode("utf-8")
+        if self._save_script is not None:
+            try:
+                await self._save_script(
+                    (self._record_key(batch_id),),
+                    (serialized, BATCH_ENQUEUED_TOKEN_TTL_SECONDS),
+                )
+            except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
+                verbose_proxy_logger.warning(
+                    "Redis enqueued-token reservation save failed, falling back to in-memory: %s", str(e)
+                )
+            else:
+                return
+        await self.internal_usage_cache.async_set_cache(
+            key=self._record_key(batch_id),
+            value=serialized,
+            ttl=BATCH_ENQUEUED_TOKEN_TTL_SECONDS,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+            local_only=True,
+        )
+
+    async def pop_reservation(
+        self,
+        batch_id: str,
+        litellm_parent_otel_span: "Span | None" = None,
+    ) -> BatchEnqueuedTokenReservation | None:
+        raw: object = None
+        if self._pop_script is not None:
+            try:
+                raw = _POPPED_VALUE_ADAPTER.validate_python(await self._pop_script((self._record_key(batch_id),), ()))
+            except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
+                verbose_proxy_logger.warning(
+                    "Redis enqueued-token reservation pop failed, falling back to in-memory: %s", str(e)
+                )
+                raw = await self._pop_local_record(batch_id, litellm_parent_otel_span)
+        else:
+            raw = await self._pop_local_record(batch_id, litellm_parent_otel_span)
+        if raw is None:
+            return None
+        try:
+            if isinstance(raw, (str, bytes)):
+                return _RESERVATION_ADAPTER.validate_json(raw)
+            return _RESERVATION_ADAPTER.validate_python(raw)
+        except ValidationError:
+            verbose_proxy_logger.warning("Discarding malformed enqueued-token reservation record for %s", batch_id)
+            return None
+
+    async def _pop_local_record(self, batch_id: str, span: "Span | None") -> object:
+        async with self._lock:
+            stored = await self.internal_usage_cache.async_get_cache(
+                key=self._record_key(batch_id),
+                litellm_parent_otel_span=span,
+                local_only=True,
+            )
+            if stored is None:
+                return None
+            self.internal_usage_cache.dual_cache.in_memory_cache.delete_cache(key=self._record_key(batch_id))
+        return stored
+
+    async def _get_local_counter(self, scope: BatchEnqueuedTokenScope, span: "Span | None") -> int:
+        stored = await self.internal_usage_cache.async_get_cache(
+            key=self._counter_key(scope),
+            litellm_parent_otel_span=span,
+            local_only=True,
+        )
+        return _STORED_COUNTER_ADAPTER.validate_python(stored) or 0
+
+    async def _set_local_counter(self, scope: BatchEnqueuedTokenScope, value: int, span: "Span | None") -> None:
+        await self.internal_usage_cache.async_set_cache(
+            key=self._counter_key(scope),
+            value=value,
+            ttl=BATCH_ENQUEUED_TOKEN_TTL_SECONDS,
+            litellm_parent_otel_span=span,
+            local_only=True,
+        )

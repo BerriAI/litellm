@@ -46,6 +46,7 @@ class KeyLoggingCallback(BaseModel):
 class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
     priority: str | None = None
+    batch_enqueued_token_limit: int | None = None
 
 
 class ObjectPermission(BaseModel):
