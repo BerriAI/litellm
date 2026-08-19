@@ -469,6 +469,23 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
         assert "litellm_logging_obj" not in request_data
 
     @pytest.mark.asyncio
+    async def test_recovered_usage_without_cost_clobbers_client_cost_with_zero(self):
+        from litellm.types.utils import Usage
+
+        recovered_usage = Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31)
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"combined_usage_object": recovered_usage}
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "response_cost": 999.0,
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert request_data["combined_usage_object"] is recovered_usage
+        assert request_data["response_cost"] == 0.0
+
+    @pytest.mark.asyncio
     async def test_no_recovered_usage_is_noop(self):
         logging_obj = MagicMock()
         logging_obj.model_call_details = {}
@@ -521,6 +538,23 @@ class TestPostCallFailureHookLiftsStandardLoggingObject:
         }
         await self._run(request_data)
         assert request_data["standard_logging_object"] is authoritative
+
+    @pytest.mark.asyncio
+    async def test_client_supplied_key_is_stripped_when_logging_obj_supplies_none(self):
+        spoofed = {"model_id": "client-injected"}
+        request_data = {"standard_logging_object": spoofed, "metadata": {}}
+        await self._run(request_data)
+        assert "standard_logging_object" not in request_data
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data_with_obj = {
+            "litellm_logging_obj": logging_obj,
+            "standard_logging_object": spoofed,
+            "metadata": {},
+        }
+        await self._run(request_data_with_obj)
+        assert "standard_logging_object" not in request_data_with_obj
 
     @pytest.mark.asyncio
     async def test_no_standard_logging_object_is_noop(self):
