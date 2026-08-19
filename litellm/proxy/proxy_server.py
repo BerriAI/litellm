@@ -510,6 +510,7 @@ from litellm.proxy.management_endpoints.workflow_management_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import (
     create_audit_log_for_update,
     create_object_audit_log,
+    store_audit_logs_enabled,
 )
 from litellm.proxy.management_helpers.team_metadata_validation import (
     TEAM_METADATA_SCHEMA_REGISTRY,
@@ -4969,15 +4970,15 @@ class ProxyConfig:
                         else:
                             litellm.audit_log_callbacks.append(callback)
 
-                    _store_audit_logs = litellm_settings.get("store_audit_logs", litellm.store_audit_logs)
-                    if _store_audit_logs:
+                    if store_audit_logs_enabled(config_override=litellm_settings.get("store_audit_logs")):
                         print(  # noqa: T201
                             f"{blue_color_code} Initialized Audit Log Callbacks - {litellm.audit_log_callbacks} {reset_color_code}"
                         )
                     else:
                         verbose_proxy_logger.warning(
-                            "'audit_log_callbacks' is configured but 'store_audit_logs' is not enabled. "
-                            "Audit log callbacks will not fire until 'store_audit_logs: true' is added to litellm_settings."
+                            "'audit_log_callbacks' is configured but audit logging is disabled. "
+                            "Audit log callbacks will not fire while litellm_settings.store_audit_logs "
+                            "or LITELLM_STORE_AUDIT_LOGS is false."
                         )
                 elif key == "cache_params":
                     # this is set in the cache branch

@@ -1816,7 +1816,6 @@ async def bulk_user_update(
                         litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
                         user_api_key_dict=user_api_key_dict,
                         litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        before_value=f"Updated {len(all_users_in_db)} users",
                         after_value=json.dumps(non_default_values),
                     )
                 )

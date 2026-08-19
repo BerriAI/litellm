@@ -13,12 +13,14 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames
+from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, UserAPIKeyAuth
 from litellm.proxy.management_helpers.audit_logs import (
     _audit_log_task_done_callback,
     _build_audit_log_payload,
     _dispatch_audit_log_to_callbacks,
     create_audit_log_for_update,
+    create_object_audit_log,
+    store_audit_logs_enabled,
 )
 from litellm.types.utils import StandardAuditLogPayload
 
@@ -469,3 +471,115 @@ class TestS3AuditCallbackParamsDecoupling:
             assert second is not None
             assert id(second) != id(first)
             assert second.s3_bucket_name == "second"
+
+
+class TestStoreAuditLogsEnabled:
+    """Precedence for the audit-log toggle: env var, then config, then the litellm default."""
+
+    def test_enabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_STORE_AUDIT_LOGS", raising=False)
+        assert litellm.store_audit_logs is True
+        assert store_audit_logs_enabled() is True
+
+    def test_env_false_disables_despite_module_setting(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_STORE_AUDIT_LOGS", "false")
+        with patch("litellm.store_audit_logs", True):
+            assert store_audit_logs_enabled() is False
+
+    def test_env_true_enables_when_module_setting_off(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_STORE_AUDIT_LOGS", "true")
+        with patch("litellm.store_audit_logs", False):
+            assert store_audit_logs_enabled() is True
+
+    def test_config_false_disables(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_STORE_AUDIT_LOGS", raising=False)
+        with patch("litellm.store_audit_logs", False):
+            assert store_audit_logs_enabled() is False
+
+    def test_unrecognized_env_value_falls_back_to_module_setting(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_STORE_AUDIT_LOGS", "yes")
+        with patch("litellm.store_audit_logs", False):
+            assert store_audit_logs_enabled() is False
+
+    def test_config_override_beats_module_setting(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_STORE_AUDIT_LOGS", raising=False)
+        with patch("litellm.store_audit_logs", True):
+            assert store_audit_logs_enabled(config_override=False) is False
+
+    def test_env_beats_config_override(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_STORE_AUDIT_LOGS", "false")
+        assert store_audit_logs_enabled(config_override=True) is False
+
+
+class TestAuditLoggingOnByDefault:
+    @pytest.mark.asyncio
+    async def test_writes_audit_log_with_no_store_audit_logs_configured(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_STORE_AUDIT_LOGS", raising=False)
+
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        ):
+            mock_prisma.db.litellm_auditlog.create = AsyncMock()
+
+            await create_audit_log_for_update(_make_audit_log())
+
+            mock_prisma.db.litellm_auditlog.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_object_audit_log_writes_with_no_store_audit_logs_configured(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_STORE_AUDIT_LOGS", raising=False)
+
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        ):
+            mock_prisma.db.litellm_auditlog.create = AsyncMock()
+
+            await create_object_audit_log(
+                object_id="team-456",
+                action="created",
+                litellm_changed_by=None,
+                user_api_key_dict=UserAPIKeyAuth(user_id="user-123"),
+                litellm_proxy_admin_name="default_user_id",
+                table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                after_value=json.dumps({"name": "new-team"}),
+            )
+
+            mock_prisma.db.litellm_auditlog.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_env_opt_out_blocks_the_db_write(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_STORE_AUDIT_LOGS", "false")
+
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        ):
+            mock_prisma.db.litellm_auditlog.create = AsyncMock()
+
+            await create_audit_log_for_update(_make_audit_log())
+
+            mock_prisma.db.litellm_auditlog.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_env_opt_out_blocks_create_object_audit_log(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_STORE_AUDIT_LOGS", "false")
+
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        ):
+            mock_prisma.db.litellm_auditlog.create = AsyncMock()
+
+            await create_object_audit_log(
+                object_id="team-456",
+                action="created",
+                litellm_changed_by=None,
+                user_api_key_dict=UserAPIKeyAuth(user_id="user-123"),
+                litellm_proxy_admin_name="default_user_id",
+                table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                after_value=json.dumps({"name": "new-team"}),
+            )
+
+            mock_prisma.db.litellm_auditlog.create.assert_not_called()

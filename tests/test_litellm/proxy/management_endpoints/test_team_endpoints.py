@@ -93,6 +93,15 @@ mock_prisma_client.db.litellm_teamtable = MagicMock()
 mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
 
 
+@pytest.fixture(autouse=True)
+def disable_audit_logs(monkeypatch):
+    """These tests pass MagicMock team rows that cannot serialize into an audit payload.
+
+    Audit behavior on a realistic row is covered by test_update_team_writes_an_audit_log below.
+    """
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+
 # Fixture to provide the mock prisma client
 @pytest.fixture(autouse=True)
 def mock_db_client():
@@ -8573,6 +8582,57 @@ async def test_update_team_with_router_settings(mock_db_client, mock_admin_auth)
     # Verify router_settings can be deserialized and matches input
     deserialized_settings = json.loads(team_data["router_settings"])
     assert deserialized_settings == router_settings_data
+
+
+@pytest.mark.asyncio
+async def test_update_team_writes_an_audit_log(mock_db_client, mock_admin_auth, monkeypatch):
+    """/team/update awaits its audit payload build on the request path, so a realistic row must return normally and produce exactly one audit row."""
+    monkeypatch.setattr("litellm.store_audit_logs", True)
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmTableNames, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    team_id = "team-audit-on-1"
+    existing_team_row = LiteLLM_TeamTable(
+        team_id=team_id,
+        team_alias="audit demo",
+        models=[],
+        members_with_roles=[],
+        metadata={"nested": {"a": 1}},
+        created_at=datetime(2026, 3, 9, 12, 0, 0, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 3, 9, 12, 0, 0, tzinfo=timezone.utc),
+    )
+
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.db = MagicMock()
+    updated_team_result = MagicMock(team_id=team_id)
+    updated_team_result.model_dump.return_value = {"team_id": team_id}
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team_row)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=updated_team_result)
+    audit_create = AsyncMock()
+    mock_db_client.db.litellm_auditlog = MagicMock()
+    mock_db_client.db.litellm_auditlog.create = audit_create
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_db_client),
+    ):
+        response = await update_team(
+            data=UpdateTeamRequest(team_id=team_id, team_alias="audit demo renamed"),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+        await asyncio.sleep(0.1)
+
+    assert response["team_id"] == team_id
+    audit_create.assert_called_once()
+    audit_row = audit_create.call_args.kwargs["data"]
+    assert audit_row["table_name"] == LitellmTableNames.TEAM_TABLE_NAME
+    assert audit_row["object_id"] == team_id
+    assert audit_row["action"] == "updated"
 
 
 @pytest.mark.asyncio

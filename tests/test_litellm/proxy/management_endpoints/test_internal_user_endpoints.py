@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -4145,3 +4146,52 @@ async def test_user_info_v2_returns_the_mcp_entitlement(mocker):
     assert response.object_permission.mcp_tool_permissions == {
         "github": ["list_issues"]
     }
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_all_users_writes_a_valid_audit_log(monkeypatch):
+    """`before_value` is a pydantic Json field, so the sentence the all-users path used to pass there could never validate and the row was never written."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+        UpdateUserRequestNoUserIDorEmail,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        bulk_user_update,
+    )
+
+    monkeypatch.setattr("litellm.store_audit_logs", True)
+
+    existing_users = [
+        SimpleNamespace(user_id=f"u-{i}", user_email=f"u-{i}@example.com") for i in range(3)
+    ]
+    prisma_client = MagicMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_usertable = MagicMock()
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=existing_users)
+    prisma_client.db.litellm_usertable.update_many = AsyncMock()
+    audit_create = AsyncMock()
+    prisma_client.db.litellm_auditlog = MagicMock()
+    prisma_client.db.litellm_auditlog.create = audit_create
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+    ):
+        response = await bulk_user_update(
+            data=BulkUpdateUserRequest(
+                all_users=True,
+                user_updates=UpdateUserRequestNoUserIDorEmail(max_budget=42.0),
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"
+            ),
+        )
+        await asyncio.sleep(0.1)
+
+    assert response.successful_updates == 3
+    audit_create.assert_called_once()
+    audit_row = audit_create.call_args.kwargs["data"]
+    assert "before_value" not in audit_row
+    assert json.loads(audit_row["updated_values"]) == {"max_budget": 42.0}
