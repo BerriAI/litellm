@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -23,8 +24,8 @@ class ToolCall(BaseModel):
 
 class AssistantMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
-    content: str | list[ContentBlock] | None = None
-    tool_calls: list[ToolCall] | None = None
+    content: str | Sequence[ContentBlock] | None = None
+    tool_calls: Sequence[ToolCall] | None = None
 
 
 class SingulrGuardrailPayload(BaseModel):
@@ -32,19 +33,19 @@ class SingulrGuardrailPayload(BaseModel):
     model_name: str | None = None
     model_provider_name: str | None = None
     guardrail_scope: str | None = None
-    messages: list[Any] | None = None
-    images: list[str] | None = None
+    messages: Sequence[Any] | None = None
+    images: Sequence[str] | None = None
     response: AssistantMessage | None = None
-    metadata: dict[str, Any] | None = None
+    metadata: Mapping[str, Any] | None = None
 
 
 class SingulrMcpGuardrailPayload(BaseModel):
     guardrail_scope: str | None = None
     tool_name: str | None = None
-    tool_arguments: dict[str, Any] | None = None
+    tool_arguments: Mapping[str, Any] | None = None
     mcp_server_name: str | None = None
-    tool_result: list[str] | None = None
-    metadata: dict[str, Any] | None = None
+    tool_result: Sequence[str] | None = None
+    metadata: Mapping[str, Any] | None = None
 
 
 class SingulrGuardrailResponse(BaseModel):
