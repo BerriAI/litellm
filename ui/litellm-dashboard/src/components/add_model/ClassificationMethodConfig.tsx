@@ -93,7 +93,7 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
           </li>
           <li>
             <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; {ranges.complexReasoning}{" "}
-            (or 2+ reasoning markers)
+            (or 2+ reasoning markers with a score of at least {ranges.simpleMedium})
           </li>
         </ul>
       )}
