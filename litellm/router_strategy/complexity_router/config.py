@@ -565,7 +565,7 @@ class ComplexityRouterConfig(BaseModel):
         if registered is None:
             raise ValueError(
                 f"{value!r} is not a registered classifier plugin; declare it under "
-                "classifier_plugins in the proxy config"
+                "classifier_plugins in the proxy config (the registry loads at startup and config reload)"
             )
         return registered
 
