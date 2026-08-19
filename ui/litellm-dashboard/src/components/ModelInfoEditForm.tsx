@@ -403,29 +403,27 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
     </div>
   );
 
-  const pricingField = (name: TouchedPricingField, label: string, placeholder: string, description?: string) => (
-    <div>
-      <FieldLabel htmlFor={name}>{label}</FieldLabel>
-      {isEditing ? (
-        <FormField control={form.control} name={name} description={description}>
-          {({ value, onChange, ...control }) => (
-            <NumericalInput
-              {...control}
-              id={name}
-              value={value ?? ""}
-              placeholder={placeholder}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
-                markTouched(name);
-                onChange(event);
-              }}
-            />
-          )}
-        </FormField>
-      ) : (
+  const pricingField = (name: TouchedPricingField, label: string, placeholder: string, description?: string) =>
+    isEditing ? (
+      <FormField control={form.control} name={name} label={label} description={description}>
+        {({ value, onChange, ...control }) => (
+          <NumericalInput
+            {...control}
+            value={value ?? ""}
+            placeholder={placeholder}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+              markTouched(name);
+              onChange(event);
+            }}
+          />
+        )}
+      </FormField>
+    ) : (
+      <div>
+        <FieldLabel>{label}</FieldLabel>
         <Display>{displayCost(localModelData, name)}</Display>
-      )}
-    </div>
-  );
+      </div>
+    );
 
   const tagsField = (
     name: "model_access_group" | "guardrails" | "tags",
