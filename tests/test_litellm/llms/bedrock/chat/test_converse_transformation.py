@@ -6043,3 +6043,10 @@ def test_streaming_usage_chunk_is_transformed():
     assert chunk.usage.prompt_tokens == 11
     assert chunk.usage.completion_tokens == 4
     assert chunk.usage.total_tokens == 15
+
+
+def test_update_optional_params_with_thinking_tokens_bool_thinking_does_not_crash():
+    config = AmazonConverseConfig()
+    optional_params = {"thinking": True}
+    config.update_optional_params_with_thinking_tokens(non_default_params={"thinking": True}, optional_params=optional_params)
+    assert "maxTokens" not in optional_params
