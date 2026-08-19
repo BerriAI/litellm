@@ -6082,6 +6082,121 @@ class TestInjectCostIntoUsageDict:
         injected = json.loads(result.split("\n")[0].split("data:", 1)[1].strip())
         assert injected["usage"]["cost"] == pytest.approx(self._expected_cost("gpt-4o-mini", 11, 4))
 
+    def test_message_delta_cost_charges_the_non_cached_input_tokens(self):
+        """Anthropic reports ``input_tokens`` excluding cache tokens, so reading it as the whole
+        prompt total drops the non-cached input from the bill on every cache hit."""
+        model = "claude-haiku-4-5"
+        pricing = litellm.model_cost[model]
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 8,
+                "cache_read_input_tokens": 3202,
+                "cache_creation_input_tokens": 0,
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model)
+
+        assert result is not None
+        expected = (
+            14 * pricing["input_cost_per_token"]
+            + 3202 * pricing["cache_read_input_token_cost"]
+            + 8 * pricing["output_cost_per_token"]
+        )
+        dropped_input = expected - 14 * pricing["input_cost_per_token"]
+        assert result["usage"]["cost"] == pytest.approx(expected)
+        assert result["usage"]["cost"] > dropped_input
+
+    def test_message_delta_prices_1h_cache_creation_above_the_5m_rate(self):
+        """The ``cache_creation`` 5m/1h split has to survive into ``prompt_tokens_details``,
+        otherwise a 1h write is billed at the cheaper 5m rate."""
+        model = "claude-haiku-4-5"
+        pricing = litellm.model_cost[model]
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 8,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 2000,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 2000},
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model)
+
+        assert result is not None
+        base = 14 * pricing["input_cost_per_token"] + 8 * pricing["output_cost_per_token"]
+        expected_1h = base + 2000 * pricing["cache_creation_input_token_cost_above_1hr"]
+        flat_5m = base + 2000 * pricing["cache_creation_input_token_cost"]
+        assert expected_1h != pytest.approx(flat_5m)
+        assert result["usage"]["cost"] == pytest.approx(expected_1h)
+
+    def test_message_delta_prices_through_the_logging_obj_so_custom_pricing_applies(self):
+        """Costing by model name alone yields sticker price, so a deployment with a negotiated
+        discount streamed a ``usage.cost`` that disagreed with the callback's ``response_cost``."""
+
+        class _StubLoggingObj:
+            def __init__(self, cost):
+                self._cost = cost
+                self.captured_result = None
+
+            def _response_cost_calculator(self, result):
+                self.captured_result = result
+                return self._cost
+
+        model = "claude-haiku-4-5"
+        discounted_cost = 0.00099
+        stub = _StubLoggingObj(discounted_cost)
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 8,
+                "cache_read_input_tokens": 3202,
+                "cache_creation_input_tokens": 500,
+                "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 400},
+            },
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model, stub)
+
+        assert result is not None
+        assert result["usage"]["cost"] == discounted_cost
+        assert result["usage"]["cost"] != pytest.approx(self._expected_cost(model, 14 + 500 + 3202, 8))
+        usage = stub.captured_result.usage
+        assert usage.prompt_tokens == 14 + 500 + 3202
+        details = usage.prompt_tokens_details.cache_creation_token_details
+        assert details.ephemeral_5m_input_tokens == 100
+        assert details.ephemeral_1h_input_tokens == 400
+
+    def test_message_delta_falls_back_to_model_pricing_when_the_logging_obj_returns_no_cost(self):
+        class _StubLoggingObj:
+            def _response_cost_calculator(self, result):
+                return None
+
+        model = "claude-haiku-4-5"
+        pricing = litellm.model_cost[model]
+        event = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 14, "output_tokens": 8, "cache_read_input_tokens": 3202},
+        }
+
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model, _StubLoggingObj())
+
+        assert result is not None
+        assert result["usage"]["cost"] == pytest.approx(
+            14 * pricing["input_cost_per_token"]
+            + 3202 * pricing["cache_read_input_token_cost"]
+            + 8 * pricing["output_cost_per_token"]
+        )
+
 
 class TestProcessChunkWithCostInjection:
     def test_complete_usage_frame_chunk_is_injected(self, monkeypatch):
@@ -6115,6 +6230,31 @@ class TestProcessChunkWithCostInjection:
         )
 
         assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk
+
+    def test_message_delta_frame_is_priced_with_the_logging_obj(self, monkeypatch):
+        """Pins that the logging object reaches the pricer through the byte-frame entry point,
+        which is how the proxy actually calls this on a streamed Messages API request."""
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+
+        class _StubLoggingObj:
+            def _response_cost_calculator(self, result):
+                return 0.00042
+
+        chunk = (
+            b"event: message_delta\n"
+            b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+            b'"usage":{"input_tokens":14,"output_tokens":8,"cache_read_input_tokens":3202}}\n\n'
+        )
+
+        result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+            chunk, "claude-haiku-4-5", _StubLoggingObj()
+        )
+
+        assert result != chunk
+        data_line = next(ln for ln in result.decode("utf-8").splitlines() if ln.startswith("data:"))
+        payload = json.loads(data_line.split("data:", 1)[1].strip())
+        assert payload["usage"]["cost"] == 0.00042
+        assert payload["usage"]["cache_read_input_tokens"] == 3202
 
 
 # ---------------------------------------------------------------------------
