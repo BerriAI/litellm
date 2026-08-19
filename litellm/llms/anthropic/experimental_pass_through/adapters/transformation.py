@@ -452,6 +452,17 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
+                                        elif c.get("type") == "document":
+                                            document_part = self._tool_result_document_part(c.get("source"))
+                                            tool_result = ChatCompletionToolMessage(
+                                                role="tool",
+                                                tool_call_id=tool_use_id,
+                                                content=[document_part]  # mutable-ok: content must be a json list
+                                                if document_part
+                                                else "",
+                                            )
+                                            self._add_cache_control_if_applicable(content, tool_result, model)
+                                            tool_message_list.append(tool_result)
                                         elif c.get("type") == "tool_reference":
                                             tool_name = c.get("tool_name")
                                             text_content = (
@@ -503,6 +514,10 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 image_part = self._tool_result_image_part(c.get("source"))
                                                 if image_part:
                                                     combined_content_parts.append(image_part)
+                                            elif c.get("type") == "document":
+                                                document_part = self._tool_result_document_part(c.get("source"))
+                                                if document_part:
+                                                    combined_content_parts.append(document_part)
                                             elif c.get("type") == "tool_reference":
                                                 tool_name = c.get("tool_name")
                                                 text_repr = (
@@ -1234,6 +1249,26 @@ class LiteLLMAnthropicMessagesAdapter:
         if not openai_image_url:
             return None
         return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
+
+    def _tool_result_document_part(
+        self, document_source: object
+    ) -> ChatCompletionTextObject | ChatCompletionImageObject | None:
+        if not isinstance(document_source, dict):
+            return None
+
+        media_part = self._tool_result_image_part(document_source)
+        if media_part:
+            return media_part
+
+        if document_source.get("type") == "text":
+            data = document_source.get("data")
+            if isinstance(data, str):
+                return ChatCompletionTextObject(type="text", text=data)
+
+        return ChatCompletionTextObject(
+            type="text",
+            text=json.dumps(document_source, separators=(",", ":"), sort_keys=True),
+        )
 
     def _translate_openai_content_to_anthropic(
         self,

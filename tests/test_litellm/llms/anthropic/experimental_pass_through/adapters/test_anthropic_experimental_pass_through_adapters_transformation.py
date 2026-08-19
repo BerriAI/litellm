@@ -3785,3 +3785,152 @@ def test_tool_result_unknown_block_degrades_to_placeholder():
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == "[custom_data block]"
 
+
+def test_tool_result_single_document_preserves_payload():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_doc", "name": "read_pdf", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_doc",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": "JVBERi0xLjQK",
+                            },
+                        }
+                    ],
+                }
+            ],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == [
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:application/pdf;base64,JVBERi0xLjQK"},
+        }
+    ]
+
+
+def test_tool_result_text_and_document_preserve_payload_and_cardinality():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_doc", "name": "read_pdf", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_doc",
+                    "content": [
+                        {"type": "text", "text": "invoice"},
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": "JVBERi0xLjQK",
+                            },
+                        },
+                    ],
+                }
+            ],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool_call_id"] == "call_doc"
+    assert tool_messages[0]["content"] == [
+        {"type": "text", "text": "invoice"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:application/pdf;base64,JVBERi0xLjQK"},
+        },
+    ]
+
+
+def test_tool_result_plain_text_document_preserves_text():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_doc", "name": "read_text", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_doc",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "text",
+                                "media_type": "text/plain",
+                                "data": "15 degrees",
+                            },
+                        }
+                    ],
+                }
+            ],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == [{"type": "text", "text": "15 degrees"}]
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_content"),
+    [
+        (
+            {"type": "file", "file_id": "file_123"},
+            [{"type": "text", "text": '{"file_id":"file_123","type":"file"}'}],
+        ),
+        ("invalid", ""),
+    ],
+)
+def test_tool_result_document_preserves_reference_or_degrades_safely(source, expected_content):
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_doc", "name": "read_file", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_doc",
+                    "content": [{"type": "document", "source": source}],
+                }
+            ],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == expected_content
