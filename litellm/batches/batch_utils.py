@@ -426,7 +426,7 @@ def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict]:
 def _parse_batch_output_line(line: bytes) -> dict | None:
     try:
         parsed: Final = json.loads(line)
-    except json.JSONDecodeError as e:
+    except ValueError as e:
         verbose_logger.warning("skipping malformed batch output line: %s", str(e))
         return None
     if isinstance(parsed, dict):
