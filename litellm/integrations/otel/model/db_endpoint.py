@@ -77,10 +77,10 @@ def _is_misparsed_authority(parsed: ParseResult, url: str, raw_database: str) ->
     port, and the rest of the credential as the path, query or fragment. The
     stranded userinfo ``@`` is the only surviving evidence.
 
-    A DSN that carries the at-sign in a query parameter instead, such as
     A database name cannot hold an unencoded slash either, so a second path
     segment is the same evidence.
 
+    A DSN that carries the at-sign in a query parameter instead, such as
     ``?application_name=svc@prod``, is indistinguishable from a mis-split by any
     property of the parse: both leave no userinfo, a host, a port and a path.
     Since guessing wrong publishes a credential fragment to a tracing backend,
@@ -127,8 +127,9 @@ def postgres_endpoint() -> DatabaseEndpoint | None:
     reconnect path re-reads ``DATABASE_URL``, and the DB-backed
     ``environment_variables`` config overlay can rewrite any of them after
     startup, so a value cached for the process lifetime goes stale against a
-    connection that has genuinely moved. Only the parse is memoized, keyed on the
-    URL, which keeps the per-span cost to a dict lookup.
+    connection that has genuinely moved. Nothing is memoized either: a cache
+    keyed on the URL would hold a rotated credential past its rotation, and the
+    parse is a single ``urlparse`` on a short string.
 
     A configured read replica yields ``None``: ``RoutingPrismaWrapper`` picks
     reader or writer per Prisma call, underneath the span, so naming the writer
