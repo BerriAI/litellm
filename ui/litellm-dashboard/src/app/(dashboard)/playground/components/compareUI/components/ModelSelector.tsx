@@ -1,6 +1,15 @@
 import React, { useMemo, useState } from "react";
-import { Select } from "antd";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
@@ -8,6 +17,17 @@ interface ModelSelectorProps {
   loading?: boolean;
   disabled?: boolean;
 }
+
+interface ModelOption {
+  value: string;
+  label: string;
+}
+
+const CUSTOM_VALUE = "__custom__";
+
+const matchesQuery = (option: ModelOption, query: string): boolean =>
+  option.label.toLowerCase().includes(query.trim().toLowerCase());
+
 export function ModelSelector({ value, onChange, models, loading, disabled }: ModelSelectorProps) {
   const [isAddingCustom, setIsAddingCustom] = useState(false);
   const [customValue, setCustomValue] = useState("");
@@ -20,21 +40,27 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
     return options;
   }, [options, value]);
 
-  const selectValue = isAddingCustom ? "__custom__" : value || undefined;
+  const modelOptions: ModelOption[] = useMemo(
+    () => [
+      ...displayOptions.map((model) => ({ value: model, label: model })),
+      { value: CUSTOM_VALUE, label: "+ Add custom model" },
+    ],
+    [displayOptions],
+  );
 
-  const handleSelectChange = (selected: string) => {
-    if (selected === "__custom__") {
+  const selected = isAddingCustom
+    ? (modelOptions.find((option) => option.value === CUSTOM_VALUE) ?? null)
+    : (modelOptions.find((option) => option.value === value) ?? null);
+
+  const handleSelect = (option: ModelOption | null) => {
+    if (option?.value === CUSTOM_VALUE) {
       setIsAddingCustom(true);
-      if (value && !options.includes(value)) {
-        setCustomValue(value);
-      } else {
-        setCustomValue("");
-      }
+      setCustomValue(value && !options.includes(value) ? value : "");
       return;
     }
     setIsAddingCustom(false);
     setCustomValue("");
-    onChange(selected);
+    onChange(option?.value ?? "");
   };
 
   const commitCustomValue = () => {
@@ -48,31 +74,49 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
     setIsAddingCustom(false);
     setCustomValue("");
   };
+
   return (
-    <div className="flex-1 min-w-0">
-      <Select<string>
-        value={selectValue}
-        onChange={handleSelectChange}
+    <div className="min-w-0 flex-1">
+      <Combobox
+        items={modelOptions}
+        value={selected}
+        onValueChange={handleSelect}
         disabled={disabled}
-        loading={loading}
-        placeholder={loading ? "Loading models..." : "Select a model"}
-        className="w-full rounded-md"
-        showSearch
-        optionFilterProp="children"
+        isItemEqualToValue={(a: ModelOption, b: ModelOption) => a.value === b.value}
+        itemToStringLabel={(option: ModelOption) => option.label}
+        filter={matchesQuery}
       >
-        {displayOptions.map((model) => (
-          <Select.Option key={model} value={model}>
-            {model}
-          </Select.Option>
-        ))}
-        <Select.Option value="__custom__">+ Add custom model</Select.Option>
-      </Select>
+        <ComboboxInput
+          placeholder={loading ? "Loading models..." : "Select a model"}
+          className="w-full"
+          disabled={disabled}
+        />
+        <ComboboxContent>
+          <ComboboxEmpty>
+            {loading ? (
+              <span aria-busy="true" className="flex items-center justify-center py-2">
+                <UiLoadingSpinner className="size-4" />
+              </span>
+            ) : (
+              "No models available"
+            )}
+          </ComboboxEmpty>
+          <ComboboxList>
+            {(option: ModelOption) => (
+              <ComboboxItem key={option.value} value={option}>
+                {option.label}
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
       {isAddingCustom && (
         <Input
           className="mt-2"
           placeholder="Custom Model Name (Enter to add)"
           value={customValue}
-          onChange={(e) => setCustomValue(e.target.value)}
+          autoFocus
+          onChange={(event) => setCustomValue(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
@@ -80,7 +124,6 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
             }
           }}
           onBlur={commitCustomValue}
-          autoFocus
         />
       )}
     </div>

@@ -739,11 +739,13 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                 Clear All Chats
               </Button>
               <Tooltip>
-                <TooltipTrigger render={<span className="inline-flex" />}>
-                  <Button variant="outline" onClick={addComparison} disabled={comparisons.length >= maxComparisons}>
-                    <Plus />
-                    Add Comparison
-                  </Button>
+                <TooltipTrigger
+                  render={
+                    <Button variant="outline" onClick={addComparison} disabled={comparisons.length >= maxComparisons} />
+                  }
+                >
+                  <Plus />
+                  Add Comparison
                 </TooltipTrigger>
                 <TooltipContent>
                   {comparisons.length >= maxComparisons ? "Compare up to 3 models at a time" : "Add another comparison"}
@@ -782,27 +784,31 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                 ) : showSuggestedPrompts ? (
                   <div className="flex items-center gap-2 overflow-x-auto">
                     {SUGGESTED_PROMPTS.map((prompt) => (
-                      <button
+                      <Button
                         key={prompt}
                         type="button"
+                        variant="outline"
+                        size="xs"
+                        className="h-auto shrink-0 rounded-full px-3 py-1 font-medium"
                         onClick={() => handleFollowUpSelect(prompt)}
-                        className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100 cursor-pointer"
                       >
                         {prompt}
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 ) : haveAllResponses && !hasAttachment ? (
                   <div className="flex items-center gap-2 overflow-x-auto">
                     {GENERIC_FOLLOW_UPS.map((question) => (
-                      <button
+                      <Button
                         key={question}
                         type="button"
+                        variant="outline"
+                        size="xs"
+                        className="h-auto shrink-0 rounded-full px-3 py-1 font-medium"
                         onClick={() => handleFollowUpSelect(question)}
-                        className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100 cursor-pointer"
                       >
                         {question}
-                      </button>
+                      </Button>
                     ))}
                   </div>
                 ) : isAnyComparisonLoading ? (
@@ -834,13 +840,16 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                       <div className="text-sm font-medium text-gray-900 truncate">{uploadedFile.name}</div>
                       <div className="text-xs text-gray-500">{isUploadedFilePdf ? "PDF" : "Image"}</div>
                     </div>
-                    <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="rounded-full text-muted-foreground"
                       onClick={handleRemoveFile}
                       aria-label="Remove attachment"
                     >
-                      <Trash2 className="size-3" />
-                    </button>
+                      <Trash2 />
+                    </Button>
                   </div>
                 </div>
               )}

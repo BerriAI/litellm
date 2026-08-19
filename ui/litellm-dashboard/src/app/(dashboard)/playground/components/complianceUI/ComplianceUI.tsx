@@ -7,17 +7,23 @@ import {
   type CompliancePrompt,
 } from "@/data/compliancePrompts";
 import useCan from "@/app/(dashboard)/hooks/useCan";
-import { getGuardrailsList, testPoliciesAndGuardrails } from "@/components/networking";
+import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
+import { testPoliciesAndGuardrails } from "@/components/networking";
 import PolicySelector, { getPolicyOptionEntries } from "@/components/policies/PolicySelector";
 import { Policy } from "@/components/policies/types";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import {
   AlertTriangle,
   BarChart3,
   Bot,
   Brain,
   CheckCircle2,
-  Check,
   ChevronDown,
   ChevronRight,
   ClipboardList,
@@ -97,12 +103,6 @@ interface QuickTestMessage {
 type ResultFilter = "all" | "matches" | "mismatches" | "pending";
 type RightPanelTab = "quick-test" | "batch-results";
 
-interface GuardrailOption {
-  id: string;
-  name: string;
-  type?: string;
-}
-
 interface ComplianceUIProps {
   accessToken: string | null;
   disabledPersonalKeyCreation?: boolean;
@@ -128,10 +128,8 @@ export default function ComplianceUI({
   const frameworks = getFrameworks();
 
   const [policyValueToLabel, setPolicyValueToLabel] = useState<Map<string, string>>(new Map());
-  const [guardrailOptions, setGuardrailOptions] = useState<GuardrailOption[]>([]);
   const [selectedPolicies, setSelectedPolicies] = useState<string[]>([]);
   const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
-  const [showGuardrailDropdown, setShowGuardrailDropdown] = useState(false);
 
   const [selectedPromptIds, setSelectedPromptIds] = useState<Set<string>>(new Set());
   const [expandedFrameworks, setExpandedFrameworks] = useState<Set<string>>(new Set([frameworks[0]?.name ?? ""]));
@@ -162,26 +160,7 @@ export default function ComplianceUI({
   }, []);
 
   useEffect(() => {
-    if (!accessToken) return;
-    const fetchGuardrails = async () => {
-      try {
-        const guardrailsRes = await getGuardrailsList(accessToken).catch(() => ({ guardrails: [] }));
-        setGuardrailOptions(
-          (guardrailsRes.guardrails || []).map((g: { guardrail_name: string }) => ({
-            id: g.guardrail_name,
-            name: g.guardrail_name,
-            type: "litellm_content_filter",
-          })),
-        );
-      } catch {
-        setGuardrailOptions([]);
-      }
-    };
-    fetchGuardrails();
-  }, [accessToken]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
   }, [quickTestMessages]);
 
   const allFrameworks: ComplianceFramework[] = (() => {
@@ -264,10 +243,6 @@ export default function ComplianceUI({
   };
 
   const deselectAll = () => setSelectedPromptIds(new Set());
-
-  const toggleGuardrail = (id: string) => {
-    setSelectedGuardrails((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]));
-  };
 
   const addCustomPrompt = () => {
     if (!newPromptText.trim()) return;
@@ -697,24 +672,23 @@ export default function ComplianceUI({
   })();
 
   return (
-    <div className="w-full h-full p-4 bg-white">
-      <div className="rounded-2xl border border-gray-200 bg-white shadow-xs min-h-[calc(100vh-160px)] flex flex-col overflow-hidden">
-        {/* Top config */}
-        <div className="shrink-0 border-b border-gray-200 px-6 py-4">
+    <div className="h-full w-full bg-background p-4">
+      <div className="flex min-h-[calc(100vh-160px)] flex-col overflow-hidden rounded-2xl border bg-card shadow-xs">
+        <div className="shrink-0 border-b px-6 py-4">
           <div className="mb-3">
-            <h3 className="text-sm font-semibold text-gray-900">Test Configuration</h3>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <h3 className="text-sm font-semibold tracking-tight">Test Configuration</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
               {canViewPolicies
                 ? "Select policies, guardrails, or both to test against."
                 : "Select guardrails to test against."}
             </p>
           </div>
 
-          <div className="flex items-start gap-3 flex-wrap">
+          <div className="flex flex-wrap items-start gap-3">
             {canViewPolicies && (
               <>
-                <div className="flex-1 min-w-[200px]">
-                  <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">
+                <div className="min-w-[200px] flex-1">
+                  <label className="mb-1.5 block text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
                     Policies
                   </label>
                   {accessToken && (
@@ -727,264 +701,204 @@ export default function ComplianceUI({
                   )}
                 </div>
 
-                <div className="flex flex-col items-center pt-6 shrink-0">
-                  <div className="w-px h-4 bg-gray-200" />
-                  <span className="text-[10px] font-medium text-gray-400 my-1">or</span>
-                  <div className="w-px h-4 bg-gray-200" />
+                <div className="flex shrink-0 flex-col items-center pt-6">
+                  <div className="h-4 w-px bg-border" />
+                  <span className="my-1 text-[10px] font-medium text-muted-foreground">or</span>
+                  <div className="h-4 w-px bg-border" />
                 </div>
               </>
             )}
 
-            <div className="flex-1 min-w-[200px]">
-              <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">
+            <div className="min-w-[200px] flex-1">
+              <label className="mb-1.5 block text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
                 Guardrails
               </label>
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowGuardrailDropdown(!showGuardrailDropdown)}
-                  className="w-full flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2 text-sm text-left hover:border-gray-300 transition-colors"
-                >
-                  <span className={selectedGuardrails.length > 0 ? "text-gray-700" : "text-gray-400"}>
-                    {selectedGuardrails.length > 0 ? `${selectedGuardrails.length} selected` : "None selected"}
-                  </span>
-                  <ChevronDown className="w-4 h-4 text-gray-400" />
-                </button>
-                {showGuardrailDropdown && (
-                  <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 max-h-52 overflow-y-auto">
-                    {guardrailOptions.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-gray-500">
-                        No guardrails available. Create guardrails in the Guardrails page.
-                      </div>
-                    ) : (
-                      guardrailOptions.map((g) => (
-                        <button
-                          key={g.id}
-                          type="button"
-                          onClick={() => toggleGuardrail(g.id)}
-                          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left hover:bg-gray-50"
-                        >
-                          <div
-                            className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${selectedGuardrails.includes(g.id) ? "bg-blue-500 border-blue-500" : "border-gray-300"}`}
-                          >
-                            {selectedGuardrails.includes(g.id) && <Check className="w-3 h-3 text-white" />}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-gray-700">{g.name}</div>
-                            {g.type && <div className="text-[10px] text-gray-400">{g.type}</div>}
-                          </div>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-              {selectedGuardrails.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {selectedGuardrails.map((id) => {
-                    const g = guardrailOptions.find((x) => x.id === id);
-                    return (
-                      <span
-                        key={id}
-                        className="inline-flex items-center gap-1 text-[11px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-sm font-medium"
-                      >
-                        {g?.name}
-                        <button
-                          type="button"
-                          onClick={() => toggleGuardrail(id)}
-                          className="hover:text-indigo-900"
-                          aria-label="Remove"
-                        >
-                          <X className="w-2.5 h-2.5" />
-                        </button>
-                      </span>
-                    );
-                  })}
-                </div>
+              {accessToken && (
+                <GuardrailSelector
+                  value={selectedGuardrails}
+                  onChange={setSelectedGuardrails}
+                  accessToken={accessToken}
+                />
               )}
             </div>
 
-            <div className="flex flex-col gap-1.5 pt-6 shrink-0">
+            <div className="flex shrink-0 flex-col gap-1.5 pt-6">
               {isRunning ? (
-                <button
-                  type="button"
-                  onClick={() => batchAbortControllerRef.current?.abort()}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap bg-red-600 text-white hover:bg-red-700"
-                >
-                  <Square className="w-3.5 h-3.5" /> Stop
-                </button>
+                <Button type="button" variant="destructive" onClick={() => batchAbortControllerRef.current?.abort()}>
+                  <Square /> Stop
+                </Button>
               ) : (
-                <button
+                <Button
                   type="button"
                   onClick={runTests}
                   disabled={selectedPromptIds.size === 0 || disabledPersonalKeyCreation}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || disabledPersonalKeyCreation ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
                 >
-                  <Play className="w-3.5 h-3.5" /> Simulate ({selectedPromptIds.size})
-                </button>
+                  <Play /> Simulate ({selectedPromptIds.size})
+                </Button>
               )}
               {isRunning && (
-                <span className="text-[11px] text-gray-500 flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Running...
+                <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Loader2 className="size-3 animate-spin" /> Running...
                 </span>
               )}
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
                 onClick={() => {
                   setSelectedPolicies([]);
                   setSelectedGuardrails([]);
                   setTestResults([]);
                   setQuickTestMessages([]);
                 }}
-                className="flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100 transition-colors"
               >
-                <RotateCcw className="w-3 h-3" /> Reset
-              </button>
+                <RotateCcw /> Reset
+              </Button>
             </div>
           </div>
         </div>
 
-        {/* Panels */}
-        <div className="flex flex-1 min-h-0 overflow-hidden">
-          {/* Left: Prompt library */}
-          <div className="w-[400px] shrink-0 border-r border-gray-200 flex flex-col bg-white overflow-hidden">
-            <div className="flex-1 overflow-y-auto min-h-0">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex w-[400px] shrink-0 flex-col overflow-hidden border-r bg-background">
+            <div className="min-h-0 flex-1 overflow-y-auto">
               <div className="px-4 pt-4 pb-2">
-                <div className="flex items-center justify-between mb-2.5">
-                  <h3 className="text-sm font-semibold text-gray-900">Test Prompts</h3>
-                  <span className="text-[11px] text-gray-400 tabular-nums">
+                <div className="mb-2.5 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold tracking-tight">Test Prompts</h3>
+                  <span className="text-[11px] text-muted-foreground tabular-nums">
                     {selectedPromptIds.size}/{totalPromptCount}
                   </span>
                 </div>
 
                 <div className="relative mb-2.5">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-                  <input
+                  <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
                     type="text"
                     value={searchPrompt}
                     onChange={(e) => setSearchPrompt(e.target.value)}
                     placeholder="Search prompts..."
-                    className="w-full border border-gray-200 rounded-lg pl-8 pr-3 py-1.5 text-xs placeholder:text-gray-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"
+                    className="h-8 pl-8 text-xs"
                   />
                 </div>
 
-                <div className="flex items-center justify-between mb-1">
+                <div className="mb-1 flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={selectAll}
-                      className="text-[11px] font-medium text-blue-600 hover:text-blue-700"
-                    >
+                    <Button type="button" variant="link" size="xs" className="h-auto px-0" onClick={selectAll}>
                       Select All
-                    </button>
-                    <span className="text-gray-300 text-[10px]">·</span>
-                    <button
+                    </Button>
+                    <span className="text-[10px] text-muted-foreground">·</span>
+                    <Button
                       type="button"
+                      variant="link"
+                      size="xs"
+                      className="h-auto px-0 text-muted-foreground"
                       onClick={deselectAll}
-                      className="text-[11px] font-medium text-gray-500 hover:text-gray-700"
                     >
                       Clear
-                    </button>
+                    </Button>
                   </div>
                   <div className="flex items-center gap-1">
-                    <button
+                    <Button
                       type="button"
+                      variant={showAddPrompt ? "secondary" : "ghost"}
+                      size="xs"
                       onClick={() => {
                         setShowAddPrompt(!showAddPrompt);
                         setShowCsvUpload(false);
                       }}
-                      className={`flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-sm transition-colors ${showAddPrompt ? "bg-blue-50 text-blue-600" : "text-gray-500 hover:bg-gray-100"}`}
                     >
-                      <Plus className="w-3 h-3" /> Add
-                    </button>
-                    <button
+                      <Plus /> Add
+                    </Button>
+                    <Button
                       type="button"
+                      variant={showCsvUpload ? "secondary" : "ghost"}
+                      size="xs"
                       onClick={() => {
                         setShowCsvUpload(!showCsvUpload);
                         setShowAddPrompt(false);
                       }}
-                      className={`flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-sm transition-colors ${showCsvUpload ? "bg-blue-50 text-blue-600" : "text-gray-500 hover:bg-gray-100"}`}
                     >
-                      <Upload className="w-3 h-3" /> CSV
-                    </button>
+                      <Upload /> CSV
+                    </Button>
                   </div>
                 </div>
               </div>
 
               {showAddPrompt && (
-                <div className="mx-4 mb-2 border border-blue-200 bg-blue-50/30 rounded-lg p-3">
-                  <textarea
+                <div className="mx-4 mb-2 rounded-lg border border-border bg-muted/30 p-3">
+                  <Textarea
                     value={newPromptText}
                     onChange={(e) => setNewPromptText(e.target.value)}
                     placeholder="Enter your test prompt..."
                     rows={2}
-                    className="w-full border border-gray-200 rounded-sm px-2.5 py-1.5 text-xs text-gray-700 placeholder:text-gray-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 resize-none bg-white"
+                    className="min-h-0 resize-none text-xs"
                   />
-                  <div className="flex items-center justify-between mt-2">
+                  <div className="mt-2 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <button
+                      <Button
                         type="button"
+                        variant={newPromptExpected === "fail" ? "destructive" : "secondary"}
+                        size="xs"
                         onClick={() => setNewPromptExpected("fail")}
-                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-sm ${newPromptExpected === "fail" ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-500"}`}
                       >
                         Should Fail
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
+                        variant={newPromptExpected === "pass" ? "secondary" : "ghost"}
+                        size="xs"
+                        className={newPromptExpected === "pass" ? "bg-emerald-100 text-emerald-700" : ""}
                         onClick={() => setNewPromptExpected("pass")}
-                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-sm ${newPromptExpected === "pass" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}
                       >
                         Should Pass
-                      </button>
+                      </Button>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="xs"
                         onClick={() => {
                           setShowAddPrompt(false);
                           setNewPromptText("");
                         }}
-                        className="text-[11px] text-gray-500 px-2 py-1"
                       >
                         Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={addCustomPrompt}
-                        disabled={!newPromptText.trim()}
-                        className={`text-[11px] font-medium px-2.5 py-1 rounded-sm ${newPromptText.trim() ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-400"}`}
-                      >
+                      </Button>
+                      <Button type="button" size="xs" onClick={addCustomPrompt} disabled={!newPromptText.trim()}>
                         Add
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
               )}
 
               {showCsvUpload && (
-                <div className="mx-4 mb-2 border border-blue-200 bg-blue-50/30 rounded-lg p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-semibold text-gray-700">Upload CSV Dataset</span>
-                    <button
+                <div className="mx-4 mb-2 rounded-lg border bg-muted/30 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[11px] font-semibold">Upload CSV Dataset</span>
+                    <Button
                       type="button"
+                      variant="link"
+                      size="xs"
+                      className="h-auto px-0"
                       onClick={downloadCsvTemplate}
-                      className="flex items-center gap-1 text-[10px] font-medium text-blue-600 hover:text-blue-700"
                     >
-                      <Download className="w-3 h-3" /> Download Template
-                    </button>
+                      <Download /> Download Template
+                    </Button>
                   </div>
 
-                  <div className="mb-2 p-2 bg-white rounded-sm border border-gray-200">
-                    <p className="text-[10px] text-gray-500 leading-relaxed">
-                      <span className="font-semibold text-gray-600">Required columns:</span>{" "}
-                      <code className="bg-gray-100 px-1 rounded-sm text-[10px]">prompt</code>,{" "}
-                      <code className="bg-gray-100 px-1 rounded-sm text-[10px]">expected_result</code>{" "}
-                      <span className="text-gray-400">(fail or pass)</span>
+                  <div className="mb-2 rounded-sm border bg-background p-2">
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      <span className="font-semibold text-foreground">Required columns:</span>{" "}
+                      <code className="rounded-sm bg-muted px-1 text-[10px]">prompt</code>,{" "}
+                      <code className="rounded-sm bg-muted px-1 text-[10px]">expected_result</code>{" "}
+                      <span>(fail or pass)</span>
                     </p>
-                    <p className="text-[10px] text-gray-500 leading-relaxed mt-0.5">
-                      <span className="font-semibold text-gray-600">Optional columns:</span>{" "}
-                      <code className="bg-gray-100 px-1 rounded-sm text-[10px]">framework</code>,{" "}
-                      <code className="bg-gray-100 px-1 rounded-sm text-[10px]">category</code>
+                    <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                      <span className="font-semibold text-foreground">Optional columns:</span>{" "}
+                      <code className="rounded-sm bg-muted px-1 text-[10px]">framework</code>,{" "}
+                      <code className="rounded-sm bg-muted px-1 text-[10px]">category</code>
                     </p>
                   </div>
 
@@ -998,36 +912,38 @@ export default function ComplianceUI({
                       if (file) handleCsvUpload(file);
                     }}
                   />
-                  <button
+                  <Button
                     type="button"
+                    variant="outline"
+                    className="h-auto w-full border-dashed py-2 text-xs"
                     onClick={() => csvInputRef.current?.click()}
-                    className="w-full flex items-center justify-center gap-1.5 py-2 border-2 border-dashed border-gray-300 rounded-lg text-xs text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
                   >
-                    <Upload className="w-3.5 h-3.5" /> Choose CSV file
-                  </button>
+                    <Upload /> Choose CSV file
+                  </Button>
 
                   {csvError && (
-                    <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-sm text-[10px] text-red-600 whitespace-pre-line">
+                    <div className="mt-2 whitespace-pre-line rounded-sm border border-destructive/20 bg-destructive/10 p-2 text-[10px] text-destructive">
                       {csvError}
                     </div>
                   )}
 
-                  <div className="flex justify-end mt-2">
-                    <button
+                  <div className="mt-2 flex justify-end">
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="xs"
                       onClick={() => {
                         setShowCsvUpload(false);
                         setCsvError(null);
                       }}
-                      className="text-[11px] text-gray-500 px-2 py-1"
                     >
                       Cancel
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
 
-              <div className="px-4 pb-4 space-y-1.5">
+              <div className="space-y-1.5 px-4 pb-4">
                 {filteredFrameworks.map((fw) => {
                   const isExpanded = expandedFrameworks.has(fw.name);
                   const fwPromptCount = fw.categories.reduce((s, c) => s + c.prompts.length, 0);
@@ -1036,41 +952,45 @@ export default function ComplianceUI({
                     0,
                   );
                   return (
-                    <div key={fw.name} className="rounded-lg overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => toggleFramework(fw.name)}
-                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left bg-gray-50 hover:bg-gray-100 transition-colors rounded-lg border border-gray-200"
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
-                        ) : (
-                          <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />
-                        )}
-                        <CategoryIcon iconKey={fw.icon} className="w-4 h-4 text-gray-500 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-xs font-semibold text-gray-900">{fw.name}</span>
-                          <span className="text-[10px] text-gray-400 ml-1.5">{fwPromptCount} prompts</span>
-                        </div>
-                        {fwSelectedCount > 0 && (
-                          <span className="text-[10px] font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
-                            {fwSelectedCount}
-                          </span>
-                        )}
-                        <button
+                    <div key={fw.name} className="overflow-hidden rounded-lg">
+                      <div className="flex items-center gap-1 rounded-lg border bg-muted/50">
+                        <Button
                           type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleFrameworkPrompts(fw);
-                          }}
-                          className="text-[10px] font-medium text-blue-600 hover:text-blue-700 px-1.5 py-0.5 rounded-sm hover:bg-blue-50 shrink-0"
+                          variant="ghost"
+                          className="h-auto min-w-0 flex-1 justify-start gap-2 px-3 py-2.5"
+                          onClick={() => toggleFramework(fw.name)}
+                        >
+                          {isExpanded ? (
+                            <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                          )}
+                          <CategoryIcon iconKey={fw.icon} className="size-4 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1 text-left">
+                            <span className="text-xs font-semibold">{fw.name}</span>
+                            <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                              {fwPromptCount} prompts
+                            </span>
+                          </span>
+                          {fwSelectedCount > 0 && (
+                            <Badge variant="secondary" className="h-auto px-1.5 py-0.5 text-[10px]">
+                              {fwSelectedCount}
+                            </Badge>
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          className="mr-1 shrink-0"
+                          onClick={() => toggleFrameworkPrompts(fw)}
                         >
                           {fwSelectedCount === fwPromptCount ? "Clear" : "All"}
-                        </button>
-                      </button>
+                        </Button>
+                      </div>
 
                       {isExpanded && (
-                        <div className="ml-3 mt-1 space-y-0.5 border-l-2 border-gray-100 pl-3">
+                        <div className="mt-1 ml-3 space-y-0.5 border-l-2 border-border pl-3">
                           {fw.categories.map((category) => {
                             const isCatExpanded = expandedCategories.has(category.name);
                             const selectedInCat = category.prompts.filter((p) => selectedPromptIds.has(p.id)).length;
@@ -1079,77 +999,86 @@ export default function ComplianceUI({
                             const builtInFrameworkNames = new Set(frameworks.map((f) => f.name));
                             const isCustom = !builtInFrameworkNames.has(fw.name);
                             return (
-                              <div key={category.name} className="rounded-md overflow-hidden">
-                                <button
+                              <div key={category.name} className="overflow-hidden rounded-md">
+                                <Button
                                   type="button"
+                                  variant="ghost"
+                                  className="h-auto w-full justify-start gap-1.5 px-2.5 py-2"
                                   onClick={() => toggleCategory(category.name)}
-                                  className="w-full flex items-center gap-1.5 px-2.5 py-2 text-left hover:bg-gray-50 transition-colors"
                                 >
                                   {isCatExpanded ? (
-                                    <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                                    <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
                                   ) : (
-                                    <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
                                   )}
-                                  <span className="text-sm shrink-0">
-                                    <CategoryIcon iconKey={category.icon} className="w-3.5 h-3.5 text-gray-500" />
-                                  </span>
-                                  <span className="text-[11px] font-medium text-gray-700 flex-1 min-w-0 truncate">
+                                  <CategoryIcon
+                                    iconKey={category.icon}
+                                    className="size-3.5 shrink-0 text-muted-foreground"
+                                  />
+                                  <span className="min-w-0 flex-1 truncate text-left text-[11px] font-medium">
                                     {category.name}
                                   </span>
-                                  <span className="text-[10px] text-gray-400 shrink-0">{category.prompts.length}</span>
+                                  <span className="shrink-0 text-[10px] font-normal text-muted-foreground">
+                                    {category.prompts.length}
+                                  </span>
                                   {selectedInCat > 0 && (
-                                    <span className="text-[9px] font-medium bg-blue-100 text-blue-700 px-1 py-0.5 rounded-full shrink-0">
+                                    <Badge variant="secondary" className="h-auto shrink-0 px-1 py-0.5 text-[9px]">
                                       {selectedInCat}
-                                    </span>
+                                    </Badge>
                                   )}
-                                </button>
+                                </Button>
 
                                 {isCatExpanded && (
                                   <div>
-                                    <div className="px-2.5 py-1 flex items-center justify-between">
-                                      <p className="text-[10px] text-gray-400 leading-relaxed flex-1 mr-2 line-clamp-2">
+                                    <div className="flex items-center justify-between px-2.5 py-1">
+                                      <p className="mr-2 line-clamp-2 flex-1 text-[10px] leading-relaxed text-muted-foreground">
                                         {category.description}
                                       </p>
-                                      <button
+                                      <Button
                                         type="button"
+                                        variant="link"
+                                        size="xs"
+                                        className="h-auto shrink-0 px-0 whitespace-nowrap"
                                         onClick={() => toggleCategoryPrompts(category)}
-                                        className="text-[10px] font-medium text-blue-600 hover:text-blue-700 shrink-0 whitespace-nowrap"
                                       >
                                         {allCatSelected ? "Clear" : "Select all"}
-                                      </button>
+                                      </Button>
                                     </div>
                                     {category.prompts.map((prompt) => (
                                       <label
                                         key={prompt.id}
-                                        className="flex items-start gap-2 px-2.5 py-1.5 hover:bg-gray-50 cursor-pointer group"
+                                        className="group flex cursor-pointer items-start gap-2 px-2.5 py-1.5 hover:bg-muted/50"
                                       >
-                                        <input
-                                          type="checkbox"
+                                        <Checkbox
                                           checked={selectedPromptIds.has(prompt.id)}
-                                          onChange={() => togglePrompt(prompt.id)}
-                                          className="mt-0.5 w-3.5 h-3.5 rounded-sm border-gray-300 text-blue-600 focus:ring-blue-500/20 shrink-0"
+                                          onCheckedChange={() => togglePrompt(prompt.id)}
+                                          className="mt-0.5 shrink-0"
+                                          aria-label={prompt.prompt}
                                         />
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-[11px] text-gray-700 leading-relaxed">{prompt.prompt}</p>
-                                          <span
-                                            className={`inline-block mt-0.5 text-[9px] font-semibold px-1 py-0.5 rounded-sm ${prompt.expectedResult === "fail" ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"}`}
+                                        <div className="min-w-0 flex-1">
+                                          <p className="text-[11px] leading-relaxed">{prompt.prompt}</p>
+                                          <Badge
+                                            variant={prompt.expectedResult === "fail" ? "destructive" : "secondary"}
+                                            className="mt-0.5 h-auto px-1 py-0.5 text-[9px]"
                                           >
                                             {prompt.expectedResult === "fail" ? "Should Fail" : "Should Pass"}
-                                          </span>
+                                          </Badge>
                                         </div>
                                         {isCustom && (
-                                          <button
+                                          <Button
                                             type="button"
+                                            variant="ghost"
+                                            size="icon-xs"
+                                            className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive"
+                                            aria-label="Delete"
                                             onClick={(e) => {
                                               e.preventDefault();
                                               e.stopPropagation();
                                               deleteCustomPrompt(prompt.id);
                                             }}
-                                            className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-red-500 transition-all shrink-0"
-                                            aria-label="Delete"
                                           >
-                                            <Trash2 className="w-3 h-3" />
-                                          </button>
+                                            <Trash2 />
+                                          </Button>
                                         )}
                                       </label>
                                     ))}
@@ -1167,379 +1096,361 @@ export default function ComplianceUI({
             </div>
           </div>
 
-          {/* Right panel */}
-          <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden min-w-0">
-            <div className="shrink-0 bg-white border-b border-gray-200 px-4">
-              <div className="flex items-center gap-0">
-                <button
-                  type="button"
-                  onClick={() => setRightTab("quick-test")}
-                  className={`relative flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors ${rightTab === "quick-test" ? "text-blue-600" : "text-gray-500 hover:text-gray-700"}`}
-                >
-                  <MessageSquare className="w-3.5 h-3.5" /> Quick Test
-                  {rightTab === "quick-test" && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600 rounded-t" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRightTab("batch-results")}
-                  className={`relative flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors ${rightTab === "batch-results" ? "text-blue-600" : "text-gray-500 hover:text-gray-700"}`}
-                >
-                  <ListChecks className="w-3.5 h-3.5" /> Batch Results
-                  {testResults.length > 0 && (
-                    <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full">
-                      {testResults.length}
-                    </span>
-                  )}
-                  {rightTab === "batch-results" && (
-                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-600 rounded-t" />
-                  )}
-                </button>
+          <Tabs
+            value={rightTab}
+            onValueChange={(value) => setRightTab(value as RightPanelTab)}
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-muted/30"
+          >
+            <TabsList
+              variant="line"
+              className="h-auto w-full shrink-0 justify-start rounded-none border-b bg-background px-4"
+            >
+              <TabsTrigger value="quick-test" className="flex-none rounded-none px-3 py-2.5 text-xs">
+                <MessageSquare /> Quick Test
+              </TabsTrigger>
+              <TabsTrigger value="batch-results" className="flex-none rounded-none px-3 py-2.5 text-xs">
+                <ListChecks /> Batch Results
+                {testResults.length > 0 && (
+                  <Badge variant="secondary" className="h-auto px-1.5 py-0.5 text-[10px]">
+                    {testResults.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent
+              value="quick-test"
+              className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden data-hidden:hidden"
+            >
+              <div className="shrink-0 px-5 pt-4 pb-2">
+                {hasAnyConfig ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] font-medium text-muted-foreground">Testing against:</span>
+                    {selectedPolicies.map((id) => (
+                      <Badge key={id} variant="secondary" className="h-auto px-2 py-0.5 text-[11px]">
+                        {policyValueToLabel.get(id) ?? id}
+                      </Badge>
+                    ))}
+                    {selectedGuardrails.map((id) => (
+                      <Badge key={id} variant="secondary" className="h-auto px-2 py-0.5 text-[11px]">
+                        {id}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground">
+                    No policies or guardrails selected. Select above to test against specific rules.
+                  </p>
+                )}
               </div>
-            </div>
 
-            {rightTab === "quick-test" && (
-              <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-                <div className="px-5 pt-4 pb-2 shrink-0">
-                  {hasAnyConfig ? (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[11px] font-medium text-gray-500">Testing against:</span>
-                      {selectedPolicies.map((id) => (
-                        <span
-                          key={id}
-                          className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-sm font-medium"
-                        >
-                          {policyValueToLabel.get(id) ?? id}
-                        </span>
-                      ))}
-                      {selectedGuardrails.map((id) => {
-                        const g = guardrailOptions.find((x) => x.id === id);
-                        return (
-                          <span
-                            key={id}
-                            className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-sm font-medium"
-                          >
-                            {g?.name}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="text-[11px] text-gray-400">
-                      No policies or guardrails selected — select above to test against specific rules.
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3 min-h-0">
-                  {quickTestMessages.length === 0 && (
-                    <div className="flex items-center justify-center h-full min-h-[120px]">
-                      <div className="text-center">
-                        <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
-                          <MessageSquare className="w-5 h-5 text-gray-400" />
-                        </div>
-                        <p className="text-xs text-gray-500">Type a prompt below to quickly test it.</p>
+              <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3 min-h-0">
+                {quickTestMessages.length === 0 && (
+                  <div className="flex items-center justify-center h-full min-h-[120px]">
+                    <div className="text-center">
+                      <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
+                        <MessageSquare className="w-5 h-5 text-gray-400" />
                       </div>
-                    </div>
-                  )}
-                  {quickTestMessages.map((msg) => (
-                    <div key={msg.id} className={`flex ${msg.type === "user" ? "justify-end" : "justify-start"}`}>
-                      <div
-                        className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.type === "user" ? "bg-blue-600 text-white" : msg.result === "blocked" ? "bg-red-50 border border-red-100" : "bg-green-50 border border-green-100"}`}
-                      >
-                        <p
-                          className={`text-xs leading-relaxed ${msg.type === "user" ? "text-white" : msg.result === "blocked" ? "text-red-700" : "text-green-700"}`}
-                        >
-                          {msg.type === "system" && (
-                            <span className="inline-flex items-center gap-1 font-semibold mr-1">
-                              {msg.result === "blocked" ? (
-                                <X className="w-3 h-3 inline" />
-                              ) : (
-                                <CheckCircle2 className="w-3 h-3 inline" />
-                              )}
-                              {msg.result === "blocked" ? "Blocked" : "Allowed"}
-                              <span className="font-normal mx-0.5">—</span>
-                            </span>
-                          )}
-                          {msg.text}
-                          {msg.type === "system" && msg.returnedText != null && (
-                            <span className="block mt-1.5 pt-1.5 border-t border-gray-200/60">
-                              <span className="text-gray-500">Returned: </span>
-                              <span className="font-medium text-gray-700 break-all">{msg.returnedText}</span>
-                            </span>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                  {isQuickTesting && (
-                    <div className="flex justify-start">
-                      <div className="bg-gray-100 rounded-lg px-3 py-2">
-                        <Loader2 className="w-3.5 h-3.5 text-gray-400 animate-spin" />
-                      </div>
-                    </div>
-                  )}
-                  <div ref={messagesEndRef} />
-                </div>
-
-                <div className="shrink-0 px-5 pb-4">
-                  <div className="border border-gray-200 rounded-lg bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-400">
-                    <textarea
-                      ref={textareaRef}
-                      value={quickTestInput}
-                      onChange={(e) => setQuickTestInput(e.target.value)}
-                      onKeyDown={handleQuickTestKeyDown}
-                      placeholder="Enter text to test..."
-                      rows={3}
-                      className="w-full px-3 pt-3 pb-1 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-hidden resize-none"
-                    />
-                    <div className="flex items-center justify-between px-3 pb-2">
-                      <span className="text-[10px] text-gray-400">
-                        Press <kbd className="px-1 py-0.5 bg-gray-100 rounded-sm text-[10px] font-mono">Enter</kbd> to
-                        submit ·{" "}
-                        <kbd className="px-1 py-0.5 bg-gray-100 rounded-sm text-[10px] font-mono">Shift+Enter</kbd> for
-                        new line
-                      </span>
-                      <span className="text-[10px] text-gray-400 tabular-nums">{quickTestInput.length}</span>
+                      <p className="text-xs text-gray-500">Type a prompt below to quickly test it.</p>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={runQuickTest}
-                    disabled={!quickTestInput.trim() || isQuickTesting || disabledPersonalKeyCreation}
-                    className={`w-full mt-2 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${!quickTestInput.trim() || isQuickTesting || disabledPersonalKeyCreation ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
-                  >
-                    {isQuickTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}{" "}
-                    {testButtonLabel}
-                  </button>
-                </div>
+                )}
+                {quickTestMessages.map((msg) => (
+                  <div key={msg.id} className={`flex ${msg.type === "user" ? "justify-end" : "justify-start"}`}>
+                    <div
+                      className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.type === "user" ? "bg-blue-600 text-white" : msg.result === "blocked" ? "bg-red-50 border border-red-100" : "bg-green-50 border border-green-100"}`}
+                    >
+                      <p
+                        className={`text-xs leading-relaxed ${msg.type === "user" ? "text-white" : msg.result === "blocked" ? "text-red-700" : "text-green-700"}`}
+                      >
+                        {msg.type === "system" && (
+                          <span className="inline-flex items-center gap-1 font-semibold mr-1">
+                            {msg.result === "blocked" ? (
+                              <X className="w-3 h-3 inline" />
+                            ) : (
+                              <CheckCircle2 className="w-3 h-3 inline" />
+                            )}
+                            {msg.result === "blocked" ? "Blocked" : "Allowed"}
+                            <span className="font-normal mx-0.5">—</span>
+                          </span>
+                        )}
+                        {msg.text}
+                        {msg.type === "system" && msg.returnedText != null && (
+                          <span className="block mt-1.5 pt-1.5 border-t border-gray-200/60">
+                            <span className="text-gray-500">Returned: </span>
+                            <span className="font-medium text-gray-700 break-all">{msg.returnedText}</span>
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+                {isQuickTesting && (
+                  <div className="flex justify-start">
+                    <div className="bg-gray-100 rounded-lg px-3 py-2">
+                      <Loader2 className="w-3.5 h-3.5 text-gray-400 animate-spin" />
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
               </div>
-            )}
 
-            {rightTab === "batch-results" && (
-              <div className="flex-1 flex flex-col overflow-hidden bg-white min-h-0">
-                <div className="px-5 py-3 border-b border-gray-200 shrink-0">
-                  <div className="flex items-center justify-between mb-2">
-                    <h2 className="text-sm font-semibold text-gray-900">Results</h2>
-                    {testResults.length > 0 && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={exportBatchResults}
-                          disabled={filteredResults.length === 0}
-                          className="flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 px-2 py-1 rounded-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              <div className="shrink-0 px-5 pb-4">
+                <div className="overflow-hidden rounded-lg border bg-background">
+                  <Textarea
+                    ref={textareaRef}
+                    value={quickTestInput}
+                    onChange={(e) => setQuickTestInput(e.target.value)}
+                    onKeyDown={handleQuickTestKeyDown}
+                    placeholder="Enter text to test..."
+                    rows={3}
+                    className="min-h-0 resize-none border-0 shadow-none focus-visible:ring-0"
+                  />
+                  <div className="flex items-center justify-between px-3 pb-2">
+                    <span className="text-[10px] text-muted-foreground">
+                      Press <kbd className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[10px]">Enter</kbd> to submit
+                      · <kbd className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[10px]">Shift+Enter</kbd> for new
+                      line
+                    </span>
+                    <span className="text-[10px] text-muted-foreground tabular-nums">{quickTestInput.length}</span>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  className="mt-2 w-full"
+                  onClick={runQuickTest}
+                  disabled={!quickTestInput.trim() || isQuickTesting || disabledPersonalKeyCreation}
+                >
+                  {isQuickTesting ? <Loader2 className="animate-spin" /> : <Send />} {testButtonLabel}
+                </Button>
+              </div>
+            </TabsContent>
+
+            <TabsContent
+              value="batch-results"
+              className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden bg-background data-hidden:hidden"
+            >
+              <div className="shrink-0 border-b px-5 py-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold tracking-tight">Results</h2>
+                  {testResults.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={exportBatchResults}
+                        disabled={filteredResults.length === 0}
+                      >
+                        <Download /> Export CSV
+                      </Button>
+                      <div className="flex items-center gap-2.5 text-[11px]">
+                        <span className="flex items-center gap-1 text-green-600">
+                          <CheckCircle2 className="w-3 h-3" />
+                          {matchCount}
+                        </span>
+                        <span
+                          className="flex items-center gap-1 text-amber-600"
+                          title="Allowed content that should have been blocked"
                         >
-                          <Download className="w-3 h-3" /> Export CSV
-                        </button>
-                        <div className="flex items-center gap-2.5 text-[11px]">
-                          <span className="flex items-center gap-1 text-green-600">
-                            <CheckCircle2 className="w-3 h-3" />
-                            {matchCount}
+                          <AlertTriangle className="w-3 h-3" />
+                          {falseNegativeCount} FN
+                        </span>
+                        <span
+                          className="flex items-center gap-1 text-red-600"
+                          title="Blocked content that should have been allowed"
+                        >
+                          <X className="w-3 h-3" />
+                          {falsePositiveCount} FP
+                        </span>
+                        {pendingCount > 0 && (
+                          <span className="flex items-center gap-1 text-gray-500">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            {pendingCount}
                           </span>
-                          <span
-                            className="flex items-center gap-1 text-amber-600"
-                            title="Allowed content that should have been blocked"
-                          >
-                            <AlertTriangle className="w-3 h-3" />
-                            {falseNegativeCount} FN
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {testResults.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1">
+                    {(["all", "matches", "mismatches", "pending"] as ResultFilter[]).map((filter) => {
+                      const count =
+                        filter === "all"
+                          ? testResults.length
+                          : filter === "matches"
+                            ? matchCount
+                            : filter === "mismatches"
+                              ? mismatchCount
+                              : pendingCount;
+                      return (
+                        <Button
+                          key={filter}
+                          type="button"
+                          variant={resultFilter === filter ? "default" : "ghost"}
+                          size="xs"
+                          className="capitalize"
+                          onClick={() => setResultFilter(filter)}
+                        >
+                          {filter} ({count})
+                        </Button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto min-h-0">
+                {testResults.length === 0 ? (
+                  <div className="flex items-center justify-center h-full min-h-[120px]">
+                    <div className="text-center">
+                      <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
+                        <FlaskConical className="w-6 h-6 text-gray-400" />
+                      </div>
+                      <p className="text-xs text-gray-500 max-w-[240px]">
+                        Select prompts and click Simulate to run batch compliance tests.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 space-y-1.5">
+                    {completedResults.length > 0 && (
+                      <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl mb-4 border border-gray-100">
+                        <div className="flex items-center gap-3 text-sm flex-1">
+                          <span>
+                            <span className="font-semibold text-gray-700">{testResults.length}</span>{" "}
+                            <span className="text-gray-500">total</span>
                           </span>
-                          <span
-                            className="flex items-center gap-1 text-red-600"
-                            title="Blocked content that should have been allowed"
-                          >
-                            <X className="w-3 h-3" />
-                            {falsePositiveCount} FP
+                          <div className="w-px h-4 bg-gray-200" />
+                          <span>
+                            <span className="font-semibold text-green-700">{matchCount}</span>{" "}
+                            <span className="text-gray-500">correct</span>
                           </span>
-                          {pendingCount > 0 && (
-                            <span className="flex items-center gap-1 text-gray-500">
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                              {pendingCount}
-                            </span>
-                          )}
+                          <div className="w-px h-4 bg-gray-200" />
+                          <span title="Allowed content that should have been blocked">
+                            <span className="font-semibold text-amber-700">{falseNegativeCount}</span>{" "}
+                            <span className="text-gray-500">false negative</span>
+                          </span>
+                          <div className="w-px h-4 bg-gray-200" />
+                          <span title="Blocked content that should have been allowed">
+                            <span className="font-semibold text-red-700">{falsePositiveCount}</span>{" "}
+                            <span className="text-gray-500">false positive</span>
+                          </span>
+                        </div>
+                        <div
+                          className={`flex flex-col items-center justify-center min-w-[88px] py-2.5 px-4 rounded-xl border-2 font-bold text-2xl tabular-nums ${
+                            matchCount / completedResults.length >= 0.8
+                              ? "bg-green-50 border-green-200 text-green-700"
+                              : matchCount / completedResults.length >= 0.5
+                                ? "bg-amber-50 border-amber-200 text-amber-700"
+                                : "bg-red-50 border-red-200 text-red-700"
+                          }`}
+                        >
+                          <span className="text-[10px] font-semibold uppercase tracking-wider opacity-90">Score</span>
+                          <span>{Math.round((matchCount / completedResults.length) * 100)}%</span>
                         </div>
                       </div>
                     )}
-                  </div>
-                  {testResults.length > 0 && (
-                    <div className="flex items-center gap-1 flex-wrap">
-                      {(["all", "matches", "mismatches", "pending"] as ResultFilter[]).map((filter) => {
-                        const count =
-                          filter === "all"
-                            ? testResults.length
-                            : filter === "matches"
-                              ? matchCount
-                              : filter === "mismatches"
-                                ? mismatchCount
-                                : pendingCount;
-                        return (
-                          <button
-                            key={filter}
-                            type="button"
-                            onClick={() => setResultFilter(filter)}
-                            className={`text-[11px] font-medium px-2.5 py-1 rounded-md transition-colors capitalize ${resultFilter === filter ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-100"}`}
-                          >
-                            {filter} ({count})
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
 
-                <div className="flex-1 overflow-y-auto min-h-0">
-                  {testResults.length === 0 ? (
-                    <div className="flex items-center justify-center h-full min-h-[120px]">
-                      <div className="text-center">
-                        <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center mx-auto mb-3">
-                          <FlaskConical className="w-6 h-6 text-gray-400" />
-                        </div>
-                        <p className="text-xs text-gray-500 max-w-[240px]">
-                          Select prompts and click Simulate to run batch compliance tests.
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="p-4 space-y-1.5">
-                      {completedResults.length > 0 && (
-                        <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl mb-4 border border-gray-100">
-                          <div className="flex items-center gap-3 text-sm flex-1">
-                            <span>
-                              <span className="font-semibold text-gray-700">{testResults.length}</span>{" "}
-                              <span className="text-gray-500">total</span>
-                            </span>
-                            <div className="w-px h-4 bg-gray-200" />
-                            <span>
-                              <span className="font-semibold text-green-700">{matchCount}</span>{" "}
-                              <span className="text-gray-500">correct</span>
-                            </span>
-                            <div className="w-px h-4 bg-gray-200" />
-                            <span title="Allowed content that should have been blocked">
-                              <span className="font-semibold text-amber-700">{falseNegativeCount}</span>{" "}
-                              <span className="text-gray-500">false negative</span>
-                            </span>
-                            <div className="w-px h-4 bg-gray-200" />
-                            <span title="Blocked content that should have been allowed">
-                              <span className="font-semibold text-red-700">{falsePositiveCount}</span>{" "}
-                              <span className="text-gray-500">false positive</span>
-                            </span>
-                          </div>
-                          <div
-                            className={`flex flex-col items-center justify-center min-w-[88px] py-2.5 px-4 rounded-xl border-2 font-bold text-2xl tabular-nums ${
-                              matchCount / completedResults.length >= 0.8
-                                ? "bg-green-50 border-green-200 text-green-700"
-                                : matchCount / completedResults.length >= 0.5
-                                  ? "bg-amber-50 border-amber-200 text-amber-700"
-                                  : "bg-red-50 border-red-200 text-red-700"
-                            }`}
-                          >
-                            <span className="text-[10px] font-semibold uppercase tracking-wider opacity-90">Score</span>
-                            <span>{Math.round((matchCount / completedResults.length) * 100)}%</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {filteredResults.map((result) => {
-                        const isExpanded = expandedResults.has(result.promptId);
-                        return (
-                          <div
-                            key={result.promptId}
-                            className={`border rounded-lg overflow-hidden ${result.status !== "complete" ? "border-gray-100 bg-gray-50/50" : result.isMatch ? "border-green-100" : "border-red-100"}`}
-                          >
-                            <div className="p-2.5">
-                              <div className="flex items-start gap-2">
-                                <div className="shrink-0 mt-0.5">
-                                  {result.status !== "complete" ? (
-                                    <Loader2 className="w-3.5 h-3.5 text-gray-400 animate-spin" />
-                                  ) : result.isMatch ? (
-                                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
-                                  ) : (
-                                    <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
-                                  )}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-[11px] text-gray-700 leading-relaxed mb-1.5">{result.prompt}</p>
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="text-[9px] text-gray-400 inline-flex items-center gap-0.5">
-                                      <CategoryIcon iconKey={result.categoryIcon} className="w-3 h-3" />
-                                      {result.category}
-                                    </span>
-                                    <span
-                                      className={`text-[9px] font-semibold px-1 py-0.5 rounded-sm ${result.expectedResult === "fail" ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"}`}
-                                    >
-                                      {result.expectedResult === "fail" ? "Expect Block" : "Expect Allow"}
-                                    </span>
-                                    {result.status === "complete" && (
-                                      <span
-                                        className={`text-[9px] font-bold px-1 py-0.5 rounded-sm ${result.isMatch ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}
-                                      >
-                                        {result.isMatch ? "✓ Match" : "✗ Gap"}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                {result.status === "complete" && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setExpandedResults((prev) => {
-                                        const next = new Set(prev);
-                                        if (next.has(result.promptId)) next.delete(result.promptId);
-                                        else next.add(result.promptId);
-                                        return next;
-                                      });
-                                    }}
-                                    className="shrink-0 p-0.5 text-gray-400 hover:text-gray-600"
-                                    aria-label={isExpanded ? "Collapse" : "Expand"}
-                                  >
-                                    {isExpanded ? (
-                                      <ChevronDown className="w-3.5 h-3.5" />
-                                    ) : (
-                                      <ChevronRight className="w-3.5 h-3.5" />
-                                    )}
-                                  </button>
+                    {filteredResults.map((result) => {
+                      const isExpanded = expandedResults.has(result.promptId);
+                      return (
+                        <div
+                          key={result.promptId}
+                          className={`border rounded-lg overflow-hidden ${result.status !== "complete" ? "border-gray-100 bg-gray-50/50" : result.isMatch ? "border-green-100" : "border-red-100"}`}
+                        >
+                          <div className="p-2.5">
+                            <div className="flex items-start gap-2">
+                              <div className="shrink-0 mt-0.5">
+                                {result.status !== "complete" ? (
+                                  <Loader2 className="w-3.5 h-3.5 text-gray-400 animate-spin" />
+                                ) : result.isMatch ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                                ) : (
+                                  <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
                                 )}
                               </div>
-                              {isExpanded && result.status === "complete" && (
-                                <div className="mt-2 pt-2 border-t border-gray-100 text-[11px] space-y-1">
-                                  {result.triggeredBy && (
-                                    <div>
-                                      <span className="text-gray-400">Triggered by:</span>{" "}
-                                      <span className="font-medium text-gray-700 bg-gray-100 px-1.5 py-0.5 rounded-sm">
-                                        {result.triggeredBy}
-                                      </span>
-                                    </div>
-                                  )}
-                                  <div>
-                                    <span className="text-gray-400">Verdict:</span>{" "}
-                                    <span className={result.isMatch ? "text-green-600" : "text-red-600"}>
-                                      {result.isMatch
-                                        ? "Correctly handled"
-                                        : result.expectedResult === "fail"
-                                          ? "Gap — should have been blocked"
-                                          : "False positive — incorrectly blocked"}
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[11px] text-gray-700 leading-relaxed mb-1.5">{result.prompt}</p>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-[9px] text-gray-400 inline-flex items-center gap-0.5">
+                                    <CategoryIcon iconKey={result.categoryIcon} className="w-3 h-3" />
+                                    {result.category}
+                                  </span>
+                                  <span
+                                    className={`text-[9px] font-semibold px-1 py-0.5 rounded-sm ${result.expectedResult === "fail" ? "bg-red-50 text-red-600" : "bg-green-50 text-green-600"}`}
+                                  >
+                                    {result.expectedResult === "fail" ? "Expect Block" : "Expect Allow"}
+                                  </span>
+                                  {result.status === "complete" && (
+                                    <span
+                                      className={`text-[9px] font-bold px-1 py-0.5 rounded-sm ${result.isMatch ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}
+                                    >
+                                      {result.isMatch ? "✓ Match" : "✗ Gap"}
                                     </span>
-                                  </div>
-                                  {result.returnedText != null && result.returnedText !== "" && (
-                                    <div className="mt-1.5">
-                                      <span className="text-gray-400 block mb-0.5">LLM response:</span>
-                                      <div className="text-gray-700 bg-gray-50 rounded-sm px-2 py-1.5 border border-gray-100 max-h-32 overflow-y-auto whitespace-pre-wrap wrap-break-word">
-                                        {result.returnedText}
-                                      </div>
-                                    </div>
                                   )}
                                 </div>
+                              </div>
+                              {result.status === "complete" && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  className="shrink-0 text-muted-foreground"
+                                  aria-label={isExpanded ? "Collapse" : "Expand"}
+                                  onClick={() => {
+                                    setExpandedResults((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(result.promptId)) next.delete(result.promptId);
+                                      else next.add(result.promptId);
+                                      return next;
+                                    });
+                                  }}
+                                >
+                                  {isExpanded ? <ChevronDown /> : <ChevronRight />}
+                                </Button>
                               )}
                             </div>
+                            {isExpanded && result.status === "complete" && (
+                              <div className="mt-2 pt-2 border-t border-gray-100 text-[11px] space-y-1">
+                                {result.triggeredBy && (
+                                  <div>
+                                    <span className="text-gray-400">Triggered by:</span>{" "}
+                                    <span className="font-medium text-gray-700 bg-gray-100 px-1.5 py-0.5 rounded-sm">
+                                      {result.triggeredBy}
+                                    </span>
+                                  </div>
+                                )}
+                                <div>
+                                  <span className="text-gray-400">Verdict:</span>{" "}
+                                  <span className={result.isMatch ? "text-green-600" : "text-red-600"}>
+                                    {result.isMatch
+                                      ? "Correctly handled"
+                                      : result.expectedResult === "fail"
+                                        ? "Gap — should have been blocked"
+                                        : "False positive — incorrectly blocked"}
+                                  </span>
+                                </div>
+                                {result.returnedText != null && result.returnedText !== "" && (
+                                  <div className="mt-1.5">
+                                    <span className="text-gray-400 block mb-0.5">LLM response:</span>
+                                    <div className="text-gray-700 bg-gray-50 rounded-sm px-2 py-1.5 border border-gray-100 max-h-32 overflow-y-auto whitespace-pre-wrap wrap-break-word">
+                                      {result.returnedText}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </div>

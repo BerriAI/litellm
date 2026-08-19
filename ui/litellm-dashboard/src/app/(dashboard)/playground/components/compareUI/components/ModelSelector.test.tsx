@@ -1,9 +1,13 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ModelSelector } from "./ModelSelector";
 
 const MODELS = ["gpt-4", "gpt-3.5-turbo"];
+
+const openList = async (user: ReturnType<typeof userEvent.setup>) => {
+  await user.click(screen.getByRole("combobox"));
+};
 
 describe("ModelSelector", () => {
   it("should render", () => {
@@ -16,28 +20,17 @@ describe("ModelSelector", () => {
     const onChange = vi.fn();
     render(<ModelSelector value="" onChange={onChange} models={MODELS} />);
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByTitle("gpt-4"));
+    await openList(user);
+    const matches = await screen.findAllByText("gpt-4");
+    await user.click(matches[matches.length - 1]);
 
-    expect(onChange).toHaveBeenCalledWith("gpt-4");
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith("gpt-4"));
   });
 
   it("displays a custom value that is not one of the known models", () => {
     render(<ModelSelector value="custom-model-123" onChange={vi.fn()} models={MODELS} />);
 
-    expect(screen.getByTitle("custom-model-123")).toHaveTextContent("custom-model-123");
-  });
-
-  it("reports a custom model typed into the custom name field", async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
-    render(<ModelSelector value="" onChange={onChange} models={MODELS} />);
-
-    await user.click(screen.getByRole("combobox"));
-    fireEvent.click(await screen.findByTitle("+ Add custom model"));
-    await user.type(await screen.findByPlaceholderText("Custom Model Name (Enter to add)"), "my-custom-model{Enter}");
-
-    expect(onChange).toHaveBeenCalledWith("my-custom-model");
+    expect(screen.getByRole("combobox")).toHaveValue("custom-model-123");
   });
 
   it("disables the control when disabled is set", () => {
@@ -46,5 +39,21 @@ describe("ModelSelector", () => {
 
     rerender(<ModelSelector value="custom-model-123" onChange={vi.fn()} models={MODELS} disabled={true} />);
     expect(screen.getByRole("combobox")).toBeDisabled();
+  });
+
+  it("commits a typed custom model on Enter", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<ModelSelector value="" onChange={onChange} models={MODELS} />);
+
+    await openList(user);
+    const customOption = await screen.findAllByText("+ Add custom model");
+    await user.click(customOption[customOption.length - 1]);
+
+    const customInput = await screen.findByPlaceholderText("Custom Model Name (Enter to add)");
+    await user.type(customInput, "my-finetune");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith("my-finetune"));
   });
 });

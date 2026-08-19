@@ -224,7 +224,7 @@ export default function AgentBuilderView({
 
   const effectiveApiKey = apiKey || accessToken || "";
   const selectedAgent =
-    selectedId === NEW_AGENT_ID ? null : agentModels.find((a) => getAgentSelectionKey(a) === selectedId) ?? null;
+    selectedId === NEW_AGENT_ID ? null : (agentModels.find((a) => getAgentSelectionKey(a) === selectedId) ?? null);
   const isNewAgent = selectedId === NEW_AGENT_ID;
   const selectedAgentModelId = selectedAgent ? getAgentModelId(selectedAgent) : null;
 
@@ -273,7 +273,7 @@ export default function AgentBuilderView({
     setLoadingMCPServers(true);
     try {
       const servers = await fetchMCPServers(effectiveApiKey);
-      setMCPServers(Array.isArray(servers) ? servers : (servers as { data?: MCPServer[] })?.data ?? []);
+      setMCPServers(Array.isArray(servers) ? servers : ((servers as { data?: MCPServer[] })?.data ?? []));
     } catch (e) {
       console.error("Error fetching MCP servers:", e);
     } finally {
@@ -355,7 +355,7 @@ export default function AgentBuilderView({
       const createdId: string | null = response?.model_id ?? response?.model_info?.id ?? null;
       const list = await loadAgents();
       const created = createdId
-        ? list.find((a) => getAgentModelId(a) === createdId) ?? list.find((a) => a.model_name === draftName.trim())
+        ? (list.find((a) => getAgentModelId(a) === createdId) ?? list.find((a) => a.model_name === draftName.trim()))
         : list.find((a) => a.model_name === draftName.trim());
       setSelectedId(created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null);
       goToTab("chat");
@@ -496,29 +496,34 @@ export default function AgentBuilderView({
               <>
                 {agentModels.map((agent) => {
                   const key = getAgentSelectionKey(agent);
+                  const active = selectedId === key;
                   return (
-                    <button
+                    <Button
                       key={key}
                       type="button"
+                      variant="ghost"
+                      aria-current={active ? "page" : undefined}
+                      aria-label={`${agent.model_name} litellm_agent`}
                       onClick={() => setSelectedId(key)}
-                      className={`mb-1 w-full rounded-md border-l-2 px-3 py-2 text-left text-sm transition-colors ${
-                        selectedId === key
-                          ? "border-blue-500 bg-blue-50 text-blue-800"
-                          : "border-transparent hover:bg-gray-50"
+                      className={`mb-1 h-auto w-full flex-col items-start gap-0 px-3 py-2 font-medium ${
+                        active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-muted-foreground"
                       }`}
                     >
-                      <div className="font-medium truncate">{agent.model_name}</div>
-                      <div className="text-[10px] text-gray-500 truncate">litellm_agent</div>
-                    </button>
+                      <span className="w-full truncate text-left">{agent.model_name}</span>
+                      <span className="w-full truncate text-left text-[10px] font-normal text-muted-foreground">
+                        litellm_agent
+                      </span>
+                    </Button>
                   );
                 })}
-                <button
+                <Button
                   type="button"
+                  variant="outline"
                   onClick={handleAddAgent}
-                  className="mb-1 w-full rounded-md border border-dashed border-gray-300 px-3 py-2 text-left text-sm text-gray-500 hover:border-blue-400 hover:bg-blue-50/50 hover:text-gray-700"
+                  className="mb-1 h-auto w-full justify-start border-dashed px-3 py-2 text-muted-foreground"
                 >
-                  <Plus className="mr-1 inline size-4" /> New agent
-                </button>
+                  <Plus /> New agent
+                </Button>
               </>
             )}
           </div>
