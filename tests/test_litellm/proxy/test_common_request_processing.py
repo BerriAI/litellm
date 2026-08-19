@@ -6028,7 +6028,7 @@ class _RecordingDisconnectHookLogger(CustomLogger):
         super().__init__()
         self.disconnect_hook_calls = 0
 
-    async def async_release_disconnect_state_hook(self) -> None:
+    async def async_release_disconnect_state_hook(self, request_data: dict) -> None:
         self.disconnect_hook_calls += 1
 
 

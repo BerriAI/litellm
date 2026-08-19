@@ -5,6 +5,7 @@ Unit tests for tag-scoped token/request/dollar rate limiting.
 import asyncio
 import uuid
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Final
 
 import pytest
@@ -25,8 +26,9 @@ from litellm.proxy.hooks.tag_rate_limiter import (
     _fixed_length_identity,
     _inflight_key,
     _partition_key,
-    _pending_concurrency_holder,
+    _PENDING_CONCURRENCY_KEYS_FIELD,
     _PROXY_TagRateLimiter,
+    _queue_pending_concurrency_reservations,
 )
 from litellm.types.router import TagRateLimitEntry
 
@@ -52,6 +54,28 @@ def _make_limiter(time_controller: TimeController) -> _PROXY_TagRateLimiter:
         internal_usage_cache=DualCache(),
         time_provider=time_controller.now,
     )
+
+
+def _call_context(tags: list[str]) -> tuple[dict, dict]:
+    """
+    A (request_kwargs, kwargs) pair sharing one `model_call_details` dict,
+    mirroring production: admission reads `request_kwargs["litellm_logging_obj"]
+    .model_call_details`, and the `kwargs` passed to async_log_success_event /
+    async_log_failure_event / async_release_disconnect_state_hook's
+    request_data *is* that same model_call_details dict (or carries the same
+    logging_obj) -- see _PENDING_CONCURRENCY_KEYS_FIELD's docstring. A plain
+    SimpleNamespace stands in for the real Logging object; only its
+    model_call_details attribute is used.
+    """
+    model_call_details: dict = {}
+    logging_obj = SimpleNamespace(model_call_details=model_call_details)
+    request_kwargs = {"metadata": {"tags": tags}, "litellm_logging_obj": logging_obj}
+    # kwargs must be the *same* dict object model_call_details is, so that
+    # admission's writes onto model_call_details are visible when this kwargs
+    # is later passed to a release hook -- see the docstring above.
+    model_call_details["litellm_logging_obj"] = logging_obj
+    model_call_details["metadata"] = {"tags": tags}
+    return request_kwargs, model_call_details
 
 
 def _deployment(model_name: str, deployment_id: str, tag_rate_limits: dict) -> dict:
@@ -984,9 +1008,9 @@ async def test_concurrency_slot_released_on_success_frees_capacity(time_controll
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
 
     # At capacity: a second concurrent request is rejected.
@@ -1031,9 +1055,9 @@ async def test_concurrency_slot_released_on_disconnect_frees_capacity(time_contr
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
 
     # At capacity: a second concurrent request is rejected.
@@ -1047,7 +1071,7 @@ async def test_concurrency_slot_released_on_disconnect_frees_capacity(time_contr
 
     # The first request's client disconnects -- neither logging callback fires --
     # but the disconnect hook still releases its slot, freeing capacity again.
-    await limiter.async_release_disconnect_state_hook()
+    await limiter.async_release_disconnect_state_hook(request_kwargs)
 
     result = await limiter.async_filter_deployments(
         model="grp",
@@ -1065,15 +1089,17 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
     await limiter.async_filter_deployments(
         model="grp",
         healthy_deployments=healthy,
         messages=None,
-        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        request_kwargs=request_kwargs,
     )
 
+    kwargs["standard_logging_object"] = {"model_group": "grp"}
     await limiter.async_log_failure_event(
-        kwargs={"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
+        kwargs=kwargs,
         response_obj=None,
         start_time=0,
         end_time=0,
@@ -1106,17 +1132,16 @@ async def test_concurrency_slot_released_on_fallback_recovered_hop_failure(time_
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
     await limiter.async_filter_deployments(
         model="grp",
         healthy_deployments=healthy,
         messages=None,
-        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        request_kwargs=request_kwargs,
     )
+    kwargs["standard_logging_object"] = {"model_group": "grp", "model_id": "dep-1"}
     await limiter.async_log_failure_event(
-        kwargs={
-            "standard_logging_object": {"model_group": "grp", "model_id": "dep-1"},
-            "metadata": {"tags": ["end_user_id:u1"]},
-        },
+        kwargs=kwargs,
         response_obj=None,
         start_time=0,
         end_time=0,
@@ -1132,81 +1157,68 @@ async def test_concurrency_slot_released_on_fallback_recovered_hop_failure(time_
 
 
 @pytest.mark.asyncio
-async def test_pending_concurrency_context_does_not_leak_across_concurrent_tasks(time_controller):
+async def test_pending_concurrency_reservations_do_not_leak_across_unrelated_requests(time_controller):
     """
-    Security regression test, current design: `_pending_concurrency_keys` is
-    a `contextvars.ContextVar`, isolated per asyncio task/context rather
-    than a plain shared dict or list -- which matters because two genuinely
-    concurrent, unrelated requests each get their own task in production (a
-    hard ASGI guarantee, not something litellm or this hook controls), so
-    they can never share a context regardless of what identifiers (tags,
-    keys, litellm_call_id) they happen to reuse. Prove this directly: if
-    this were a shared collection instead of a real `ContextVar`, one task's
-    own release would incorrectly drain the other task's still-pending
-    reservation too, since nothing would distinguish which task accumulated
-    which key. An earlier design correlated reservations using
-    litellm_call_id specifically -- caller-controlled via the
-    x-litellm-call-id header -- as a registry key; that's what let two
-    unrelated concurrent requests merge reservations in the first place, and
-    is why this test isolates via real tasks rather than a shared id at all.
+    Security regression test, current design: pending concurrency keys are
+    stashed on the admitting request's own `model_call_details` dict (see
+    `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring), never in a registry keyed
+    by anything caller-visible or by ambient asyncio context. Two unrelated
+    concurrent requests each get their own `model_call_details` in
+    production, so one request's release can never see or drain a different
+    request's still-pending reservation, regardless of which asyncio task
+    each happens to run in and even when both share the identical tag value
+    (an earlier design keyed reservations by `litellm_call_id` -- settable by
+    the caller via the `x-litellm-call-id` header -- which let two unrelated
+    requests merge reservations simply by choosing the same id).
     """
     limiter = _make_limiter(time_controller)
-    router = _concurrency_router(limit=2)
+    router = _concurrency_router(limit=1)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    async def _admit(tag_value):
-        await limiter.async_filter_deployments(
-            model="grp",
-            healthy_deployments=healthy,
-            messages=None,
-            request_kwargs={"metadata": {"tags": [f"end_user_id:{tag_value}"]}},
-        )
+    request_a, kwargs_a = _call_context(["end_user_id:shared"])
+    request_b, kwargs_b = _call_context(["end_user_id:shared"])
 
-    async def _release(tag_value):
-        await limiter.async_log_success_event(
-            kwargs={
-                "standard_logging_object": {
-                    "model_group": "grp",
-                    "model_id": "dep-1",
-                    "total_tokens": 0,
-                    "response_cost": 0,
-                },
-                "metadata": {"tags": [f"end_user_id:{tag_value}"]},
-            },
-            response_obj=None,
-            start_time=0,
-            end_time=0,
-        )
-
-    # Two separate, genuinely concurrent tasks admit -- reaching capacity.
-    task_a = asyncio.create_task(_admit("a"))
-    task_b = asyncio.create_task(_admit("b"))
-    await task_a
-    await task_b
-
-    # Task A releases its own reservation, in its own task -- this must not
-    # also release task B's still-pending one.
-    await asyncio.create_task(_release("a"))
-    await asyncio.sleep(0)
-
-    # Exactly one slot was freed: a fresh request is admitted (back to 2 in flight)...
     await limiter.async_filter_deployments(
-        model="grp",
-        healthy_deployments=healthy,
-        messages=None,
-        request_kwargs={"metadata": {"tags": ["end_user_id:a"]}},
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_a
     )
-    # ...but a second one does not, since B's reservation is genuinely still
-    # held. If task isolation were broken, task A's release would have
-    # drained B's reservation too, and this would wrongly admit.
+    # B shares A's tag value but is a genuinely separate request/object: at
+    # capacity (limit=1), B is rejected and never reserves anything.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_b
+        )
+
+    # B's own failure event releases via its own (empty) model_call_details --
+    # this must not accidentally drain A's still-live reservation.
+    kwargs_b["standard_logging_object"] = {"model_group": "grp", "model_id": "dep-1"}
+    await limiter.async_log_failure_event(kwargs=kwargs_b, response_obj=None, start_time=0, end_time=0)
+
     with pytest.raises(ProxyRateLimitError):
         await limiter.async_filter_deployments(
             model="grp",
             healthy_deployments=healthy,
             messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:a"]}},
+            request_kwargs={"metadata": {"tags": ["end_user_id:shared"]}},
         )
+
+    # A's own success event correctly releases its own reservation.
+    kwargs_a["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 0,
+        "response_cost": 0,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs_a, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:shared"]}},
+    )
+    assert result == healthy
 
 
 @pytest.mark.asyncio
@@ -1217,18 +1229,18 @@ async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(ti
     `Logging.has_run_logging`'s `has_logged_async_failure` guard); a later
     failed hop (a retry or a further fallback) never gets its own failure
     event at all. Reservations still accumulate at admission for every hop
-    regardless (onto `_pending_concurrency_keys`), so whichever event fires
-    next must release everything accumulated since the last release, not
-    just its own hop's key.
+    regardless (onto the request's own `model_call_details`, shared across
+    every hop of one logical request -- see `_PENDING_CONCURRENCY_KEYS_FIELD`'s
+    docstring), so whichever event fires next must release everything
+    accumulated since the last release, not just its own hop's key.
 
     Hop 3's eventual success is fired as a child task of the same admission
     chain -- exactly like litellm's real dispatch, where `wrapper_async`
     create_task's the success path and `LoggingWorker.enqueue` explicitly
     propagates the calling context -- to prove the fix survives the actual
     task boundary a real success event crosses in production, not just a
-    same-coroutine call that would pass regardless of whether
-    `_pending_concurrency_keys` were a real `ContextVar` or an ordinary
-    variable.
+    same-coroutine call that would pass regardless of whether the pending
+    keys lived on a real shared object or an ordinary per-task variable.
     """
     limiter = _make_limiter(time_controller)
     router = _concurrency_router(limit=2)
@@ -1236,6 +1248,11 @@ async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(ti
     healthy = router.model_list
 
     async def _one_logical_request():
+        # All three hops of this one logical request share the same
+        # model_call_details, exactly as real fallback hops share one
+        # Logging object -- only litellm_call_id differs per hop.
+        request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+
         # Hop 1 admits and fails; its failure event is the one that fires
         # (dedup allows exactly the first failure through), releasing its
         # own key immediately.
@@ -1243,10 +1260,11 @@ async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(ti
             model="grp",
             healthy_deployments=healthy,
             messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+            request_kwargs=request_kwargs,
         )
+        kwargs["standard_logging_object"] = {"model_group": "grp"}
         await limiter.async_log_failure_event(
-            kwargs={"standard_logging_object": {"model_group": "grp"}, "metadata": {"tags": ["end_user_id:u1"]}},
+            kwargs=kwargs,
             response_obj=None,
             start_time=0,
             end_time=0,
@@ -1258,7 +1276,7 @@ async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(ti
             model="grp",
             healthy_deployments=healthy,
             messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+            request_kwargs=request_kwargs,
         )
 
         # Hop 3 admits and succeeds. Its success event, dispatched as a
@@ -1268,19 +1286,18 @@ async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(ti
             model="grp",
             healthy_deployments=healthy,
             messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+            request_kwargs=request_kwargs,
         )
 
         async def _hop_3_success_event():
+            kwargs["standard_logging_object"] = {
+                "model_group": "grp",
+                "model_id": "dep-1",
+                "total_tokens": 0,
+                "response_cost": 0,
+            }
             await limiter.async_log_success_event(
-                kwargs={
-                    "standard_logging_object": {
-                        "model_group": "grp",
-                        "model_id": "dep-1",
-                        "total_tokens": 0,
-                        "response_cost": 0,
-                    }
-                },
+                kwargs=kwargs,
                 response_obj=None,
                 start_time=0,
                 end_time=0,
@@ -1930,53 +1947,53 @@ def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
 
 
 # ---------------------------------------------------------------------------
-# pending-concurrency-key holder must survive a detached asyncio.create_task
-# fork (e.g. litellm's own failure-logging dispatch) without a rebind in that
-# forked task hiding the release from the parent, and a release must never
-# sweep up a key a still-live sibling hop appended in the meantime
+# pending-concurrency-key field on model_call_details must survive a detached
+# asyncio.create_task fork (e.g. litellm's own failure-logging dispatch),
+# and a release must never sweep up a key a still-live sibling hop appended
+# in the meantime. This dict-on-a-shared-object design is what replaced a
+# contextvars.ContextVar-based holder that silently failed to release
+# anything once release ran in a task that wasn't a descendant of admission's
+# own task -- exactly what happens in the real proxy request pipeline (see
+# _PENDING_CONCURRENCY_KEYS_FIELD's docstring).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_release_in_a_forked_task_is_visible_to_the_parent_context():
-    _pending_concurrency_holder().keys.clear()
-    _pending_concurrency_holder().keys.append("key1")
+    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
 
     async def detached_release():
-        return _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
+        return _PROXY_TagRateLimiter._pop_pending_concurrency_keys(model_call_details)
 
     released = await asyncio.create_task(detached_release())
     assert released == ("key1",)
 
-    # The parent's own binding must see the same, now-empty holder --
-    # not a stale copy still holding "key1".
-    assert _pending_concurrency_holder().keys == []
+    # The parent's own view of the same dict must see the release too.
+    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == []
 
 
 @pytest.mark.asyncio
 async def test_release_does_not_sweep_up_a_key_appended_after_its_snapshot():
-    _pending_concurrency_holder().keys.clear()
-    _pending_concurrency_holder().keys.append("key1")
+    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
 
     async def detached_release_then_sibling_admits():
-        released = _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
-        # A sibling hop's admission, appending to the same shared holder,
+        released = _PROXY_TagRateLimiter._pop_pending_concurrency_keys(model_call_details)
+        # A sibling hop's admission, appending to the same shared dict,
         # interleaved right after this release's snapshot was taken.
-        _pending_concurrency_holder().keys.append("key2")
+        model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD].append("key2")
         return released
 
     released = await asyncio.create_task(detached_release_then_sibling_admits())
     assert released == ("key1",)
     # key2 must still be pending for its own hop's eventual release.
-    assert _pending_concurrency_holder().keys == ["key2"]
+    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == ["key2"]
 
 
 @pytest.mark.asyncio
 async def test_release_is_not_repeated_for_the_same_snapshot():
-    _pending_concurrency_holder().keys.clear()
-    _pending_concurrency_holder().keys.append("key1")
-    first = _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
-    second = _PROXY_TagRateLimiter._pop_pending_concurrency_keys()
+    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
+    first = _PROXY_TagRateLimiter._pop_pending_concurrency_keys(model_call_details)
+    second = _PROXY_TagRateLimiter._pop_pending_concurrency_keys(model_call_details)
     assert first == ("key1",)
     assert second == ()
 
@@ -2420,56 +2437,54 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
     block keyB's admission, and releasing keyA's reservation (via the
     standard_logging_object.metadata.user_api_key_hash channel) must free
     keyA's capacity, not keyB's. Each key is modeled as its own logical
-    request: one task does admission and then spawns its own release as a
-    child task, exactly like litellm's real dispatch (`wrapper_async`
-    create_task's the success path, itself a descendant of the same
-    admission-time task/context chain) -- release must never be spawned as
-    an unrelated sibling task from the test's own top level, which would
-    start from a fresh context that never saw the admission's `ContextVar`
-    write at all, an artifact of this test's own construction rather than a
-    real bug.
+    request with its own model_call_details, and keyA's release is spawned
+    as a genuinely separate child task (mirroring litellm's real dispatch)
+    to prove release survives that task boundary via the shared
+    model_call_details object, not via which task happens to run it.
     """
     limiter = _make_limiter(time_controller)
     router = _concurrency_router_scoped_by_key(limit=1)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    async def _admit(key: str):
+    async def _admit(key: str, request_kwargs: dict):
         await limiter.async_filter_deployments(
             model="grp",
             healthy_deployments=healthy,
             messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key": key}},
+            request_kwargs=request_kwargs,
         )
 
-    async def _release(key: str):
+    async def _release(key: str, kwargs: dict):
+        kwargs["standard_logging_object"] = {
+            "model_group": "grp",
+            "model_id": "dep-1",
+            "total_tokens": 0,
+            "response_cost": 0,
+            "metadata": {"user_api_key_hash": key},
+        }
         await limiter.async_log_success_event(
-            kwargs={
-                "standard_logging_object": {
-                    "model_group": "grp",
-                    "model_id": "dep-1",
-                    "total_tokens": 0,
-                    "response_cost": 0,
-                    "metadata": {"user_api_key_hash": key},
-                },
-                "metadata": {"tags": ["end_user_id:u1"]},
-            },
+            kwargs=kwargs,
             response_obj=None,
             start_time=0,
             end_time=0,
         )
 
     ready_to_release = asyncio.Event()
+    key_a_request, key_a_kwargs = _call_context(["end_user_id:u1"])
+    key_a_request["metadata"]["user_api_key"] = "keyA"
+    key_b_request, _key_b_kwargs = _call_context(["end_user_id:u1"])
+    key_b_request["metadata"]["user_api_key"] = "keyB"
 
     async def _key_a_admits_then_waits_then_releases_from_the_same_context_chain():
-        await _admit("keyA")
+        await _admit("keyA", key_a_request)
         await ready_to_release.wait()
-        await asyncio.create_task(_release("keyA"))
+        await asyncio.create_task(_release("keyA", key_a_kwargs))
 
     # keyA occupies its own single slot; keyB, same tag value, different
     # key, still admits since it has its own bucket.
     key_a_task = asyncio.create_task(_key_a_admits_then_waits_then_releases_from_the_same_context_chain())
-    key_b_task = asyncio.create_task(_admit("keyB"))
+    key_b_task = asyncio.create_task(_admit("keyB", key_b_request))
     await key_b_task
     # Let key_a_task's admission run up to (but not past) `ready_to_release.wait()`.
     await asyncio.sleep(0)
@@ -2913,9 +2928,9 @@ async def test_concurrency_slot_with_a_cache_size_override_is_released_against_t
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
 
-    kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
     await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
 
     # At capacity: a second concurrent reservation for the same tag is rejected.

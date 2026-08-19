@@ -400,7 +400,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     return True
 
 
-async def _release_disconnect_state_on_all_callbacks() -> None:
+async def _release_disconnect_state_on_all_callbacks(request_data: Mapping[str, object]) -> None:
     """
     A client disconnect throws GeneratorExit/CancelledError into the streaming
     generator, so neither the success nor failure logging callback runs for it
@@ -419,7 +419,7 @@ async def _release_disconnect_state_on_all_callbacks() -> None:
         if not isinstance(callback, CustomLogger):
             continue
         try:
-            await callback.async_release_disconnect_state_hook()
+            await callback.async_release_disconnect_state_hook(request_data)
         except Exception as e:  # noqa: BLE001  # one callback's cleanup must never block another's or the response teardown
             verbose_proxy_logger.debug(
                 "Failed to run async_release_disconnect_state_hook for %s: %s", type(callback).__name__, e
@@ -3559,7 +3559,7 @@ class ProxyBaseLLMRequestProcessing:
                 ):
                     await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
                 if not success_event_owns_slot_release:
-                    await _release_disconnect_state_on_all_callbacks()
+                    await _release_disconnect_state_on_all_callbacks(request_data)
 
             if hasattr(response, "aclose"):
                 try:

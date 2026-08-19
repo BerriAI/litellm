@@ -1,7 +1,6 @@
 """Tag-scoped token, request, dollar, and concurrency rate limits."""
 
 import asyncio
-import contextvars
 import hashlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -468,34 +467,34 @@ _CONCURRENCY_MIN_SAFETY_TTL_SECONDS: Final = 3600
 # TagRateLimitEntry.max_in_memory_cache_size) each reservation was
 # incremented under: releasing a reservation must decrement the exact same
 # cache partition it was incremented on, or the release silently no-ops on
-# the wrong (default) partition and the reservation leaks forever. Held via
-# a ContextVar bound to a mutable holder object (not an immutable tuple
-# rebound with `.set()`) because `asyncio.create_task` only copies which
-# *object* a ContextVar is bound to, not a snapshot of that object's
-# contents: a `.set()` performed inside a task forked off this context
-# mutates only that task's own binding, invisible to the parent task that
-# continues on to a fallback hop. Mutating a shared holder in place is
-# visible from every task forked after the holder was first created,
-# regardless of which task performs the mutation.
-class _PendingConcurrencyKeys:
-    __slots__ = ("keys",)
-
-    def __init__(self) -> None:
-        self.keys: list[tuple[str, _PartitionKey]] = []  # mutable-ok: shared across forks by design; see docstring
-
-
-_pending_concurrency_keys: Final[contextvars.ContextVar[_PendingConcurrencyKeys | None]] = contextvars.ContextVar(
-    "tag_rate_limiter_pending_concurrency_keys", default=None
-)
-
-
-def _pending_concurrency_holder() -> _PendingConcurrencyKeys:
-    existing: Final = _pending_concurrency_keys.get()
-    if existing is not None:
-        return existing
-    holder: Final = _PendingConcurrencyKeys()
-    _pending_concurrency_keys.set(holder)
-    return holder
+# the wrong (default) partition and the reservation leaks forever.
+#
+# Stashed directly on `Logging.model_call_details` under this field, not a
+# `contextvars.ContextVar`: the real proxy request pipeline forks the
+# streaming response through several distinct asyncio Tasks (the disconnect
+# race in `create_response`, the streaming generator's own task, ...), and a
+# ContextVar only propagates forward into tasks forked *after* a value was
+# `.set()` -- a task that isn't a descendant of admission's task never sees
+# it, so release silently finds nothing and every reservation leaks until
+# `_CONCURRENCY_MIN_SAFETY_TTL_SECONDS`, disconnect or not (confirmed live:
+# even a fully-completed, non-disconnected streaming request never released
+# its slot). `model_call_details` is a single dict, explicitly passed by
+# object reference through both admission's `request_kwargs` (as
+# `request_kwargs["litellm_logging_obj"].model_call_details`) and release's
+# `kwargs` (`async_log_success_event`/`async_log_failure_event`'s `kwargs`
+# argument *is* `model_call_details` -- see their own callers), so it
+# survives task boundaries by construction, not by ambient context.
+#
+# Deliberately not keyed by `litellm_call_id` instead: that field is
+# caller-controlled via the `x-litellm-call-id` request header, so two
+# unrelated concurrent requests sharing a caller-chosen id would merge their
+# reservations under a shared identifier -- letting one request's release
+# free a different request's still-live slot. `model_call_details` is a
+# plain Python object with no caller-visible identifier, created fresh
+# server-side per logical request (and shared across that request's own
+# fallback hops, matching the original chain-wide release semantics), so it
+# can't be forged or guessed.
+_PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_tag_rate_limiter_pending_concurrency_keys"
 
 
 class _TagRateLimitIndex:
@@ -633,7 +632,7 @@ def _increment_operation_for_limit(
     now: float,
 ) -> RedisPipelineIncrementOperation | None:
     if configured_limit.unit == "concurrency":
-        return None  # released above, from _pending_concurrency_keys
+        return None  # released above, via _pop_pending_concurrency_keys
     if configured_limit.deployment_scope is not None and deployment_id not in configured_limit.deployment_scope:
         return None
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
@@ -702,6 +701,26 @@ def _partition_key(entry: TagRateLimitEntry) -> _PartitionKey:
         entry.scope_by_key_hash,
         entry.max_in_memory_cache_size,
     )
+
+
+def _queue_pending_concurrency_reservations(
+    request_kwargs: Mapping[str, object], reservations: Sequence[tuple[str, _PartitionKey]]
+) -> None:
+    """Stash reservations on the request's own `model_call_details` -- see
+    `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring for why this, not a
+    ContextVar or `litellm_call_id`. Silently a no-op without a real logging
+    object (defensive only; every real request has one): the reservation
+    still self-heals via `_CONCURRENCY_MIN_SAFETY_TTL_SECONDS`, just later.
+    """
+    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+    model_call_details: Final = getattr(logging_obj, "model_call_details", None)
+    if not isinstance(model_call_details, dict):
+        return
+    pending = model_call_details.get(_PENDING_CONCURRENCY_KEYS_FIELD)
+    if pending is None:
+        pending = []  # mutable-ok: shared, request-scoped accumulator; see field's own docstring
+        model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] = pending
+    pending.extend(reservations)  # mutable-ok: see comment above
 
 
 @dataclass(frozen=True, slots=True)
@@ -984,7 +1003,7 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
                 if configured_limit.unit == "concurrency"
             )
             if concurrency_reservations:
-                _pending_concurrency_holder().keys.extend(concurrency_reservations)
+                _queue_pending_concurrency_reservations(resolved_request_kwargs, concurrency_reservations)
 
         return healthy_deployments
 
@@ -1099,7 +1118,7 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
 
         Each reservation is released against the exact cache partition
         (`_partition_for(partition_key)`) its increment used -- see
-        `_PendingConcurrencyKeys`'s docstring for why this must match.
+        `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring for why this must match.
         """
         for key, partition_key in reservations:
             try:
@@ -1109,24 +1128,24 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
                 verbose_proxy_logger.warning("tag_rate_limiter: failed to release concurrency slot %s: %s", key, e)
 
     @staticmethod
-    def _pop_pending_concurrency_keys() -> tuple[tuple[str, _PartitionKey], ...]:
+    def _pop_pending_concurrency_keys(kwargs: Mapping[str, object]) -> tuple[tuple[str, _PartitionKey], ...]:
         # Snapshot then remove only those exact keys, never a blanket clear:
-        # a sibling hop can still be live and appending to the same shared
-        # holder concurrently (see the holder's own comment above), so
-        # wiping the whole list here would silently strand that hop's
-        # reservation instead of releasing it later.
-        holder: Final = _pending_concurrency_keys.get()
-        if holder is None or not holder.keys:
+        # a sibling hop sharing this same request's model_call_details can
+        # still be live and appending concurrently (see the field's own
+        # docstring), so wiping the whole list here would silently strand
+        # that hop's reservation instead of releasing it later.
+        pending: Final = kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
+        if not isinstance(pending, list) or not pending:
             return ()
-        keys: Final = tuple(holder.keys)
+        keys: Final = tuple(pending)
         for key in keys:
             try:
-                holder.keys.remove(key)
+                pending.remove(key)
             except ValueError:
                 pass
         return keys
 
-    async def async_release_disconnect_state_hook(self) -> None:
+    async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
         """
         A client disconnecting before the first streamed chunk raises
         CancelledError/GeneratorExit, which bypasses both async_log_success_event
@@ -1136,7 +1155,11 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         expires, letting a caller who repeatedly opens and immediately drops
         streaming requests exhaust their own tag's concurrency limit for free.
         """
-        release_keys: Final = self._pop_pending_concurrency_keys()
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        model_call_details: Final = getattr(logging_obj, "model_call_details", None)
+        if not isinstance(model_call_details, dict):
+            return
+        release_keys: Final = self._pop_pending_concurrency_keys(model_call_details)
         if release_keys:
             await self._release_keys(release_keys)
 
@@ -1148,12 +1171,12 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
             if detail.get("error") == "tag_rate_limit_exceeded":
                 return
 
-        release_keys: Final = self._pop_pending_concurrency_keys()
+        release_keys: Final = self._pop_pending_concurrency_keys(kwargs)
         if release_keys:
             await self._release_keys(release_keys)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        release_keys: Final = self._pop_pending_concurrency_keys()
+        release_keys: Final = self._pop_pending_concurrency_keys(kwargs)
         if release_keys:
             asyncio.create_task(self._release_keys(release_keys))
 

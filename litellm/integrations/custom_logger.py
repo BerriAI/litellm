@@ -770,7 +770,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         return
 
-    async def async_release_disconnect_state_hook(self) -> None:
+    async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
         """
         Release per-request state reserved outside of `async_log_success_event`
         / `async_log_failure_event` for a request whose streaming response is
@@ -778,7 +778,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         are `BaseException`, so they bypass both of those callbacks entirely.
 
         Called from the proxy's shielded streaming cleanup only when no
-        disconnect-time success event fired for this request. Must be
+        disconnect-time success event fired for this request. `request_data`
+        is the same proxy request-data dict threaded through the rest of that
+        cleanup (carries ``litellm_logging_obj`` and other request-scoped
+        state); implementations needing per-request correlation should key
+        off an object reachable from it (e.g. ``litellm_logging_obj``'s own
+        identity or its ``model_call_details``), never off a caller-supplied
+        value like ``litellm_call_id`` (settable via the ``x-litellm-call-id``
+        header), which would let two unrelated requests collide. Must be
         idempotent and never raise -- a callback that never reserved such
         state has nothing to do here.
 
