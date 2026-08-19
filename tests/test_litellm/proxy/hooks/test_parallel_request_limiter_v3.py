@@ -5858,3 +5858,26 @@ async def test_conflicting_token_limits_cannot_bypass_tpm_reservation():
         )
 
     assert exc_info.value.status_code == 429
+
+
+def test_parallel_request_slot_ttl_env_override():
+    """LITELLM_PARALLEL_REQUEST_SLOT_TTL_SECONDS shortens how long a leaked
+    slot can block a key before being pruned as stale. The constant is bound at
+    import time, so the override is checked in a fresh interpreter."""
+    import subprocess
+
+    assert PARALLEL_REQUEST_SLOT_TTL_SECONDS == 3600
+
+    output = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from litellm.proxy.hooks.parallel_request_limiter_v3 import "
+            "PARALLEL_REQUEST_SLOT_TTL_SECONDS; print(PARALLEL_REQUEST_SLOT_TTL_SECONDS)",
+        ],
+        env={**os.environ, "LITELLM_PARALLEL_REQUEST_SLOT_TTL_SECONDS": "300"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert output.stdout.strip() == "300"

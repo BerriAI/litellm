@@ -369,7 +369,7 @@ PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
 # considered leaked (worker crashed without any release callback firing) and
 # pruned. Also the longest request duration the gauge can track: a request
 # running longer than this stops occupying its slot.
-PARALLEL_REQUEST_SLOT_TTL_SECONDS: Final = 3600
+PARALLEL_REQUEST_SLOT_TTL_SECONDS: Final = int(os.getenv("LITELLM_PARALLEL_REQUEST_SLOT_TTL_SECONDS", "3600"))
 
 
 CacheCounterValue: TypeAlias = int | float | str | bytes
