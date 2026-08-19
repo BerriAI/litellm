@@ -7090,38 +7090,40 @@ class ProxyConfig:
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
+            GUARDRAIL_RECONCILE_LOCK,
             IN_MEMORY_GUARDRAIL_HANDLER,
             Guardrail,
             GuardrailRegistry,
         )
 
         try:
-            guardrails_in_db: Final[list[Guardrail]] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
-            )
-            verbose_proxy_logger.debug("guardrails from the DB %s", str(guardrails_in_db))
-            db_guardrail_ids: Final[set] = set()
-            for guardrail in guardrails_in_db:
-                guardrail_id = guardrail.get("guardrail_id")
-                if guardrail_id:
-                    db_guardrail_ids.add(guardrail_id)
-                try:
-                    IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
-                        guardrail=cast(Guardrail, guardrail),
-                    )
-                except Exception as e:  # noqa: BLE001  # one unloadable row must not stop the remaining guardrails
-                    verbose_proxy_logger.error(
-                        "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - "
-                        "skipping guardrail '%s' (ID: %s): %s: %s",
-                        guardrail.get("guardrail_name"),
-                        guardrail_id,
-                        type(e).__name__,
-                        e,
-                    )
+            async with GUARDRAIL_RECONCILE_LOCK:
+                guardrails_in_db: Final[list[Guardrail]] = await GuardrailRegistry.get_all_guardrails_from_db(
+                    prisma_client=prisma_client
+                )
+                verbose_proxy_logger.debug("guardrails from the DB %s", str(guardrails_in_db))
+                db_guardrail_ids: Final[set] = set()
+                for guardrail in guardrails_in_db:
+                    guardrail_id = guardrail.get("guardrail_id")
+                    if guardrail_id:
+                        db_guardrail_ids.add(guardrail_id)
+                    try:
+                        IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
+                            guardrail=cast(Guardrail, guardrail),
+                        )
+                    except Exception as e:  # noqa: BLE001  # one unloadable row must not stop the remaining guardrails
+                        verbose_proxy_logger.error(
+                            "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - "
+                            "skipping guardrail '%s' (ID: %s): %s: %s",
+                            guardrail.get("guardrail_name"),
+                            guardrail_id,
+                            type(e).__name__,
+                            e,
+                        )
 
-            # Drop in-memory DB-backed entries whose row was deleted on another
-            # pod. Config-loaded entries are never touched.
-            IN_MEMORY_GUARDRAIL_HANDLER.reconcile_db_guardrails(db_guardrail_ids=db_guardrail_ids)
+                # Drop in-memory DB-backed entries whose row was deleted on another
+                # pod. Config-loaded entries are never touched.
+                IN_MEMORY_GUARDRAIL_HANDLER.reconcile_db_guardrails(db_guardrail_ids=db_guardrail_ids)
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - %s", e)
 

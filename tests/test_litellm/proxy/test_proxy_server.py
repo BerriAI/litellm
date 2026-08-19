@@ -11126,6 +11126,34 @@ async def test_init_agents_in_db_rebuilds_registry_under_agent_reconcile_lock(mo
     assert not AGENT_RECONCILE_LOCK.locked()
 
 
+@pytest.mark.asyncio
+async def test_init_guardrails_in_db_snapshots_and_reconciles_under_guardrail_reconcile_lock(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        GUARDRAIL_RECONCILE_LOCK,
+        IN_MEMORY_GUARDRAIL_HANDLER,
+        GuardrailRegistry,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    lock_states: list[bool] = []
+
+    async def fake_get_all_guardrails_from_db(prisma_client) -> list:
+        lock_states.append(GUARDRAIL_RECONCILE_LOCK.locked())
+        return []
+
+    def fake_reconcile_db_guardrails(db_guardrail_ids) -> list:
+        lock_states.append(GUARDRAIL_RECONCILE_LOCK.locked())
+        return []
+
+    monkeypatch.setattr(GuardrailRegistry, "get_all_guardrails_from_db", fake_get_all_guardrails_from_db)
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "reconcile_db_guardrails", fake_reconcile_db_guardrails)
+
+    await ProxyConfig()._init_guardrails_in_db(prisma_client=MagicMock())
+
+    assert lock_states == [True, True]
+    assert not GUARDRAIL_RECONCILE_LOCK.locked()
+
+
 class TestEmbeddingsFailureHookRequestData:
     @pytest.mark.asyncio
     async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
