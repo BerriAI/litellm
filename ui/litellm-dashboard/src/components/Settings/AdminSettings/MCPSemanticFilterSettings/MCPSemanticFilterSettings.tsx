@@ -3,7 +3,7 @@
 import { useMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useMCPSemanticFilterSettings";
 import { useUpdateMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useUpdateMCPSemanticFilterSettings";
 import { toast } from "@/lib/toast";
-import { Card, Col, Row, Skeleton } from "antd";
+import { Skeleton } from "@/components/ui/skeleton";
 import { CircleCheck, CircleHelp, Info, Save, X } from "lucide-react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useEffect, useState } from "react";
@@ -13,6 +13,7 @@ import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -78,6 +79,26 @@ const clampTopK = (value: number | null): number | null =>
 
 const parseTopK = (raw: string, rawAsNumber: number): number | null =>
   raw === "" || Number.isNaN(rawAsNumber) ? null : rawAsNumber;
+
+const SaveSuccessAlert = () => {
+  const [dismissed, setDismissed] = useState(false);
+
+  if (dismissed) {
+    return null;
+  }
+
+  return (
+    <Alert variant="success" className="mb-4">
+      <CircleCheck />
+      <AlertTitle>Settings saved successfully</AlertTitle>
+      <AlertAction>
+        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setDismissed(true)}>
+          <X className="size-4" />
+        </Button>
+      </AlertAction>
+    </Alert>
+  );
+};
 
 export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFilterSettingsProps) {
   const { data, isLoading, isError, error } = useMCPSemanticFilterSettings();
@@ -175,7 +196,12 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
   return (
     <div style={{ width: "100%" }}>
       {isLoading ? (
-        <Skeleton active />
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-4 w-2/5" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/5" />
+        </div>
       ) : isError ? (
         <Alert variant="error" className="mb-6">
           <AlertTitle>Could not load MCP Semantic Filter settings</AlertTitle>
@@ -193,17 +219,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
             </AlertDescription>
           </Alert>
 
-          {saveSuccess && (
-            <Alert className="mb-4">
-              <CircleCheck />
-              <AlertTitle>Settings saved successfully</AlertTitle>
-              <AlertAction>
-                <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setSaveSuccess(false)}>
-                  <X />
-                </Button>
-              </AlertAction>
-            </Alert>
-          )}
+          {saveSuccess && <SaveSuccessAlert />}
 
           {updateError && (
             <Alert variant="error" className="mb-4">
@@ -212,121 +228,128 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
             </Alert>
           )}
 
-          <Row gutter={24}>
+          <div className="grid grid-cols-1 gap-x-6 lg:grid-cols-2">
             {/* Left Column - Settings */}
-            <Col xs={24} lg={12}>
+            <div>
               <TooltipProvider>
                 <form onSubmit={(event) => event.preventDefault()} noValidate>
-                  <Card style={{ marginBottom: 16 }}>
-                    <FieldGroup>
-                      <FormField
-                        control={form.control}
-                        name="enabled"
-                        label={labelWithHint(
-                          "Enable Semantic Filtering",
-                          "When enabled, only the most relevant MCP tools will be included in requests based on semantic similarity",
-                        )}
-                        description={schema?.properties?.enabled?.description}
-                      >
-                        {({ value, onChange, onBlur, id }) => (
-                          <Switch
-                            id={id}
-                            checked={value}
-                            onCheckedChange={(checked) => commitChange(onChange, checked)}
-                            onBlur={onBlur}
-                            disabled={isUpdating}
-                          />
-                        )}
-                      </FormField>
-                    </FieldGroup>
-                  </Card>
-
-                  <Card title="Configuration" style={{ marginBottom: 16 }}>
-                    <FieldGroup>
-                      <FormField
-                        control={form.control}
-                        name="embedding_model"
-                        label={labelWithHint(
-                          "Embedding Model",
-                          "The model used to generate embeddings for semantic matching",
-                        )}
-                      >
-                        {({ value, onChange, id }) => (
-                          <SearchSelect
-                            inputId={id}
-                            options={embeddingModels.map((model) => ({
-                              label: model.model_group,
-                              value: model.model_group,
-                            }))}
-                            value={value}
-                            onValueChange={(selected) => commitChange(onChange, selected)}
-                            allowClear={false}
-                            placeholder={loadingModels ? "Loading models..." : "Select embedding model"}
-                            emptyText={loadingModels ? "Loading..." : "No embedding models available"}
-                            disabled={isUpdating || loadingModels}
-                          />
-                        )}
-                      </FormField>
-
-                      <FormField
-                        control={form.control}
-                        name="top_k"
-                        label={labelWithHint("Top K Results", "Maximum number of tools to return after filtering")}
-                      >
-                        {({ ref, value, onChange, onBlur, id }) => (
-                          <Input
-                            id={id}
-                            ref={ref}
-                            type="number"
-                            min={TOP_K_MIN}
-                            max={TOP_K_MAX}
-                            value={value ?? ""}
-                            onChange={(event) =>
-                              commitChange(onChange, parseTopK(event.target.value, event.target.valueAsNumber))
-                            }
-                            onBlur={() => {
-                              onChange(clampTopK(value));
-                              onBlur();
-                            }}
-                            disabled={isUpdating}
-                          />
-                        )}
-                      </FormField>
-
-                      <FormField
-                        control={form.control}
-                        name="similarity_threshold"
-                        label={labelWithHint(
-                          "Similarity Threshold",
-                          "Minimum similarity score (0-1) for a tool to be included",
-                        )}
-                      >
-                        {({ value, onChange, id }) => (
-                          <div className="w-full">
-                            <Slider
+                  <Card className="mb-4">
+                    <CardContent>
+                      <FieldGroup>
+                        <FormField
+                          control={form.control}
+                          name="enabled"
+                          label={labelWithHint(
+                            "Enable Semantic Filtering",
+                            "When enabled, only the most relevant MCP tools will be included in requests based on semantic similarity",
+                          )}
+                          description={schema?.properties?.enabled?.description}
+                        >
+                          {({ value, onChange, onBlur, id }) => (
+                            <Switch
                               id={id}
-                              min={0}
-                              max={1}
-                              step={0.05}
-                              value={[value]}
-                              onValueChange={(next) => commitChange(onChange, Array.isArray(next) ? next[0] : next)}
+                              checked={value}
+                              onCheckedChange={(checked) => commitChange(onChange, checked)}
+                              onBlur={onBlur}
                               disabled={isUpdating}
                             />
-                            <div className="relative mt-2 h-4 text-xs text-muted-foreground">
-                              {SIMILARITY_THRESHOLD_MARKS.map((mark) => (
-                                <span
-                                  key={mark.value}
-                                  className="absolute -translate-x-1/2"
-                                  style={{ left: `${mark.value * 100}%` }}
-                                >
-                                  {mark.label}
-                                </span>
-                              ))}
+                          )}
+                        </FormField>
+                      </FieldGroup>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="mb-4">
+                    <CardHeader className="border-b">
+                      <CardTitle>Configuration</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <FieldGroup>
+                        <FormField
+                          control={form.control}
+                          name="embedding_model"
+                          label={labelWithHint(
+                            "Embedding Model",
+                            "The model used to generate embeddings for semantic matching",
+                          )}
+                        >
+                          {({ value, onChange, id }) => (
+                            <SearchSelect
+                              inputId={id}
+                              options={embeddingModels.map((model) => ({
+                                label: model.model_group,
+                                value: model.model_group,
+                              }))}
+                              value={value}
+                              onValueChange={(selected) => commitChange(onChange, selected)}
+                              allowClear={false}
+                              placeholder={loadingModels ? "Loading models..." : "Select embedding model"}
+                              emptyText={loadingModels ? "Loading..." : "No embedding models available"}
+                              disabled={isUpdating || loadingModels}
+                            />
+                          )}
+                        </FormField>
+
+                        <FormField
+                          control={form.control}
+                          name="top_k"
+                          label={labelWithHint("Top K Results", "Maximum number of tools to return after filtering")}
+                        >
+                          {({ ref, value, onChange, onBlur, id }) => (
+                            <Input
+                              id={id}
+                              ref={ref}
+                              type="number"
+                              min={TOP_K_MIN}
+                              max={TOP_K_MAX}
+                              value={value ?? ""}
+                              onChange={(event) =>
+                                commitChange(onChange, parseTopK(event.target.value, event.target.valueAsNumber))
+                              }
+                              onBlur={() => {
+                                onChange(clampTopK(value));
+                                onBlur();
+                              }}
+                              disabled={isUpdating}
+                            />
+                          )}
+                        </FormField>
+
+                        <FormField
+                          control={form.control}
+                          name="similarity_threshold"
+                          label={labelWithHint(
+                            "Similarity Threshold",
+                            "Minimum similarity score (0-1) for a tool to be included",
+                          )}
+                        >
+                          {({ value, onChange, id }) => (
+                            <div className="w-full">
+                              <Slider
+                                id={id}
+                                min={0}
+                                max={1}
+                                step={0.05}
+                                value={[value]}
+                                onValueChange={(next) => commitChange(onChange, Array.isArray(next) ? next[0] : next)}
+                                disabled={isUpdating}
+                              />
+                              <div className="relative mt-2 h-4 text-xs text-muted-foreground">
+                                {SIMILARITY_THRESHOLD_MARKS.map((mark) => (
+                                  <span
+                                    key={mark.value}
+                                    className="absolute -translate-x-1/2"
+                                    style={{ left: `${mark.value * 100}%` }}
+                                  >
+                                    {mark.label}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
-                      </FormField>
-                    </FieldGroup>
+                          )}
+                        </FormField>
+                      </FieldGroup>
+                    </CardContent>
                   </Card>
 
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -341,10 +364,10 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                   </div>
                 </form>
               </TooltipProvider>
-            </Col>
+            </div>
 
             {/* Right Column - Test Configuration */}
-            <Col xs={24} lg={12}>
+            <div>
               <MCPSemanticFilterTestPanel
                 accessToken={accessToken}
                 testQuery={testQuery}
@@ -358,8 +381,8 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                 testError={testError}
                 curlCommand={getCurlCommand(testModel, testQuery)}
               />
-            </Col>
-          </Row>
+            </div>
+          </div>
         </>
       )}
     </div>

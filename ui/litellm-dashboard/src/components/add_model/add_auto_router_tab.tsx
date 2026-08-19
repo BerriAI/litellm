@@ -362,6 +362,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tierBoundaries: complexityRouterConfig.tier_boundaries,
     tokenThresholds: complexityRouterConfig.token_thresholds,
     dimensionWeights: complexityRouterConfig.dimension_weights,
+    reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
   };
 
   const submitRecommendedRouter = async (name: string) => {

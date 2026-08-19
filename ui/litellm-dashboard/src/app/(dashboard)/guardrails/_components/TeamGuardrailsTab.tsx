@@ -1002,6 +1002,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
             />
           </div>
           <select
+            aria-label="Filter by status"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
             className="border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-background"

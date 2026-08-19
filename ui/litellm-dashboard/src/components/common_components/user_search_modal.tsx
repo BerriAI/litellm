@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Info } from "lucide-react";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { UserAddOutlined } from "@ant-design/icons";
@@ -80,10 +80,16 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedField, setSelectedField] = useState<"user_email" | "user_id">("user_email");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const latestSearchRef = useRef(0);
 
   const fetchUsers = async (searchText: string, fieldName: "user_email" | "user_id"): Promise<void> => {
+    const searchId = latestSearchRef.current + 1;
+    latestSearchRef.current = searchId;
+    const isLatestSearch = (): boolean => searchId === latestSearchRef.current;
+
     if (!searchText) {
       setUserOptions([]);
+      setLoading(false);
       return;
     }
 
@@ -98,6 +104,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
         return;
       }
       const response = await userFilterUICall(accessToken, params);
+      if (!isLatestSearch()) return;
 
       const data: User[] = response;
       const options: UserOption[] = data.map((user) => ({
@@ -109,7 +116,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     } catch (error) {
       console.error("Error fetching users:", error);
     } finally {
-      setLoading(false);
+      if (isLatestSearch()) setLoading(false);
     }
   };
 
