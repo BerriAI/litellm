@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Any, Final, Literal, cast, overload
 
 import litellm
@@ -14,6 +14,25 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+# Model families the DeepSeek API runs in thinking mode unless the caller turns
+# it off, as opposed to the families where thinking is opt-in. Compared against
+# the model name with any provider prefix stripped.
+#
+# This cannot be read off model_prices_and_context_window.json: every
+# reasoning-capable DeepSeek entry there carries `supports_reasoning: true`,
+# including deepseek-v3.1 / v3.2 / reasoner, where thinking is opt-in and
+# tool_choice="required" is accepted while thinking is off. No capability flag
+# distinguishes "reasoning is on unless disabled" from "reasoning is available",
+# so the family is listed here.
+THINKING_ON_BY_DEFAULT_MODELS: Final = ("deepseek-v4",)
+
+# tool_choice values the DeepSeek API accepts outside thinking mode but rejects
+# while it is active. `"any"` is deliberately absent: DeepSeek rejects it in
+# every mode, thinking or not, with a deserialization error naming the values it
+# accepts - that is a separate bug from this one, and `"any"` is not an
+# OpenAI-spec tool_choice value to begin with.
+TOOL_CHOICES_REJECTED_IN_THINKING_MODE: Final = ("required",)
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
@@ -58,7 +77,71 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         elif reasoning_effort is not None:
             optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
 
+        if self._tool_choice_is_rejected_in_thinking_mode(model=model, optional_params=optional_params):
+            litellm.verbose_logger.warning(
+                "DeepSeek thinking mode does not accept tool_choice=%r; sending "
+                "tool_choice='auto' for model %r instead. The model now decides "
+                "whether to call a tool, so a tool call is no longer forced. Turn "
+                "thinking off (thinking={'type': 'disabled'} or "
+                "reasoning_effort='none') to keep the requested tool_choice.",
+                optional_params["tool_choice"],
+                model,
+            )
+            optional_params["tool_choice"] = "auto"
+            return optional_params
+
         return optional_params
+
+    @staticmethod
+    def _thinking_on_by_default(model: str) -> bool:
+        """
+        Whether the API enables thinking mode for this model unless the caller disables it.
+        """
+        model_name: Final = model.rsplit("/", 1)[-1].lower()
+        return model_name.startswith(THINKING_ON_BY_DEFAULT_MODELS)
+
+    def _thinking_mode_will_be_active(self, model: str, optional_params: Mapping[str, Any]) -> bool:
+        """
+        Whether the request being built will run in thinking mode - the caller
+        enabled it, or the model runs it by default and the caller did not
+        disable it.
+
+        Reads the `thinking` value already resolved into `optional_params`, i.e.
+        what is about to be sent, rather than the `supports_reasoning`
+        capability flag: that flag is also true for models where thinking is
+        merely available, and a deployment missing from the cost map still runs
+        in thinking mode.
+        """
+        thinking: Final = optional_params.get("thinking")
+        thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
+        if thinking_type in ("enabled", "disabled"):
+            return thinking_type == "enabled"
+        return self._thinking_on_by_default(model)
+
+    def _tool_choice_is_rejected_in_thinking_mode(self, model: str, optional_params: Mapping[str, Any]) -> bool:
+        """
+        DeepSeek rejects `tool_choice="required"` and the
+        `{"type": "function", ...}` form while thinking mode is active:
+
+            400 - Thinking mode does not support this tool_choice
+
+        Only "auto" and "none" get through. deepseek-v4-pro / deepseek-v4-flash
+        run in thinking mode by default, so callers hit this without ever
+        passing `thinking` - every SDK that hardcodes `tool_choice="required"`
+        to force a tool call (the OpenAI Agents SDK delegation path, LangChain's
+        `bind_tools(tool_choice=...)`) fails on the first turn.
+
+        The caller asked for a stronger guarantee than DeepSeek gives here, so
+        downgrading to "auto" is lossy - but the alternative is a 400 that
+        honours the requested tool_choice even less. A caller that needs the
+        guarantee can turn thinking off with `thinking={"type": "disabled"}` or
+        `reasoning_effort="none"`, which leaves tool_choice untouched.
+
+        Reference: https://api-docs.deepseek.com/guides/thinking_mode
+        """
+        tool_choice: Final = optional_params.get("tool_choice")
+        is_rejected: Final = tool_choice in TOOL_CHOICES_REJECTED_IN_THINKING_MODE or isinstance(tool_choice, dict)
+        return is_rejected and self._thinking_mode_will_be_active(model=model, optional_params=optional_params)
 
     def _fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
