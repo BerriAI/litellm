@@ -136,6 +136,9 @@ async def anthropic_messages_with_mcp(
         messages=list(working_messages), stream=False, **base_call_args
     )
 
+    # Extract non-MCP tool names provided directly in the call by the client
+    client_tool_names = {t.get("name") for t in (other_tools or []) if isinstance(t, dict) and t.get("name")}
+
     for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
         if _get_stop_reason(response) != "tool_use":
             break
@@ -144,9 +147,14 @@ async def anthropic_messages_with_mcp(
         if not tool_use_blocks:
             break
 
-        # If any requested tool is not owned by server-side MCP (e.g. client-native tools like Read/Bash),
-        # do not auto-execute server-side. Pass the full response back to the client.
-        has_client_side_tool = any(block.get("name") not in tool_server_map for block in tool_use_blocks)
+        # Stop server-side auto-execution if the response contains client-native tools:
+        # 1. Tools explicitly passed in other_tools
+        # 2. Tools missing from tool_server_map when server-side tools exist
+        has_client_side_tool = any(
+            block.get("name") in client_tool_names
+            or (bool(tool_server_map) and block.get("name") not in tool_server_map)
+            for block in tool_use_blocks
+        )
         if has_client_side_tool:
             break
 
@@ -163,8 +171,6 @@ async def anthropic_messages_with_mcp(
             request_tags=list(context.request_tags) if context.request_tags else None,
         )
 
-        # Every tool call was skipped, so there is nothing to feed back; a
-        # tool_result message with empty content is rejected by Anthropic.
         if not tool_results:
             break
 
