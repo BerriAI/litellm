@@ -642,13 +642,18 @@ export function KeyEditView({
           </FormField>
 
           {canViewPrompts && (
-            <FormField control={form.control} name="prompts" label="Prompts">
+            <FormField
+              control={form.control}
+              name="prompts"
+              label={premiumUser ? "Prompts" : labelWithHint("Prompts", "Setting prompts by key is a premium feature")}
+            >
               {({ value, onChange, id }) => (
                 <TagsInput
                   id={id}
                   value={(value as string[] | undefined) ?? []}
                   onValueChange={onChange}
                   options={promptsList.map((name) => ({ value: name, label: name }))}
+                  disabled={!premiumUser}
                   placeholder={currentValuePlaceholder(
                     premiumUser,
                     keyData.metadata?.prompts,
@@ -833,7 +838,6 @@ export function KeyEditView({
             {(field) => <Textarea {...field} value={(field.value as string | undefined) ?? ""} rows={10} />}
           </FormField>
 
-          {/* Auto-Rotation Settings */}
           <div className="mb-4">
             <FormField control={form.control} name="duration">
               {({ value, onChange, id }) => (

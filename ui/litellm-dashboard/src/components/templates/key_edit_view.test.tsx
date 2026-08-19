@@ -372,6 +372,48 @@ describe("KeyEditView", () => {
         />,
       );
 
+    it("locks the prompts control for a non-premium admin so an unsavable value cannot be entered", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Admin"}
+          premiumUser={false}
+        />,
+      );
+
+      const prompts = await screen.findByLabelText(/Prompts/);
+      expect(prompts).toBeDisabled();
+
+      await userEvent.type(prompts, "sneaky-prompt{Enter}");
+
+      expect(screen.queryByLabelText("sneaky-prompt")).not.toBeInTheDocument();
+    });
+
+    it("leaves the prompts control usable for a premium admin", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Admin"}
+          premiumUser={true}
+        />,
+      );
+
+      const prompts = await screen.findByLabelText(/Prompts/);
+      expect(prompts).toBeEnabled();
+
+      await userEvent.type(prompts, "allowed-prompt{Enter}");
+
+      expect(await screen.findByLabelText("allowed-prompt")).toBeInTheDocument();
+    });
+
     it("should render both fields and load prompts for an admin", async () => {
       renderAs("Admin");
 
@@ -2088,6 +2130,51 @@ describe("KeyEditView", () => {
       expect(onSubmitMock.mock.calls[0][0].logging_settings).toEqual([
         { callback_name: "", callback_type: "success", callback_vars: {} },
       ]);
+    });
+
+    it("resends stored budget fallbacks on an untouched save", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        budget_fallbacks: { "gpt-4": ["gpt-4o-mini"] },
+      } as KeyResponse);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("budget_fallbacks", { "gpt-4": ["gpt-4o-mini"] });
+    });
+
+    it("omits budget fallbacks entirely for a key that has none", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).not.toHaveProperty("budget_fallbacks");
+    });
+
+    it("resends the stored per-tag rpm limits on an untouched save", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        metadata: { ...MOCK_KEY_DATA.metadata, tag_rpm_limit: { "test-tag": 7 } },
+      } as KeyResponse);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("tag_rpm_limit", { "test-tag": 7 });
     });
   });
 });
