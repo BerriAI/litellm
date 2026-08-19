@@ -1781,16 +1781,22 @@ def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
     including the above-128k dynamic rates, so a synthetic model carrying both keys
     prices regional above-128k usage at 1.1x the above-128k rate."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.model_cost["vertex_ai/fake-regional-128k-model"] = {
-        "litellm_provider": "vertex_ai",
-        "mode": "chat",
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 2e-06,
-        "input_cost_per_token_above_128k_tokens": 2e-06,
-        "output_cost_per_token_above_128k_tokens": 4e-06,
-        "regional_endpoint_uplift_multiplier": 1.1,
-    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            "vertex_ai/fake-regional-128k-model": {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "input_cost_per_token_above_128k_tokens": 2e-06,
+                "output_cost_per_token_above_128k_tokens": 4e-06,
+                "regional_endpoint_uplift_multiplier": 1.1,
+            },
+        },
+    )
 
     usage = Usage(prompt_tokens=200_000, completion_tokens=10, total_tokens=200_010)
     global_prompt, global_completion = cost_per_token(

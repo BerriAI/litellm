@@ -1109,6 +1109,98 @@ class TestVertexAIPassThroughHandler:
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
 
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_vertex_passthrough_handler_prices_regional_endpoint_with_uplift(self, monkeypatch, streaming):
+        """
+        Passthrough cost is computed inside the handler and stored as response_cost before the
+        logging cost resolver runs, so the handler itself must read the serving location out of
+        the passthrough URL; otherwise regional Vertex passthrough traffic bills at the global
+        rate (#34393).
+        """
+        import datetime
+
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                **litellm.get_model_cost_map(url=""),
+                "vertex_ai/gemini-fake-regional": {
+                    "litellm_provider": "vertex_ai",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                    "regional_endpoint_uplift_multiplier": 1.1,
+                },
+            },
+        )
+
+        response_body: Final = {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "hello"}], "role": "model"},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 20,
+                "totalTokenCount": 30,
+            },
+        }
+
+        def cost_for(location: str) -> float:
+            url_route: Final = (
+                f"https://{location}-aiplatform.googleapis.com/v1/projects/p/locations/{location}"
+                "/publishers/google/models/gemini-fake-regional:"
+                f"{'streamGenerateContent' if streaming else 'generateContent'}"
+            )
+            mock_logging_obj: Final = Mock()
+            mock_logging_obj.litellm_call_id = "call-id"
+            mock_logging_obj.model_call_details = {}
+            mock_logging_obj.optional_params = {}
+            start_time: Final = datetime.datetime.now()
+            end_time: Final = datetime.datetime.now()
+            if streaming:
+                result = VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
+                    litellm_logging_obj=mock_logging_obj,
+                    passthrough_success_handler_obj=Mock(),
+                    url_route=url_route,
+                    request_body={},
+                    endpoint_type="vertex_ai",
+                    start_time=start_time,
+                    all_chunks=[json.dumps(response_body)],
+                    model=None,
+                    end_time=end_time,
+                )
+            else:
+                mock_httpx_response: Final = Mock()
+                mock_httpx_response.json.return_value = response_body
+                mock_httpx_response.headers = {}
+                mock_httpx_response.status_code = 200
+                result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                    httpx_response=mock_httpx_response,
+                    logging_obj=mock_logging_obj,
+                    url_route=url_route,
+                    result="test-result",
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=False,
+                )
+            return result["kwargs"]["response_cost"]
+
+        global_cost: Final = cost_for("global")
+        regional_cost: Final = cost_for("us-east5")
+
+        assert global_cost == pytest.approx(10 * 1e-06 + 20 * 2e-06, rel=1e-9)
+        assert regional_cost == pytest.approx(global_cost * 1.10, rel=1e-9), (
+            "regional Vertex passthrough traffic must bill at 1.1x the global rate"
+        )
+
 
 class TestVertexAIDiscoveryPassThroughHandler:
     """

@@ -999,9 +999,6 @@ def generic_cost_per_token(
         prompt_cost *= uplift
         completion_cost *= uplift
 
-    ## VERTEX REGIONAL-ENDPOINT UPLIFT
-    # Applied as a flat multiplier across all token costs for the request
-    # when the Vertex AI endpoint serving it is non-global.
     vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
     if vertex_uplift != 1.0:
         prompt_cost *= vertex_uplift
@@ -1109,8 +1106,6 @@ def get_token_type_cost_breakdown(
         cache_read_cost *= uplift
         cache_creation_cost *= uplift
 
-    # Same flat uplift for Vertex AI non-global endpoints, keeping per-type
-    # costs reconciled with the totals for regional Vertex deployments.
     vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
     if vertex_uplift != 1.0:
         reasoning_cost *= vertex_uplift

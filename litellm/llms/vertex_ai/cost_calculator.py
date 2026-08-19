@@ -164,8 +164,6 @@ def cost_per_character(
                 usage=usage,
             )
 
-    # Applied once here; the cost_per_token fallbacks above are called without
-    # vertex_location so the uplift can never compound.
     vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
     return prompt_cost * vertex_uplift, completion_cost * vertex_uplift
 

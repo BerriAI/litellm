@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.vertex_ai.common_utils import get_vertex_location_from_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as VertexModelResponseIterator,
 )
@@ -60,6 +61,7 @@ class VertexPassthroughLoggingHandler:
         request_body: dict | None = None,
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
+        vertex_location: Final = get_vertex_location_from_url(url_route)
         if "predictLongRunning" in url_route:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
@@ -82,6 +84,7 @@ class VertexPassthroughLoggingHandler:
                 model=model,
                 custom_llm_provider="vertex_ai",
                 call_type="create_video",
+                vertex_location=vertex_location,
             )
 
             # Set response_cost in _hidden_params to prevent recalculation
@@ -123,6 +126,7 @@ class VertexPassthroughLoggingHandler:
                 end_time=end_time,
                 logging_obj=logging_obj,
                 custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+                vertex_location=vertex_location,
             )
 
             return {
@@ -190,6 +194,7 @@ class VertexPassthroughLoggingHandler:
                 end_time=end_time,
                 logging_obj=logging_obj,
                 custom_llm_provider="vertex_ai",
+                vertex_location=vertex_location,
             )
 
             return {
@@ -206,6 +211,7 @@ class VertexPassthroughLoggingHandler:
                 model="vertex_ai/search_api",
                 custom_llm_provider="vertex_ai",
                 call_type="vector_store_search",
+                vertex_location=vertex_location,
             )
 
             standard_pass_through_response_object: Final[StandardPassThroughResponseObject] = {
@@ -302,6 +308,7 @@ class VertexPassthroughLoggingHandler:
             completion_response=litellm_prediction_response,
             model=model,
             custom_llm_provider="vertex_ai",
+            vertex_location=get_vertex_location_from_url(url_route),
         )
 
         kwargs["response_cost"] = response_cost
@@ -381,6 +388,7 @@ class VertexPassthroughLoggingHandler:
             completion_response=litellm_embedding_response,
             model=model,
             custom_llm_provider=custom_llm_provider,
+            vertex_location=get_vertex_location_from_url(url_route),
         )
 
         kwargs["response_cost"] = response_cost
@@ -438,6 +446,7 @@ class VertexPassthroughLoggingHandler:
             end_time=end_time,
             logging_obj=litellm_logging_obj,
             custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+            vertex_location=get_vertex_location_from_url(url_route),
         )
 
         return {
@@ -591,6 +600,7 @@ class VertexPassthroughLoggingHandler:
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
+        vertex_location: str | None,
     ) -> dict:
         """
         Create the standard logging object for Vertex passthrough generateContent (streaming and non-streaming)
@@ -601,6 +611,7 @@ class VertexPassthroughLoggingHandler:
             completion_response=litellm_model_response,
             model=model,
             custom_llm_provider="vertex_ai",
+            vertex_location=vertex_location,
         )
 
         kwargs["response_cost"] = response_cost
