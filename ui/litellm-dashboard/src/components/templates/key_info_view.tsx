@@ -37,6 +37,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
+import { KeyBudgetsTable } from "./KeyBudgetsTable";
 import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
@@ -603,6 +604,9 @@ export default function KeyInfoView({
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
+          <TabsTrigger value="budgets" className="flex-none rounded-none px-4 py-2">
+            Budgets
+          </TabsTrigger>
           <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
             Settings
           </TabsTrigger>
@@ -736,6 +740,12 @@ export default function KeyInfoView({
                 variant="card"
               />
             </div>
+          </TabsContent>
+
+          {/* Budgets Panel — deliberately NOT keepMounted: it must stay unmounted until opened so the
+              budgets request is lazy and its cells cannot collide with the keepMounted Overview panel. */}
+          <TabsContent value="budgets">
+            <KeyBudgetsTable keyId={currentKeyData.token_id || currentKeyData.token} />
           </TabsContent>
 
           {/* Settings Panel */}
