@@ -1,4 +1,6 @@
+import asyncio
 import os
+from datetime import datetime
 from typing import Any, Final
 from urllib.parse import urlparse
 
@@ -23,11 +25,18 @@ from litellm.types.proxy.guardrails.guardrail_hooks.base import (
     GuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
+    AssistantMessage,
     SingulrGuardrailPayload,
-    SingulrGuardrailRequest,
     SingulrGuardrailResponse,
+    SingulrMcpGuardrailPayload,
+    ToolCall,
+    ToolCallFunction,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    StandardLoggingGuardrailInformation,
+)
 
 _DEFAULT_API_BASE: Final = "http://localhost:8003"
 _GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm"
@@ -46,8 +55,8 @@ class SingulrGuardrail(CustomGuardrail):
         **kwargs: Any,
     ) -> None:
         self.singulr_api_key = singulr_api_key or os.environ.get("SINGULR_API_KEY")
-        self.singulr_api_base = (singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip(
-            "/"
+        self.singulr_api_base = (
+            (singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).strip().rstrip("/")
         )
         parsed: Final = urlparse(self.singulr_api_base)
         if parsed.scheme == "http" and parsed.hostname not in (
@@ -80,6 +89,9 @@ class SingulrGuardrail(CustomGuardrail):
             kwargs["supported_event_hooks"] = [
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.post_call,
+                GuardrailEventHooks.logging_only,
+                GuardrailEventHooks.pre_mcp_call,
+                GuardrailEventHooks.post_mcp_call,
             ]
 
         super().__init__(**kwargs)
@@ -92,51 +104,53 @@ class SingulrGuardrail(CustomGuardrail):
 
         return SingulrGuardrailConfigModel
 
-    def _build_payload(
-        self,
-        request_data: dict[str, Any],
-        inputs: GenericGuardrailAPIInputs,
-        input_type: str,
-    ) -> dict[str, Any]:
-        if not request_data:
-            texts: Final = inputs.get("texts", [])
+    @staticmethod
+    def _resolve_key_alias_from_request_data(request_data: dict) -> str | None:
+        litellm_metadata: Final = request_data.get("litellm_metadata", {})
+        if litellm_metadata:
+            alias = litellm_metadata.get("user_api_key_alias")
+            if alias:
+                return alias
 
-            payload = SingulrGuardrailPayload(
-                input_type=input_type,
-                is_playground_request=True,
-                playground_text=texts[0] if texts else None,
-            )
-        else:
-            response: Final = request_data.get("response")
-            singulr_req_object: Final = SingulrGuardrailRequest(
-                model=request_data.get("model"),
-                messages=request_data.get("messages"),
-                tools=request_data.get("tools"),
-                model_response=response.model_dump(mode="json") if input_type == "response" and response else None,
-                litellm_metadata=request_data.get("litellm_metadata"),
-            )
-            payload = SingulrGuardrailPayload(
-                litellm_call_id=request_data.get("litellm_call_id"),
-                request_data=singulr_req_object,
-                input_type=input_type,
-            )
+        # Then check regular metadata
+        metadata: Final = request_data.get("metadata", {})
+        if metadata:
+            alias = metadata.get("user_api_key_alias")
+            if alias:
+                return alias
 
-        return payload.model_dump(mode="json")
+        return None
+
+    @staticmethod
+    def _extract_content_text(content: Any) -> str | None:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text = "\n".join(
+                block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"
+            )
+            return text or None
+        return None
+
+    def _extract_completion_text(self, response: Any) -> str | None:
+        choices: Final = response.get("choices") or []
+        for choice in choices:
+            if choice.get("finish_reason") != "stop":
+                continue
+            message = choice.get("message") or {}
+            text = self._extract_content_text(message.get("content"))
+            if text:
+                return text
+        return None
 
     def _build_headers(self) -> dict[str, str]:
-        return dict(
-            (header, value)
-            for header, value in (
-                ("Content-Type", "application/json"),
-                ("X-Singulr-Gateway-Token", self.singulr_api_key),
-                (
-                    "X-Singulr-Enforcement-Entity-Id",
-                    self.singulr_application_id or "",
-                ),
-                ("X-Singulr-Guardrail-Id", self.singulr_guardrail_id or ""),
-            )
-            if value
-        )
+        headers: Final = {
+            "Content-Type": "application/json",
+            "X-Singulr-Gateway-Token": self.singulr_api_key,
+            "X-Singulr-Enforcement-Entity-Id": self.singulr_application_id,
+            "X-Singulr-Guardrail-Id": self.singulr_guardrail_id,
+        }
+        return {header: value for header, value in headers.items() if value}
 
     async def _call_api(self, payload: dict[str, Any]) -> SingulrGuardrailResponse | None:
         endpoint: Final = f"{self.singulr_api_base}{_GUARD_ENDPOINT}"
@@ -163,7 +177,7 @@ class SingulrGuardrail(CustomGuardrail):
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
-                    message=(f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}"),
+                    message=f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}",
                 ) from exc
             return None
 
@@ -185,6 +199,238 @@ class SingulrGuardrail(CustomGuardrail):
                 ) from exc
             return None
 
+    async def _apply_guardrail_on_request(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        texts: list[str],
+        structured_messages: list,
+        request_data: dict,
+    ) -> GenericGuardrailAPIInputs:
+        if structured_messages:
+            messages = list(structured_messages)
+        else:
+            messages = [{"role": "user", "content": text} for text in texts]
+
+        images: Final = inputs.get("images")
+
+        if not messages and not images:
+            verbose_proxy_logger.debug("Singulr: No messages or images to check after filtering")
+            return inputs
+
+        user_api_key_alias = self._resolve_key_alias_from_request_data(request_data=request_data)
+        metadata: Final = {"user_api_key_alias": user_api_key_alias} if user_api_key_alias else None
+
+        singulr_req_obj = SingulrGuardrailPayload(
+            correlation_id=request_data.get("litellm_call_id"),
+            model_name=inputs.get("model"),
+            guardrail_scope="request",
+            messages=messages,
+            images=images,
+            metadata=metadata,
+        )
+        payload = singulr_req_obj.model_dump(mode="json")
+        guardrail_resp = await self._call_api(payload)
+
+        if guardrail_resp is None:
+            return inputs
+
+        if guardrail_resp.should_block:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                status_code=400,
+                message=f"Blocked by Singulr, Blocking due to {guardrail_resp.blocking_due_to or 'unknown'}",
+            )
+        return inputs
+
+    async def _apply_guardrail_on_mcp_request(self, request_data: dict) -> None:
+        user_api_key_alias = self._resolve_key_alias_from_request_data(request_data=request_data)
+        metadata: Final = {"user_api_key_alias": user_api_key_alias} if user_api_key_alias else None
+
+        singulr_mcp_obj = SingulrMcpGuardrailPayload(
+            guardrail_scope="mcp_request",
+            tool_name=request_data.get("mcp_tool_name"),
+            tool_arguments=request_data.get("mcp_arguments"),
+            mcp_server_name=request_data.get("mcp_server_name"),
+            metadata=metadata,
+        )
+        payload = singulr_mcp_obj.model_dump(mode="json")
+        guardrail_resp = await self._call_api(payload)
+
+        if guardrail_resp is None:
+            return
+
+        if guardrail_resp.should_block:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                status_code=400,
+                message=f"Blocked by Singulr, Blocking due to {guardrail_resp.blocking_due_to or 'unknown'}",
+            )
+
+    async def _apply_guardrail_on_mcp_response(
+        self, inputs: GenericGuardrailAPIInputs, texts: list[str], request_data: dict
+    ) -> GenericGuardrailAPIInputs:
+        if not texts:
+            return inputs
+
+        user_api_key_alias = self._resolve_key_alias_from_request_data(request_data=request_data)
+        metadata: Final = {"user_api_key_alias": user_api_key_alias} if user_api_key_alias else None
+
+        singulr_mcp_obj = SingulrMcpGuardrailPayload(
+            guardrail_scope="mcp_response",
+            tool_name=request_data.get("mcp_tool_name"),
+            tool_arguments=request_data.get("mcp_arguments"),
+            mcp_server_name=request_data.get("mcp_server_name"),
+            tool_result=texts,
+            metadata=metadata,
+        )
+        payload = singulr_mcp_obj.model_dump(mode="json")
+        guardrail_resp = await self._call_api(payload)
+
+        if guardrail_resp is None:
+            return inputs
+
+        if guardrail_resp.should_block:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                status_code=400,
+                message=f"Blocked by Singulr, Blocking due to {guardrail_resp.blocking_due_to or 'unknown'}",
+            )
+
+        return inputs
+
+    async def _apply_guardrail_on_response(
+        self, inputs: GenericGuardrailAPIInputs, texts: list[str], request_data: dict
+    ) -> GenericGuardrailAPIInputs:
+
+        combined_texts = None
+        if texts:
+            combined_texts = "\n".join(texts)
+
+        tool_calls_res = []
+        tool_calls = inputs.get("tool_calls", [])
+
+        for tool_call in tool_calls:
+            tool_call_id = tool_call.get("id")
+            tool_call_type = tool_call.get("type")
+            fun = tool_call.get("function")
+            if not tool_call_id or not fun:
+                continue
+            func_name = fun.get("name") if fun else None
+            args = fun.get("arguments") if fun else None
+            if not func_name or args is None:
+                continue
+
+            tool_call_fun = ToolCallFunction(
+                name=func_name,
+                arguments=args,
+            )
+            tool_call_obj = ToolCall(
+                id=tool_call_id,
+                type=tool_call_type,
+                function=tool_call_fun,
+            )
+            tool_calls_res.append(tool_call_obj)
+
+        assistant_message = AssistantMessage(
+            role="assistant",
+            content=combined_texts,
+            tool_calls=tool_calls_res,
+        )
+
+        user_api_key_alias = self._resolve_key_alias_from_request_data(request_data=request_data)
+        metadata: Final = {"user_api_key_alias": user_api_key_alias} if user_api_key_alias else None
+
+        singulr_resp_obj = SingulrGuardrailPayload(
+            correlation_id=request_data.get("litellm_call_id"),
+            guardrail_scope="response",
+            messages=request_data.get("messages"),
+            images=inputs.get("images"),
+            response=assistant_message,
+            metadata=metadata,
+        )
+
+        payload = singulr_resp_obj.model_dump(mode="json")
+        guardrail_resp = await self._call_api(payload)
+
+        if guardrail_resp is None:
+            return inputs
+
+        if guardrail_resp.should_block:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                status_code=400,
+                message=f"Blocked by Singulr, Blocking due to {guardrail_resp.blocking_due_to or 'unknown'}",
+            )
+        return inputs
+
+    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
+        start_time: Final = datetime.now()
+        guardrail_status: GuardrailStatus = "success"
+        try:
+            messages: Final = kwargs.get("messages") or []
+            if messages:
+                singulr_req_obj = SingulrGuardrailPayload(
+                    correlation_id=kwargs.get("litellm_call_id"),
+                    model_name=kwargs.get("model"),
+                    guardrail_scope="request",
+                    messages=messages,
+                )
+                payload_req = singulr_req_obj.model_dump(mode="json")
+                await self._call_api(payload_req)
+
+            if result:
+                completion_text = self._extract_completion_text(result)
+                assistant_message = AssistantMessage(
+                    role="assistant",
+                    content=completion_text,
+                    tool_calls=[],
+                )
+                singulr_res_obj = SingulrGuardrailPayload(
+                    correlation_id=kwargs.get("litellm_call_id"),
+                    guardrail_scope="response",
+                    response=assistant_message,
+                )
+                payload = singulr_res_obj.model_dump(mode="json")
+                await self._call_api(payload)
+        except GuardrailRaisedException:
+            guardrail_status = "guardrail_intervened"
+        except Exception as exc:
+            verbose_proxy_logger.debug("Singulr: logging_only hook swallowed exception: %s", exc)
+            return kwargs, result
+
+        end_time: Final = datetime.now()
+        slg: Final = StandardLoggingGuardrailInformation(
+            guardrail_name=self.guardrail_name or "singulr",
+            guardrail_mode=GuardrailEventHooks.logging_only,
+            guardrail_status=guardrail_status,
+            start_time=start_time.timestamp(),
+            end_time=end_time.timestamp(),
+            duration=(end_time - start_time).total_seconds(),
+            masked_entity_count=None,
+        )
+        standard_logging_object: Final = kwargs.setdefault("standard_logging_object", {})
+        existing = standard_logging_object.get("guardrail_information")
+        if isinstance(existing, list):
+            existing.append(slg)
+        else:
+            standard_logging_object["guardrail_information"] = [slg]
+
+        return kwargs, result
+
+    def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
+        try:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            if loop.is_running():
+                return kwargs, result
+            loop.run_until_complete(self.async_logging_hook(kwargs=kwargs, result=result, call_type=call_type))
+        except Exception as exc:
+            verbose_proxy_logger.debug("Singulr: sync logging_hook swallowed exception: %s", exc)
+        return kwargs, result
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -193,24 +439,28 @@ class SingulrGuardrail(CustomGuardrail):
         input_type: str,
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        payload: Final = self._build_payload(request_data, inputs, input_type)
-        if not payload:
-            return inputs
 
-        result: Final = await self._call_api(payload)
-        if result is None:
-            return inputs
+        texts: Final = inputs.get("texts", [])
+        structured_messages: Final = inputs.get("structured_messages", [])
 
         verbose_proxy_logger.debug(
-            "Singulr: should_block=%s blocking_due_to=%s",
-            result.should_block,
-            result.blocking_due_to,
+            "Singulr Guardrail: apply_guardrail called with input_type=%s, texts=%d, structured_messages=%d",
+            input_type,
+            len(texts),
+            len(structured_messages),
         )
 
-        if result.should_block:
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name,
-                message=f"Blocked by Singulr: {result.blocking_due_to or 'unknown'}",
+        if input_type == "request":
+            if request_data.get("mcp_tool_name"):
+                await self._apply_guardrail_on_mcp_request(request_data=request_data)
+                return inputs
+            return await self._apply_guardrail_on_request(
+                inputs=inputs, texts=texts, structured_messages=structured_messages, request_data=request_data
             )
-
+        elif input_type == "response":
+            if request_data.get("call_type") == "call_mcp_tool":
+                return await self._apply_guardrail_on_mcp_response(
+                    inputs=inputs, texts=texts, request_data=request_data
+                )
+            return await self._apply_guardrail_on_response(inputs=inputs, texts=texts, request_data=request_data)
         return inputs

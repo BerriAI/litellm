@@ -1,30 +1,56 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
 
 
-class SingulrGuardrailRequest(BaseModel):
-    model: str | None = None
-    messages: list[dict[str, Any]] | None = None
-    tools: list[dict[str, Any]] | None = None
-    model_response: dict[str, Any] | None = None
-    litellm_metadata: dict[str, Any] | None = None
+class ContentBlock(BaseModel):
+    type: str | None = None
+    text: str | None = None
+
+
+class ToolCallFunction(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    id: str
+    type: Literal["function"] = "function"
+    function: ToolCallFunction
+
+
+class AssistantMessage(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: str | list[ContentBlock] | None = None
+    tool_calls: list[ToolCall] | None = None
 
 
 class SingulrGuardrailPayload(BaseModel):
-    litellm_call_id: str | None = None
-    request_data: SingulrGuardrailRequest | None = None
-    input_type: str
-    is_playground_request: bool | None = None
-    playground_text: str | None = None
+    correlation_id: str | None = None
+    model_name: str | None = None
+    model_provider_name: str | None = None
+    guardrail_scope: str | None = None
+    messages: list[Any] | None = None
+    images: list[str] | None = None
+    response: AssistantMessage | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class SingulrMcpGuardrailPayload(BaseModel):
+    guardrail_scope: str | None = None
+    tool_name: str | None = None
+    tool_arguments: dict[str, Any] | None = None
+    mcp_server_name: str | None = None
+    tool_result: list[str] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class SingulrGuardrailResponse(BaseModel):
     """Response returned by the Singulr guardrail API."""
 
-    should_block: bool = False
+    should_block: bool | None = None
     blocking_due_to: str | None = None
 
 
