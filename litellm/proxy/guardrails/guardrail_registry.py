@@ -1,5 +1,6 @@
 # litellm/proxy/guardrails/guardrail_registry.py
 
+import asyncio
 import importlib
 import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -824,4 +825,6 @@ class InMemoryGuardrailHandler:
 # In Memory Guardrail Handler for LiteLLM Proxy
 ########################################################
 IN_MEMORY_GUARDRAIL_HANDLER: Final = InMemoryGuardrailHandler()
+
+GUARDRAIL_RECONCILE_LOCK: Final = asyncio.Lock()
 ########################################################

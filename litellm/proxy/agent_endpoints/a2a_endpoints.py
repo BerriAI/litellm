@@ -168,14 +168,13 @@ def _jsonrpc_error(
     )
 
 
-def _get_agent(agent_id: str):
+async def _get_agent(agent_id: str) -> "AgentResponse | None":
     """Look up an agent by ID or name. Returns None if not found."""
-    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.common_utils.registry_read_through import (
+        get_agent_with_read_through,
+    )
 
-    agent = global_agent_registry.get_agent_by_id(agent_id=agent_id)
-    if agent is None:
-        agent = global_agent_registry.get_agent_by_name(agent_name=agent_id)
-    return agent
+    return await get_agent_with_read_through(agent_id)
 
 
 def _enforce_inbound_trace_id(agent: "AgentResponse", request: Request) -> None:
@@ -559,7 +558,7 @@ async def get_agent_card(
     )
 
     try:
-        agent: Final = _get_agent(agent_id)
+        agent: Final = await _get_agent(agent_id)
         if agent is None:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
 
@@ -673,7 +672,7 @@ async def invoke_agent_a2a(
                 params.pop(key)
 
         # Find the agent
-        agent: Final = _get_agent(agent_id)
+        agent: Final = await _get_agent(agent_id)
         if agent is None:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
 
