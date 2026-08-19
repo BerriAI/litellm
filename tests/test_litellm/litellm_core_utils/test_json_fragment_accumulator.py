@@ -156,6 +156,30 @@ def test_accumulation_of_many_fragments_is_not_quadratic():
     assert elapsed_ms < 50, f"1000-fragment append took {elapsed_ms:.1f} ms (expected < 50 ms); O(n^2) regression?"
 
 
+def test_draining_many_concatenated_values_is_not_quadratic():
+    """
+    Regression guard: peeling N JSON values already sitting in one buffer,
+    one pop_next_value() call per value with no new fragments in between,
+    must be O(n) total. Re-copying the shrinking remainder on every pop
+    (slicing a new string instead of advancing a cursor) makes total drain
+    time scale with the square of the buffer size.
+    """
+    accumulator = JSONFragmentAccumulator()
+    accumulator.append('{"a": 1}' * 80_000)
+
+    start = time.perf_counter()
+    drained = 0
+    while True:
+        found, _ = accumulator.pop_next_value()
+        if not found:
+            break
+        drained += 1
+    elapsed_ms = (time.perf_counter() - start) * 1000
+
+    assert drained == 80_000
+    assert elapsed_ms < 150, f"draining 80000 concatenated values took {elapsed_ms:.1f} ms (expected < 150 ms); O(n^2) regression?"
+
+
 def test_could_close_json_after_many_blank_fragments_is_not_quadratic():
     """
     Regression test: a hostile upstream can send malformed JSON that never
