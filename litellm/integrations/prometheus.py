@@ -159,10 +159,16 @@ class PrometheusLogger(CustomLogger):
 
     @staticmethod
     def get_instance() -> PrometheusLogger | None:
-        """The registered PrometheusLogger, however it was registered.
+        """The live PrometheusLogger, however it was registered.
 
-        ``litellm.callbacks`` alone misses ``success_callback: ["prometheus"]``,
-        which shows up as a metric that registers and never leaves zero.
+        Two registrations have to be covered, and neither one subsumes the other.
+        An object placed in ``litellm.callbacks`` is found through the callback
+        lists. A *string* registration -- ``success_callback: ["prometheus"]``,
+        which is what the docs show -- is different: the logger is constructed
+        lazily on the first request and cached in ``_in_memory_loggers``, and
+        nothing ever adds it to a callback list. Searching only the callback
+        lists therefore returns None for the whole life of such a proxy, and
+        every metric published through here registers and never leaves zero.
         """
         import litellm
 
@@ -170,6 +176,15 @@ class PrometheusLogger(CustomLogger):
         for instance in instances:
             if isinstance(instance, PrometheusLogger):
                 return instance
+
+        # Imported here, not at module scope: litellm_logging imports this module.
+        from litellm.litellm_core_utils.litellm_logging import (
+            _in_memory_loggers,  # pyright: ignore[reportPrivateUsage]  # the only registry of lazily built loggers
+        )
+
+        for logger in _in_memory_loggers:
+            if isinstance(logger, PrometheusLogger):
+                return logger
         return None
 
     def __init__(

@@ -246,6 +246,37 @@ def test_get_instance_finds_a_logger_registered_via_success_callback(logger):
         litellm.success_callback = saved_success
 
 
+def test_get_instance_finds_a_logger_registered_by_the_string_prometheus():
+    """success_callback: ["prometheus"] is the form the docs show. The logger is
+    built lazily on the first request and cached in _in_memory_loggers, and
+    nothing adds it to a callback list, so searching the callback lists alone
+    returns None for the life of the proxy and every pool metric stays at zero."""
+    import litellm
+    import litellm.litellm_core_utils.litellm_logging as litellm_logging
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    saved_callbacks = litellm.callbacks
+    saved_success = litellm.success_callback
+    saved_in_memory = list(litellm_logging._in_memory_loggers)
+    try:
+        litellm.callbacks = []
+        litellm.success_callback = ["prometheus"]
+        litellm_logging._in_memory_loggers.clear()
+
+        assert PrometheusLogger.get_instance() is None, "nothing is constructed before the first request"
+
+        constructed = litellm_logging._init_custom_logger_compatible_class(
+            "prometheus", internal_usage_cache=None, llm_router=None
+        )
+
+        assert PrometheusLogger.get_instance() is constructed
+    finally:
+        litellm_logging._in_memory_loggers.clear()
+        litellm_logging._in_memory_loggers.extend(saved_in_memory)
+        litellm.callbacks = saved_callbacks
+        litellm.success_callback = saved_success
+
+
 def test_get_instance_returns_none_when_prometheus_is_not_registered(logger):
     import litellm
     from litellm.integrations.prometheus import PrometheusLogger
