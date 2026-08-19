@@ -5,9 +5,10 @@ the live one (dependency injection, no monkeypatching): recording must pass
 every value through unchanged while writing one redacted interaction file per
 call, and replay must serve identical values from the bundle alone - the
 fake's call log proves nothing reaches the inner transport - failing hard
-(``ReplayMiss``) on any drift in order, verb, or path. The collection-time
-gate and report header are pinned here too, including the stale message that
-names the bundle's age.
+(``ReplayMiss``) on any content drift, printing the computed canonical key and
+the closest recorded key (LIT-5741; the pure canonicalizer is pinned in
+test_fixture_canonical.py). The collection-time gate and report header are
+pinned here too, including the stale message that names the bundle's age.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel
@@ -35,10 +37,12 @@ from fixture_bundle import (
     Interaction,
     LoadedBundle,
     Manifest,
+    RecordedResult,
     load_bundle,
     prepare_bundle,
     slug_for_test,
 )
+from fixture_canonical import canonicalize
 from fixture_transport import (
     InvalidFixtureMode,
     RecordingTransport,
@@ -50,6 +54,7 @@ from fixture_transport import (
     fixture_mode_collection_error,
     fixture_report_lines,
     parse_fixture_mode,
+    recorded_request,
     replay_leftover_error,
     select_transport,
 )
@@ -68,6 +73,17 @@ class Body(BaseModel):
 
 class Query(BaseModel):
     q: str
+
+
+class DeployParams(BaseModel):
+    model: str
+    api_key: str | None = None
+    aws_secret_access_key: str | None = None
+
+
+class DeployBody(BaseModel):
+    model_name: str
+    litellm_params: DeployParams
 
 
 STREAMING = StreamingResponse(
@@ -272,6 +288,28 @@ class TestRecordingTransport:
         }
         assert "sk-secret" not in this_tests_files(root)[0].read_text(encoding="utf-8")
 
+    def test_redacts_credential_body_fields_in_the_recorded_request(self, tmp_path: Path) -> None:
+        fake = FakeTransport()
+        root = tmp_path / "bundle"
+        recording: Transport = RecordingTransport(inner=fake, recorder=make_recorder(root))
+        recording.post(
+            "/model/new",
+            headers=fake.master,
+            json=DeployBody(
+                model_name="m",
+                litellm_params=DeployParams(model="openai/gpt", api_key="sk-live-provider-secret-123456"),
+            ),
+            response_type=Payload,
+        )
+        raw = this_tests_files(root)[0].read_text(encoding="utf-8")
+        interaction = Interaction.model_validate_json(raw)
+        assert "sk-live-provider-secret-123456" not in raw
+        assert isinstance(interaction.request.body, dict)
+        params = interaction.request.body["litellm_params"]
+        assert isinstance(params, dict)
+        assert params["api_key"] == "<redacted>"
+        assert params["aws_secret_access_key"] is None
+
     def test_upload_records_a_content_digest_not_the_bytes(self, tmp_path: Path) -> None:
         fake = FakeTransport()
         root = tmp_path / "bundle"
@@ -335,24 +373,134 @@ class TestReplayTransport:
         )
         assert fake.calls == calls_after_record
 
-    def test_mismatched_call_names_recorded_and_actual(self, tmp_path: Path) -> None:
+    def test_miss_names_the_computed_key_and_the_closest_recorded_key(self, tmp_path: Path) -> None:
         fake = FakeTransport()
         root = tmp_path / "bundle"
         recording: Transport = RecordingTransport(inner=fake, recorder=make_recorder(root))
         recording.post("/model/new", headers=fake.master, json=Body(prompt="x"), response_type=Payload)
         replay: Transport = ReplayTransport(source=replay_source(root), master_key="sk-1234")
-        with pytest.raises(ReplayMiss, match=r"recorded post /model/new, test made get /v1/models"):
+        with pytest.raises(ReplayMiss) as excinfo:
             replay.get("/v1/models", headers=replay.master, params=Query(q="all"), response_type=Payload)
+        message = str(excinfo.value)
+        assert "no recorded interaction matches key get /v1/models #" in message
+        assert "closest recorded key is post /model/new #" in message
+        assert "0000-post-model-new.json" in message
+        assert "re-record with E2E_FIXTURE_MODE=record" in message
 
-    def test_exhausted_recording_names_the_call_count(self, tmp_path: Path) -> None:
+    def test_content_drift_on_the_same_route_misses_with_no_live_call(self, tmp_path: Path) -> None:
+        """The naive verb+path match replayed a stale response for a request
+        whose content had changed, silently passing; a content key must miss,
+        print both canonical forms' diff, and never reach the inner transport."""
+        fake = FakeTransport()
+        root = tmp_path / "bundle"
+        recording: Transport = RecordingTransport(inner=fake, recorder=make_recorder(root))
+        recording.post("/model/new", headers=fake.master, json=Body(prompt="x"), response_type=Payload)
+        calls_after_record = list(fake.calls)
+        replay: Transport = ReplayTransport(source=replay_source(root), master_key="sk-1234")
+        with pytest.raises(ReplayMiss) as excinfo:
+            replay.post("/model/new", headers=replay.master, json=Body(prompt="y"), response_type=Payload)
+        message = str(excinfo.value)
+        assert "no recorded interaction matches key post /model/new #" in message
+        assert "closest recorded key is post /model/new #" in message
+        assert '-    "prompt": "x"' in message
+        assert '+    "prompt": "y"' in message
+        assert fake.calls == calls_after_record
+
+    def test_exhausted_key_names_the_key(self, tmp_path: Path) -> None:
         fake = FakeTransport()
         root = tmp_path / "bundle"
         recording: Transport = RecordingTransport(inner=fake, recorder=make_recorder(root))
         recording.post("/model/new", headers=fake.master, json=Body(prompt="x"), response_type=Payload)
         replay: Transport = ReplayTransport(source=replay_source(root), master_key="sk-1234")
         replay.post("/model/new", headers=replay.master, json=Body(prompt="x"), response_type=Payload)
-        with pytest.raises(ReplayMiss, match=r"call #2 \(post /model/new\) has no recorded interaction \(1 recorded"):
+        with pytest.raises(
+            ReplayMiss, match=r"every recorded interaction for key post /model/new #\w{16} is already consumed"
+        ):
             replay.post("/model/new", headers=replay.master, json=Body(prompt="x"), response_type=Payload)
+
+    def test_replays_out_of_recorded_order_across_distinct_keys(self, tmp_path: Path) -> None:
+        """Concurrent tests interleave independent calls nondeterministically
+        (e.g. a burst of parallel chat calls), so replay matches by content,
+        never by recorded position."""
+        fake = FakeTransport()
+        root = tmp_path / "bundle"
+        recording: Transport = RecordingTransport(inner=fake, recorder=make_recorder(root))
+        recording.post("/model/new", headers=fake.master, json=Body(prompt="x"), response_type=Payload)
+        recording.post("/key/generate", headers=fake.master, json=Body(prompt="k"), response_type=Payload)
+        source = replay_source(root)
+        replay: Transport = ReplayTransport(source=source, master_key="sk-1234")
+        replay.post("/key/generate", headers=replay.master, json=Body(prompt="k"), response_type=Payload)
+        replay.post("/model/new", headers=replay.master, json=Body(prompt="x"), response_type=Payload)
+        assert source.leftover_error(current_test_key()) is None
+
+    def test_identical_requests_replay_their_responses_in_recorded_order(self, tmp_path: Path) -> None:
+        """A poll loop makes the same request repeatedly and asserts on the
+        progression, so duplicates under one key stay FIFO."""
+        root = tmp_path / "bundle"
+        recorder = make_recorder(root)
+        recorder.record(
+            test_key=current_test_key(),
+            request=recorded_request(
+                "get", "/v1/models", headers=AuthHeaders(authorization="Bearer sk-x"), params=Query(q="all")
+            ),
+            response=RecordedResult(kind="success", status_code=200, data={"value": "first"}),
+        )
+        recorder.record(
+            test_key=current_test_key(),
+            request=recorded_request(
+                "get", "/v1/models", headers=AuthHeaders(authorization="Bearer sk-x"), params=Query(q="all")
+            ),
+            response=RecordedResult(kind="success", status_code=200, data={"value": "second"}),
+        )
+        replay: Transport = ReplayTransport(source=replay_source(root), master_key="sk-1234")
+        first = replay.get("/v1/models", headers=replay.master, params=Query(q="all"), response_type=Payload)
+        second = replay.get("/v1/models", headers=replay.master, params=Query(q="all"), response_type=Payload)
+        assert first == Success(status_code=200, data=Payload(value="first"))
+        assert second == Success(status_code=200, data=Payload(value="second"))
+
+
+class TestRecordedKeySets:
+    def test_two_separate_recordings_of_one_flow_produce_identical_key_sets(
+        self, tmp_path: Path
+    ) -> None:
+        """Everything a run randomizes (markers, virtual keys, dates) must
+        canonicalize out, so separately recorded runs of the same suite agree
+        on every match key and a bundle recorded elsewhere replays here."""
+
+        def record_flow(root: Path, run_date: str) -> list[str]:
+            fake = FakeTransport()
+            recording: Transport = RecordingTransport(inner=fake, recorder=make_recorder(root))
+            marker = deterministic_marker()
+            recording.post(
+                "/model/new",
+                headers=fake.master,
+                json=DeployBody(
+                    model_name=f"e2e-chat-{marker}",
+                    litellm_params=DeployParams(model="openai/gpt", api_key=f"sk-live-{uuid4().hex}"),
+                ),
+                response_type=Payload,
+            )
+            recording.post(
+                "/chat/completions",
+                headers=recording.bearer(f"sk-{uuid4().hex}"),
+                json=Body(prompt=f"Reply with the single word ok. {marker}"),
+                response_type=Payload,
+            )
+            recording.get(
+                "/spend/logs", headers=fake.master, params=Query(q=run_date), response_type=Payload
+            )
+            loaded = load_bundle(root)
+            assert isinstance(loaded, LoadedBundle)
+            return sorted(
+                canonicalize(interaction.request).key
+                for interactions in loaded.interactions.values()
+                for interaction in interactions
+            )
+
+        first_keys = record_flow(tmp_path / "one", "2026-08-18")
+        second_keys = record_flow(tmp_path / "two", "2026-08-19")
+        assert first_keys == second_keys
+        assert len(first_keys) == 3
 
 
 class TestReplayLeftover:
@@ -378,7 +526,7 @@ class TestReplayLeftover:
         error = source.leftover_error(current_test_key())
         assert error is not None
         assert "1 of 2 recorded interactions never consumed" in error
-        assert "next is probe /health/liveliness" in error
+        assert "e.g. probe /health/liveliness #" in error
         assert "re-record with E2E_FIXTURE_MODE=record" in error
 
     def test_test_without_recordings_has_no_leftover(self, tmp_path: Path) -> None:
