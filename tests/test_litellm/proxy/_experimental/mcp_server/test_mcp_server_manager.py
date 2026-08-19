@@ -4841,14 +4841,12 @@ class TestMCPServerManager:
             server_id="huggingface-id", name="huggingface", server_name="huggingface", transport=MCPTransport.http
         )
         manager.registry = {"deepwiki-id": deepwiki, "huggingface-id": huggingface}
-        manager.tool_name_to_mcp_server_name_mapping.update(
-            {
-                "read_wiki_structure": "deepwiki",
-                "deepwiki-read_wiki_structure": "deepwiki",
-                "hub_repo_search": "huggingface",
-                "huggingface-hub_repo_search": "huggingface",
-            }
-        )
+        manager.tool_name_to_mcp_server_name_mapping = {
+            "read_wiki_structure": "deepwiki",
+            "deepwiki-read_wiki_structure": "deepwiki",
+            "hub_repo_search": "huggingface",
+            "huggingface-hub_repo_search": "huggingface",
+        }
         return manager
 
     def test_resolve_mcp_server_for_tool_call_rejects_tool_exposed_only_by_another_server(self):
@@ -4875,13 +4873,11 @@ class TestMCPServerManager:
         zapier = MCPServer(server_id="zapier-id", name="zapier", alias="zapier-alias", transport=MCPTransport.http)
         other = MCPServer(server_id="other-id", name="other", server_name="other", transport=MCPTransport.http)
         manager.registry = {"zapier-id": zapier, "other-id": other}
-        manager.tool_name_to_mcp_server_name_mapping.update(
-            {
-                "create_zap": "other",
-                "other-create_zap": "other",
-                "zapier-alias-create_zap": "zapier-alias",
-            }
-        )
+        manager.tool_name_to_mcp_server_name_mapping = {
+            "create_zap": "other",
+            "other-create_zap": "other",
+            "zapier-alias-create_zap": "zapier-alias",
+        }
 
         assert manager._resolve_mcp_server_for_tool_call("zapier", "create_zap") is zapier
         assert manager._resolve_mcp_server_for_tool_call("other", "create_zap") is other
