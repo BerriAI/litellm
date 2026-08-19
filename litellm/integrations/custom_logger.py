@@ -770,6 +770,22 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         return
 
+    async def async_release_disconnect_state_hook(self) -> None:
+        """
+        Release per-request state reserved outside of `async_log_success_event`
+        / `async_log_failure_event` for a request whose streaming response is
+        torn down by a client disconnect: `CancelledError` / `GeneratorExit`
+        are `BaseException`, so they bypass both of those callbacks entirely.
+
+        Called from the proxy's shielded streaming cleanup only when no
+        disconnect-time success event fired for this request. Must be
+        idempotent and never raise -- a callback that never reserved such
+        state has nothing to do here.
+
+        Default does nothing.
+        """
+        return
+
     async def async_should_run_chat_completion_agentic_loop(
         self,
         response: object,

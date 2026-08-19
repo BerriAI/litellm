@@ -32,6 +32,7 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, is_expected_client_error
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -397,6 +398,32 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         verbose_proxy_logger.debug("Failed to dispatch disconnect billing event: %s", e)
         return False
     return True
+
+
+async def _release_disconnect_state_on_all_callbacks() -> None:
+    """
+    A client disconnect throws GeneratorExit/CancelledError into the streaming
+    generator, so neither the success nor failure logging callback runs for it
+    (see the callers of this function). A callback that reserves per-request
+    state outside of those two callbacks (e.g. a concurrency slot admitted
+    before the first chunk) would otherwise leak that state until its own
+    safety-net TTL. Give every registered callback a chance to release such
+    state via the optional, default-no-op ``async_release_disconnect_state_hook``.
+
+    Only ``CustomLogger`` instances are considered, never raw string entries:
+    by the time a request can reach this proxy-only cleanup path, startup's
+    ``ProxyLogging._init_litellm_callbacks`` has already replaced every string
+    entry in ``litellm.callbacks`` with its initialized instance in place.
+    """
+    for callback in litellm.callbacks:
+        if not isinstance(callback, CustomLogger):
+            continue
+        try:
+            await callback.async_release_disconnect_state_hook()
+        except Exception as e:  # noqa: BLE001  # one callback's cleanup must never block another's or the response teardown
+            verbose_proxy_logger.debug(
+                "Failed to run async_release_disconnect_state_hook for %s: %s", type(callback).__name__, e
+            )
 
 
 async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
@@ -3531,6 +3558,8 @@ class ProxyBaseLLMRequestProcessing:
                     and user_api_key_dict is not None
                 ):
                     await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
+                if not success_event_owns_slot_release:
+                    await _release_disconnect_state_on_all_callbacks()
 
             if hasattr(response, "aclose"):
                 try:

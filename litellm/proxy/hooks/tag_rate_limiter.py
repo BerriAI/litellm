@@ -1126,6 +1126,20 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
                 pass
         return keys
 
+    async def async_release_disconnect_state_hook(self) -> None:
+        """
+        A client disconnecting before the first streamed chunk raises
+        CancelledError/GeneratorExit, which bypasses both async_log_success_event
+        and async_log_failure_event below -- the only two places a concurrency
+        reservation queued during admission is normally popped and released.
+        Without this, the reservation would sit held until _CONCURRENCY_MIN_SAFETY_TTL_SECONDS
+        expires, letting a caller who repeatedly opens and immediately drops
+        streaming requests exhaust their own tag's concurrency limit for free.
+        """
+        release_keys: Final = self._pop_pending_concurrency_keys()
+        if release_keys:
+            await self._release_keys(release_keys)
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         if isinstance(kwargs.get("exception"), ProxyRateLimitError):
             detail: Final = (

@@ -1018,6 +1018,47 @@ async def test_concurrency_slot_released_on_success_frees_capacity(time_controll
 
 
 @pytest.mark.asyncio
+async def test_concurrency_slot_released_on_disconnect_frees_capacity(time_controller):
+    """
+    A client disconnecting before the first streamed chunk raises
+    CancelledError/GeneratorExit, which bypasses both async_log_success_event
+    and async_log_failure_event entirely -- neither fires, so the reservation
+    would otherwise sit held until the safety-net TTL. The proxy's disconnect
+    cleanup calls async_release_disconnect_state_hook instead in that case.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    kwargs = {"metadata": {"tags": ["end_user_id:u1"]}}
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=kwargs
+    )
+
+    # At capacity: a second concurrent request is rejected.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+
+    # The first request's client disconnects -- neither logging callback fires --
+    # but the disconnect hook still releases its slot, freeing capacity again.
+    await limiter.async_release_disconnect_state_hook()
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
 async def test_concurrency_slot_released_on_failure_frees_capacity(time_controller):
     limiter = _make_limiter(time_controller)
     router = _concurrency_router(limit=1)
