@@ -46913,10 +46913,6 @@
     "openai.gpt-5.6-luna": {
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
-        "cache_creation_input_token_cost": 2.75e-07,
-        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
-        "cache_read_input_token_cost": 2.2e-08,
-        "cache_read_input_token_cost_above_272k_tokens": 4.4e-08,
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
         "litellm_provider": "bedrock_converse",
@@ -46932,7 +46928,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -46941,10 +46936,6 @@
     "us.openai.gpt-5.6-luna": {
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
-        "cache_creation_input_token_cost": 2.75e-07,
-        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
-        "cache_read_input_token_cost": 2.2e-08,
-        "cache_read_input_token_cost_above_272k_tokens": 4.4e-08,
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
         "litellm_provider": "bedrock_converse",
@@ -46960,7 +46951,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -46969,10 +46959,6 @@
     "global.openai.gpt-5.6-luna": {
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
-        "cache_creation_input_token_cost": 2.75e-07,
-        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
-        "cache_read_input_token_cost": 2.2e-08,
-        "cache_read_input_token_cost_above_272k_tokens": 4.4e-08,
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
         "litellm_provider": "bedrock_converse",
@@ -46988,7 +46974,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -46997,10 +46982,6 @@
     "openai.gpt-5.6-terra": {
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
-        "cache_creation_input_token_cost": 2.75e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
-        "cache_read_input_token_cost": 2.2e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
         "output_cost_per_token": 1.32e-05,
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
         "litellm_provider": "bedrock_converse",
@@ -47016,7 +46997,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -47025,10 +47005,6 @@
     "us.openai.gpt-5.6-terra": {
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
-        "cache_creation_input_token_cost": 2.75e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
-        "cache_read_input_token_cost": 2.2e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
         "output_cost_per_token": 1.32e-05,
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
         "litellm_provider": "bedrock_converse",
@@ -47044,7 +47020,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -47053,10 +47028,6 @@
     "global.openai.gpt-5.6-terra": {
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
-        "cache_creation_input_token_cost": 2.75e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
-        "cache_read_input_token_cost": 2.2e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
         "output_cost_per_token": 1.32e-05,
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
         "litellm_provider": "bedrock_converse",
@@ -47072,7 +47043,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -47081,10 +47051,6 @@
     "openai.gpt-5.6-sol": {
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "cache_creation_input_token_cost": 6.875e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
-        "cache_read_input_token_cost": 5.5e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
         "litellm_provider": "bedrock_converse",
@@ -47100,7 +47066,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -47109,10 +47074,6 @@
     "us.openai.gpt-5.6-sol": {
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "cache_creation_input_token_cost": 6.875e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
-        "cache_read_input_token_cost": 5.5e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
         "litellm_provider": "bedrock_converse",
@@ -47128,7 +47089,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -47137,10 +47097,6 @@
     "global.openai.gpt-5.6-sol": {
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "cache_creation_input_token_cost": 6.875e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
-        "cache_read_input_token_cost": 5.5e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
         "litellm_provider": "bedrock_converse",
@@ -47156,7 +47112,6 @@
             "text"
         ],
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
