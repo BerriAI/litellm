@@ -94,6 +94,11 @@ export const projectMountedValues = (
   );
 };
 
+export const useMountedName = (name: MountedFieldName): void => {
+  const { registry } = React.useContext(MountedFormContext);
+  React.useEffect(() => registry.register(name), [registry, name]);
+};
+
 export type MountedFieldControlProps = {
   readonly id: string;
   readonly name: string;
@@ -131,9 +136,9 @@ export const MountedFormField: React.FC<MountedFormFieldProps> = ({
   className,
   children,
 }) => {
-  const { control, registry } = React.useContext(MountedFormContext);
+  const { control } = React.useContext(MountedFormContext);
   const path = fieldKey(name);
-  React.useEffect(() => registry.register(name), [registry, name]);
+  useMountedName(name);
 
   const helpId = `${path}_help`;
   const hasHelp = help !== undefined && help !== null;
