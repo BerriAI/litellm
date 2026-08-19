@@ -48,6 +48,7 @@ async def _handle_completed_batch(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: str | None = None,
     litellm_params: dict | None = None,
+    model_info: ModelInfo | None = None,
 ) -> tuple[float, Usage, list[str]]:
     """Fetch a completed batch's output file and aggregate its cost, usage, and
     models in a single pass over the JSONL lines, so the parsed file content is
@@ -58,6 +59,9 @@ async def _handle_completed_batch(
         custom_llm_provider: The LLM provider
         model_name: Optional model name
         litellm_params: Optional litellm parameters containing credentials (api_key, api_base, etc.)
+        model_info: Optional deployment-level model info with custom pricing,
+            threaded through so a deployment's configured rates win over the
+            global cost map.
     """
     # A completed batch whose request lines all failed has no output file - the
     # results are written to a separate error_file_id and output_file_id is None.
@@ -86,6 +90,7 @@ async def _handle_completed_batch(
         entries=_iter_batch_input_entries(file_content),
         custom_llm_provider=custom_llm_provider,
         model_name=model_name,
+        model_info=model_info,
     )
 
 
@@ -441,11 +446,23 @@ def _get_batch_job_usage_from_response_body(response_body: dict, custom_llm_prov
     """
     if custom_llm_provider in ("anthropic", "bedrock"):
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
-        return AnthropicConfig().calculate_usage(
-            usage_object=response_body.get("usage", None) or {},
+        usage_object: Final = response_body.get("usage", None) or {}
+        if custom_llm_provider == "bedrock" and AmazonConverseConfig.is_converse_usage_shape(usage_object):
+            return AmazonConverseConfig().usage_from_batch_output(usage_object)
+        anthropic_usage: Final = AnthropicConfig().calculate_usage(
+            usage_object=usage_object,
             reasoning_content=None,
         )
+        if usage_object and anthropic_usage.total_tokens == 0:
+            verbose_logger.warning(
+                "batch output line reported usage this parser does not understand, so it will be billed at $0. "
+                "provider=%s usage_keys=%s",
+                custom_llm_provider,
+                sorted(usage_object.keys()),
+            )
+        return anthropic_usage
     from litellm.responses.utils import ResponseAPILoggingUtils
 
     _usage_dict: Final = response_body.get("usage", None) or {}

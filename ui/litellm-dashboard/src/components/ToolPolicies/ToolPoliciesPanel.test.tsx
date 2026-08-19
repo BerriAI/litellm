@@ -7,6 +7,7 @@ import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { ToolRow } from "@/components/networking";
 import { ToolPoliciesPanel } from "./ToolPoliciesPanel";
+import { toast } from "@/lib/toast";
 
 const fetchToolsList = vi.fn();
 const updateToolPolicy = vi.fn();
@@ -16,10 +17,7 @@ vi.mock("@/components/networking", () => ({
   updateToolPolicy: (...args: unknown[]) => updateToolPolicy(...args),
 }));
 
-const fromBackend = vi.fn();
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { fromBackend: (...args: unknown[]) => fromBackend(...args) },
-}));
+const fromBackend = vi.mocked(toast.fromError);
 
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({

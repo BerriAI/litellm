@@ -66,7 +66,7 @@ test.describe("Team Admin", () => {
 
     // Use a dedicated invitee user so this doesn't race with the proxy-admin
     // "Invite a user" test that adds invitable@test.local to the same team.
-    await modal.locator(".ant-select").first().click();
+    await modal.getByRole("combobox").first().click();
     await page.keyboard.type("invitable-team@test.local");
 
     const emailOption = page.getByRole("option", { name: "invitable-team@test.local" }).first();
@@ -136,7 +136,7 @@ test.describe("Team Admin", () => {
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
     const keyName = `e2e-team-admin-key-${Date.now()}`;
-    await page.getByTestId("base-input").fill(keyName);
+    await page.getByLabel(/Key Name/).fill(keyName);
 
     // Team selector — same locator pattern as the proxy-admin keys test.
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");

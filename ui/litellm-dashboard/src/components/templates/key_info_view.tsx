@@ -24,7 +24,7 @@ import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlockedState";
@@ -36,6 +36,7 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
+import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
@@ -224,9 +225,7 @@ export default function KeyInfoView({
             (toolsetId) => !(allMcpToolsets ?? []).some((toolset) => toolset.toolset_id === toolsetId),
           );
         if (unresolvableSelection && Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0) {
-          NotificationManager.error(
-            "MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.",
-          );
+          toast.error("MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.");
           return;
         }
         formValues.object_permission = {
@@ -276,7 +275,7 @@ export default function KeyInfoView({
           };
         } catch (error) {
           console.error("Error parsing metadata JSON:", error);
-          NotificationManager.error("Invalid metadata JSON");
+          toast.error("Invalid metadata JSON");
           return;
         }
       } else {
@@ -322,11 +321,11 @@ export default function KeyInfoView({
       if (onKeyDataUpdate) {
         onKeyDataUpdate(newKeyValues);
       }
-      NotificationManager.success("Key updated successfully");
+      toast.success("Key updated successfully");
       setIsEditing(false);
       // Refresh key data here if needed
     } catch (error) {
-      NotificationManager.fromBackend(parseErrorMessage(error));
+      toast.fromError(parseErrorMessage(error));
       console.error("Error updating key:", error);
     }
   };
@@ -336,7 +335,7 @@ export default function KeyInfoView({
       setDeleteLoading(true);
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id);
-      NotificationManager.success("Key deleted successfully");
+      toast.success("Key deleted successfully");
       await queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
       if (onDelete) {
         onDelete();
@@ -344,7 +343,7 @@ export default function KeyInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the key:", error);
-      NotificationManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setDeleteLoading(false);
       setIsDeleteModalOpen(false);
@@ -421,11 +420,11 @@ export default function KeyInfoView({
         if (onKeyDataUpdate) {
           onKeyDataUpdate({ spend: 0 });
         }
-        NotificationManager.success("Key spend reset to $0");
+        toast.success("Key spend reset to $0");
         setIsResetSpendModalOpen(false);
       },
       onError: (error) => {
-        NotificationManager.fromBackend(parseErrorMessage(error));
+        toast.fromError(parseErrorMessage(error));
         console.error("Error resetting key spend:", error);
       },
     });
@@ -443,11 +442,11 @@ export default function KeyInfoView({
           if (onKeyDataUpdate) {
             onKeyDataUpdate({ blocked });
           }
-          NotificationManager.success(blocked ? "Key blocked" : "Key unblocked");
+          toast.success(blocked ? "Key blocked" : "Key unblocked");
           setIsBlockModalOpen(false);
         },
         onError: (error) => {
-          NotificationManager.fromBackend(parseErrorMessage(error));
+          toast.fromError(parseErrorMessage(error));
           console.error("Error updating key blocked state:", error);
         },
       },
@@ -460,12 +459,9 @@ export default function KeyInfoView({
   const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
   const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
 
-  const budgetDisplay =
-    currentKeyData.max_budget !== null
-      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
-      : parentTeam?.max_budget != null
-        ? `$${formatNumberWithCommas(parentTeam.max_budget, 2)} (Team: ${parentTeam.team_alias || parentTeam.team_id}${parentTeam.budget_duration ? ` / ${parentTeam.budget_duration}` : ""})`
-        : "Unlimited";
+  const hasOwnBudget = currentKeyData.max_budget !== null;
+  const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -616,7 +612,10 @@ export default function KeyInfoView({
                 <p className="text-sm">Spend</p>
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
-                  <p className="text-sm">of {budgetDisplay}</p>
+                  <p className="text-sm">
+                    of {budgetDisplay}
+                    <InheritedBudgetHint gates={inheritedGates} />
+                  </p>
                   {currentKeyData.budget_reset_at && (
                     <p className="text-sm">Resets {formatTimestamp(currentKeyData.budget_reset_at)}</p>
                   )}

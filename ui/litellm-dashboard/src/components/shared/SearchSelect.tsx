@@ -25,6 +25,7 @@ interface SearchSelectProps {
   disabled?: boolean;
   className?: string;
   inputId?: string;
+  allowClear?: boolean;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -42,6 +43,7 @@ export function SearchSelect({
   disabled = false,
   className,
   inputId,
+  allowClear = true,
 }: SearchSelectProps) {
   const selected =
     value === undefined || value === ""
@@ -63,7 +65,7 @@ export function SearchSelect({
       <ComboboxInput
         id={inputId}
         placeholder={placeholder}
-        showClear={value != null && value !== ""}
+        showClear={allowClear && value != null && value !== ""}
         className={`h-8 w-full text-sm ${className ?? ""}`}
       />
       <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>

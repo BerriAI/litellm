@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 // eslint-disable-next-line no-restricted-imports -- exercising KeyLifecycleSettings requires hosting it in a real antd Form (the component it's built on)
 import { Form } from "antd";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import KeyLifecycleSettings from "./KeyLifecycleSettings";
@@ -22,16 +22,17 @@ const Harness: React.FC<HarnessProps> = ({ isCreateMode = true, onFinish = () =>
 
   return (
     <Form form={form} onFinish={onFinish}>
-      <KeyLifecycleSettings
-        form={form}
-        autoRotationEnabled={autoRotationEnabled}
-        onAutoRotationChange={setAutoRotationEnabled}
-        rotationInterval={rotationInterval}
-        onRotationIntervalChange={setRotationInterval}
-        isCreateMode={isCreateMode}
-        neverExpire={neverExpire}
-        onNeverExpireChange={setNeverExpire}
-      />
+      <Form.Item name="duration" initialValue="" noStyle>
+        <KeyLifecycleSettings
+          autoRotationEnabled={autoRotationEnabled}
+          onAutoRotationChange={setAutoRotationEnabled}
+          rotationInterval={rotationInterval}
+          onRotationIntervalChange={setRotationInterval}
+          isCreateMode={isCreateMode}
+          neverExpire={neverExpire}
+          onNeverExpireChange={setNeverExpire}
+        />
+      </Form.Item>
       <button type="submit">submit</button>
       <button type="button" onClick={() => form.resetFields()}>
         reset
@@ -44,6 +45,8 @@ const Harness: React.FC<HarnessProps> = ({ isCreateMode = true, onFinish = () =>
 const getDurationInput = (isCreateMode = true) =>
   screen.getByPlaceholderText(isCreateMode ? CREATE_PLACEHOLDER : EDIT_PLACEHOLDER) as HTMLInputElement;
 
+const isRenderedSelection = (el: HTMLElement): boolean => !el.closest('[role="listbox"]');
+
 describe("KeyLifecycleSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -54,6 +57,12 @@ describe("KeyLifecycleSettings", () => {
     expect(screen.getByText("Key Expiry Settings")).toBeInTheDocument();
     expect(screen.getByText("Auto-Rotation Settings")).toBeInTheDocument();
     expect(getDurationInput()).toBeInTheDocument();
+  });
+
+  it("gives the duration input and the Never Expire checkbox their own labels", () => {
+    renderWithProviders(<Harness isCreateMode={false} />);
+    expect(screen.getByLabelText("Expire Key")).toBe(getDurationInput(false));
+    expect(screen.getByRole("checkbox", { name: "Never Expire" })).toBeInTheDocument();
   });
 
   it("uses the create-mode placeholder in create mode", () => {
@@ -142,7 +151,7 @@ describe("KeyLifecycleSettings", () => {
       expect(screen.queryByText("Rotation Interval")).not.toBeInTheDocument();
       await user.click(screen.getByRole("switch"));
 
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
     });
 
     it("propagates a selected predefined interval", async () => {
@@ -150,12 +159,12 @@ describe("KeyLifecycleSettings", () => {
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("90 days"));
 
-      await waitFor(() => expect(document.querySelector(".ant-select-selection-item")?.textContent).toBe("90 days"));
+      await waitFor(() => expect(screen.getAllByTitle("90 days").some(isRenderedSelection)).toBe(true));
       expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("90d");
     });
 
@@ -164,7 +173,7 @@ describe("KeyLifecycleSettings", () => {
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("Custom interval"));
@@ -179,7 +188,7 @@ describe("KeyLifecycleSettings", () => {
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("Custom interval"));
@@ -192,11 +201,11 @@ describe("KeyLifecycleSettings", () => {
     });
 
     it("hides the custom input and propagates the value when switching back to a predefined interval", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
-      await waitFor(() => expect(screen.getByText("Rotation Interval")).toBeInTheDocument());
+      expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("Custom interval"));

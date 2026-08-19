@@ -1,7 +1,10 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, InputNumber, Radio, Space, Switch, Tooltip, Typography } from "antd";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Select as AntdSelect, Card, InputNumber, Radio, Space, Switch, Typography } from "antd";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
+import HeuristicScoringConfig from "./HeuristicScoringConfig";
+import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassifierFallback,
   ClassifierType,
@@ -45,6 +48,62 @@ const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
   return value.classifier_fallback === "default_model"
     ? CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK
     : CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK;
+};
+
+/**
+ * The three boundaries this card states, as displayed strings, or null until the proxy's shipped defaults
+ * have arrived. Kept out of the component so the card cannot state a range the router stopped using, and
+ * so the derivation does not add branches to an already dense render.
+ */
+const boundaryRanges = (
+  shipped: Record<string, number> | undefined,
+  overrides: Record<string, number> | undefined,
+): { simpleMedium: string; mediumComplex: string; complexReasoning: string } | null => {
+  const effective: Record<string, number> = { ...shipped, ...overrides };
+  const [low, mid, high] = [effective.simple_medium, effective.medium_complex, effective.complex_reasoning];
+  if (low === undefined || mid === undefined || high === undefined) return null;
+  return { simpleMedium: low.toFixed(2), mediumComplex: mid.toFixed(2), complexReasoning: high.toFixed(2) };
+};
+
+const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => {
+  // The shipped boundaries come from the proxy, so this card cannot state ranges the router stopped using.
+  const { data: scorerDefaults, isError } = useComplexityScorerDefaults();
+  const ranges = boundaryRanges(scorerDefaults?.tier_boundaries, value.tier_boundaries);
+
+  return (
+    <Card className="bg-gray-50 mt-4">
+      <Text strong style={{ display: "block", marginBottom: 8 }}>
+        How Classification Works
+      </Text>
+      <Text type="secondary" style={{ fontSize: 13 }}>
+        {scoringExplanation(value)}
+      </Text>
+      {ranges && (
+        <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
+          <li>
+            <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; {ranges.simpleMedium}
+          </li>
+          <li>
+            <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>: Score {ranges.simpleMedium} -{" "}
+            {ranges.mediumComplex}
+          </li>
+          <li>
+            <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>: Score {ranges.mediumComplex} -{" "}
+            {ranges.complexReasoning}
+          </li>
+          <li>
+            <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; {ranges.complexReasoning}{" "}
+            (or 2+ reasoning markers)
+          </li>
+        </ul>
+      )}
+      {!ranges && isError && (
+        <Text type="secondary" style={{ fontSize: 13, display: "block", marginTop: 8 }}>
+          The tier score ranges could not be loaded from the proxy.
+        </Text>
+      )}
+    </Card>
+  );
 };
 
 interface ClassificationMethodConfigProps {
@@ -228,11 +287,14 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <div>
             <div className="flex items-center gap-2 mb-1">
               <Text strong>Classification Rubric</Text>
-              <Tooltip title="Every rubric uses the same four tiers and the same tier definitions. They differ only in the worked examples that show the classifier where the boundary between tiers sits.">
+              <SimpleTooltip content="Every rubric uses the same four tiers and the same tier definitions. They differ only in the worked examples that show the classifier where the boundary between tiers sits.">
                 <InfoCircleOutlined className="text-gray-400" />
-              </Tooltip>
+              </SimpleTooltip>
             </div>
-            <Tooltip title={usesCustomPrompt ? "Your custom prompt replaces the built-in rubric entirely" : undefined}>
+            <SimpleTooltip
+              content={usesCustomPrompt ? "Your custom prompt replaces the built-in rubric entirely" : undefined}
+              className="w-full"
+            >
               <AntdSelect
                 value={classificationRubric}
                 onChange={handleClassificationRubricChange}
@@ -244,7 +306,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                   label: CLASSIFICATION_RUBRIC_DESCRIPTIONS[preset].label,
                 }))}
               />
-            </Tooltip>
+            </SimpleTooltip>
             <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
               {usesCustomPrompt
                 ? "Not in use: the custom prompt below is the classifier's entire rubric."
@@ -277,8 +339,8 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                   <Text type="secondary">— right when the classifier grades complexity too</Text>
                 </Radio>
                 <Radio value="default_model" disabled={!hasDefaultModel}>
-                  <Tooltip
-                    title={
+                  <SimpleTooltip
+                    content={
                       hasDefaultModel
                         ? "Change it from the Default Model select."
                         : "Set a default model on this router to use this option"
@@ -288,7 +350,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                       <Text>Route to the default model{defaultModel ? ` (${defaultModel})` : ""}</Text>{" "}
                       <Text type="secondary">— right when your prompt grades something other than complexity</Text>
                     </span>
-                  </Tooltip>
+                  </SimpleTooltip>
                 </Radio>
               </Space>
             </Radio.Group>
@@ -335,9 +397,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                 aria-label="Include Assistant Turns"
               />
               <Text strong>Include Assistant Turns</Text>
-              <Tooltip title="Off by default. Enabling it changes tier decisions, and therefore spend, for an existing router, and sends assistant text to the classifier model, which may be a different provider than the routed model.">
+              <SimpleTooltip content="Off by default. Enabling it changes tier decisions, and therefore spend, for an existing router, and sends assistant text to the classifier model, which may be a different provider than the routed model.">
                 <InfoCircleOutlined className="text-gray-400" />
-              </Tooltip>
+              </SimpleTooltip>
             </div>
             <Text type="secondary" style={{ fontSize: 12 }}>
               Let the classifier read the assistant&apos;s replies, so difficulty the model stated rather than the user
@@ -353,9 +415,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         <div className="mt-4">
           <div className="flex items-center gap-2 mb-1">
             <Text strong>Custom Technical Keywords</Text>
-            <Tooltip title="Domain-specific terms appended to the built-in technical keyword list. Prompts containing these terms score higher on the technical dimension and route to more capable models.">
+            <SimpleTooltip content="Domain-specific terms appended to the built-in technical keyword list. Prompts containing these terms score higher on the technical dimension and route to more capable models.">
               <InfoCircleOutlined className="text-gray-400" />
-            </Tooltip>
+            </SimpleTooltip>
           </div>
           <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
             Optional: Add terms to the built-in list to improve classification accuracy on the technical dimension.
@@ -375,29 +437,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
-      <Card className="bg-gray-50 mt-4">
-        <Text strong style={{ display: "block", marginBottom: 8 }}>
-          How Classification Works
-        </Text>
-        <Text type="secondary" style={{ fontSize: 13 }}>
-          {scoringExplanation(value)}
-        </Text>
-        <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
-          <li>
-            <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; 0.15
-          </li>
-          <li>
-            <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>: Score 0.15 - 0.35
-          </li>
-          <li>
-            <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>: Score 0.35 - 0.60
-          </li>
-          <li>
-            <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt; 0.60 (or 2+ reasoning
-            markers)
-          </li>
-        </ul>
-      </Card>
+      <HeuristicScoringConfig value={value} onChange={onChange} />
+
+      <HowClassificationWorks value={value} />
     </>
   );
 };

@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { Modal, Input, Switch } from "antd";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { fetchClient } from "@/lib/http/api";
 import { ApiError } from "@/lib/http/client";
 import {
@@ -50,7 +50,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
 
   const handleAuthorize = async () => {
     if (!apiKey.trim()) {
-      MessageManager.error("Please enter your API key");
+      toast.error("Please enter your API key");
       return;
     }
     setLoading(true);
@@ -59,11 +59,11 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
         params: { path: { server_id: server.server_id } },
         body: { credential: apiKey.trim(), save: saveKey },
       });
-      MessageManager.success(`Connected to ${serverDisplayName}`);
+      toast.success(`Connected to ${serverDisplayName}`);
       onSuccess(server.server_id);
       handleClose();
     } catch (e) {
-      MessageManager.error(byokSaveErrorMessage(e));
+      toast.error(byokSaveErrorMessage(e));
     } finally {
       setLoading(false);
     }

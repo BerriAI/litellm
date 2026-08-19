@@ -204,6 +204,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
+    LlmProviders,
     ModelInfo,
     ModelResponseStream,
     StandardLoggingPayload,
@@ -3193,7 +3194,7 @@ class Router:
             function_name=function_name,
         )
         model_group: Final = kwargs.get(metadata_variable_name, {}).get("model_group")
-        _model_id: Final = self._generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
+        _model_id: Final = self.generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
         original_model_id: Final = model_info.get("id")
         model_info["id"] = _model_id
         model_info["original_model_id"] = original_model_id
@@ -5087,6 +5088,13 @@ class Router:
                     )
 
                     kwargs_copy["file"] = file
+                if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+                    kwargs_copy["extra_body"] = MappingProxyType(
+                        {
+                            **(kwargs_copy.get("extra_body") or MappingProxyType({})),
+                            "target_model_names": stripped_model,
+                        }
+                    )
                 if (
                     "gcs_bucket_name" in data
                 ):  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
@@ -7570,13 +7578,14 @@ class Router:
 
     @staticmethod
     def _json_default_stable_id(value: object) -> str:
-        """json.dumps default= for _generate_model_id: plain str() on an arbitrary
+        """json.dumps default= for generate_model_id: plain str() on an arbitrary
         object (e.g. a RoutingPlugin instance) falls back to object.__repr__'s
         `<module.Class object at 0x...>`, so the hash -- and deployment id -- would
         change every restart. Use the class name instead, stable across restarts."""
         return f"{type(value).__module__}.{type(value).__qualname__}"
 
-    def _generate_model_id(self, model_group: str, litellm_params: dict):
+    @staticmethod
+    def generate_model_id(model_group: str, litellm_params: dict) -> str:  # mutable-ok: hashed read-only
         """
         Helper function to consistently generate the same id for a deployment
 
@@ -7591,14 +7600,14 @@ class Router:
             if isinstance(k, str):
                 parts.append(k)
             elif isinstance(k, dict):
-                parts.append(json.dumps(k, default=self._json_default_stable_id))
+                parts.append(json.dumps(k, default=Router._json_default_stable_id))
             else:
                 parts.append(str(k))
 
             if isinstance(v, str):
                 parts.append(v)
             elif isinstance(v, dict):
-                parts.append(json.dumps(v, default=self._json_default_stable_id))
+                parts.append(json.dumps(v, default=Router._json_default_stable_id))
             else:
                 parts.append(str(v))
 
@@ -7833,20 +7842,29 @@ class Router:
         from litellm.router_strategy.complexity_router.complexity_router import (
             ComplexityRouter,
         )
+        from litellm.router_strategy.complexity_router.config import (
+            ComplexityRouterConfig,
+        )
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
 
         default_model: str | None = deployment.litellm_params.complexity_router_default_model
 
-        # If no default model specified, try to get from config tiers
+        # If no default model specified, try to get from config tiers. Derived from the
+        # validated model, not the raw dict, so normalization (e.g. fallback_tier
+        # whitespace) is applied by its one owner before the tiers lookup.
         if default_model is None and complexity_router_config:
-            tiers: Final = complexity_router_config.get("tiers", {})
-            # Use MEDIUM tier as fallback default
-            medium: Final = tiers.get("MEDIUM") or tiers.get("SIMPLE")
-            if isinstance(medium, list):
-                default_model = medium[0] if medium else None
+            validated: Final = ComplexityRouterConfig.model_validate(complexity_router_config)
+            # Custom tier sets name their fallback tier; built-in sets default to MEDIUM or SIMPLE
+            derived: Final = (
+                (validated.tiers.get(validated.fallback_tier) if validated.fallback_tier is not None else None)
+                or validated.tiers.get("MEDIUM")
+                or validated.tiers.get("SIMPLE")
+            )
+            if isinstance(derived, list):
+                default_model = derived[0] if derived else None
             else:
-                default_model = medium
+                default_model = derived
 
         if default_model is None:
             raise ValueError(
@@ -8183,7 +8201,7 @@ class Router:
 
             # check if model info has id
             if "id" not in _model_info:
-                _id = self._generate_model_id(_model_name, _litellm_params)
+                _id = self.generate_model_id(_model_name, _litellm_params)
                 _model_info["id"] = _id
 
             if _litellm_params.get("organization", None) is not None and isinstance(
@@ -9741,7 +9759,7 @@ class Router:
             if model_id is None:
                 model_name = model.get("model_name", "")
                 litellm_params = model.get("litellm_params", {})
-                model_id = self._generate_model_id(model_name, litellm_params)
+                model_id = self.generate_model_id(model_name, litellm_params)
                 # Update the model_info in the original list
                 if "model_info" not in model:
                     model["model_info"] = {}
@@ -11445,8 +11463,10 @@ class Router:
         deployment the strategy was registered from via its (model_name, tags)
         pair.
 
-        With tag filtering enabled, strategies that all carry real tags matching
-        none of the request's do not capture it when the name also has plain
+        With tag filtering enabled, router-wide or by the request's
+        enable_tag_filtering (which the proxy sets from key/team
+        router_settings), strategies that all carry real tags matching none of
+        the request's do not capture it when the name also has plain
         deployments: returning None hands the request to ordinary tag-aware
         deployment selection.
         """
@@ -11469,8 +11489,9 @@ class Router:
         for tagged in candidates:
             if "default" in tagged.tags:
                 return tagged
+        request_scoped_filtering: Final = request_kwargs.get("enable_tag_filtering") is True
         if (
-            self.enable_tag_filtering
+            (self.enable_tag_filtering or request_scoped_filtering)
             and all(tagged.tags for tagged in candidates)
             and self._model_name_has_plain_deployments(model)
         ):

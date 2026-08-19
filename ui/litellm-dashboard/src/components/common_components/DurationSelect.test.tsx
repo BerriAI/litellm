@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { useState } from "react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import DurationSelect from "./DurationSelect";
@@ -49,5 +50,30 @@ describe("DurationSelect", () => {
     render(<DurationSelect value="7d" />);
     const select = screen.getByRole("combobox");
     expect(select).toBeInTheDocument();
+  });
+
+  it.each([
+    ["24h", "Daily"],
+    ["7d", "Weekly"],
+    ["30d", "Monthly"],
+  ])("shows the human label on the trigger for %s", (value, label) => {
+    render(<DurationSelect value={value} />);
+
+    expect(screen.getByRole("combobox")).toHaveTextContent(label);
+  });
+
+  it("shows the human label on the trigger after the user picks an option", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const Harness = () => {
+      const [value, setValue] = useState("24h");
+      return <DurationSelect value={value} onChange={setValue} />;
+    };
+    render(<Harness />);
+
+    await user.click(screen.getByRole("combobox"));
+    const monthly = screen.getByText("Monthly");
+    await user.click(monthly.closest('[role="option"]') ?? monthly);
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("Monthly");
   });
 });

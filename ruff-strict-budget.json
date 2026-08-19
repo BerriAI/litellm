@@ -33,10 +33,10 @@
     "limit": 2
   },
   "B006": {
-    "limit": 178
+    "limit": 177
   },
   "B008": {
-    "limit": 505
+    "limit": 503
   },
   "B009": {
     "limit": 59
@@ -78,7 +78,7 @@
     "limit": 1
   },
   "C901": {
-    "limit": 313
+    "limit": 312
   },
   "D419": {
     "limit": 6
@@ -96,7 +96,7 @@
     "limit": 10
   },
   "DTZ007": {
-    "limit": 19
+    "limit": 17
   },
   "DTZ011": {
     "limit": 3
@@ -201,7 +201,7 @@
     "limit": 58
   },
   "SIM102": {
-    "limit": 319
+    "limit": 317
   },
   "SIM103": {
     "limit": 119
