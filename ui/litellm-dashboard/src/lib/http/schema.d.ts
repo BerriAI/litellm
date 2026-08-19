@@ -6829,8 +6829,8 @@ export interface paths {
          *     - budgets: list - One entry per applicable budget
          *         - scope: str - `proxy`, `key`, `key_window`, `key_model`, `team`, `team_window`,
          *           `team_member`, `user`, `organization`, `project`, `tag`, `end_user` or `end_user_model`
-         *         - entity_type: str - The `Litellm_EntityType` a `BudgetExceededError` from this scope
-         *           carries, so a denial message maps back to a row here
+         *         - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
+         *           names, so a denial message maps back to a row here
          *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
          *         - enforcement: str - `hard` blocks the request, `soft` only raises an alert
          *         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
@@ -7519,8 +7519,8 @@ export interface paths {
          *     - budgets: list - One entry per applicable budget
          *         - scope: str - `proxy`, `key`, `key_window`, `key_model`, `team`, `team_window`,
          *           `team_member`, `user`, `organization`, `project`, `tag`, `end_user` or `end_user_model`
-         *         - entity_type: str - The `Litellm_EntityType` a `BudgetExceededError` from this scope
-         *           carries, so a denial message maps back to a row here
+         *         - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
+         *           names, so a denial message maps back to a row here
          *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
          *         - enforcement: str - `hard` blocks the request, `soft` only raises an alert
          *         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
@@ -26350,8 +26350,7 @@ export interface components {
             entity_id?: string | null;
             /** Entity Label */
             entity_label?: string | null;
-            /** Entity Type */
-            entity_type: string;
+            entity_type: components["schemas"]["Litellm_EntityType"];
             /** Max Budget */
             max_budget?: number | null;
             /** Note */
@@ -26383,7 +26382,7 @@ export interface components {
             /** Budgets */
             budgets: components["schemas"]["KeyBudgetEntry"][];
             /** Key */
-            key?: string | null;
+            key: string;
         };
         /** KeyHealthResponse */
         KeyHealthResponse: {
@@ -29162,6 +29161,14 @@ export interface components {
          * @enum {string}
          */
         LitellmUserRoles: "proxy_admin" | "proxy_admin_viewer" | "org_admin" | "internal_user" | "internal_user_viewer" | "team" | "customer";
+        /**
+         * Litellm_EntityType
+         * @description Enum for types of entities on litellm
+         *
+         *     This enum allows specifying the type of entity that is being tracked in the database.
+         * @enum {string}
+         */
+        Litellm_EntityType: "key" | "user" | "end_user" | "team" | "team_member" | "organization" | "project" | "tag" | "agent" | "proxy";
         /** LoggingCallbackStatus */
         LoggingCallbackStatus: {
             /** Callbacks */
