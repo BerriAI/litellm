@@ -65,6 +65,8 @@ from models import (
 )
 from e2e_config import (
     CONTROL_PLANE_BASE_URL,
+    FIXTURE_DIR,
+    FIXTURE_MODE_RAW,
     MASTER_KEY,
     POLL_INTERVAL,
     POLL_TIMEOUT,
@@ -72,6 +74,7 @@ from e2e_config import (
     REQUEST_TIMEOUT,
     settle_propagation,
 )
+from fixture_transport import select_transport
 from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
@@ -531,19 +534,29 @@ def build_proxy_client(
     The endpoints are injectable for callers that resolve the proxy some other
     way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
     pass all three together, since a caller that overrides only the data plane
-    would leave management calls pointed at the env default."""
+    would leave management calls pointed at the env default.
+
+    E2E_FIXTURE_MODE wraps (record) or replaces (replay) the transport here, so
+    every client built from this seam records or replays without changing shape;
+    unset it stays the plain SplitTransport (see fixture_transport.py)."""
+    split = SplitTransport(
+        data=HttpTransport(
+            base_url=base_url,
+            master_key=master_key,
+            request_timeout=REQUEST_TIMEOUT,
+        ),
+        control=HttpTransport(
+            base_url=control_plane_base_url,
+            master_key=master_key,
+            request_timeout=REQUEST_TIMEOUT,
+        ),
+    )
     return ProxyClient(
-        transport=SplitTransport(
-            data=HttpTransport(
-                base_url=base_url,
-                master_key=master_key,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
-            control=HttpTransport(
-                base_url=control_plane_base_url,
-                master_key=master_key,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
+        transport=select_transport(
+            split,
+            mode_raw=FIXTURE_MODE_RAW,
+            bundle_dir=FIXTURE_DIR,
+            master_key=master_key,
         ),
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,

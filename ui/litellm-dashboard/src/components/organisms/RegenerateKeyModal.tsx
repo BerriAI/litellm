@@ -1,8 +1,9 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
-import { Alert, Modal, Space } from "antd";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
+import { Modal, Space } from "antd";
 import { Button } from "@/components/ui/button";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, TriangleAlert } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -184,7 +185,10 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     >
       {regeneratedKey ? (
         <div className="flex flex-col gap-4">
-          <Alert type="warning" showIcon message="Save it now, you will not see it again" />
+          <Alert variant="warning">
+            <TriangleAlert />
+            <AlertTitle>Save it now, you will not see it again</AlertTitle>
+          </Alert>
 
           <div className="flex flex-col gap-0.5">
             <span className="text-xs text-muted-foreground">Key Alias</span>

@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import { Modal, Alert } from "antd";
-import { CircleHelp, Plug } from "lucide-react";
+import { Modal } from "antd";
+import { CircleHelp, Info, Plug } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useWatch } from "react-hook-form";
 import { z } from "zod/v4";
 
@@ -156,13 +157,14 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
           }}
         >
           <div className="mt-6">
-            <Alert
-              message="What is a Pass-Through Endpoint?"
-              description="Route requests from your LiteLLM proxy to any external API. Perfect for custom models, image generation APIs, or any service you want to proxy through LiteLLM."
-              type="info"
-              showIcon
-              className="mb-6"
-            />
+            <Alert variant="info" className="mb-6">
+              <Info />
+              <AlertTitle>What is a Pass-Through Endpoint?</AlertTitle>
+              <AlertDescription>
+                Route requests from your LiteLLM proxy to any external API. Perfect for custom models, image generation
+                APIs, or any service you want to proxy through LiteLLM.
+              </AlertDescription>
+            </Alert>
 
             <form onSubmit={form.handleSubmit(addPassThrough)} className="space-y-6">
               <Card className="block p-5">
