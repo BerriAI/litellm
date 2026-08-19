@@ -163,21 +163,34 @@ def test_draining_many_concatenated_values_is_not_quadratic():
     must be O(n) total. Re-copying the shrinking remainder on every pop
     (slicing a new string instead of advancing a cursor) makes total drain
     time scale with the square of the buffer size.
+
+    Uses a doubling ratio rather than an absolute ms budget so it isn't
+    flaky on a slower or busier CI runner: doubling the input should
+    roughly double an O(n) drain's time but roughly quadruple an O(n^2)
+    drain's time, and that ratio holds regardless of machine speed.
     """
-    accumulator = JSONFragmentAccumulator()
-    accumulator.append('{"a": 1}' * 80_000)
 
-    start = time.perf_counter()
-    drained = 0
-    while True:
-        found, _ = accumulator.pop_next_value()
-        if not found:
-            break
-        drained += 1
-    elapsed_ms = (time.perf_counter() - start) * 1000
+    def drain_time_ms(n: int) -> float:
+        accumulator = JSONFragmentAccumulator()
+        accumulator.append('{"a": 1}' * n)
+        start = time.perf_counter()
+        drained = 0
+        while True:
+            found, _ = accumulator.pop_next_value()
+            if not found:
+                break
+            drained += 1
+        assert drained == n
+        return (time.perf_counter() - start) * 1000
 
-    assert drained == 80_000
-    assert elapsed_ms < 150, f"draining 80000 concatenated values took {elapsed_ms:.1f} ms (expected < 150 ms); O(n^2) regression?"
+    small_ms = drain_time_ms(40_000)
+    large_ms = drain_time_ms(80_000)
+
+    ratio = large_ms / max(small_ms, 0.001)
+    assert ratio < 3.0, (
+        f"doubling drained values scaled time by {ratio:.2f}x ({small_ms:.1f} ms -> {large_ms:.1f} ms); "
+        "expected roughly 2x for O(n); O(n^2) regression?"
+    )
 
 
 def test_could_close_json_after_many_blank_fragments_is_not_quadratic():
