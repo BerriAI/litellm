@@ -27,6 +27,10 @@ class AliyunGuardrailBase:
         return (message for message in messages if message.get("role") == "user")
 
     @staticmethod
+    def _iter_audited_text_messages(messages: Sequence[AllMessageValues]) -> Iterator[AllMessageValues]:
+        return (message for message in messages if message.get("role") in ("user", "tool"))
+
+    @staticmethod
     def _extract_image_url(part: object) -> str | None:
         """
         Return the URL of an ``image_url`` content part.
@@ -35,7 +39,7 @@ class AliyunGuardrailBase:
         Returns:
             The URL string, or None when the part carries no image URL
         """
-        if not isinstance(part, dict) or part.get("type") != "image_url":
+        if not isinstance(part, dict) or part.get("type") not in ("image_url", "input_image"):
             return None
         image_url: Final = part.get("image_url")
         if isinstance(image_url, dict):
@@ -62,7 +66,7 @@ class AliyunGuardrailBase:
         )
 
         user_prompt: Final = "\n".join(
-            convert_content_list_to_str(message) for message in self._iter_user_messages(messages)
+            convert_content_list_to_str(message) for message in self._iter_audited_text_messages(messages)
         ).strip()
         return user_prompt or None
 

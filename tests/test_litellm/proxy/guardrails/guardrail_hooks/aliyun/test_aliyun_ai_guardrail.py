@@ -792,8 +792,8 @@ class TestPreCallHook:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "结构化输入文本"},
-                        {"type": "image_url", "image_url": {"url": IMG_A}},
+                        {"type": "input_text", "text": "结构化输入文本"},
+                        {"type": "input_image", "image_url": IMG_A, "detail": "auto"},
                     ],
                 }
             ]
@@ -809,6 +809,32 @@ class TestPreCallHook:
         sent = [json.loads(call.kwargs["data"]["ServiceParameters"]) for call in mock_post.call_args_list]
         assert any("结构化输入文本" in (sp.get("content") or "") for sp in sent)
         assert any(IMG_A in (sp.get("imageUrls") or []) for sp in sent)
+
+    @pytest.mark.asyncio
+    async def test_scans_responses_api_function_call_output(self):
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        data = {
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "工具输出里的违规内容",
+                }
+            ]
+        }
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean) as mock_post:
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                cache=MagicMock(),
+                data=data,
+                call_type="responses",
+            )
+
+        scanned = "".join(
+            json.loads(call.kwargs["data"]["ServiceParameters"]).get("content", "") for call in mock_post.call_args_list
+        )
+        assert "工具输出里的违规内容" in scanned
 
     @pytest.mark.asyncio
     async def test_blocks_violation(self):
@@ -1350,6 +1376,7 @@ class TestExtractMcpToolText:
         remaining = " ".join(getattr(item, "text", "") for item in tool_result.content)
         assert CONTENT_MODERATION_TYPE in remaining
         assert tool_result.isError is True
+        assert tool_result.structuredContent is None
 
 
 # ---------------------------------------------------------------------------

@@ -885,9 +885,14 @@ class AliyunAIGuardrail(AliyunGuardrailBase, CustomGuardrail):
         """
         if target is None:
             return False
+        from litellm.proxy._experimental.mcp_server.utils import (
+            set_mcp_tool_result_structured_content,
+        )
+
         content: Final = getattr(target, "content", None)
         if isinstance(content, list):
             content[:] = blocked_content
+            set_mcp_tool_result_structured_content(target, None)
             if hasattr(target, "isError"):
                 try:
                     # Kept duck-typed on purpose: any MCP result shape carrying `isError`
@@ -903,10 +908,12 @@ class AliyunAIGuardrail(AliyunGuardrailBase, CustomGuardrail):
             result: Final = target.get("result")
             if isinstance(result, dict) and isinstance(result.get("content"), list):
                 result["content"] = list(blocked_content)  # mutable-ok: the replaced field must stay a JSON list
+                set_mcp_tool_result_structured_content(result, None)
                 return True
             if isinstance(target.get("content"), list):
                 blocked: Final = list(blocked_content)  # mutable-ok: must stay a JSON list
                 target["content"] = blocked  # rebind-ok: overwrite the caller's result
+                set_mcp_tool_result_structured_content(target, None)
                 return True
         return False
 
