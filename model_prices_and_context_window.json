@@ -16792,6 +16792,14 @@
             "notes": "APISerpent deep search (/api/search), multi-engine (Google, Bing, Yahoo, DuckDuckGo). Pricing: $0.60/1k searches."
         }
     },
+    "agentcore/search": {
+        "input_cost_per_query": 0.0,
+        "litellm_provider": "agentcore",
+        "mode": "search",
+        "metadata": {
+            "notes": "Web Search on Amazon Bedrock AgentCore, billed by AWS on the gateway"
+        }
+    },
     "tinyfish/search": {
         "input_cost_per_query": 0.0,
         "litellm_provider": "tinyfish",
