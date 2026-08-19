@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,7 +37,7 @@ describe("SCIMConfig", () => {
     const user = userEvent.setup();
     renderSCIM();
 
-    await user.type(screen.getByLabelText("Token Name"), "My SCIM Token");
+    fireEvent.change(screen.getByLabelText("Token Name"), { target: { value: "My SCIM Token" } });
     await user.click(screen.getByRole("button", { name: /create scim token/i }));
 
     await waitFor(() => {
@@ -82,7 +82,7 @@ describe("SCIMConfig", () => {
     const user = userEvent.setup();
     renderSCIM();
 
-    await user.type(screen.getByLabelText("Token Name"), "My SCIM Token");
+    fireEvent.change(screen.getByLabelText("Token Name"), { target: { value: "My SCIM Token" } });
     await user.click(screen.getByRole("button", { name: /create scim token/i }));
 
     expect(await screen.findByText("Your SCIM Token")).toBeInTheDocument();
@@ -95,7 +95,7 @@ describe("SCIMConfig", () => {
     const user = userEvent.setup();
     renderSCIM();
 
-    await user.type(screen.getByLabelText("Token Name"), "My SCIM Token");
+    fireEvent.change(screen.getByLabelText("Token Name"), { target: { value: "My SCIM Token" } });
     await user.click(screen.getByRole("button", { name: /create scim token/i }));
     await user.click(await screen.findByRole("button", { name: /create another token/i }));
 
@@ -106,7 +106,7 @@ describe("SCIMConfig", () => {
     const user = userEvent.setup();
     renderSCIM({ accessToken: null });
 
-    await user.type(screen.getByLabelText("Token Name"), "My SCIM Token");
+    fireEvent.change(screen.getByLabelText("Token Name"), { target: { value: "My SCIM Token" } });
     await user.click(screen.getByRole("button", { name: /create scim token/i }));
 
     await waitFor(() => {
@@ -120,7 +120,7 @@ describe("SCIMConfig", () => {
     const user = userEvent.setup();
     renderSCIM();
 
-    await user.type(screen.getByLabelText("Token Name"), "My SCIM Token");
+    fireEvent.change(screen.getByLabelText("Token Name"), { target: { value: "My SCIM Token" } });
     await user.click(screen.getByRole("button", { name: /create scim token/i }));
 
     await waitFor(() => {

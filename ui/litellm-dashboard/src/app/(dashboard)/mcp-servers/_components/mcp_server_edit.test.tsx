@@ -781,7 +781,7 @@ describe("MCPServerEdit (interactive OAuth)", () => {
   });
 
   // Note: The M2M flow hiding logic is tested via OAuthFormFields.test.tsx (isM2M prop directly),
-  // since Form.useWatch doesn't synchronously reflect initialValues in jsdom.
+  // since a mounted-values read doesn't synchronously reflect the seeded defaults in jsdom.
 
   it("pre-populates token_validation_json from existing server token_validation", async () => {
     const tokenValidation = { organization: "my-org", "team.id": "123" };
@@ -1003,7 +1003,7 @@ describe("MCPServerEdit (interactive OAuth)", () => {
       fireEvent.click(saveButtons[0]);
     });
 
-    // The Form.Item inline validator intercepts invalid JSON before handleSave runs,
+    // The field's inline validator intercepts invalid JSON before handleSave runs,
     // so the inline error message appears and updateMCPServer is never called.
     await waitFor(() => {
       expect(screen.getByText("Must be valid JSON")).toBeInTheDocument();
@@ -2190,7 +2190,7 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
     });
     expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
 
-    // The Form.Item stays mounted across the two client-forwarded modes, so the live toggle value is
+    // The field stays mounted across the two client-forwarded modes, so the live toggle value is
     // preserved rather than forced false by the switch.
     await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
     await waitFor(() => {

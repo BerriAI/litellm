@@ -1,6 +1,9 @@
 import React from "react";
-import { Form, Select, Tooltip } from "antd";
+import { Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
+
+import { MountedFormField } from "@/components/common_components/MountedFormField";
+import { selectControl } from "./mcpFieldRules";
 
 const TOKEN_ENDPOINT_AUTH_METHOD_OPTIONS = [
   { value: "client_secret_basic", label: "Client Secret Basic" },
@@ -12,7 +15,7 @@ interface TokenEndpointAuthMethodFieldProps {
 }
 
 const TokenEndpointAuthMethodField: React.FC<TokenEndpointAuthMethodFieldProps> = ({ isEditing = false }) => (
-  <Form.Item
+  <MountedFormField
     label={
       <span className="text-sm font-medium text-gray-700 flex items-center">
         Token Endpoint Auth Method (optional)
@@ -23,16 +26,19 @@ const TokenEndpointAuthMethodField: React.FC<TokenEndpointAuthMethodFieldProps> 
     }
     name={["credentials", "token_endpoint_auth_method"]}
   >
-    <Select
-      allowClear
-      placeholder={
-        isEditing ? "Leave blank to keep existing (default Client Secret Post)" : "Default (Client Secret Post)"
-      }
-      className="rounded-lg"
-      size="large"
-      options={TOKEN_ENDPOINT_AUTH_METHOD_OPTIONS}
-    />
-  </Form.Item>
+    {(control) => (
+      <Select
+        {...selectControl(control)}
+        allowClear
+        placeholder={
+          isEditing ? "Leave blank to keep existing (default Client Secret Post)" : "Default (Client Secret Post)"
+        }
+        className="rounded-lg"
+        size="large"
+        options={TOKEN_ENDPOINT_AUTH_METHOD_OPTIONS}
+      />
+    )}
+  </MountedFormField>
 );
 
 export default TokenEndpointAuthMethodField;
