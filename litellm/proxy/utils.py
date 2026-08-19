@@ -2309,6 +2309,11 @@ class ProxyLogging:
                 )
             )
 
+        # Auth and pass-through failure bodies are unstripped client input, and
+        # the logging handler below flattens body keys into model_call_details,
+        # so drop the key before it can masquerade as the built payload.
+        request_data.pop("standard_logging_object", None)
+
         ### LOGGING ###
         if self._is_proxy_only_llm_api_error(
             original_exception=original_exception,
@@ -2322,9 +2327,6 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        # Auth and pass-through failures reach this hook with the raw request
-        # body unstripped, so only the logging object may supply this key.
-        request_data.pop("standard_logging_object", None)
         request_data.update(_failure_fields_to_lift(request_data))
 
         # Remove before callbacks iterate — not serialisable

@@ -557,6 +557,41 @@ class TestPostCallFailureHookLiftsStandardLoggingObject:
         assert "standard_logging_object" not in request_data_with_obj
 
     @pytest.mark.asyncio
+    async def test_pass_through_failure_never_relifts_client_supplied_key(self):
+        from datetime import datetime
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi import HTTPException
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        logging_obj = Logging(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "standard_logging_object": {"model_id": "client-injected"},
+            "metadata": {},
+        }
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=HTTPException(status_code=401, detail="unauthorized"),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            )
+        assert "standard_logging_object" not in request_data
+        assert "standard_logging_object" not in logging_obj.model_call_details
+
+    @pytest.mark.asyncio
     async def test_no_standard_logging_object_is_noop(self):
         logging_obj = MagicMock()
         logging_obj.model_call_details = {}
