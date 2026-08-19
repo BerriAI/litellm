@@ -1219,6 +1219,12 @@ class DBSpendUpdateWriter:
         is_retryable = isinstance(e, DB_RETRY_SAFE_ERROR_TYPES) or PrismaDBExceptionHandler.is_deadlock_error(e)
         if not is_retryable or attempt >= n_retry_times:
             _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
+        verbose_proxy_logger.warning(
+            "Retrying spend update after retryable DB error (attempt %s/%s): %s",
+            attempt + 1,
+            n_retry_times,
+            e,
+        )
         await asyncio.sleep(random.uniform(2**attempt, 2 ** (attempt + 1)))
 
     async def _commit_spend_updates_to_db(
