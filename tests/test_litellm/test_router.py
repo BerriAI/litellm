@@ -7698,6 +7698,41 @@ class TestUpsertDeploymentRollback:
         assert router.get_deployment(model_id="fresh-1") is None
         assert router.model_list == []
 
+    def test_restore_re_adds_popped_deployment(self):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "prod-model",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "sk-old"},
+                    "model_info": {"id": "prod-1", "db_model": True},
+                }
+            ],
+            ignore_invalid_deployments=True,
+        )
+        previous = router.get_deployment(model_id="prod-1")
+        router.delete_deployment(id="prod-1")
+        assert router.has_model_id("prod-1") is False
+
+        router._restore_deployment_after_failed_upsert(
+            previous_deployment=previous, model_id="prod-1"
+        )
+
+        restored = router.get_deployment(model_id="prod-1")
+        assert restored is not None
+        assert restored.litellm_params.model == "gpt-4o"
+
+        router._restore_deployment_after_failed_upsert(
+            previous_deployment=previous, model_id="prod-1"
+        )
+        assert len(router.model_list) == 1
+
+        router._restore_deployment_after_failed_upsert(
+            previous_deployment=None, model_id="prod-1"
+        )
+        assert len(router.model_list) == 1
+
 
 class TestConsumedRequestTagsStamp:
     """Issue #36621: when a request's tags select a tagged pre-routing strategy, those
