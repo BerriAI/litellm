@@ -1,12 +1,14 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Form } from "antd";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod/v4";
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import MetadataKeyValueFields, {
   MetadataPair,
   metadataObjectToPairs,
+  metadataPairsSchema,
   metadataPairsToObject,
 } from "./MetadataKeyValueFields";
 
@@ -95,13 +97,21 @@ interface HarnessProps {
   schemaLoading?: boolean;
 }
 
+const harnessSchema = z.object({ metadata: metadataPairsSchema });
+
 const Harness: React.FC<HarnessProps> = ({ onFinish, initialMetadata, schemaFields, schemaLoading }) => {
-  const [form] = Form.useForm();
+  const form = useZodForm(harnessSchema, { defaultValues: { metadata: initialMetadata ?? [] } });
   return (
-    <Form form={form} onFinish={onFinish} initialValues={{ metadata: initialMetadata }}>
-      <MetadataKeyValueFields form={form} schemaFields={schemaFields} schemaLoading={schemaLoading} />
+    <form onSubmit={form.handleSubmit((values) => onFinish(values))}>
+      <MetadataKeyValueFields
+        control={form.control}
+        getValues={form.getValues}
+        name="metadata"
+        schemaFields={schemaFields}
+        schemaLoading={schemaLoading}
+      />
       <button type="submit">Save</button>
-    </Form>
+    </form>
   );
 };
 
