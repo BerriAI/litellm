@@ -835,6 +835,34 @@ describe("CreateKey", () => {
       expect(screen.queryByTitle("alice.jones@example.com (u-jones)")).not.toBeInTheDocument();
       expect(screen.getByTitle("alice.smith@example.com (u-smith)")).toBeInTheDocument();
     });
+
+    it("stops searching once the box is cleared and the abandoned search answers", async () => {
+      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          new Promise((resolve) => {
+            answers.set(params.get("user_email") ?? "", resolve);
+          }) as never,
+      );
+
+      const user = userEvent.setup();
+      renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
+      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+
+      await user.type(search, "ali");
+      await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+      await screen.findByText("Searching...");
+
+      await user.clear(search);
+      await screen.findByText("No users found");
+
+      await act(async () => {
+        answers.get("ali")?.([{ user_id: "u-jones", user_email: "alice.jones@example.com" }]);
+      });
+
+      expect(screen.queryByTitle("alice.jones@example.com (u-jones)")).not.toBeInTheDocument();
+      expect(screen.getByText("No users found")).toBeInTheDocument();
+    });
   });
 
   describe("created key display", () => {

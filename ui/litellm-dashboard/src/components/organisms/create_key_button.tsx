@@ -563,6 +563,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
     if (!searchText) {
       setUserOptions([]);
+      setUserSearchLoading(false);
       return;
     }
 
