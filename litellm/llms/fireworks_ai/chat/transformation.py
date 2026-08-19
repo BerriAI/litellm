@@ -454,7 +454,47 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             params = function.get("parameters")
             if isinstance(params, dict):
                 unpack_legacy_defs(params)
+                self._sanitize_tool_schema(params)
         return tools
+
+    # JSON Schema keywords Fireworks rejects in tool parameter schemas.
+    # ``pattern``: Fireworks compiles it into a constrained-decoding grammar.
+    # When a caller (e.g. LiteLLM's Anthropic→OpenAI translation) injects a
+    # second ``pattern`` on the same field, Fireworks returns
+    # "Conflict in schema definitions for key 'pattern'".
+    # ``title``: auto-emitted by Pydantic; Fireworks returns
+    # "JSON Schema not supported: could not understand the instance".
+    # ``default: null``: same 400 as ``title``; non-null defaults are preserved.
+    _FIREWORKS_TOOL_SCHEMA_STRIP_KEYS: Final = frozenset({"pattern", "title"})
+
+    @staticmethod
+    def _sanitize_tool_schema(schema: Any) -> None:
+        """Recursively strip JSON Schema keywords Fireworks rejects from tool
+        parameter schemas, in place.
+
+        Walks ``properties``, ``items``, ``anyOf``/``allOf``/``oneOf``, and
+        ``$defs``. Removes ``pattern`` and ``title`` everywhere, and ``default``
+        only when its value is ``None``. Non-null defaults, enums, and all other
+        keywords are preserved.
+        """
+        if not isinstance(schema, dict):
+            return
+        for key in list(schema):
+            if key in FireworksAIConfig._FIREWORKS_TOOL_SCHEMA_STRIP_KEYS:
+                schema.pop(key, None)
+            elif key == "default" and schema[key] is None:
+                schema.pop(key, None)
+            elif key == "properties" and isinstance(schema[key], dict):
+                for prop in schema[key].values():
+                    FireworksAIConfig._sanitize_tool_schema(prop)
+            elif key == "items" and isinstance(schema[key], dict):
+                FireworksAIConfig._sanitize_tool_schema(schema[key])
+            elif key == "$defs" and isinstance(schema[key], dict):
+                for defn in schema[key].values():
+                    FireworksAIConfig._sanitize_tool_schema(defn)
+            elif key in ("anyOf", "allOf", "oneOf") and isinstance(schema[key], list):
+                for item in schema[key]:
+                    FireworksAIConfig._sanitize_tool_schema(item)
 
     def _transform_messages_helper(
         self, messages: list[AllMessageValues], model: str, litellm_params: dict
