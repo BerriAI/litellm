@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
@@ -562,7 +562,7 @@ GROUP BY a.job_id
 
 _STOP_JOB_SQL: Final = """
 UPDATE "LiteLLM_ShadowEvalJob"
-SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamptz)
+SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamp)
 WHERE group_id = $1
 """
 
@@ -575,22 +575,21 @@ class _AttemptCountRow(BaseModel):
 _ATTEMPT_COUNT_ROWS: Final = TypeAdapter(list[_AttemptCountRow])
 
 
-_LIST_GROUPS_SQL: Final = """
-SELECT group_id FROM "LiteLLM_ShadowEvalJob"
-GROUP BY group_id ORDER BY MAX(created_at) DESC LIMIT $1::int
+_LIST_LEGS_SQL: Final = """
+SELECT * FROM "LiteLLM_ShadowEvalJob"
+WHERE group_id IN (
+    SELECT group_id FROM "LiteLLM_ShadowEvalJob"
+    GROUP BY group_id ORDER BY MAX(created_at) DESC LIMIT $1::int
+)
 """
 
-_LIST_GROUPS_BY_KEY_SQL: Final = """
-SELECT group_id FROM "LiteLLM_ShadowEvalJob" WHERE api_key_id = $2
-GROUP BY group_id ORDER BY MAX(created_at) DESC LIMIT $1::int
+_LIST_LEGS_BY_KEY_SQL: Final = """
+SELECT * FROM "LiteLLM_ShadowEvalJob"
+WHERE group_id IN (
+    SELECT group_id FROM "LiteLLM_ShadowEvalJob" WHERE api_key_id = $2
+    GROUP BY group_id ORDER BY MAX(created_at) DESC LIMIT $1::int
+)
 """
-
-
-class _GroupIdRow(BaseModel):
-    group_id: str
-
-
-_GROUP_ID_ROWS: Final = TypeAdapter(list[_GroupIdRow])
 
 
 class _AttemptTotalsRow(BaseModel):
@@ -642,6 +641,16 @@ class _LegRow(BaseModel):
     stopped_at: datetime | None = None
     stopped_by: str | None = None
 
+    @field_validator("created_at", "ends_at", "stopped_at")
+    @classmethod
+    def _as_aware_utc(cls, value: datetime | None) -> datetime | None:
+        """The columns store naive UTC wall time (prisma's convention); prisma reads hand
+        back aware datetimes while raw SQL reads hand back naive ones, so this boundary
+        makes every read aware UTC before anything compares or serializes them."""
+        if value is None or value.tzinfo is not None:
+            return value
+        return value.replace(tzinfo=timezone.utc)
+
 
 _LEG_ROWS: Final = TypeAdapter(list[_LegRow])
 
@@ -661,13 +670,14 @@ async def _leg_attempt_counts(prisma_client: "PrismaClient", legs: Sequence[_Leg
     return MappingProxyType({row.job_id: row.attempt_count for row in rows})
 
 
-def _group_response(legs: Sequence[_LegRow], attempt_counts: Mapping[str, int]) -> ShadowEvalJobResponse:
-    """The one constructor of a job response from a group's legs; config is read off the
-    first leg because every leg carries the same copy. No caller may serialize a raw row
-    (that would leak a leg id as the job id)."""
+def _group_response(group_id: str, legs: Sequence[_LegRow], attempt_counts: Mapping[str, int]) -> ShadowEvalJobResponse:
+    """The one constructor of a job response: the caller names the group and passes that
+    group's legs. Config is read off the first leg because every leg carries the same copy,
+    written by one create_many. No caller may serialize a raw row (that would leak a leg id
+    as the job id)."""
     first: Final = legs[0]
     return ShadowEvalJobResponse(
-        job_id=first.group_id,
+        job_id=group_id,
         keys=tuple(
             ShadowEvalJobKeyResponse(
                 api_key_id=leg.api_key_id,
@@ -899,21 +909,13 @@ async def list_shadow_eval_jobs(
     _require_admin_viewer(user_api_key_dict, "view shadow evals")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
-    heads: Final = _GROUP_ID_ROWS.validate_python(
+    legs: Final = _LEG_ROWS.validate_python(
         (
-            await prisma_client.db.query_raw(_LIST_GROUPS_BY_KEY_SQL, limit, api_key_id)
+            await prisma_client.db.query_raw(_LIST_LEGS_BY_KEY_SQL, limit, api_key_id)
             if api_key_id
-            else await prisma_client.db.query_raw(_LIST_GROUPS_SQL, limit)
+            else await prisma_client.db.query_raw(_LIST_LEGS_SQL, limit)
         )
         or ()
-    )
-    group_ids: Final = tuple(head.group_id for head in heads)
-    legs: Final = _LEG_ROWS.validate_python(
-        await prisma_client.db.litellm_shadowevaljob.find_many(
-            where={"group_id": {"in": list(group_ids)}}  # mutable-ok: Prisma filter
-        )
-        if group_ids
-        else ()
     )
     by_group: Final[Mapping[str, tuple[_LegRow, ...]]] = MappingProxyType(
         {
@@ -921,9 +923,12 @@ async def list_shadow_eval_jobs(
             for group_id, group in groupby(sorted(legs, key=attrgetter("group_id")), key=attrgetter("group_id"))
         }
     )
+    newest_first: Final = sorted(
+        by_group, key=lambda group_id: max(leg.created_at for leg in by_group[group_id]), reverse=True
+    )
     counts: Final = await _leg_attempt_counts(prisma_client, legs)
     return await _with_key_labels(
-        prisma_client, tuple(_group_response(by_group[group_id], counts) for group_id in group_ids)
+        prisma_client, tuple(_group_response(group_id, by_group[group_id], counts) for group_id in newest_first)
     )
 
 
@@ -960,7 +965,7 @@ async def get_shadow_eval_job(
         order={"created_at": "desc"},  # mutable-ok: Prisma order
     )
     labeled: Final = await _with_key_labels(
-        prisma_client, (_group_response(legs, await _leg_attempt_counts(prisma_client, legs)),)
+        prisma_client, (_group_response(job_id, legs, await _leg_attempt_counts(prisma_client, legs)),)
     )
     return labeled[0].model_copy(
         update={  # mutable-ok: pydantic update payload
@@ -1001,12 +1006,12 @@ async def stop_shadow_eval_job(
     if not legs:
         raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
     counts: Final = await _leg_attempt_counts(prisma_client, legs)
-    current: Final = _group_response(legs, counts)
+    current: Final = _group_response(job_id, legs, counts)
     if current.status != "running":
         raise HTTPException(status_code=400, detail=f"Job {job_id} is already {current.status}")
     stamp: Final = datetime.now(timezone.utc)
     operator: Final = user_api_key_dict.user_id or "operator"
-    await prisma_client.db.execute_raw(_STOP_JOB_SQL, job_id, operator, stamp.isoformat())
+    await prisma_client.db.execute_raw(_STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat())
     stopped: Final = tuple(
         (
             leg
@@ -1015,5 +1020,5 @@ async def stop_shadow_eval_job(
         ).model_copy(update={"stopped_by": operator})  # mutable-ok: pydantic update payload
         for leg in legs
     )
-    labeled: Final = await _with_key_labels(prisma_client, (_group_response(stopped, counts),))
+    labeled: Final = await _with_key_labels(prisma_client, (_group_response(job_id, stopped, counts),))
     return labeled[0]
