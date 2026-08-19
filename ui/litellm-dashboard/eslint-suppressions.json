@@ -336,9 +336,6 @@
     "max-params": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 3
     }
@@ -1300,9 +1297,6 @@
   },
   "src/app/(dashboard)/tag-management/_components/tag_info.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {

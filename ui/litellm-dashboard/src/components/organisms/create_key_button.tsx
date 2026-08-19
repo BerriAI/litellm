@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/shared/form/field";
-import { Button as Button2, Input as AntdInput, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
+import { Input as AntdInput, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
 import { ChevronDown } from "lucide-react";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
@@ -708,9 +708,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           style={{ width: "100%" }}
                           notFoundContent={userSearchLoading ? "Searching..." : "No users found"}
                         />
-                        <Button2 onClick={() => setIsCreateUserModalVisible(true)} style={{ marginLeft: "8px" }}>
+                        <Button variant="outline" className="ml-2" onClick={() => setIsCreateUserModalVisible(true)}>
                           Create User
-                        </Button2>
+                        </Button>
                       </div>
                       <div className="text-xs text-muted-foreground">Search by email to find users</div>
                     </div>
@@ -1726,9 +1726,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
             )}
 
             <div style={{ textAlign: "right", marginTop: "10px" }}>
-              <Button2 htmlType="submit" disabled={isFormDisabled} style={{ opacity: isFormDisabled ? 0.5 : 1 }}>
+              <Button type="submit" disabled={isFormDisabled}>
                 Create Key
-              </Button2>
+              </Button>
             </div>
           </form>
         </MountedFormProvider>

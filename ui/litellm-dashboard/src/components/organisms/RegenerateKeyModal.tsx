@@ -1,6 +1,7 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
-import { Alert, Button, Modal, Space } from "antd";
+import { Alert, Modal, Space } from "antd";
+import { Button } from "@/components/ui/button";
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
@@ -157,9 +158,12 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         regeneratedKey
           ? [
               <Space key="footer-actions">
-                <Button onClick={handleClose}>Close</Button>
+                <Button variant="outline" onClick={handleClose}>
+                  Close
+                </Button>
                 <CopyToClipboard text={regeneratedKey} onCopy={handleCopyKey}>
-                  <Button type="primary" icon={copied ? <CheckOutlined /> : <CopyOutlined />}>
+                  <Button>
+                    {copied ? <CheckOutlined /> : <CopyOutlined />}
                     {copied ? "Copied" : "Copy Key"}
                   </Button>
                 </CopyToClipboard>
@@ -167,8 +171,11 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
             ]
           : [
               <Space key="footer-actions">
-                <Button onClick={handleClose}>Cancel</Button>
-                <Button type="primary" icon={<SyncOutlined />} onClick={handleRegenerateKey} loading={isRegenerating}>
+                <Button variant="outline" onClick={handleClose}>
+                  Cancel
+                </Button>
+                <Button onClick={handleRegenerateKey} disabled={isRegenerating} aria-busy={isRegenerating}>
+                  <SyncOutlined />
                   Regenerate
                 </Button>
               </Space>,

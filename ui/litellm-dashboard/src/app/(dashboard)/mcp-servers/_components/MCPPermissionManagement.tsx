@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
-import { Alert, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
+import { Alert, Select, Tooltip, Collapse, Input, Space, Switch } from "antd";
+import { Button } from "@/components/ui/button";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
 import { MCPServer, AUTH_TYPE } from "@/components/mcp_tools/types";
@@ -77,7 +78,8 @@ const StaticHeadersFieldArray: React.FC = () => {
           />
         </Space>
       ))}
-      <Button type="dashed" onClick={() => append({})} icon={<PlusOutlined />} block>
+      <Button variant="outline" className="w-full border-dashed" onClick={() => append({})}>
+        <PlusOutlined />
         Add Static Header
       </Button>
     </div>
