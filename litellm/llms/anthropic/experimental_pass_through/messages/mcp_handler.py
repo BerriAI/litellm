@@ -64,17 +64,17 @@ def _has_client_side_tool(
     tool_use_blocks: Sequence[Mapping[str, object]],
     other_tools: Sequence[Mapping[str, object]] | None,
     tool_server_map: Mapping[str, str],
-) -> bool:  # kwargs-ok: helper function inspecting tool blocks for client passthrough
+) -> bool:  # kwargs-ok: helper inspecting tool blocks for client passthrough
     client_tool_names = {
-        t.get("name")  # kwargs-ok: extract client tool name
+        t.get("name")  # kwargs-ok: extract client tool name from dictionary
         for t in (other_tools or ())
         if isinstance(t, dict) and t.get("name")  # kwargs-ok: extract client tool name
     }
     for block in tool_use_blocks:
-        name = block.get("name")  # kwargs-ok: extract block tool name
+        name = block.get("name")  # kwargs-ok: extract block tool name from dictionary
         if name in client_tool_names or (
             bool(tool_server_map) and name not in tool_server_map
-        ):  # kwargs-ok: check map membership
+        ):  # kwargs-ok: map membership test
             return True
     return False
 
