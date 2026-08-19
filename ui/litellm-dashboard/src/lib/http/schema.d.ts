@@ -24053,6 +24053,11 @@ export interface components {
              */
             master_key?: string | null;
             /**
+             * Max Batch File Size Mb
+             * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
+             */
+            max_batch_file_size_mb?: number | null;
+            /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
              */
