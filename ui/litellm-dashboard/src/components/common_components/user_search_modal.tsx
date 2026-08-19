@@ -165,6 +165,8 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
         <Combobox
           items={items}
           value={selected}
+          // @ts-expect-error TS2322 -- Combobox.Root narrows autoHighlight to boolean; the AriaCombobox it wraps
+          // accepts "always", the only value that highlights a list this component filters server-side
           autoHighlight="always"
           filter={null}
           onValueChange={(option: UserOption | null) => {
