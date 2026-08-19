@@ -4833,6 +4833,74 @@ class TestMCPServerManager:
         with pytest.raises(ValueError, match="Tool missing_tool not found"):
             manager._resolve_mcp_server_for_tool_call("github", "missing_tool")
 
+    @staticmethod
+    def _manager_with_deepwiki_and_huggingface() -> MCPServerManager:
+        manager = MCPServerManager()
+        deepwiki = MCPServer(server_id="deepwiki-id", name="deepwiki", server_name="deepwiki", transport=MCPTransport.http)
+        huggingface = MCPServer(
+            server_id="huggingface-id", name="huggingface", server_name="huggingface", transport=MCPTransport.http
+        )
+        manager.registry = {"deepwiki-id": deepwiki, "huggingface-id": huggingface}
+        manager.tool_name_to_mcp_server_name_mapping = {
+            "read_wiki_structure": "deepwiki",
+            "deepwiki-read_wiki_structure": "deepwiki",
+            "hub_repo_search": "huggingface",
+            "huggingface-hub_repo_search": "huggingface",
+        }
+        return manager
+
+    def test_resolve_mcp_server_for_tool_call_rejects_tool_exposed_only_by_another_server(self):
+        manager = self._manager_with_deepwiki_and_huggingface()
+
+        with pytest.raises(ValueError, match="Tool read_wiki_structure not found"):
+            manager._resolve_mcp_server_for_tool_call("huggingface", "read_wiki_structure")
+        with pytest.raises(ValueError, match="Tool hub_repo_search not found"):
+            manager._resolve_mcp_server_for_tool_call("deepwiki", "hub_repo_search")
+
+        assert manager._resolve_mcp_server_for_tool_call("deepwiki", "read_wiki_structure") is manager.registry["deepwiki-id"]
+        assert manager._resolve_mcp_server_for_tool_call("huggingface", "hub_repo_search") is manager.registry["huggingface-id"]
+
+    def test_get_mcp_server_from_tool_name_rejects_other_servers_prefix(self):
+        manager = self._manager_with_deepwiki_and_huggingface()
+
+        assert manager._get_mcp_server_from_tool_name("huggingface-read_wiki_structure") is None
+        assert manager._get_mcp_server_from_tool_name("deepwiki-hub_repo_search") is None
+        assert manager._get_mcp_server_from_tool_name("deepwiki-read_wiki_structure") is manager.registry["deepwiki-id"]
+        assert manager._get_mcp_server_from_tool_name("huggingface-hub_repo_search") is manager.registry["huggingface-id"]
+
+    def test_resolve_mcp_server_for_tool_call_shared_bare_name_resolves_via_own_prefixed_spelling(self):
+        manager = MCPServerManager()
+        zapier = MCPServer(server_id="zapier-id", name="zapier", alias="zapier-alias", transport=MCPTransport.http)
+        other = MCPServer(server_id="other-id", name="other", server_name="other", transport=MCPTransport.http)
+        manager.registry = {"zapier-id": zapier, "other-id": other}
+        manager.tool_name_to_mcp_server_name_mapping = {
+            "create_zap": "other",
+            "other-create_zap": "other",
+            "zapier-alias-create_zap": "zapier-alias",
+        }
+
+        assert manager._resolve_mcp_server_for_tool_call("zapier", "create_zap") is zapier
+        assert manager._resolve_mcp_server_for_tool_call("other", "create_zap") is other
+
+    def test_remove_server_drops_only_its_own_tool_mapping_rows(self):
+        manager = self._manager_with_deepwiki_and_huggingface()
+
+        manager.remove_server(
+            LiteLLM_MCPServerTable(
+                server_id="huggingface-id",
+                alias="huggingface",
+                url="https://huggingface.co/mcp",
+                transport=MCPTransport.http,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+
+        assert manager.tool_name_to_mcp_server_name_mapping == {
+            "read_wiki_structure": "deepwiki",
+            "deepwiki-read_wiki_structure": "deepwiki",
+        }
+
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_skipped_when_not_user_oauth(self):
         """Returns input headers unchanged when server does not need user OAuth."""
