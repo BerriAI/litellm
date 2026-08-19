@@ -1,6 +1,8 @@
 import os
 from typing import Final, Literal
 
+from litellm.integrations.custom_logger import CustomLogger
+
 from . import *
 from .cache_control_check import _PROXY_CacheControlCheck
 from .litellm_skills import SkillsInjectionHook
@@ -16,7 +18,11 @@ from .sensitive_data_routing import _PROXY_SensitiveDataRoutingHandler
 # Defined before the enterprise import below so that any module re-imported
 # transitively through `enterprise.enterprise_hooks` can resolve `PROXY_HOOKS`
 # and `get_proxy_hook` from this partially-initialized module without circling.
-PROXY_HOOKS: Final = {
+# Annotated rather than inferred: the literal below is not the whole mapping.
+# The v1 parallel-request limiter replaces its entry under
+# LEGACY_MULTI_INSTANCE_RATE_LIMITING, and ENTERPRISE_PROXY_HOOKS is merged in
+# at the bottom of this module, so the value type is any CustomLogger subclass.
+PROXY_HOOKS: Final[dict[str, type[CustomLogger]]] = {  # mutable-ok: the swap and merge below
     "max_budget_limiter": _PROXY_MaxBudgetLimiter,
     "parallel_request_limiter": _PROXY_MaxParallelRequestsHandler_v3,
     "cache_control_check": _PROXY_CacheControlCheck,

@@ -39,10 +39,17 @@ def was_request_shed_by_proxy() -> bool:
 
 
 def is_global_limit_enforced() -> bool:
-    """Whether the registered limiter reads ``global_max_parallel_requests``."""
+    """Whether the registered limiter reads ``global_max_parallel_requests``.
+
+    Only the v1 handler does. Identity against v1 rather than "anything but v3"
+    so an unrecognised limiter reports unbounded instead of claiming a ceiling
+    it may not apply.
+    """
+    # The limiter class is private by naming convention only: it is what the hook
+    # registry is built from, and proxy/utils.py imports it the same way.
     from litellm.proxy.hooks import PROXY_HOOKS
     from litellm.proxy.hooks.parallel_request_limiter import (
-        _PROXY_MaxParallelRequestsHandler,
+        _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # the registry's own hook class, imported this way across the proxy
     )
 
     return PROXY_HOOKS.get("parallel_request_limiter") is _PROXY_MaxParallelRequestsHandler
