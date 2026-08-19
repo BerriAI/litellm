@@ -13,9 +13,14 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/sh
 
 export type MountedFormValues = Record<string, unknown>;
 
+const fieldKey = (name: string | readonly string[]): string =>
+  Array.isArray(name) ? name.join(".") : (name as string);
+
+export type MountedFieldName = string | readonly string[];
+
 export interface MountRegistry {
-  readonly register: (name: string) => () => void;
-  readonly mountedNames: () => readonly string[];
+  readonly register: (name: MountedFieldName) => () => void;
+  readonly mountedNames: () => readonly MountedFieldName[];
 }
 
 export interface MountedFormContextValue {
@@ -40,21 +45,22 @@ const MountedFormContext = React.createContext<MountedFormContextValue>({
 export const MountedFormProvider = MountedFormContext.Provider;
 
 export const useMountRegistry = (): MountRegistry => {
-  const counts = React.useRef<Map<string, number>>(new Map());
+  const counts = React.useRef<Map<string, { readonly name: MountedFieldName; readonly count: number }>>(new Map());
   return React.useMemo(
     () => ({
-      register: (name: string) => {
-        counts.current.set(name, (counts.current.get(name) ?? 0) + 1);
+      register: (name: MountedFieldName) => {
+        const key = fieldKey(name);
+        counts.current.set(key, { name, count: (counts.current.get(key)?.count ?? 0) + 1 });
         return () => {
-          const remaining = (counts.current.get(name) ?? 0) - 1;
+          const remaining = (counts.current.get(key)?.count ?? 0) - 1;
           if (remaining > 0) {
-            counts.current.set(name, remaining);
+            counts.current.set(key, { name, count: remaining });
           } else {
-            counts.current.delete(name);
+            counts.current.delete(key);
           }
         };
       },
-      mountedNames: () => Array.from(counts.current.keys()),
+      mountedNames: () => Array.from(counts.current.values(), (entry) => entry.name),
     }),
     [],
   );
@@ -80,9 +86,10 @@ export const projectMountedValues = (
   getValues: UseFormGetValues<MountedFormValues>,
 ): MountedFormValues => {
   const names = [...registry.mountedNames()];
-  const values = getValues(names);
+  const values = getValues(names.map(fieldKey));
   return names.reduce<MountedFormValues>(
-    (projected, name, index) => setPath(projected, name.split("."), values[index]) as MountedFormValues,
+    (projected, name, index) =>
+      setPath(projected, Array.isArray(name) ? name : [name as string], values[index]) as MountedFormValues,
     {},
   );
 };
@@ -99,7 +106,7 @@ export type MountedFieldControlProps = {
 };
 
 export interface MountedFormFieldProps {
-  readonly name: string;
+  readonly name: MountedFieldName;
   readonly label?: React.ReactNode;
   readonly help?: React.ReactNode;
   readonly required?: boolean;
@@ -125,15 +132,16 @@ export const MountedFormField: React.FC<MountedFormFieldProps> = ({
   children,
 }) => {
   const { control, registry } = React.useContext(MountedFormContext);
+  const path = fieldKey(name);
   React.useEffect(() => registry.register(name), [registry, name]);
 
-  const helpId = `${name}_help`;
+  const helpId = `${path}_help`;
   const hasHelp = help !== undefined && help !== null;
 
   const renderField: ControllerProps<MountedFormValues, string>["render"] = ({ field, fieldState }) => {
     const invalid = fieldState.error !== undefined;
     const controlProps: MountedFieldControlProps = {
-      id: name,
+      id: path,
       name: field.name,
       value: field.value,
       onChange: field.onChange,
@@ -149,7 +157,7 @@ export const MountedFormField: React.FC<MountedFormFieldProps> = ({
 
     return (
       <Field data-invalid={invalid || undefined} className={className}>
-        {label !== undefined && <FieldLabel htmlFor={name}>{label}</FieldLabel>}
+        {label !== undefined && <FieldLabel htmlFor={path}>{label}</FieldLabel>}
         {children(controlProps)}
         {hasHelp ? (
           <FieldDescription id={helpId}>{help}</FieldDescription>
@@ -160,5 +168,5 @@ export const MountedFormField: React.FC<MountedFormFieldProps> = ({
     );
   };
 
-  return <Controller control={control} name={name} rules={rules} defaultValue={defaultValue} render={renderField} />;
+  return <Controller control={control} name={path} rules={rules} defaultValue={defaultValue} render={renderField} />;
 };
