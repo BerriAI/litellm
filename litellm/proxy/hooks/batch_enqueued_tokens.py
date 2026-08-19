@@ -246,7 +246,7 @@ class BatchEnqueuedTokenStore:
                 already_reserved=scopes[:index],
             )
             if result[0] != 1:
-                await self._refund_via_redis(refund_script, tokens=tokens, scopes=scopes[:index])
+                await self._rollback_partial_reserve(refund_script, tokens=tokens, scopes=scopes[:index])
                 return BatchEnqueuedTokenOverLimit(scope=scope, enqueued=result[1])
         return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes, backend="redis")
 
@@ -376,17 +376,10 @@ class BatchEnqueuedTokenStore:
         batch_id: str,
         litellm_parent_otel_span: "Span | None" = None,
     ) -> BatchEnqueuedTokenReservation | None:
-        raw: object = None
-        if self._pop_script is not None:
-            try:
-                raw = _POPPED_VALUE_ADAPTER.validate_python(await self._pop_script((self._record_key(batch_id),), ()))
-            except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
-                verbose_proxy_logger.warning(
-                    "Redis enqueued-token reservation pop failed, falling back to in-memory: %s", str(e)
-                )
-                raw = await self._pop_local_record(batch_id, litellm_parent_otel_span)
-        else:
-            raw = await self._pop_local_record(batch_id, litellm_parent_otel_span)
+        redis_raw: Final = await self._pop_redis_record(batch_id)
+        raw: Final = (
+            redis_raw if redis_raw is not None else await self._pop_local_record(batch_id, litellm_parent_otel_span)
+        )
         if raw is None:
             return None
         try:
@@ -395,6 +388,18 @@ class BatchEnqueuedTokenStore:
             return _RESERVATION_ADAPTER.validate_python(raw)
         except ValidationError:
             verbose_proxy_logger.warning("Discarding malformed enqueued-token reservation record for %s", batch_id)
+            return None
+
+    async def _pop_redis_record(self, batch_id: str) -> str | bytes | None:
+        pop_script: Final = self._pop_script
+        if pop_script is None:
+            return None
+        try:
+            return _POPPED_VALUE_ADAPTER.validate_python(await pop_script((self._record_key(batch_id),), ()))
+        except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
+            verbose_proxy_logger.warning(
+                "Redis enqueued-token reservation pop failed, falling back to in-memory: %s", str(e)
+            )
             return None
 
     async def _pop_local_record(self, batch_id: str, span: "Span | None") -> object:
