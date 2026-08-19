@@ -885,6 +885,30 @@ class PrometheusLogger(CustomLogger):
             print_verbose(f"Got exception on init prometheus client {e}")
             raise e
 
+        self._restore_effective_concurrency_ceiling()
+
+    def _restore_effective_concurrency_ceiling(self) -> None:
+        """Set the ceiling gauge to the value already in force.
+
+        Startup publishes the ceiling, but ``success_callback: ["prometheus"]``
+        builds this logger lazily on the first request, long after that ran with
+        no logger to publish to. The gauge would then register at its zero
+        default and stay there, reading as "no requests allowed" on a proxy
+        serving everything, which is the reading ``+Inf`` exists to prevent.
+
+        Set directly rather than through the module helper, because during
+        ``__init__`` this instance is not yet reachable by the logger lookup.
+        """
+        try:
+            from litellm.proxy.common_utils.request_pressure_metrics import effective_global_limit
+            from litellm.proxy.proxy_server import general_settings
+
+            self.set_global_max_parallel_requests_limit(
+                effective_global_limit(general_settings.get("global_max_parallel_requests"))
+            )
+        except Exception as e:  # noqa: BLE001  # a logger that cannot read proxy config must still start
+            print_verbose(f"could not publish the concurrency ceiling on init: {e}")
+
     def _parse_prometheus_config(self) -> dict[str, list[str]]:
         """Parse prometheus metrics configuration for label filtering and enabled metrics"""
         import litellm

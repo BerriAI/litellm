@@ -104,3 +104,32 @@ def test_publishing_never_blocks_startup():
         ),
     ):
         publish_global_max_parallel_requests(3)
+
+def test_a_lazily_built_logger_publishes_the_ceiling_already_in_force(monkeypatch):
+    """success_callback: ["prometheus"] builds the logger on the first request,
+    long after startup published the ceiling with no logger to publish to. The
+    gauge would register at its zero default and stay there, reading as "no
+    requests allowed" on a proxy serving everything."""
+    from prometheus_client import REGISTRY
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setitem(proxy_server.general_settings, "global_max_parallel_requests", 7)
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.request_pressure_metrics.is_global_limit_enforced",
+        lambda: True,
+    )
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        try:
+            REGISTRY.unregister(collector)
+        except Exception:
+            pass
+
+    PrometheusLogger()
+
+    assert REGISTRY.get_sample_value("litellm_global_max_parallel_requests_limit") == 7.0
+
