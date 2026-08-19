@@ -265,8 +265,6 @@ class JsonFormatter(Formatter):
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
-        # SecretRedactionFilter only scrubs str values; redacting the rendered line means
-        # no `extra=` value shape (dict, list, set, nested) can bypass redaction.
         return _redact_string(safe_dumps(json_record))
 
 
