@@ -14,6 +14,9 @@ pinned here too, including the stale message that names the bundle's age.
 from __future__ import annotations
 
 import hashlib
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -457,6 +460,46 @@ class TestReplayTransport:
         second = replay.get("/v1/models", headers=replay.master, params=Query(q="all"), response_type=Payload)
         assert first == Success(status_code=200, data=Payload(value="first"))
         assert second == Success(status_code=200, data=Payload(value="second"))
+
+    def test_concurrent_replays_of_one_key_serve_each_recording_exactly_once(self, tmp_path: Path) -> None:
+        """A burst of parallel identical calls consumes one shared pool: no
+        response duplicated, none forgotten, nothing left over at teardown.
+        The tiny switch interval forces thread preemption inside pool setup
+        and consumption, so a non-atomic pool build or pop fails this test."""
+        root = tmp_path / "bundle"
+        recorder = make_recorder(root)
+        for ordinal in range(32):
+            recorder.record(
+                test_key=current_test_key(),
+                request=recorded_request(
+                    "get", "/v1/models", headers=AuthHeaders(authorization="Bearer sk-x"), params=Query(q="all")
+                ),
+                response=RecordedResult(kind="success", status_code=200, data={"value": f"v{ordinal:02d}"}),
+            )
+        source = replay_source(root)
+        replay: Transport = ReplayTransport(source=source, master_key="sk-1234")
+        barrier = threading.Barrier(8)
+
+        def consume_one() -> str:
+            result = replay.get(
+                "/v1/models", headers=replay.master, params=Query(q="all"), response_type=Payload
+            )
+            assert isinstance(result, Success)
+            return result.data.value
+
+        def consume(_: int) -> tuple[str, ...]:
+            barrier.wait()
+            return tuple(consume_one() for _call in range(4))
+
+        previous_interval = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        try:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                served = sorted(value for values in executor.map(consume, range(8)) for value in values)
+        finally:
+            sys.setswitchinterval(previous_interval)
+        assert served == [f"v{ordinal:02d}" for ordinal in range(32)]
+        assert source.leftover_error(current_test_key()) is None
 
 
 class TestRecordedKeySets:
