@@ -195,28 +195,23 @@ class LangfuseOtelLogger(OpenTelemetry):
                                 "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
                             }
                         )
-                    elif item_type == "function_call":
-                        arguments_str = getattr(item, "arguments", "{}")
-                        arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                    elif item_type in ("function_call", "custom_tool_call"):
+                        # A custom (freeform) tool carries its payload as a raw string under `input`,
+                        # where a function call carries a JSON string under `arguments`.
+                        if item_type == "custom_tool_call":
+                            payload_key, payload_value = "input", getattr(item, "input", "")
+                        else:
+                            arguments_str = getattr(item, "arguments", "{}")
+                            payload_key = "arguments"
+                            payload_value = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
                             "name": getattr(item, "name", ""),
                             "call_id": getattr(item, "call_id", ""),
-                            "type": "function_call",
-                            "arguments": arguments_obj,
+                            "type": item_type,
+                            payload_key: payload_value,
                         }
                         output_items_data.append(langfuse_tool_call)
-                    elif item_type == "custom_tool_call":
-                        # Custom (freeform) tools carry a raw string `input` instead of JSON `arguments`
-                        output_items_data.append(
-                            {
-                                "id": getattr(item, "id", ""),
-                                "name": getattr(item, "name", ""),
-                                "call_id": getattr(item, "call_id", ""),
-                                "type": "custom_tool_call",
-                                "input": getattr(item, "input", ""),
-                            }
-                        )
             if output_items_data:
                 safe_set_attribute(
                     span,
