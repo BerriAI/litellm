@@ -170,9 +170,7 @@ def _classify_output_line_stats(
                 custom_llm_provider=custom_llm_provider,
                 call_type=CallTypes.aretrieve_batch.value,
             )
-        reasoning_tokens: Final = (
-            usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
-        )
+        reasoning_tokens = usage.completion_tokens_details.reasoning_tokens if usage.completion_tokens_details else None
         yield _BatchOutputLineStats(
             cost=line_cost,
             prompt_tokens=usage.prompt_tokens,
