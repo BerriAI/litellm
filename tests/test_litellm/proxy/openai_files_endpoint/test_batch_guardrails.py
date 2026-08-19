@@ -169,6 +169,31 @@ async def test_guardrail_that_adds_a_key_is_detected():
 
 
 @pytest.mark.asyncio
+async def test_guardrail_that_adds_a_null_valued_key_is_detected():
+    """A null value must not read the same as a missing key, or dropping one hides a change."""
+
+    def _add_null_key(data):
+        data["response_format"] = None
+
+    failure = await _scan(_jsonl(_record("a")), FakeProxyLogging(_add_null_key))
+
+    assert failure == RedactionRequired(line_number=1, custom_id="a")
+
+
+@pytest.mark.asyncio
+async def test_guardrail_that_drops_a_null_valued_key_is_detected():
+    def _drop_null_key(data):
+        data.pop("response_format")
+
+    record = _record("a")
+    record["body"]["response_format"] = None
+
+    failure = await _scan(_jsonl(record), FakeProxyLogging(_drop_null_key))
+
+    assert failure == RedactionRequired(line_number=1, custom_id="a")
+
+
+@pytest.mark.asyncio
 async def test_guardrail_that_only_reorders_a_nested_dict_is_not_a_redaction():
     def _reorder(data):
         message = data["messages"][0]

@@ -168,8 +168,17 @@ def _custom_id_of(payload: Mapping[str, object]) -> str | None:
 
 
 def _fingerprint(body: Mapping[str, object], keys: frozenset[str]) -> str:
-    """Order-insensitive projection, so a guardrail re-serializing a dict does not read as a change."""
-    return json.dumps(tuple((key, json.dumps(body.get(key), sort_keys=True, default=str)) for key in sorted(keys)))
+    """
+    Order-insensitive projection, so a guardrail re-serializing a dict does not read as a change.
+
+    An absent key projects to ``null`` while a key holding ``None`` projects to the string
+    ``"null"``, so adding or dropping a null-valued key still reads as a change.
+    """
+    return json.dumps(
+        tuple(
+            (key, json.dumps(body[key], sort_keys=True, default=str) if key in body else None) for key in sorted(keys)
+        )
+    )
 
 
 def build_scan_metadata(request_metadata: Mapping[str, object]) -> Mapping[str, object]:
