@@ -27,17 +27,17 @@ export const selectControl = <TValue = unknown>(control: MountedFieldControlProp
 
 export const selectTriggerControl = (control: MountedFieldControlProps) => ariaOf(control);
 
-// Tag fields are backed by a list, but a stored value can still arrive as the delimited string an
-// OAuth server returns (RFC 6749 uses space-delimited scopes) or as the empty string a cleared
-// antd field left behind, so normalise before the tag list renders.
+// Tag fields are backed by a list, but a single entry can still carry several tags: a stored value
+// arrives as the delimited string an OAuth server returns (RFC 6749 uses space-delimited scopes),
+// and the tag input commits whatever the admin typed as one custom value, so "read,write" would
+// otherwise be stored verbatim. Split and dedupe on the way in and on the way out.
 const toTags = (value: unknown): string[] => {
-  if (Array.isArray(value)) {
-    return value.filter((tag): tag is string => typeof tag === "string" && tag !== "");
-  }
-  if (typeof value === "string") {
-    return value.split(/[\s,]+/).filter((tag) => tag !== "");
-  }
-  return [];
+  const entries = Array.isArray(value) ? value : [value];
+  return [
+    ...new Set(
+      entries.flatMap((entry) => (typeof entry === "string" ? entry.split(/[\s,]+/) : [])).filter((tag) => tag !== ""),
+    ),
+  ];
 };
 
 export const tagsControl = (control: MountedFieldControlProps) => {
@@ -46,7 +46,7 @@ export const tagsControl = (control: MountedFieldControlProps) => {
     id: control.id,
     options: value.map((tag) => ({ label: tag, value: tag })),
     value,
-    onValueChange: control.onChange,
+    onValueChange: (tags: readonly string[]) => control.onChange(toTags(tags)),
     emptyText: "Type to add",
     allowCustomValues: true,
   };
