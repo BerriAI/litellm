@@ -6,11 +6,15 @@ in the litellm hot path: token counting, model info lookup, provider
 resolution, and cost calculation.
 """
 
+import io
+import tempfile
 import threading
+import wave
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -208,6 +212,54 @@ def test_get_model_cost_key_exact_match():
 def test_get_model_cost_key_case_insensitive():
     """Benchmark model cost key lookup with case-insensitive fallback."""
     litellm.utils._get_model_cost_key("GPT-4o")
+
+
+# ---------------------------------------------------------------------------
+# Audio duration extraction
+# ---------------------------------------------------------------------------
+
+
+def _benchmark_wav(duration_seconds: float, sample_rate: int = 16000) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(b"\x00\x00" * int(sample_rate * duration_seconds))
+    return buffer.getvalue()
+
+
+def _spooled_upload(content: bytes) -> tempfile.SpooledTemporaryFile:
+    """A starlette-shaped upload. A BytesIO over an existing bytes object shares
+    its buffer, so reading it costs nothing and would understate the real work."""
+    handle = tempfile.SpooledTemporaryFile(max_size=1024 * 1024)
+    handle.write(content)
+    handle.seek(0)
+    return handle
+
+
+SHORT_UPLOAD = _spooled_upload(_benchmark_wav(5.0))
+LONG_UPLOAD = _spooled_upload(_benchmark_wav(600.0))
+UNREADABLE_UPLOAD = _spooled_upload(b"\x00\x00\x00\x20ftypM4A " + b"\x11" * (2 * 1024 * 1024))
+
+
+@pytest.mark.benchmark
+def test_audio_duration_short_wav():
+    """Duration read for a 5s WAV, the common transcription upload."""
+    calculate_request_duration(SHORT_UPLOAD)
+
+
+@pytest.mark.benchmark
+def test_audio_duration_long_wav():
+    """Duration read for 10 minutes of WAV, ~19 MB, near the provider size cap."""
+    calculate_request_duration(LONG_UPLOAD)
+
+
+@pytest.mark.benchmark
+def test_audio_duration_unreadable_container():
+    """Measures the failure path taken by any upload libsndfile declines to
+    decode, before the byte-count ceiling picks it up."""
+    calculate_request_duration(UNREADABLE_UPLOAD)
 
 
 # ---------------------------------------------------------------------------

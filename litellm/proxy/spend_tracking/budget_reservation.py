@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final, NoReturn, cast
 
 from fastapi import HTTPException, status
+from starlette.datastructures import UploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -183,10 +186,12 @@ async def reserve_budget_for_request(
         return None
 
     current_spend_by_counter_key: Final[dict[str, float]] = {}
+    audio_duration: Final = _audio_duration_reader(request_body)
     reservation_cost = estimate_request_max_cost(
         request_body=request_body,
         route=route,
         llm_router=llm_router,
+        audio_duration=audio_duration,
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -245,7 +250,9 @@ async def reserve_budget_for_request(
     if not applied_entries:
         return None
 
-    input_cost: Final = estimate_request_input_cost(request_body=request_body, route=route, llm_router=llm_router)
+    input_cost: Final = estimate_request_input_cost(
+        request_body=request_body, route=route, llm_router=llm_router, audio_duration=audio_duration
+    )
     return {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
@@ -907,18 +914,21 @@ def estimate_request_max_cost(
     request_body: dict,
     route: str,
     llm_router: Router | None,
+    audio_duration: Callable[[], float | None] | None = None,
 ) -> float | None:
     model: Final = get_model_from_request(request_body, route, llm_router=llm_router)
     if model is None:
         return None
 
     models: Final = [model] if isinstance(model, str) else model
+    read_duration: Final = audio_duration or _audio_duration_reader(request_body)
     estimates = [
         _estimate_request_max_cost_for_model(
             request_body=request_body,
             route=route,
             model=model_name,
             llm_router=llm_router,
+            audio_duration=read_duration,
         )
         for model_name in models
     ]
@@ -932,6 +942,7 @@ def estimate_request_input_cost(
     request_body: dict,
     route: str,
     llm_router: Router | None,
+    audio_duration: Callable[[], float | None] | None = None,
 ) -> float | None:
     """Cost of the request's input tokens alone.
 
@@ -945,12 +956,14 @@ def estimate_request_input_cost(
         return None
 
     models: Final = [model] if isinstance(model, str) else model
+    read_duration: Final = audio_duration or _audio_duration_reader(request_body)
     estimates = [
         _estimate_request_input_cost_for_model(
             request_body=request_body,
             route=route,
             model=model_name,
             llm_router=llm_router,
+            audio_duration=read_duration,
         )
         for model_name in models
     ]
@@ -965,6 +978,7 @@ def _estimate_request_input_cost_for_model(
     route: str,
     model: str,
     llm_router: Router | None,
+    audio_duration: Callable[[], float | None],
 ) -> float | None:
     estimates: Final = [
         _input_cost_for_cost_info(
@@ -972,6 +986,7 @@ def _estimate_request_input_cost_for_model(
             route=route,
             model=model,
             model_info=model_info,
+            audio_duration=audio_duration,
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
@@ -983,8 +998,18 @@ def _input_cost_for_cost_info(
     request_body: dict,
     route: str,
     model: str,
-    model_info: dict[str, Any],
+    model_info: Mapping[str, Any],
+    audio_duration: Callable[[], float | None],
 ) -> float | None:
+    # The provider bills the full duration on accepting the upload, so a
+    # cancelled transcription has no unbilled share to refund.
+    audio_cost: Final = _estimate_audio_transcription_cost(
+        audio_duration=audio_duration,
+        model_info=model_info,
+    )
+    if audio_cost is not None:
+        return audio_cost
+
     input_tokens: Final = _estimate_input_tokens(
         request_body=request_body,
         route=route,
@@ -1009,6 +1034,7 @@ def _estimate_request_max_cost_for_model(
     route: str,
     model: str,
     llm_router: Router | None,
+    audio_duration: Callable[[], float | None],
 ) -> float | None:
     estimates: Final = [
         _max_cost_for_cost_info(
@@ -1016,6 +1042,7 @@ def _estimate_request_max_cost_for_model(
             route=route,
             model=model,
             model_info=model_info,
+            audio_duration=audio_duration,
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
@@ -1027,7 +1054,8 @@ def _max_cost_for_cost_info(
     request_body: dict,
     route: str,
     model: str,
-    model_info: dict[str, Any],
+    model_info: Mapping[str, Any],
+    audio_duration: Callable[[], float | None],
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
@@ -1035,6 +1063,13 @@ def _max_cost_for_cost_info(
     )
     if image_cost is not None:
         return image_cost
+
+    audio_cost: Final = _estimate_audio_transcription_cost(
+        audio_duration=audio_duration,
+        model_info=model_info,
+    )
+    if audio_cost is not None:
+        return audio_cost
 
     input_tokens: Final = _estimate_input_tokens(
         request_body=request_body,
@@ -1086,7 +1121,7 @@ def _max_cost_for_cost_info(
 
 def _estimate_image_generation_cost(
     request_body: dict,
-    model_info: dict[str, Any],
+    model_info: Mapping[str, Any],
 ) -> float | None:
     """
     Reserve `n × per-image cost` for image-generation requests so concurrent
@@ -1122,6 +1157,73 @@ def _estimate_image_generation_cost(
     return cost_per_image * max(n, 1)
 
 
+# Bytes-per-second floor for bounding an upload's duration when it cannot be
+# decoded. 500 sits below the lowest rate measured for speech at 8-32 kbps.
+MIN_AUDIO_BYTES_PER_SECOND: Final = 500.0
+
+# Cap on what a duration read will pull into memory during auth. Above it the
+# byte-count ceiling is used instead of decoding.
+MAX_AUDIO_DECODE_BYTES: Final = 25 * 1024 * 1024
+
+
+def _estimate_audio_transcription_cost(
+    audio_duration: Callable[[], float | None],
+    model_info: Mapping[str, Any],
+) -> float | None:
+    """Cost of transcribing the request's audio: its duration times the model's
+    per-second rate. ``None`` for anything not priced that way."""
+    if model_info.get("mode") != "audio_transcription":
+        return None
+
+    cost_per_second: Final = _audio_cost_per_second(model_info)
+    if cost_per_second is None or cost_per_second <= 0:
+        return None
+
+    audio_seconds: Final = audio_duration()
+    if audio_seconds is None:
+        return None
+
+    return cost_per_second * audio_seconds
+
+
+def _audio_cost_per_second(model_info: Mapping[str, Any]) -> float | None:
+    """The model's per-second billing rate, chosen the way ``cost_per_second``
+    chooses it."""
+    output_cost_per_second: Final = _to_float(model_info.get("output_cost_per_second"))
+    if output_cost_per_second is not None and output_cost_per_second > 0:
+        return output_cost_per_second
+    return _to_float(model_info.get("input_cost_per_second"))
+
+
+def _audio_duration_reader(request_body: dict) -> Callable[[], float | None]:
+    """Defers the duration read until a per-second-priced candidate needs it, and
+    performs it at most once. Any route can carry a multipart file, and reading
+    one pulls it into memory, so nothing is read on the strength of the body
+    alone."""
+    return functools.lru_cache(maxsize=1)(lambda: _estimate_audio_duration_seconds(request_body=request_body))
+
+
+def _estimate_audio_duration_seconds(request_body: dict) -> float | None:
+    """Seconds of audio in the request, read from the file when it can be decoded
+    and bounded from its byte count when it cannot. ``None`` when the request
+    carries no readable upload."""
+    upload: Final = request_body.get("file")
+    if not isinstance(upload, UploadFile):
+        return None
+    size_in_bytes: Final = _to_float(upload.size)
+
+    if size_in_bytes is not None and size_in_bytes > MAX_AUDIO_DECODE_BYTES:
+        return size_in_bytes / MIN_AUDIO_BYTES_PER_SECOND
+
+    exact_duration: Final = calculate_request_duration(upload.file)
+    if exact_duration is not None and exact_duration > 0:
+        return exact_duration
+
+    if size_in_bytes is None or size_in_bytes <= 0:
+        return None
+    return size_in_bytes / MIN_AUDIO_BYTES_PER_SECOND
+
+
 def _get_model_cost_info(
     model: str,
     llm_router: Router | None,
@@ -1136,67 +1238,66 @@ def _get_model_cost_info(
 def _get_model_cost_infos(
     model: str,
     llm_router: Router | None,
-) -> list[dict[str, Any]]:
+) -> tuple[Mapping[str, Any], ...]:
     """Cost-info candidates to estimate a request against for one model group.
 
     Reservation runs before routing, so the deployment that will serve the request
     is unknown. Rather than guess, we estimate the cost against every eligible
-    pricing shape in the group (the group's flat rates plus each deployment's
-    tiered table) and let the caller reserve the maximum, so a cheaper sibling
-    deployment can never leave the request under-reserved.
+    pricing shape in the group (the group's flat rates, each deployment's own cost
+    info, and each deployment's tiered table) and let the caller reserve the
+    maximum, so a cheaper sibling deployment can never leave the request
+    under-reserved.
     """
     try:
         base: Final = _get_model_cost_info(model=model, llm_router=llm_router)
         if base is None:
-            return []
-        tiered_tables: Final = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
+            return ()
+        deployment_infos: Final = _get_deployment_cost_infos(model=model, llm_router=llm_router)
     except Exception:
         verbose_proxy_logger.debug(
             "Unable to load model cost info for budget reservation",
             exc_info=True,
         )
-        return []
-    if not tiered_tables:
-        return [base]
-    return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
+        return ()
+    return (
+        base,
+        *deployment_infos,
+        *(
+            {**base, "tiered_pricing": tiered_pricing}
+            for info in deployment_infos
+            if isinstance(tiered_pricing := info.get("tiered_pricing"), list) and tiered_pricing
+        ),
+    )
 
 
-def _deployment_tiered_pricing_table(
+def _get_deployment_cost_infos(
+    model: str,
+    llm_router: Router | None,
+) -> tuple[Mapping[str, Any], ...]:
+    if llm_router is None:
+        return ()
+    deployments: Final = llm_router.get_model_list(model_name=model) or ()
+    return tuple(
+        info for deployment in deployments if (info := _deployment_cost_info(deployment, llm_router)) is not None
+    )
+
+
+def _deployment_cost_info(
     deployment: dict[str, Any],
     llm_router: Router,
-) -> list[dict] | None:
+) -> Mapping[str, Any] | None:
     model_id: Final = deployment.get("model_info", {}).get("id")
     backend_model: Final = deployment.get("litellm_params", {}).get("model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
-    deployment_model_info: Final = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
-    if deployment_model_info is None:
-        return None
-    tiered_pricing: Final = deployment_model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        return tiered_pricing
-    return None
-
-
-def _get_deployment_tiered_pricing_tables(
-    model: str,
-    llm_router: Router | None,
-) -> list[list[dict]]:
-    if llm_router is None:
-        return []
-    deployments: Final = llm_router.get_model_list(model_name=model) or []
-    return [
-        table
-        for deployment in deployments
-        if (table := _deployment_tiered_pricing_table(deployment, llm_router)) is not None
-    ]
+    return llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
 
 
 def _estimate_input_tokens(
     request_body: dict,
     route: str,
     model: str,
-    model_info: dict[str, Any],
+    model_info: Mapping[str, Any],
 ) -> int | None:
     try:
         if "messages" in request_body:
@@ -1233,7 +1334,7 @@ DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384
 def _estimate_output_tokens(
     request_body: dict,
     route: str,
-    model_info: dict[str, Any],
+    model_info: Mapping[str, Any],
 ) -> int | None:
     if _is_input_only_route(route=route):
         return 0

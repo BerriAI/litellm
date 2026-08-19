@@ -33,6 +33,12 @@ model_list:
       model: anthropic/claude-sonnet-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  # ---------- Audio transcription ----------
+  - model_name: whisper-1
+    litellm_params:
+      model: openai/whisper-1
+      api_key: os.environ/OPENAI_API_KEY
+
   # ---------- Embeddings (for complexity router semantic keyword matching) ----------
   - model_name: voyage-4-large
     litellm_params:
