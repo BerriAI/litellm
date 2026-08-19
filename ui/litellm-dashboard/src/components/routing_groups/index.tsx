@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Button, Card, Flex, Input, Modal, Space, Typography } from "antd";
+import { Card, Flex, Input, Modal, Space, Typography } from "antd";
+import { Button } from "@/components/ui/button";
 import { PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
 import { useRouterFields } from "@/app/(dashboard)/hooks/router/useRouterFields";
@@ -112,10 +113,17 @@ const RoutingGroups: React.FC = () => {
             className="max-w-sm"
           />
           <Flex align="center" gap={12}>
-            <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isFetching && !isLoading}>
+            <Button
+              variant="outline"
+              onClick={() => refetch()}
+              disabled={isFetching && !isLoading}
+              aria-busy={isFetching && !isLoading}
+            >
+              <ReloadOutlined />
               Refresh
             </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            <Button onClick={openCreate}>
+              <PlusOutlined />
               Create Group
             </Button>
             <Text type="secondary" className="text-sm whitespace-nowrap">

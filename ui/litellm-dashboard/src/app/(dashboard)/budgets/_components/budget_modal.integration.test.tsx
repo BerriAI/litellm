@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,9 +39,9 @@ describe("BudgetModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Budget ID"), "budget-alpha");
-    await user.type(screen.getByLabelText("Max Tokens per minute"), "500.567");
-    await user.type(screen.getByLabelText("Max Requests per minute"), "7");
+    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
+    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "500.567" } });
+    fireEvent.change(screen.getByLabelText("Max Requests per minute"), { target: { value: "7" } });
     await create(user);
 
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
@@ -56,12 +56,12 @@ describe("BudgetModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Budget ID"), "budget-alpha");
-    await user.type(screen.getByLabelText("Max Tokens per minute"), "500.567");
-    await user.type(screen.getByLabelText("Max Requests per minute"), "7");
+    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
+    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "500.567" } });
+    fireEvent.change(screen.getByLabelText("Max Requests per minute"), { target: { value: "7" } });
 
     await openOptionalSettings(user);
-    await user.type(screen.getByLabelText("Max Budget (USD)"), "42.567");
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.567" } });
 
     await user.click(screen.getByRole("combobox"));
     await user.click(await screen.findByText("monthly"));
@@ -76,10 +76,10 @@ describe("BudgetModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Budget ID"), "budget-alpha");
+    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
 
     await openOptionalSettings(user);
-    await user.type(screen.getByLabelText("Max Budget (USD)"), "42.567");
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.567" } });
     await user.click(screen.getByRole("combobox"));
     await user.click(await screen.findByText("monthly"));
 
@@ -95,8 +95,8 @@ describe("BudgetModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Budget ID"), "budget-alpha");
-    await user.type(screen.getByLabelText("Max Tokens per minute"), "5");
+    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "budget-alpha" } });
+    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "5" } });
     await user.clear(screen.getByLabelText("Max Tokens per minute"));
     await create(user);
 
@@ -111,7 +111,7 @@ describe("BudgetModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Max Tokens per minute"), "5");
+    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "5" } });
     await create(user);
 
     await waitFor(() => expect(screen.getByLabelText("Budget ID")).toHaveAttribute("aria-invalid", "true"));
@@ -121,10 +121,10 @@ describe("BudgetModal", () => {
   it("keeps a typed Optional Setting when the section is collapsed and reopened, as antd's store did", async () => {
     const user = userEvent.setup();
     renderModal();
-    await user.type(screen.getByLabelText("Budget ID"), "probe-budget");
+    fireEvent.change(screen.getByLabelText("Budget ID"), { target: { value: "probe-budget" } });
 
     await openOptionalSettings(user);
-    await user.type(screen.getByLabelText("Max Budget (USD)"), "42.5");
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.5" } });
 
     await user.click(screen.getByText("Optional Settings"));
     await user.click(screen.getByText("Optional Settings"));

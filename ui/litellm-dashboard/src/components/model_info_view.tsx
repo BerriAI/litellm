@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Button as AntdButton, Modal } from "antd";
+import { Modal } from "antd";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
 import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
@@ -600,10 +600,9 @@ export default function ModelInfoView({
           <h2 className="text-xl font-semibold">Public Model Name: {getDisplayModelName(modelData)}</h2>
           <div className="flex items-center cursor-pointer">
             <span className="text-sm text-muted-foreground font-mono">{modelData.model_info.id}</span>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            <Button
+              variant="ghost"
+              size="icon-xs"
               aria-label="Copy model ID"
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
               className={`left-2 z-10 transition-all duration-200 ${
@@ -611,54 +610,59 @@ export default function ModelInfoView({
                   ? "text-green-600 bg-green-50 border-green-200"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
-            />
+            >
+              {copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            </Button>
           </div>
         </div>
         <div className="flex gap-2">
           {(!isAnyAutoRouter || isComplexityRouterModel) && (
-            <AntdButton
-              icon={<RefreshIcon className="h-4 w-4" />}
+            <Button
+              variant="outline"
               onClick={handleTestConnection}
               className="flex items-center gap-2"
               data-testid="test-connection-button"
             >
+              <RefreshIcon className="h-4 w-4" />
               Test Connection
-            </AntdButton>
+            </Button>
           )}
 
           {!isAnyAutoRouter && (
             <>
-              <AntdButton
-                icon={<KeyIcon className="h-4 w-4" />}
+              <Button
+                variant="outline"
                 onClick={() => setIsUpdateCredentialsModalOpen(true)}
                 className="flex items-center"
                 disabled={!canEditModel}
                 data-testid="update-api-key-button"
               >
+                <KeyIcon className="h-4 w-4" />
                 Update API Key
-              </AntdButton>
+              </Button>
 
-              <AntdButton
-                icon={<KeyIcon className="h-4 w-4" />}
+              <Button
+                variant="outline"
                 onClick={() => setIsCredentialModalOpen(true)}
                 className="flex items-center"
                 disabled={!isAdmin}
                 data-testid="reuse-credentials-button"
               >
+                <KeyIcon className="h-4 w-4" />
                 Re-use Credentials
-              </AntdButton>
+              </Button>
             </>
           )}
-          <AntdButton
-            danger
-            icon={<TrashIcon className="h-4 w-4" />}
+          <Button
+            variant="destructive"
             onClick={() => setIsDeleteModalOpen(true)}
             className="flex items-center"
             disabled={!canEditModel}
             data-testid="delete-model-button"
           >
+            <TrashIcon className="h-4 w-4" />
             {deleteLabel}
-          </AntdButton>
+          </Button>
         </div>
       </div>
 
@@ -865,9 +869,9 @@ export default function ModelInfoView({
         open={isAutoRouterTestModalOpen}
         onCancel={() => setIsAutoRouterTestModalOpen(false)}
         footer={[
-          <AntdButton key="close" onClick={() => setIsAutoRouterTestModalOpen(false)}>
+          <Button key="close" variant="outline" onClick={() => setIsAutoRouterTestModalOpen(false)}>
             Close
-          </AntdButton>,
+          </Button>,
         ]}
         width={700}
       >

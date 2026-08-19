@@ -1,7 +1,8 @@
 /* eslint-disable react/no-unescaped-entities */
 
 import React, { useState } from "react";
-import { Card, Typography, Space, Alert, Button, Switch } from "antd";
+import { Card, Typography, Space, Alert, Switch } from "antd";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -145,16 +146,17 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
       )}
       <Card className={`bg-muted border border-border relative ${className}`}>
         <Button
-          type="text"
-          size="small"
-          icon={copiedStates[copyKey] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+          variant="ghost"
+          size="icon-xs"
           onClick={() => copyToClipboard(code, copyKey)}
           className={`absolute top-2 right-2 z-10 transition-all duration-200 ${
             copiedStates[copyKey]
               ? "text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950 dark:border-green-800"
               : "text-muted-foreground hover:text-foreground hover:bg-accent"
           }`}
-        />
+        >
+          {copiedStates[copyKey] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+        </Button>
         <pre className="text-sm overflow-x-auto pr-10 text-foreground font-mono leading-relaxed">{code}</pre>
       </Card>
     </div>
@@ -441,11 +443,18 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           />
           <div className="mt-4">
             <Button
-              type="link"
+              variant="link"
               className="p-0 h-auto text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
-              href="https://modelcontextprotocol.io/docs/concepts/transports"
-              icon={<ExternalLinkIcon size={14} />}
+              nativeButton={false}
+              render={
+                <a
+                  href="https://modelcontextprotocol.io/docs/concepts/transports"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                />
+              }
             >
+              <ExternalLinkIcon size={14} />
               Learn more about MCP transports
             </Button>
           </div>

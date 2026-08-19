@@ -1,4 +1,4 @@
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
@@ -87,7 +87,7 @@ describe("ClassifierPromptEditor", () => {
     const onChange = await openEditor();
     const textarea = screen.getByLabelText("Classifier system prompt");
     await userEvent.clear(textarea);
-    await userEvent.type(textarea, "Grade data sensitivity");
+    fireEvent.change(textarea, { target: { value: "Grade data sensitivity" } });
     await userEvent.click(screen.getByRole("button", { name: "Save prompt" }));
     expect(onChange).toHaveBeenCalledWith("Grade data sensitivity");
   });

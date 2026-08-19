@@ -130,22 +130,22 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
       </div>
 
       <Tabs value={String(selectedTabIndex)} onValueChange={(v: unknown) => setSelectedTabIndex(Number(v))}>
-        <TabsList className="mb-4">
-          <TabsTrigger value="0" className="flex-none">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="0" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
-          <TabsTrigger value="1" className="flex-none">
+          <TabsTrigger value="1" className="flex-none rounded-none px-4 py-2">
             MCP Tools
           </TabsTrigger>
           {isProxyAdmin && (
-            <TabsTrigger value="2" className="flex-none">
+            <TabsTrigger value="2" className="flex-none rounded-none px-4 py-2">
               Settings
             </TabsTrigger>
           )}
         </TabsList>
 
         {/* Overview Panel */}
-        <TabsContent value="0">
+        <TabsContent value="0" keepMounted>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Card className="p-4">
               <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Transport</p>
@@ -192,7 +192,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {/* Tool Panel */}
-        <TabsContent value="1">
+        <TabsContent value="1" keepMounted>
           <MCPToolsViewer
             serverId={mcpServer.server_id}
             accessToken={accessToken}
@@ -209,7 +209,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {/* Settings Panel */}
-        <TabsContent value="2">
+        <TabsContent value="2" keepMounted>
           <Card className="p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-medium">MCP Server Settings</h2>

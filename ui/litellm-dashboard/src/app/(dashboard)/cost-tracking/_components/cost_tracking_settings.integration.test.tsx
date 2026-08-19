@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CostTrackingSettings from "./cost_tracking_settings";
@@ -87,7 +87,7 @@ describe("CostTrackingSettings submit paths", () => {
 
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click((await screen.findAllByRole("option"))[0]);
-    await user.type(screen.getByLabelText(/Discount Percentage/i), "5");
+    fireEvent.change(screen.getByLabelText(/Discount Percentage/i), { target: { value: "5" } });
     await user.click(submitDiscount());
 
     await waitFor(() => expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalled());
@@ -105,7 +105,7 @@ describe("CostTrackingSettings submit paths", () => {
 
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click((await screen.findAllByRole("option"))[0]);
-    await user.type(screen.getByLabelText(/Margin Percentage/i), "10");
+    fireEvent.change(screen.getByLabelText(/Margin Percentage/i), { target: { value: "10" } });
 
     const submit = screen
       .getAllByRole("button")

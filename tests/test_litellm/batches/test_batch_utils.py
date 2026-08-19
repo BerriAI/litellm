@@ -907,8 +907,14 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
         litellm_params={"vertex_project": "proj-1", "vertex_location": "us-central1"},
     )
 
+    pricing = litellm.model_cost["vertex_ai/gemini-3.6-flash"]
+    batch_input = pricing["input_cost_per_token_batches"]
+    batch_output = pricing["output_cost_per_token_batches"]
+
+    assert batch_input < pricing["input_cost_per_token"]
+    assert batch_output < pricing["output_cost_per_token"]
     assert cost > 0
-    assert cost == pytest.approx(30 * 7.5e-07 + 15 * 3.75e-06)
+    assert cost == pytest.approx(30 * batch_input + 15 * batch_output)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
     assert models == ["gemini-3.6-flash", "gemini-3.6-flash"]
 

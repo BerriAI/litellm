@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -56,8 +56,8 @@ describe("UserEnvVarsModal", () => {
       ]),
     );
 
-    await user.type(await fieldAfterOpen(/^API_KEY/), "  secret-value  ");
-    await user.type(screen.getByLabelText(/^REGION/), "us-east-1");
+    fireEvent.change(await fieldAfterOpen(/^API_KEY/), { target: { value: "  secret-value  " } });
+    fireEvent.change(screen.getByLabelText(/^REGION/), { target: { value: "us-east-1" } });
     await save(user);
 
     await waitFor(() => {
@@ -79,7 +79,7 @@ describe("UserEnvVarsModal", () => {
       ]),
     );
 
-    await user.type(await fieldAfterOpen(/^REGION/), "eu-west-2");
+    fireEvent.change(await fieldAfterOpen(/^REGION/), { target: { value: "eu-west-2" } });
     await save(user);
 
     await waitFor(() => {
@@ -145,7 +145,7 @@ describe("UserEnvVarsModal", () => {
 
     const input = await fieldAfterOpen(/^API_KEY/);
     expect(input).toHaveAttribute("type", "password");
-    await user.type(input, "hunter2");
+    fireEvent.change(input, { target: { value: "hunter2" } });
     expect(screen.getByLabelText(/^API_KEY/)).toHaveAttribute("type", "password");
   });
 
@@ -162,7 +162,7 @@ describe("UserEnvVarsModal", () => {
     vi.mocked(networking.storeMCPUserEnvVars).mockResolvedValue(saved);
     const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
 
-    await user.type(await fieldAfterOpen(/^API_KEY/), "abc");
+    fireEvent.change(await fieldAfterOpen(/^API_KEY/), { target: { value: "abc" } });
     await save(user);
 
     await waitFor(() => {
@@ -175,7 +175,7 @@ describe("UserEnvVarsModal", () => {
     const user = setup();
     renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
 
-    await user.type(await fieldAfterOpen(/^API_KEY/), "hunter2");
+    fireEvent.change(await fieldAfterOpen(/^API_KEY/), { target: { value: "hunter2" } });
     await user.click(screen.getByRole("button", { name: "Show password" }));
     expect(screen.getByLabelText(/^API_KEY/)).toHaveAttribute("type", "text");
     expect(screen.getByLabelText(/^API_KEY/)).toHaveValue("hunter2");
@@ -199,7 +199,7 @@ describe("UserEnvVarsModal", () => {
     vi.mocked(networking.storeMCPUserEnvVars).mockRejectedValue(new Error("boom"));
     const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
 
-    await user.type(await fieldAfterOpen(/^API_KEY/), "abc");
+    fireEvent.change(await fieldAfterOpen(/^API_KEY/), { target: { value: "abc" } });
     await save(user);
 
     await waitFor(() => {

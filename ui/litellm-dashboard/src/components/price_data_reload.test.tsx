@@ -75,7 +75,7 @@ describe("PriceDataReload", () => {
     expect(screen.getByRole("dialog", { name: "Set Up Periodic Reload" })).toBeInTheDocument();
     const hours = screen.getByRole("spinbutton", { name: "Reload interval in hours" });
     await user.clear(hours);
-    await user.type(hours, "12");
+    fireEvent.change(hours, { target: { value: "12" } });
     await user.click(screen.getByRole("button", { name: "Schedule" }));
 
     await waitFor(() => expect(scheduleModelCostMapReload).toHaveBeenCalledWith("sk-test", 12));

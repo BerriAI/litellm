@@ -1,5 +1,5 @@
 import React from "react";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, test, expect, beforeEach } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -282,7 +282,7 @@ test("should keep unsaved settings edits when switching tabs and back", async ()
 
   const alias = await screen.findByLabelText(/Organization Name/i);
   await user.clear(alias);
-  await user.type(alias, "Renamed Org");
+  fireEvent.change(alias, { target: { value: "Renamed Org" } });
   expect(alias).toHaveValue("Renamed Org");
 
   await user.click(screen.getByRole("tab", { name: "Overview" }));

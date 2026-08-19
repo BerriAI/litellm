@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import AddPassThroughEndpoint from "./add_pass_through";
 
 const createPassThroughEndpoint = vi.fn();
@@ -35,11 +35,13 @@ const openModal = async (user: User) => {
 };
 
 const fillRequiredFields = async (user: User) => {
-  await user.type(screen.getByPlaceholderText("bria"), "bria");
-  await user.type(screen.getByPlaceholderText("https://engine.prod.bria-api.com"), "https://example.com");
+  fireEvent.change(screen.getByPlaceholderText("bria"), { target: { value: "bria" } });
+  fireEvent.change(screen.getByPlaceholderText("https://engine.prod.bria-api.com"), {
+    target: { value: "https://example.com" },
+  });
   await user.click(screen.getByRole("button", { name: /add header/i }));
-  await user.type(screen.getByPlaceholderText("Header Name"), "Authorization");
-  await user.type(screen.getByPlaceholderText("Header Value"), "Bearer abc");
+  fireEvent.change(screen.getByPlaceholderText("Header Name"), { target: { value: "Authorization" } });
+  fireEvent.change(screen.getByPlaceholderText("Header Value"), { target: { value: "Bearer abc" } });
 };
 
 const submit = async (user: User) => user.click(screen.getByRole("button", { name: "Add Pass-Through Endpoint" }));
@@ -57,8 +59,8 @@ describe("add_pass_through submit payload", () => {
     renderForm();
     await openModal(user);
     await fillRequiredFields(user);
-    await user.type(screen.getByPlaceholderText("600"), "900");
-    await user.type(screen.getByPlaceholderText("2.0000"), "1.5");
+    fireEvent.change(screen.getByPlaceholderText("600"), { target: { value: "900" } });
+    fireEvent.change(screen.getByPlaceholderText("2.0000"), { target: { value: "1.5" } });
 
     await submit(user);
 
@@ -84,8 +86,8 @@ describe("add_pass_through submit payload", () => {
     renderForm();
     await openModal(user);
     await fillRequiredFields(user);
-    await user.type(screen.getByPlaceholderText("600"), "900");
-    await user.type(screen.getByPlaceholderText("2.0000"), "1.5");
+    fireEvent.change(screen.getByPlaceholderText("600"), { target: { value: "900" } });
+    fireEvent.change(screen.getByPlaceholderText("2.0000"), { target: { value: "1.5" } });
 
     await submit(user);
 
@@ -183,7 +185,9 @@ describe("add_pass_through submit payload", () => {
     await fillRequiredFields(user);
 
     await user.clear(screen.getByPlaceholderText("https://engine.prod.bria-api.com"));
-    await user.type(screen.getByPlaceholderText("https://engine.prod.bria-api.com"), "not a url");
+    fireEvent.change(screen.getByPlaceholderText("https://engine.prod.bria-api.com"), {
+      target: { value: "not a url" },
+    });
 
     await submit(user);
 

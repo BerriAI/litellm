@@ -4,7 +4,7 @@ Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 Used when the target model is an OpenAI or Azure model.
 """
 
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Coroutine, Mapping
 from typing import Any, Final
 
 import litellm
@@ -23,6 +23,11 @@ from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
+
+
+def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
+    """The litellm-specific kwargs forwarded verbatim onto the Responses API request."""
+    return extra_kwargs or {}
 
 
 def _build_responses_kwargs(
@@ -100,7 +105,7 @@ def _build_responses_kwargs(
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
     excluded: Final = {"anthropic_messages"}
-    for key, value in (extra_kwargs or {}).items():
+    for key, value in _forwarded_kwargs(extra_kwargs).items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
                 Logging as LiteLLMLoggingObject,

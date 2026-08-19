@@ -18,7 +18,7 @@ import {
   Member,
 } from "@/components/networking";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Button as AntdButton, Modal } from "antd";
+import { Modal } from "antd";
 import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
 import {
   Combobox,
@@ -405,17 +405,18 @@ export default function UserInfoView({
           <h2 className="text-xl font-semibold">{userData.user_email || "User"}</h2>
           <div className="flex items-center cursor-pointer">
             <span className="text-sm text-gray-500 font-mono">{userData.user_id}</span>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={() => copyToClipboard(userData.user_id, "user-id")}
               className={`left-2 z-10 transition-all duration-200 ${
                 copiedStates["user-id"]
                   ? "text-green-600 bg-green-50 border-green-200"
                   : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               }`}
-            />
+            >
+              {copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            </Button>
           </div>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
@@ -585,17 +586,18 @@ export default function UserInfoView({
                   <p className="font-medium">User ID</p>
                   <div className="flex items-center cursor-pointer">
                     <span className="font-mono">{userData.user_id}</span>
-                    <AntdButton
-                      type="text"
-                      size="small"
-                      icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
                       onClick={() => copyToClipboard(userData.user_id, "user-id")}
                       className={`left-2 z-10 transition-all duration-200 ${
                         copiedStates["user-id"]
                           ? "text-green-600 bg-green-50 border-green-200"
                           : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                       }`}
-                    />
+                    >
+                      {copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                    </Button>
                   </div>
                 </div>
 
@@ -760,9 +762,9 @@ export default function UserInfoView({
           </FieldGroup>
 
           <div className="text-right mt-4">
-            <AntdButton type="primary" htmlType="submit" loading={isAddingTeam} disabled={!selectedTeamId}>
+            <Button type="submit" disabled={isAddingTeam || !selectedTeamId} aria-busy={isAddingTeam}>
               {isAddingTeam ? "Adding..." : "Add to Team"}
-            </AntdButton>
+            </Button>
           </div>
         </form>
       </Modal>
