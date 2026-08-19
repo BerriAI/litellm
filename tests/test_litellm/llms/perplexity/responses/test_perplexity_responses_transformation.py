@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.utils import LlmProviders
@@ -328,7 +329,7 @@ class TestPerplexityResponsesTransformation:
             model="preset/pro-search",
             input="What is AI?",
             response_api_optional_request_params={"temperature": 0.7},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -348,7 +349,7 @@ class TestPerplexityResponsesTransformation:
             model="preset/pro-search",
             input=list_input,
             response_api_optional_request_params={"temperature": 0.7},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -369,7 +370,7 @@ class TestPerplexityResponsesTransformation:
             model="openai/gpt-5.2",
             input=list_input,
             response_api_optional_request_params={},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -389,7 +390,7 @@ class TestPerplexityResponsesTransformation:
             model="openai/gpt-5.2",
             input=list_input,
             response_api_optional_request_params={},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -409,7 +410,7 @@ class TestPerplexityResponsesTransformation:
             model="openai/gpt-5.2",
             input=list_input,
             response_api_optional_request_params={},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
