@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Modal } from "antd";
 import {
   getPromptInfo,
   getPromptVersions,
@@ -17,6 +16,7 @@ import { ArrowLeft, CheckIcon, CopyIcon, Pencil, Trash2 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export interface PromptInfoProps {
   promptId: string;
@@ -489,20 +489,25 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       </Tabs>
 
       {/* Delete Confirmation Modal */}
-      <Modal
-        title="Delete Prompt"
-        open={showDeleteConfirm}
-        onOk={handleDeleteConfirm}
-        onCancel={handleDeleteCancel}
-        confirmLoading={isDeleting}
-        okText="Delete"
-        okButtonProps={{ danger: true }}
-      >
-        <p>
-          Are you sure you want to delete prompt: <strong>{basePromptId}</strong>?
-        </p>
-        <p>This action cannot be undone.</p>
-      </Modal>
+      <Dialog open={showDeleteConfirm} onOpenChange={(open) => !open && handleDeleteCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Delete Prompt</DialogTitle>
+          </DialogHeader>
+          <p>
+            Are you sure you want to delete prompt: <strong>{basePromptId}</strong>?
+          </p>
+          <p>This action cannot be undone.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleDeleteCancel}>
+              Cancel
+            </Button>
+            <Button onClick={handleDeleteConfirm} variant="destructive" disabled={isDeleting} aria-busy={isDeleting}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -234,9 +234,6 @@
     "no-nested-ternary": {
       "count": 2
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -246,9 +243,6 @@
       "count": 1
     },
     "max-lines": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -541,9 +535,6 @@
     },
     "no-restricted-imports": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/DcrBridgeToggle.tsx": {
@@ -763,11 +754,6 @@
   },
   "src/app/(dashboard)/mcp-servers/_components/utils.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/memory/_components/MemoryEditModal.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1178,9 +1164,6 @@
     "no-nested-ternary": {
       "count": 3
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1215,9 +1198,6 @@
     "local/no-complex-jsx-arrow": {
       "count": 2
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/static-components": {
       "count": 1
     }
@@ -1239,9 +1219,6 @@
   },
   "src/app/(dashboard)/skills/_components/add_plugin_form.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1471,16 +1448,6 @@
       "count": 1
     }
   },
-  "src/components/CloudZeroCostTracking/CloudZeroCreateModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/CloudZeroCostTracking/CloudZeroUpdateModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/CreateUserButton.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1516,11 +1483,6 @@
   },
   "src/components/SCIM.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/SSOModals.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1608,7 +1570,7 @@
   },
   "src/components/Teams.tsx": {
     "local/no-complex-jsx-arrow": {
-      "count": 4
+      "count": 3
     },
     "max-lines": {
       "count": 1
@@ -2173,9 +2135,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "prefer-const": {
       "count": 5
     },
@@ -2328,11 +2287,6 @@
     },
     "prefer-const": {
       "count": 2
-    }
-  },
-  "src/components/routing_groups/RoutingGroupModal.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/routing_groups/index.tsx": {

@@ -332,7 +332,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
       )}
 
       <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleModalCancel()}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px] top-8">
+        <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[1000px]">
           <DialogHeader>
             <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
               <DialogTitle className="text-xl font-semibold text-gray-900">Add Provider Discount</DialogTitle>
@@ -358,7 +358,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
       </Dialog>
 
       <Dialog open={isMarginModalVisible} onOpenChange={(open) => !open && handleMarginModalCancel()}>
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px] top-8">
+        <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[1000px]">
           <DialogHeader>
             <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
               <DialogTitle className="text-xl font-semibold text-gray-900">Add Provider Margin</DialogTitle>

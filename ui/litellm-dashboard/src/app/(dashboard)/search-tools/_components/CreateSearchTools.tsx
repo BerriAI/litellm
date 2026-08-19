@@ -173,7 +173,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
 
   return (
     <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px] top-8">
+      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[800px]">
         <DialogHeader>
           <div className="flex items-center space-x-3 pb-4 border-b border-border">
             <span className="text-2xl">🔍</span>

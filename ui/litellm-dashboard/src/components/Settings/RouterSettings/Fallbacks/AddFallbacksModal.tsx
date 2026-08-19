@@ -16,7 +16,7 @@ interface AddFallbacksModalProps {
 export function AddFallbacksModal({ open, onCancel, children }: AddFallbacksModalProps) {
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onCancel()} disablePointerDismissal>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[900px] top-8">
+      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[900px]">
         <DialogHeader>
           <div className="pb-4 border-b border-gray-100">
             <div className="flex items-center gap-2 text-gray-800">
