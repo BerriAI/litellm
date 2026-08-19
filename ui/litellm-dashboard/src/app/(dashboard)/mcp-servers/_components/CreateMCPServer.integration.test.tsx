@@ -2074,7 +2074,7 @@ describe("CreateMCPServer dcr_bridge toggle", () => {
     updated_by: "user-1",
   };
 
-  const getDcrToggle = () => document.getElementById("dcr_bridge");
+  const getDcrToggle = () => screen.queryByRole("switch", { name: /Gateway-hosted sign-in \(DCR bridge\)/ });
 
   async function setupHttpServerForm() {
     render(<CreateMCPServer {...defaultProps} />);

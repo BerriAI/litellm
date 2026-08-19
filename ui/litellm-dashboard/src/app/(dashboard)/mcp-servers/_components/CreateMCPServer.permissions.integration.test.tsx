@@ -58,15 +58,7 @@ const defaultProps = {
 
 const getServerNameInput = () => document.getElementById("server_name") as HTMLInputElement;
 
-const switchFor = (labelText: string): HTMLElement => {
-  const label = screen.getByText(labelText);
-  const row = label.closest(".flex.items-start.justify-between");
-  const control = row?.querySelector("button[role='switch']");
-  if (control === null || control === undefined) {
-    throw new Error(`no switch found for "${labelText}"`);
-  }
-  return control as HTMLElement;
-};
+const switchFor = (labelText: string): HTMLElement => screen.getByRole("switch", { name: labelText });
 
 const fillMinimalHttpServer = async (name: string) => {
   await selectAntOption("Transport Type", "Streamable HTTP");

@@ -2062,7 +2062,7 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
     mockOauth.tokenResponse = null;
   });
 
-  const getDcrToggle = () => document.getElementById("dcr_bridge");
+  const getDcrToggle = () => screen.queryByRole("switch", { name: /Gateway-hosted sign-in \(DCR bridge\)/ });
 
   function renderEdit(server: Record<string, unknown>) {
     render(

@@ -1,10 +1,13 @@
-import React from "react";
-import { Input, Select, Switch, Tooltip } from "antd";
 import { Info } from "lucide-react";
+import React from "react";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { useWatch } from "react-hook-form";
 
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { selectControl, switchControl, textControl } from "./mcpFieldRules";
+import { switchControl, tagsControl, textControl } from "./mcpFieldRules";
 
 const AUTH_HEADER_FORMATS: Readonly<Record<string, string>> = {
   bearer_token: "Authorization: Bearer {key}",
@@ -25,9 +28,9 @@ const OpenApiByokFields: React.FC = () => {
         label={
           <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
             BYOK (Bring Your Own Key)
-            <Tooltip title="When enabled, each user provides their own API key for this service. Keys are stored per-user and never shared.">
+            <SimpleTooltip content="When enabled, each user provides their own API key for this service. Keys are stored per-user and never shared.">
               <Info className="size-4 text-blue-400 hover:text-blue-600 cursor-help" />
-            </Tooltip>
+            </SimpleTooltip>
           </span>
         }
         name="is_byok"
@@ -61,20 +64,18 @@ const OpenApiByokFields: React.FC = () => {
             label={
               <span className="text-sm font-medium text-gray-700">
                 Access Description
-                <Tooltip title="List of permissions shown to users in the connection modal (e.g. 'Create and manage Jira issues')">
+                <SimpleTooltip content="List of permissions shown to users in the connection modal (e.g. 'Create and manage Jira issues')">
                   <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
-                </Tooltip>
+                </SimpleTooltip>
               </span>
             }
             name="byok_description"
           >
             {(control) => (
-              <Select
-                {...selectControl(control)}
-                mode="tags"
+              <MultiSelect
+                {...tagsControl(control)}
                 placeholder="Add access description items (press Enter after each)"
                 className="w-full"
-                tokenSeparators={[","]}
               />
             )}
           </MountedFormField>
@@ -83,9 +84,9 @@ const OpenApiByokFields: React.FC = () => {
             label={
               <span className="text-sm font-medium text-gray-700">
                 API Key Help URL
-                <Tooltip title="Optional link shown to users to help them find their API key">
+                <SimpleTooltip content="Optional link shown to users to help them find their API key">
                   <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
-                </Tooltip>
+                </SimpleTooltip>
               </span>
             }
             name="byok_api_key_help_url"
