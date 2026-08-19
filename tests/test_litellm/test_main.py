@@ -1,3 +1,5 @@
+import contextlib
+import copy
 import json
 import os
 import sys
@@ -2387,6 +2389,114 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
 
 
+def test_completion_forwards_store_and_prompt_cache_key_to_openai():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/33184
+
+    store and prompt_cache_key are documented OpenAI chat completion params that
+    were accepted as supported but silently dropped before the provider request
+    was built, because they were not named parameters of completion() and
+    get_optional_params() the way safety_identifier is.
+    """
+    from openai import OpenAI
+
+    client = OpenAI(api_key="fake-api-key")
+
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+        try:
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                store=False,
+                prompt_cache_key="test-cache-key",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+        assert request_body["store"] is False
+        assert request_body["prompt_cache_key"] == "test-cache-key"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_forwards_store_and_prompt_cache_key_to_openai():
+    """
+    Async variant of the store/prompt_cache_key forwarding regression test for
+    https://github.com/BerriAI/litellm/issues/33184
+    """
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+        try:
+            await litellm.acompletion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                store=False,
+                prompt_cache_key="test-cache-key",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+        assert request_body["store"] is False
+        assert request_body["prompt_cache_key"] == "test-cache-key"
+
+
+def test_completion_omits_store_and_prompt_cache_key_when_not_passed():
+    """
+    When store and prompt_cache_key are not passed, they must not appear in the
+    outbound request body (guards against always forwarding None defaults).
+    """
+    from openai import OpenAI
+
+    client = OpenAI(api_key="fake-api-key")
+
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+        try:
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+        assert "store" not in request_body
+        assert "prompt_cache_key" not in request_body
+
+
+def test_completion_forwards_store_and_prompt_cache_key_to_mcp_gateway():
+    """
+    Regression test for the MCP gateway early-return in completion(): store and
+    prompt_cache_key are named params, so they no longer travel via **kwargs and
+    must be forwarded explicitly like safety_identifier and service_tier.
+    """
+    with patch(
+        "litellm.responses.mcp.chat_completions_handler.acompletion_with_mcp"
+    ) as mock_mcp:
+        result = litellm.completion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy"}],
+            store=False,
+            prompt_cache_key="test-cache-key",
+        )
+
+        result.close()
+        mock_mcp.assert_called_once()
+        call_kwargs = mock_mcp.call_args.kwargs
+        assert call_kwargs["store"] is False
+        assert call_kwargs["prompt_cache_key"] == "test-cache-key"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "aws_credential_kwargs",
@@ -2461,3 +2571,104 @@ async def test_acompletion_forwards_aws_credentials_through_responses_bridge(
     finally:
         litellm.disable_aiohttp_transport = original_disable_aiohttp
         litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+_GEMINI_RESPONSE_BODY = {
+    "candidates": [{"content": {"parts": [{"text": "hello"}], "role": "model"}, "finishReason": "STOP"}],
+    "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},
+}
+
+
+def _gemini_client_returning_a_reply():
+    """An injected HTTP client whose post() answers like generativelanguage does."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    request = httpx.Request("POST", "https://generativelanguage.googleapis.com/")
+    post = MagicMock(return_value=httpx.Response(200, json=_GEMINI_RESPONSE_BODY, request=request))
+    return client, post
+
+
+@pytest.fixture
+def restore_model_registry():
+    """litellm.model_cost and the provider name sets are module-global.
+
+    register_model merges into the existing entry in place, hence the deep copy.
+    """
+    model_cost = copy.deepcopy(litellm.model_cost)
+    openai_models = set(litellm.open_ai_chat_completion_models)
+    yield
+    litellm.model_cost.clear()
+    litellm.model_cost.update(model_cost)
+    litellm.open_ai_chat_completion_models.clear()
+    litellm.open_ai_chat_completion_models.update(openai_models)
+
+
+def test_openai_model_name_does_not_outrank_explicit_provider():
+    """`gemini/gpt-4o` goes to Google, not to litellm's OpenAI handler.
+
+    completion() checks `model in litellm.open_ai_chat_completion_models` ahead of
+    the gemini branch, so the call used to reach the OpenAI handler carrying
+    VertexGeminiConfig, whose transform_request raises NotImplementedError.
+    """
+    assert "gpt-4o" in litellm.open_ai_chat_completion_models
+    client, post = _gemini_client_returning_a_reply()
+
+    with patch.object(client, "post", new=post):
+        response = litellm.completion(
+            model="gemini/gpt-4o",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-api-key",
+            client=client,
+        )
+
+    assert "generativelanguage.googleapis.com" in post.call_args.kwargs["url"]
+    assert "models/gpt-4o" in post.call_args.kwargs["url"]
+    assert response.choices[0].message.content == "hello"
+
+
+def test_mislabelled_pricing_entry_does_not_reroute_provider(restore_model_registry):
+    """register_model is the other way into the same failure.
+
+    An entry claiming litellm_provider "openai" adds its name to
+    open_ai_chat_completion_models, so one mislabelled price reroutes every later
+    call to that model in the process.
+    """
+    litellm.register_model(
+        {
+            "gemini-2.5-pro": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+            }
+        }
+    )
+    assert "gemini-2.5-pro" in litellm.open_ai_chat_completion_models
+    client, post = _gemini_client_returning_a_reply()
+
+    with patch.object(client, "post", new=post):
+        response = litellm.completion(
+            model="gemini/gemini-2.5-pro",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-api-key",
+            client=client,
+        )
+
+    assert "generativelanguage.googleapis.com" in post.call_args.kwargs["url"]
+    assert response.choices[0].message.content == "hello"
+
+
+def test_openai_model_without_a_provider_still_routes_to_openai():
+    from openai import OpenAI
+
+    client = OpenAI(api_key="fake-key")
+    raw_response = client.chat.completions.with_raw_response
+    with patch.object(raw_response, "create") as mock_create, contextlib.suppress(Exception):
+        litellm.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hello"}],
+            client=client,
+        )
+
+    mock_create.assert_called()

@@ -59,7 +59,9 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Heuristic, REASONING override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Heuristic, REASONING override (2 or more reasoning markers, score above the lowest tier)"),
+    ).toBeInTheDocument();
     expect(screen.getByText("0.20")).toBeInTheDocument();
     // The score did not decide this tier, so NO band explanation may render at all.
     // Asserting the absence of one specific band would pass vacuously: 0.20 sits in
@@ -103,6 +105,23 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("Tier")).not.toBeInTheDocument();
   });
 
+  it("explains a route that fell back to the configured fallback tier after the classifier failed", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          router_model_name: "custom-tier-router",
+          router_type: "complexity",
+          routed_model: "claude-sonnet",
+          cause: "classifier_fallback",
+          tier: "SECURITY_REVIEW",
+          signals: ["classifier-fallback:SECURITY_REVIEW"],
+        }}
+      />,
+    );
+    expect(screen.getByText("Fallback tier, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("SECURITY_REVIEW")).toBeInTheDocument();
+  });
+
   it("shows the keyword that fired a tier rule", () => {
     render(
       <RoutingDecisionCard
@@ -110,6 +129,33 @@ describe("RoutingDecisionCard", () => {
       />,
     );
     expect(screen.getByText('Keyword match: "deploy to k8s"')).toBeInTheDocument();
+  });
+
+  it("shows the plan-mode sentinel that floored the tier", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "Plan mode is active", score: undefined }}
+      />,
+    );
+    expect(screen.getByText('Plan-mode floor: "Plan mode is active"')).toBeInTheDocument();
+  });
+
+  it("names the exit_plan_mode tool instead of quoting it as a sentinel", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "exit_plan_mode", score: undefined }}
+      />,
+    );
+    expect(screen.getByText("Plan-mode floor (exit_plan_mode tool)")).toBeInTheDocument();
+  });
+
+  it("does not claim the score chose the tier on a plan-mode floored row", () => {
+    // The score's band can name a lower tier than the floored badge; the cause suppresses it.
+    render(
+      <RoutingDecisionCard decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "Plan mode is active" }} />,
+    );
+    expect(screen.queryByText(/below|to 0|at or above/)).not.toBeInTheDocument();
+    expect(screen.getByText('Plan-mode floor: "Plan mode is active"')).toBeInTheDocument();
   });
 
   it("shows the escalation keyword", () => {
@@ -144,7 +190,9 @@ describe("RoutingDecisionCard", () => {
     // `signals` is gone under redaction; the cause alone must suppress the band.
     render(<RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", signals: undefined }} />);
     expect(screen.queryByText(/SIMPLE|MEDIUM|COMPLEX|at or above/)).not.toBeInTheDocument();
-    expect(screen.getByText("Heuristic, REASONING override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Heuristic, REASONING override (2 or more reasoning markers, score above the lowest tier)"),
+    ).toBeInTheDocument();
   });
 
   it("shows the operator's tier name on the badge instead of the canonical one", () => {
@@ -168,7 +216,9 @@ describe("RoutingDecisionCard", () => {
     render(
       <RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", score: 0.2, tier_label: "Deep" }} />,
     );
-    expect(screen.getByText("Heuristic, Deep override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Heuristic, Deep override (2 or more reasoning markers, score above the lowest tier)"),
+    ).toBeInTheDocument();
   });
 
   it("falls back to the raw cause for a value this build does not know", () => {

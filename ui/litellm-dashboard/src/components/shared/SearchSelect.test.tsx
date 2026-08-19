@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -21,6 +21,13 @@ describe("SearchSelect", () => {
     expect(screen.getByRole("combobox")).toHaveValue("Growth");
   });
 
+  it("shows a value the options do not carry yet instead of blanking the field", () => {
+    const { rerender } = render(<SearchSelect options={[]} value="team-2" onValueChange={vi.fn()} />);
+    expect(screen.getByRole("combobox")).toHaveValue("team-2");
+    rerender(<SearchSelect options={OPTIONS} value="team-2" onValueChange={vi.fn()} />);
+    expect(screen.getByRole("combobox")).toHaveValue("Growth");
+  });
+
   it("shows a clear control only when a value is selected", () => {
     const { rerender } = render(<SearchSelect options={OPTIONS} onValueChange={vi.fn()} />);
     expect(document.querySelector('[data-slot="combobox-clear"]')).toBeNull();
@@ -33,7 +40,7 @@ describe("SearchSelect", () => {
     render(<SearchSelect options={OPTIONS} onValueChange={vi.fn()} />);
     const input = screen.getByRole("combobox");
     await user.click(input);
-    await user.type(input, "grow");
+    fireEvent.change(input, { target: { value: "grow" } });
     expect(await screen.findByText("Growth")).toBeInTheDocument();
     expect(screen.queryByText("Acme Prod")).not.toBeInTheDocument();
   });
@@ -49,7 +56,7 @@ describe("SearchSelect", () => {
     const input = screen.getByRole("combobox");
     await user.click(input);
     expect(await screen.findByText("team-abc-123")).toBeInTheDocument();
-    await user.type(input, "abc-123");
+    fireEvent.change(input, { target: { value: "abc-123" } });
     expect(await screen.findByText("Acme Prod")).toBeInTheDocument();
   });
 

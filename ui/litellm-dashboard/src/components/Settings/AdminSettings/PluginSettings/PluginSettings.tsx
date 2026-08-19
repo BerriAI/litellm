@@ -1,10 +1,18 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Button, Card, Form, Input, Modal, Space, Table, Typography } from "antd";
+import { Card, Modal, Space, Table, Typography } from "antd";
+import { Button } from "@/components/ui/button";
 import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
+import { Eye, EyeOff } from "lucide-react";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { FieldGroup } from "@/components/shared/form/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { pluginSchema, type PluginFormValues } from "./schema";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -15,6 +23,8 @@ interface Plugin {
   plugin_key?: string;
 }
 
+const BLANK_PLUGIN: PluginFormValues = { name: "", display_name: "", url: "", plugin_key: undefined };
+
 export default function PluginSettings() {
   const { accessToken } = useAuthorized();
   const [plugins, setPlugins] = useState<Plugin[]>([]);
@@ -22,7 +32,8 @@ export default function PluginSettings() {
   const [saving, setSaving] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
-  const [form] = Form.useForm<Plugin>();
+  const [keyVisible, setKeyVisible] = useState(false);
+  const form = useZodForm(pluginSchema, { defaultValues: BLANK_PLUGIN });
 
   useEffect(() => {
     if (!accessToken) return;
@@ -48,15 +59,17 @@ export default function PluginSettings() {
 
   const openAdd = () => {
     setEditingIndex(null);
-    form.resetFields();
+    setKeyVisible(false);
+    form.reset(BLANK_PLUGIN);
     setModalOpen(true);
   };
 
   const openEdit = (idx: number) => {
     setEditingIndex(idx);
+    setKeyVisible(false);
     // plugin_key arrives redacted ("***"); start it blank so an untouched save
     // keeps the stored credential instead of overwriting it with the placeholder.
-    form.setFieldsValue({ ...plugins[idx], plugin_key: "" });
+    form.reset({ ...plugins[idx], plugin_key: "" });
     setModalOpen(true);
   };
 
@@ -65,8 +78,7 @@ export default function PluginSettings() {
     save(updated);
   };
 
-  const handleOk = async () => {
-    const values = await form.validateFields();
+  const handleOk = async (values: PluginFormValues) => {
     const updated =
       editingIndex !== null ? plugins.map((p, i) => (i === editingIndex ? values : p)) : [...plugins, values];
     await save(updated);
@@ -102,8 +114,12 @@ export default function PluginSettings() {
       key: "actions",
       render: (_: unknown, __: Plugin, idx: number) => (
         <Space>
-          <Button icon={<EditOutlined />} size="small" onClick={() => openEdit(idx)} />
-          <Button icon={<DeleteOutlined />} size="small" danger onClick={() => handleDelete(idx)} />
+          <Button variant="outline" size="icon-sm" onClick={() => openEdit(idx)}>
+            <EditOutlined />
+          </Button>
+          <Button variant="destructive" size="icon-sm" onClick={() => handleDelete(idx)}>
+            <DeleteOutlined />
+          </Button>
         </Space>
       ),
     },
@@ -120,7 +136,8 @@ export default function PluginSettings() {
         Each plugin must expose <Text code>GET /api/plugin-manifest</Text> returning nav items and capabilities.
       </Paragraph>
 
-      <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ marginBottom: 16 }}>
+      <Button className="mb-4" onClick={openAdd}>
+        <PlusOutlined />
         Add Plugin
       </Button>
 
@@ -129,44 +146,56 @@ export default function PluginSettings() {
       <Modal
         title={editingIndex !== null ? "Edit Plugin" : "Add Plugin"}
         open={modalOpen}
-        onOk={handleOk}
+        onOk={form.handleSubmit(handleOk)}
         onCancel={() => setModalOpen(false)}
         confirmLoading={saving}
         okText="Save"
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            name="name"
-            label="Name (identifier)"
-            rules={[{ required: true, message: "Required" }]}
-            extra="Used in URLs and config. No spaces. E.g. litellm-platform-plugin"
-          >
-            <Input placeholder="litellm-platform-plugin" />
-          </Form.Item>
-          <Form.Item name="display_name" label="Display Name" rules={[{ required: true, message: "Required" }]}>
-            <Input placeholder="Agent Control Plane" />
-          </Form.Item>
-          <Form.Item
-            name="url"
-            label="URL"
-            rules={[
-              { required: true, message: "Required" },
-              { type: "url", message: "Must be a valid URL" },
-            ]}
-            extra="Base URL of the plugin service"
-          >
-            <Input placeholder="https://your-plugin.example.com" />
-          </Form.Item>
-          <Form.Item
-            name="plugin_key"
-            label="Plugin Key"
-            extra="Optional. The plugin's own credential, injected as Authorization: Bearer <key> only when litellm reverse-proxies API calls to the plugin's backend (/plugin-proxy/<name>/*). Leave blank for plugins that use the forwarded litellm user token (e.g. iframe plugins) — that path uses the user's token, not this key."
-          >
-            <Input.Password
-              placeholder={editingIndex !== null ? "Leave blank to keep current key" : "sk-... (optional)"}
-            />
-          </Form.Item>
-        </Form>
+        <form onSubmit={(event) => event.preventDefault()} noValidate style={{ marginTop: 16 }}>
+          <FieldGroup>
+            <FormField
+              control={form.control}
+              name="name"
+              label="Name (identifier)"
+              description="Used in URLs and config. No spaces. E.g. litellm-platform-plugin"
+            >
+              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="litellm-platform-plugin" />}
+            </FormField>
+            <FormField control={form.control} name="display_name" label="Display Name">
+              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="Agent Control Plane" />}
+            </FormField>
+            <FormField control={form.control} name="url" label="URL" description="Base URL of the plugin service">
+              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="https://your-plugin.example.com" />}
+            </FormField>
+            <FormField
+              control={form.control}
+              name="plugin_key"
+              label="Plugin Key"
+              description="Optional. The plugin's own credential, injected as Authorization: Bearer <key> only when litellm reverse-proxies API calls to the plugin's backend (/plugin-proxy/<name>/*). Leave blank for plugins that use the forwarded litellm user token (e.g. iframe plugins) — that path uses the user's token, not this key."
+            >
+              {({ ref, ...field }) => (
+                <InputGroup>
+                  <InputGroupInput
+                    {...field}
+                    ref={ref}
+                    type={keyVisible ? "text" : "password"}
+                    value={field.value ?? ""}
+                    placeholder={editingIndex !== null ? "Leave blank to keep current key" : "sk-... (optional)"}
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton
+                      size="icon-xs"
+                      onClick={() => setKeyVisible(!keyVisible)}
+                      aria-label={keyVisible ? "Hide plugin key" : "Show plugin key"}
+                    >
+                      {keyVisible ? <EyeOff /> : <Eye />}
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+              )}
+            </FormField>
+          </FieldGroup>
+        </form>
       </Modal>
     </Card>
   );
