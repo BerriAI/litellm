@@ -1055,11 +1055,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/policies/_components/impact_popover.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/policies/_components/impact_popover.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1070,11 +1065,6 @@
   },
   "src/app/(dashboard)/policies/_components/impact_preview_alert.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/policies/_components/index.test.tsx": {
-    "react/display-name": {
       "count": 1
     }
   },
@@ -1826,12 +1816,6 @@
   "src/components/add_model/cache_control_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "src/components/add_model/conditional_public_model_name.test.tsx": {
@@ -2063,14 +2047,6 @@
       "count": 1
     }
   },
-  "src/components/common_components/chartUtils.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
   "src/components/common_components/check_openapi_schema.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2293,15 +2269,6 @@
   "src/components/model_info_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "max-lines": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 14
     },
     "no-restricted-imports": {
       "count": 1
@@ -3061,9 +3028,6 @@
   },
   "tests/setupTests.ts": {
     "@typescript-eslint/no-this-alias": {
-      "count": 1
-    },
-    "react/display-name": {
       "count": 1
     }
   }
