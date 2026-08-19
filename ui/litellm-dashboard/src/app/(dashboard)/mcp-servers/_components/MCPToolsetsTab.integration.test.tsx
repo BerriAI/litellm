@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -68,8 +68,10 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
     renderTab();
 
     const dialog = await openCreate(user);
-    await user.type(dialog.getByPlaceholderText("e.g. github-linear-tools"), "github-linear-tools");
-    await user.type(dialog.getByPlaceholderText("Optional description"), "tools for triage");
+    fireEvent.change(dialog.getByPlaceholderText("e.g. github-linear-tools"), {
+      target: { value: "github-linear-tools" },
+    });
+    fireEvent.change(dialog.getByPlaceholderText("Optional description"), { target: { value: "tools for triage" } });
     await user.click(dialog.getByRole("button", { name: "Create Toolset" }));
 
     await waitFor(() => {
@@ -90,7 +92,7 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
     renderTab();
 
     const dialog = await openCreate(user);
-    await user.type(dialog.getByPlaceholderText("e.g. github-linear-tools"), "solo");
+    fireEvent.change(dialog.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "solo" } });
     await user.click(dialog.getByRole("button", { name: "Create Toolset" }));
 
     await waitFor(() => {
@@ -121,8 +123,8 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
     renderTab();
 
     const dialog = await openCreate(user);
-    await user.type(dialog.getByPlaceholderText("e.g. github-linear-tools"), "spaced");
-    await user.type(dialog.getByPlaceholderText("Optional description"), "  ");
+    fireEvent.change(dialog.getByPlaceholderText("e.g. github-linear-tools"), { target: { value: "spaced" } });
+    fireEvent.change(dialog.getByPlaceholderText("Optional description"), { target: { value: "  " } });
     await user.click(dialog.getByRole("button", { name: "Create Toolset" }));
 
     await waitFor(() => {
@@ -154,7 +156,7 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
     expect(dialog.getByPlaceholderText("Optional description")).toHaveValue("old description");
 
     await user.clear(name);
-    await user.type(name, "renamed");
+    fireEvent.change(name, { target: { value: "renamed" } });
     await user.click(dialog.getByRole("button", { name: "Save Changes" }));
 
     const expectedUpdate = {

@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
+    _build_entity_rollup_sql_query,
     _is_user_agent_tag,
     _record_to_spend_metrics,
     get_api_key_metadata,
@@ -980,6 +981,58 @@ class TestBuildAggregatedSqlQuery:
         assert f"(date, {fallback}), (date, {fallback}, api_key)," in normalized
         assert "(date, model_group)" not in normalized
         assert "COALESCE(model_group, model)" not in normalized
+
+
+class TestAggregatedEmptyEntityFilter:
+    _BUILDERS: Final = (_build_aggregated_sql_query, _build_entity_rollup_sql_query)
+
+    @pytest.mark.parametrize("build", _BUILDERS)
+    def test_empty_entity_list_emits_no_degenerate_in_clause(self, build):
+        sql, params = build(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=[],
+            start_date="2026-08-01",
+            end_date="2026-08-19",
+            model=None,
+            api_key=None,
+        )
+
+        normalized = " ".join(sql.split())
+        assert "IN ()" not in normalized
+        assert '"team_id" IN' not in normalized
+        assert params == ["2026-08-01", "2026-08-19"]
+
+    @pytest.mark.parametrize("build", _BUILDERS)
+    def test_empty_entity_list_matches_nothing_rather_than_everything(self, build):
+        sql, _ = build(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=[],
+            start_date="2026-08-01",
+            end_date="2026-08-19",
+            model=None,
+            api_key=None,
+        )
+
+        assert "FALSE" in " ".join(sql.split())
+
+    @pytest.mark.parametrize("build", _BUILDERS)
+    def test_populated_entity_list_still_filters_on_its_ids(self, build):
+        sql, params = build(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=["team-alpha", "team-beta"],
+            start_date="2026-08-01",
+            end_date="2026-08-19",
+            model=None,
+            api_key=None,
+        )
+
+        normalized = " ".join(sql.split())
+        assert '"team_id" IN ($3, $4)' in normalized
+        assert "FALSE" not in normalized
+        assert params == ["2026-08-01", "2026-08-19", "team-alpha", "team-beta"]
 
 
 @pytest.mark.asyncio

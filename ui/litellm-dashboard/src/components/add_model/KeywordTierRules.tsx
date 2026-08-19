@@ -1,6 +1,7 @@
 import { DeleteOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Button, Card, Empty, Select as AntdSelect, Typography } from "antd";
+import { Card, Empty, Select as AntdSelect, Typography } from "antd";
+import { Button } from "@/components/ui/button";
 import React from "react";
 
 import { emptyKeywordTierRuleIndexes } from "./complexity_router_keywords";
@@ -75,7 +76,8 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
             <InfoCircleOutlined className="text-gray-400" />
           </SimpleTooltip>
         </div>
-        <Button icon={<PlusOutlined />} onClick={addRule}>
+        <Button variant="outline" onClick={addRule}>
+          <PlusOutlined />
           Add keyword rule
         </Button>
       </div>
@@ -131,12 +133,14 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
                   />
                 </div>
                 <Button
-                  danger
-                  type="text"
-                  icon={<DeleteOutlined />}
+                  variant="ghost"
+                  size="icon"
+                  className="text-destructive hover:text-destructive"
                   aria-label={`Remove keyword rule ${index + 1}`}
                   onClick={() => removeRule(rule.id)}
-                />
+                >
+                  <DeleteOutlined />
+                </Button>
               </div>
             </Card>
           ))}
