@@ -15,6 +15,7 @@ async def test_mcp_auto_execute_bypasses_client_side_tools():
     the auto-execution loop breaks early and passes the response back to the client.
     """
     mock_mcp_references = [{"type": "mcp", "server_url": "http://localhost/mcp", "require_approval": "never"}]
+    client_tools = [{"name": "Read", "description": "Client Read tool"}]
 
     mock_mcp_tools = [SimpleNamespace(name="mcp_tool_1", description="MCP Tool", inputSchema={"type": "object"})]
     mock_tool_server_map = {"mcp_tool_1": "http://localhost/mcp"}
@@ -57,7 +58,7 @@ async def test_mcp_auto_execute_bypasses_client_side_tools():
 
     with (
         patch(path_resolve, return_value=mock_context),
-        patch(path_parse, return_value=(mock_mcp_references, [])),
+        patch(path_parse, return_value=(mock_mcp_references, client_tools)),
         patch(path_process, new_callable=AsyncMock) as mock_process,
         patch(path_auto, return_value=True),
         patch(path_exec, new_callable=AsyncMock) as mock_execute,
@@ -71,7 +72,7 @@ async def test_mcp_auto_execute_bypasses_client_side_tools():
             max_tokens=100,
             messages=[{"role": "user", "content": "Read test.txt and run image_understand"}],
             model="claude-3-5-sonnet-20241022",
-            tools=mock_mcp_references,
+            tools=[*mock_mcp_references, *client_tools],
         )
 
         mock_execute.assert_not_called()

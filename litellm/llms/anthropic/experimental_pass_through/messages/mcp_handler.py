@@ -60,6 +60,25 @@ def _build_tool_result_message(tool_results: Sequence[Mapping[str, object]]) -> 
     )
 
 
+def _has_client_side_tool(
+    tool_use_blocks: Sequence[Mapping[str, object]],
+    other_tools: Sequence[Mapping[str, object]] | None,
+    tool_server_map: Mapping[str, str],
+) -> bool:  # kwargs-ok: helper function inspecting tool blocks for client passthrough
+    client_tool_names = {
+        t.get("name")  # kwargs-ok: extract client tool name
+        for t in (other_tools or ())
+        if isinstance(t, dict) and t.get("name")  # kwargs-ok: extract client tool name
+    }
+    for block in tool_use_blocks:
+        name = block.get("name")  # kwargs-ok: extract block tool name
+        if name in client_tool_names or (
+            bool(tool_server_map) and name not in tool_server_map
+        ):  # kwargs-ok: check map membership
+            return True
+    return False
+
+
 async def anthropic_messages_with_mcp(
     max_tokens: int,
     messages: Sequence[Mapping[str, object]],
@@ -85,11 +104,12 @@ async def anthropic_messages_with_mcp(
     mcp_references, other_tools = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
 
     if not mcp_references:
+        formatted_tools: Final = list(tools) if tools is not None else None
         return await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
             max_tokens=max_tokens,
             messages=list(messages),
             model=model,
-            tools=list(tools) if tools else None,  # kwargs-ok: param pass-through
+            tools=formatted_tools,
             _skip_mcp_handler=True,
             **kwargs,
         )
@@ -136,12 +156,6 @@ async def anthropic_messages_with_mcp(
         messages=list(working_messages), stream=False, **base_call_args
     )
 
-    client_tool_names = set()
-    if other_tools:
-        for tool_item in other_tools:
-            if isinstance(tool_item, dict) and "name" in tool_item:
-                client_tool_names.add(tool_item["name"])  # kwargs-ok: extract client tool name
-
     for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
         if _get_stop_reason(response) != "tool_use":
             break
@@ -150,14 +164,7 @@ async def anthropic_messages_with_mcp(
         if not tool_use_blocks:
             break
 
-        has_client_side_tool = False
-        for block in tool_use_blocks:
-            tool_name = block.get("name")  # kwargs-ok: extract block tool name
-            if tool_name in client_tool_names or (bool(tool_server_map) and tool_name not in tool_server_map):
-                has_client_side_tool = True
-                break
-
-        if has_client_side_tool:
+        if _has_client_side_tool(tool_use_blocks, other_tools, tool_server_map):
             break
 
         tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
@@ -176,7 +183,7 @@ async def anthropic_messages_with_mcp(
         if not tool_results:
             break
 
-        working_messages = (
+        working_messages = (  # rebind-ok: append assistant and tool_result turns to working context
             *working_messages,
             {"role": "assistant", "content": list(_get_response_content(response))},
             _build_tool_result_message(tool_results),
