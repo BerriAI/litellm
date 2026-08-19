@@ -891,7 +891,7 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
     )
 
     assert cost > 0
-    assert cost == pytest.approx(30 * 7.5e-07 + 15 * 3.75e-06)
+    assert cost == pytest.approx(30 * 3.75e-07 + 15 * 1.875e-06)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
     assert models == ["gemini-3.6-flash", "gemini-3.6-flash"]
 
