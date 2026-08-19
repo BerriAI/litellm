@@ -60,7 +60,11 @@ export const useMountRegistry = (): MountRegistry => {
   );
 };
 
-/** antd submits only the mounted fields; react-hook-form submits the whole store, so the mounted set is reapplied here. */
+/**
+ * antd submits only the mounted fields; react-hook-form submits the whole store, so the mounted set is reapplied here.
+ * Covers static literal names only: the registry counts by name and this emits flat keys, so a field whose name is
+ * generated at runtime, a Form.List row and its per-row sub-fields, is never in the mounted set and goes missing here.
+ */
 export const projectMountedValues = (
   registry: MountRegistry,
   getValues: UseFormGetValues<MountedFormValues>,
