@@ -15689,6 +15689,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
         "max_request_size_mb": "Integer",
+        "max_batch_file_size_mb": "Integer",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",
