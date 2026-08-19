@@ -1,4 +1,5 @@
 import json
+from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -167,7 +168,7 @@ async def _acreate_batch(*args, **kwargs):
     raise AssertionError("only used for its __name__")
 
 
-async def _acreate_file(*args, **kwargs):
+async def _acreate_file(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("only used for its __name__")
 
 
