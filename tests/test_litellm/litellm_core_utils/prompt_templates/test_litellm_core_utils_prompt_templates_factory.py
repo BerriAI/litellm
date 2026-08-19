@@ -2330,6 +2330,73 @@ def test_bedrock_tool_call_invoke_salvages_valid_prefix_before_truncated_tail():
     assert result[0]["toolUse"]["input"] == {"cmd": "ls"}
 
 
+def test_bedrock_tool_call_invoke_mixed_turn_survives_one_malformed_call():
+    """
+    Regression for LIT-4574: an assistant turn with several tool calls where only one
+    has malformed/truncated arguments must keep the valid calls intact and degrade just
+    the bad one to empty input, instead of killing the entire turn.
+    """
+    tool_calls = [
+        {
+            "id": "t_good",
+            "type": "function",
+            "function": {
+                "name": "good_tool",
+                "arguments": '{"item_type": "email", "item_id": "AAMkAD=="}',
+            },
+        },
+        {
+            "id": "t_bad",
+            "type": "function",
+            "function": {"name": "bad_tool", "arguments": '{"item_type": "email"'},
+        },
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    tool_uses = [block["toolUse"] for block in result if "toolUse" in block]
+    assert len(tool_uses) == 2
+    by_name = {tool_use["name"]: tool_use for tool_use in tool_uses}
+    assert by_name["good_tool"]["input"] == {"item_type": "email", "item_id": "AAMkAD=="}
+    assert by_name["bad_tool"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_truncated_json_arguments():
+    """
+    Truncated tool call arguments (issue #35303) must not raise. A client replaying a
+    partially streamed tool call would otherwise trigger a pre-network exception that the
+    router maps to a retryable APIConnectionError and retries through the fallback graph.
+    """
+    tool_calls = [
+        {
+            "id": "tooluse_MAh2QLVjBRkvi5QJkLQ08V",
+            "type": "function",
+            "function": {
+                "name": "replace_note_content",
+                "arguments": '{"note_id": "999af35c-4061-4ece-8581-7d43fc988ba4", "title": "WG"',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["toolUseId"] == "tooluse_MAh2QLVjBRkvi5QJkLQ08V"
+    assert result[0]["toolUse"]["input"] == {}
+
+
+def test_bedrock_tool_call_invoke_unconvertible_raises_non_retryable_bad_request():
+    """
+    Conversion failures are client input errors, so they must surface as a non-retryable
+    BadRequestError instead of a bare Exception that maps to APIConnectionError, and the
+    message must not embed the tool call payload (issue #35303).
+    """
+    tool_calls = [{"id": "call_bad", "type": "function", "function": None}]
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _convert_to_bedrock_tool_call_invoke(tool_calls)
+
+    assert exc_info.value.status_code == 400
+    assert "call_bad" in str(exc_info.value)
+    assert "function" not in str(exc_info.value).split("Received error=")[0]
+
+
 def test_make_valid_bedrock_tool_name_preserves_hyphens():
     assert make_valid_bedrock_tool_name("my-tool") == "my-tool"
     assert (
