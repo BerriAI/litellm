@@ -18,12 +18,17 @@ export interface PiiConfigurationProps {
   entityCategories?: PiiEntityCategory[];
 }
 
+export type GuardrailMode =
+  | string
+  | string[]
+  | { tags?: Record<string, string | string[]>; default?: string | string[] | null };
+
 export interface Guardrail {
   guardrail_id: string;
   guardrail_name: string | null;
   litellm_params: {
     guardrail: string;
-    mode: string;
+    mode: GuardrailMode;
     default_on: boolean;
     pii_entities_config?: { [key: string]: string };
     [key: string]: any;
