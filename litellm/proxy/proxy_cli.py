@@ -916,6 +916,7 @@ class ProxyInitializationHelpers:
         "path that can cause schema thrashing during rolling deploys where two "
         "LiteLLM versions contend for the same DB. Default is the v1 resolver."
     ),
+    envvar="USE_V2_MIGRATION_RESOLVER",
 )
 @click.option(
     "--reload",

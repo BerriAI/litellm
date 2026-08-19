@@ -41,6 +41,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.types.mcp import MCPAuth
@@ -108,8 +109,8 @@ if MCP_AVAILABLE:
     ########################################################
     ############ MCP Server REST API Routes #################
     async def _safe_fire_mcp_tool_call_logging(
-        logging_obj: Any | None,
-        result: Any,
+        logging_obj: "LiteLLMLoggingObj | None",
+        result: "CallToolResult",
         start_time: datetime,
         end_time: datetime,
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -158,7 +159,7 @@ if MCP_AVAILABLE:
         data: dict[str, Any],
         tool_name: str,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> Any:
+    ) -> "CallToolResult":
         """Handle the virtual ``mcp_tool_search`` / ``mcp_tool_call`` REST tools (gated on
         ``mcp_tool_search_enabled``). Kept out of ``call_tool_rest_api`` so that endpoint stays a single
         dispatch. An upstream 401 raised by the virtual ``mcp_tool_call`` propagates unhandled to the
@@ -298,8 +299,8 @@ if MCP_AVAILABLE:
         """
         if not _is_v1_resolved_oauth2_server(server):
             return None
-        user_id: Final = getattr(user_api_key_dict, "user_id", None)
-        server_id: Final = getattr(server, "server_id", None)
+        user_id: Final[str | None] = getattr(user_api_key_dict, "user_id", None)
+        server_id: Final[str | None] = getattr(server, "server_id", None)
         if not user_id or not server_id:
             return None
         try:
@@ -343,7 +344,7 @@ if MCP_AVAILABLE:
         Returns a dict keyed by server_id. Used to avoid N+1 DB queries when
         iterating over multiple OAuth2 MCP servers.
         """
-        user_id: Final = getattr(user_api_key_dict, "user_id", None)
+        user_id: Final[str | None] = getattr(user_api_key_dict, "user_id", None)
         if not user_id:
             return {}
         try:
@@ -664,7 +665,7 @@ if MCP_AVAILABLE:
             "message": "Successfully retrieved tools",
         }
 
-    def _as_query_str(value: Any) -> str | None:
+    def _as_query_str(value: object) -> str | None:
         """Coerce an Optional[str] Query param to str|None, dropping unresolved FastAPI defaults."""
         return value if isinstance(value, str) else None
 
@@ -935,8 +936,8 @@ if MCP_AVAILABLE:
             user_api_key_dict = await acting_user_auth(user_api_key_dict)
             data = await request.json()
 
-            tool_name: Final = data.get("name")
-            tool_arguments: Final = data.get("arguments") or {}
+            tool_name: Final[str | None] = data.get("name")
+            tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}
 
             from litellm.proxy._experimental.mcp_server.tool_search import (
                 MCP_TOOL_CALL_TOOL_NAME,
@@ -947,7 +948,7 @@ if MCP_AVAILABLE:
                 return await _handle_virtual_mcp_tool(request, data, tool_name, user_api_key_dict)
 
             # Validate required parameters early
-            server_id: Final = data.get("server_id")
+            server_id: Final[str | None] = data.get("server_id")
             if not server_id:
                 raise HTTPException(
                     status_code=400,
@@ -1123,11 +1124,11 @@ if MCP_AVAILABLE:
 
     async def _execute_with_mcp_client(
         request: NewMCPServerRequest,
-        operation: Callable[..., Awaitable[Any]],
+        operation: Callable[..., Awaitable[Mapping[str, object]]],
         mcp_auth_header: str | dict[str, str] | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
-    ) -> dict:
+    ) -> Mapping[str, object]:
         """
         Create a temporary MCP client from *request*, run *operation*, and return the result.
 

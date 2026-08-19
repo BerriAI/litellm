@@ -348,6 +348,26 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             merged_chunk["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
         return self._augment_message_delta_usage(merged_chunk)
 
+    def _handle_choiceless_chunk(self, chunk: "ModelResponseStream") -> bool:
+        """Consume an OpenAI-compatible chunk that carries no ``choices``.
+
+        ``choices`` is legitimately empty on metadata-only chunks; the final
+        usage chunk emitted when ``stream_options.include_usage`` is set is the
+        common case (vLLM and other OpenAI-compatible servers do this). Such a
+        chunk carries no content-block information, so the caller must not run
+        the content-block state machine over it.
+
+        Returns True when a merged ``message_delta`` was queued (usage folded
+        into the held stop-reason chunk); False when the chunk should be
+        skipped entirely.
+        """
+        if self.holding_stop_reason_chunk is not None and _optional_attr(chunk, "usage") is not None:
+            self.chunk_queue.append(self._merge_usage_into_held_stop_reason_chunk(chunk))
+            self.queued_usage_chunk = True
+            self.holding_stop_reason_chunk = None
+            return True
+        return False
+
     def _ensure_context_management_attached(self, message_delta_chunk: MessageBlockDelta) -> MessageBlockDelta:
         """Attach ``context_management`` to a ``message_delta`` chunk if
         ``self.applied_edits`` is non-empty and the chunk does not already
@@ -509,6 +529,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
+                if not getattr(chunk, "choices", None):
+                    if self._handle_choiceless_chunk(chunk):
+                        return self.chunk_queue.popleft()
+                    continue
+
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 is_opening_first_block = self.sent_content_block_start is False
                 if is_opening_first_block and self._is_blank_delta(chunk):
@@ -599,6 +624,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     return self.chunk_queue.popleft()
 
                 if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(processed_chunk):
+                    # A tool_use block opens with empty arguments (Bedrock Converse's
+                    # ``contentBlockStart``, OpenAI's ``arguments: ""``), so flush the
+                    # block start queued above instead of waiting for the next upstream
+                    # chunk, which on a trailing-burst provider is the whole generation.
+                    if self.chunk_queue:
+                        return self.chunk_queue.popleft()
                     continue
 
                 if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
@@ -732,6 +763,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if chunk == "None" or chunk is None:
                     raise Exception
 
+                if not getattr(chunk, "choices", None):
+                    if self._handle_choiceless_chunk(chunk):
+                        return self.chunk_queue.popleft()
+                    continue
+
                 should_start_new_block = self._should_start_new_content_block(chunk)
                 is_opening_first_block = self.sent_content_block_start is False
                 if is_opening_first_block and self._is_blank_delta(chunk):
@@ -817,6 +853,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     if processed_chunk["type"] == "content_block_delta" and not self._delta_has_content(
                         processed_chunk
                     ):
+                        # See ``__next__``: flush the queued block start (issue #32004).
+                        if self.chunk_queue:
+                            return self.chunk_queue.popleft()
                         continue
 
                     if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:

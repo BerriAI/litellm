@@ -33,6 +33,7 @@ from litellm.integrations.otel.model.payloads import (
     is_mcp_list_tools,
     is_mcp_tool_call,
 )
+from litellm.integrations.otel.model.semconv import Error
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
@@ -61,8 +62,13 @@ from litellm.integrations.otel.plumbing.providers import (
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
 
 if TYPE_CHECKING:
+    from opentelemetry.metrics import MeterProvider
+
+    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.services import ServiceLoggerPayload
     from litellm.types.utils import (
+        CallTypesLiteral,
         StandardLoggingGuardrailInformation,
         StandardLoggingPayload,
     )
@@ -139,7 +145,7 @@ class OpenTelemetryV2(CustomLogger):
         callback_name: str | None = None,
         tracer_provider: TracerProvider | None = None,
         logger_provider: LoggerProvider | None = None,
-        meter_provider: Any | None = None,
+        meter_provider: "MeterProvider | None" = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -161,7 +167,7 @@ class OpenTelemetryV2(CustomLogger):
         self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
-    def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":
+    def _init_metrics(self, meter_provider: "MeterProvider | None") -> "GenAIMetricRecorder | None":
         """Create the six GenAI histograms when metrics are enabled, else ``None``.
 
         ``meter_provider`` is an explicit override (tests inject one); otherwise the
@@ -339,7 +345,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _emit_mcp_tool_call(
         self,
-        kwargs: Mapping[str, Any],
+        kwargs: Mapping[str, object],
         start_time: datetime | float | None,
         end_time: datetime | float | None,
     ) -> bool:
@@ -416,7 +422,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _close_llm_call(
         self,
-        kwargs: Mapping[str, Any],
+        kwargs: Mapping[str, object],
         start_time: datetime | float | None,
         end_time: datetime | float | None,
     ) -> Span | None:
@@ -473,7 +479,7 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_service_success_hook(
         self,
-        payload: Any,
+        payload: "ServiceLoggerPayload",
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
@@ -490,7 +496,7 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_service_failure_hook(
         self,
-        payload: Any,
+        payload: "ServiceLoggerPayload",
         error: str | None = "",
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
@@ -508,7 +514,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _emit_service(
         self,
-        payload: Any,
+        payload: "ServiceLoggerPayload",
         *,
         parent_otel_span: Span | None,
         start_time: datetime | float | None,
@@ -558,7 +564,7 @@ class OpenTelemetryV2(CustomLogger):
     #  / errors are the FastAPI instrumentor's job, so we don't touch it here.
     # ====================================================================== #
 
-    def seed_request_identity(self, user_api_key_dict: Any, model: Any = None) -> None:
+    def seed_request_identity(self, user_api_key_dict: object, model: str | None = None) -> None:
         """Attach request-identity Baggage to the current context + server span.
 
         Seeding identity into Baggage makes **every** span emitted afterwards for
@@ -614,10 +620,10 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_pre_call_hook(
         self,
-        user_api_key_dict: Any,
-        cache: Any,
+        user_api_key_dict: "UserAPIKeyAuth",
+        cache: "DualCache",
         data: dict,
-        call_type: Any,
+        call_type: "CallTypesLiteral",
     ) -> dict:
         self.seed_request_identity(
             user_api_key_dict,
@@ -634,18 +640,23 @@ class OpenTelemetryV2(CustomLogger):
         """Stamp the v2 error.* attributes on the FastAPI-owned SERVER span for a
         failure that dies before any LLM-call span exists (malformed body, auth /
         validation rejection). Called from the proxy's global exception handler via
-        ``_close_dangling_otel_server_span``. The instrumentor still owns the span's
-        status and lifecycle, so this only decorates it — never sets status, never
-        ends it — and emits no exception event, matching v1's SERVER-span behavior
-        and avoiding a duplicate of the event ``async_post_call_failure_hook`` or
-        the ``auth`` phase span already records."""
+        ``_close_dangling_otel_server_span``, which swallows the exception into a
+        ``JSONResponse`` so the instrumentor never sees it and leaves the span
+        ``UNSET``; the status is set here instead (v1 did the same from the handler)
+        so a failed request reads as failed and not merely as a span carrying an
+        error message. The instrumentor still owns the span's lifecycle, so this
+        never ends it. The exception event is recorded only when nothing stamped
+        this span already — ``async_post_call_failure_hook`` and the ``auth`` phase
+        span record their own, and a second event would duplicate it — while the
+        attributes are always restamped so ``error.code`` stays pinned to the real
+        response status."""
         if span is None or not is_recordable_span(span):
             return
+        already_stamped: Final = Error.TYPE in (getattr(span, "attributes", None) or ())
         stamp_error(
             span,
             _span_error_from_exception(exception, status_code=status_code),
-            record_event=False,
-            set_status=False,
+            record_event=not already_stamped,
         )
 
     async def async_post_call_failure_hook(
@@ -784,7 +795,7 @@ def emit_guardrail_span(entry: "StandardLoggingGuardrailInformation") -> None:
         pass
 
 
-def seed_request_identity(user_api_key_dict: Any, model: Any = None) -> None:
+def seed_request_identity(user_api_key_dict: object, model: str | None = None) -> None:
     logger: Final = _registered_v2_logger()
     if logger is not None:
         logger.seed_request_identity(user_api_key_dict, model=model)

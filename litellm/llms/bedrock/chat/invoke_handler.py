@@ -560,7 +560,7 @@ class AWSEventStreamDecoder:
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
             elif "usage" in chunk_data:
-                usage = converse_config._transform_usage(
+                usage = converse_config.transform_usage(
                     chunk_data.get("usage", {}),
                     thinking_ran=self._thinking_ran,
                 )

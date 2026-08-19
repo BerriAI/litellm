@@ -4,14 +4,16 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Annotated, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Final, Protocol
 
 from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
+from litellm.litellm_core_utils.llm_judge import router_resolves_model
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_TeamTable,
@@ -25,7 +27,9 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
 from litellm.types.management_endpoints.auto_router_endpoints import (
@@ -37,11 +41,16 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     RequestComplexityRouterConfig,
+    ShadowEvalJobResponse,
+    ShadowEvalResult,
+    ShadowEvalSlice,
+    StartShadowEvalRequest,
 )
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 else:
     try:
@@ -51,6 +60,77 @@ else:
         pass
 
 router: Final = APIRouter()
+
+
+class _TeamTable(Protocol):
+    async def find_unique(self, *, where: Mapping[str, object]) -> SupportsModelDump | None: ...
+
+
+class _VerificationTokenRow(Protocol):
+    @property
+    def token(self) -> str: ...
+
+    @property
+    def key_alias(self) -> str | None: ...
+
+    @property
+    def key_name(self) -> str | None: ...
+
+
+class _VerificationTokenTable(Protocol):
+    async def find_unique(self, *, where: Mapping[str, object]) -> _VerificationTokenRow | None: ...
+
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_VerificationTokenRow]: ...
+
+
+class _ShadowEvalJobRow(Protocol):
+    @property
+    def id(self) -> str: ...
+
+
+class _ShadowEvalJobTable(Protocol):
+    async def find_unique(self, *, where: Mapping[str, object]) -> _ShadowEvalJobRow | None: ...
+
+    async def find_first(self, *, where: Mapping[str, object]) -> _ShadowEvalJobRow | None: ...
+
+    async def find_many(
+        self, *, where: Mapping[str, object], order: Mapping[str, str], take: int
+    ) -> Sequence[_ShadowEvalJobRow]: ...
+
+    async def create(self, data: Mapping[str, object]) -> _ShadowEvalJobRow: ...
+
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> _ShadowEvalJobRow | None: ...
+
+
+class _ShadowEvalAttemptRow(Protocol):
+    @property
+    def error(self) -> str | None: ...
+
+
+class _ShadowEvalAttemptTable(Protocol):
+    async def find_first(
+        self, *, where: Mapping[str, object], order: Mapping[str, str]
+    ) -> _ShadowEvalAttemptRow | None: ...
+
+
+def _team_table(prisma_client: "PrismaClient") -> _TeamTable:
+    return TeamRepository(prisma_client).table
+
+
+def _verification_tokens(prisma_client: "PrismaClient") -> _VerificationTokenTable:
+    return prisma_client.db.litellm_verificationtoken
+
+
+def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
+    return prisma_client.db.litellm_shadowevaljob
+
+
+def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTable:
+    return prisma_client.db.litellm_shadowevalattempt
+
+
+async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
+    return await prisma_client.db.query_raw(query, *args)
 
 
 async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> None:
@@ -84,7 +164,7 @@ async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: st
             },
         )
 
-    team_row: Final = await TeamRepository(prisma_client).table.find_unique(
+    team_row: Final = await _team_table(prisma_client).find_unique(
         where={"team_id": team_id},  # mutable-ok: Prisma query filters are dict-shaped
     )
     if team_row is None:
@@ -260,6 +340,7 @@ async def preview_auto_router_routing(
 class _SessionAggRow(BaseModel):
     router_name: str
     router_type: str
+    tier_turns: Mapping[str, int]
     sessions: int
     turns: int
     unordered_turns: int
@@ -282,35 +363,6 @@ class _SessionAggRow(BaseModel):
 
 
 _SESSION_AGG_ROWS: Final = TypeAdapter(list[_SessionAggRow])
-
-_BENCHMARKS_SQL: Final = """
-SELECT
-    router_name,
-    router_type,
-    COUNT(*)::int AS sessions,
-    COALESCE(SUM(turns), 0)::int AS turns,
-    COALESCE(SUM(unordered_turns), 0)::int AS unordered_turns,
-    COALESCE(SUM(covered_turns), 0)::int AS covered_turns,
-    COALESCE(SUM(cache_hits), 0)::int AS cache_hits,
-    COALESCE(SUM(same_model_turns), 0)::int AS same_model_turns,
-    COALESCE(SUM(same_model_hits), 0)::int AS same_model_hits,
-    COALESCE(SUM(first_visit_turns), 0)::int AS first_visit_turns,
-    COALESCE(SUM(first_visit_hits), 0)::int AS first_visit_hits,
-    COALESCE(SUM(return_turns), 0)::int AS return_turns,
-    COALESCE(SUM(return_hits), 0)::int AS return_hits,
-    COALESCE(SUM(return_expired_misses), 0)::int AS return_expired_misses,
-    COALESCE(SUM(return_within_ttl_misses), 0)::int AS return_within_ttl_misses,
-    COALESCE(SUM(ttl_5m_turns), 0)::int AS ttl_5m_turns,
-    COALESCE(SUM(ttl_1h_turns), 0)::int AS ttl_1h_turns,
-    COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
-    COALESCE(SUM(spend), 0)::float8 AS spend,
-    COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
-    COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0)::float8 AS session_seconds
-FROM "LiteLLM_AutoRouterSession"
-WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
-GROUP BY router_name, router_type
-ORDER BY SUM(spend) DESC
-"""
 
 
 def _parse_benchmark_day(value: str) -> datetime:
@@ -362,10 +414,31 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     )
 
 
+def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
+    totals: Final = _benchmark_totals(row)
+    return AutoRouterBenchmarkGroup(
+        router_name=row.router_name,
+        router_type=row.router_type,
+        tier_turns=row.tier_turns,
+        sessions=totals.sessions,
+        turns=totals.turns,
+        avg_turns_per_session=totals.avg_turns_per_session,
+        avg_session_seconds=totals.avg_session_seconds,
+        avg_tokens_per_session=totals.avg_tokens_per_session,
+        spend=totals.spend,
+        saved_spend=totals.saved_spend,
+        baseline_spend=totals.baseline_spend,
+        saved_pct=totals.saved_pct,
+        saved_per_session=totals.saved_per_session,
+        cache=totals.cache,
+    )
+
+
 def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
     return _SessionAggRow(
         router_name="",
         router_type="",
+        tier_turns=MappingProxyType({}),
         sessions=sum(row.sessions for row in rows),
         turns=sum(row.turns for row in rows),
         unordered_turns=sum(row.unordered_turns for row in rows),
@@ -413,14 +486,7 @@ async def get_auto_router_benchmarks(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if user_api_key_dict.user_role not in (
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only proxy admin roles can view auto-router benchmarks across the deployment",
-        )
+    _require_admin_viewer(user_api_key_dict, "view auto-router benchmarks across the deployment")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
@@ -433,20 +499,14 @@ async def get_auto_router_benchmarks(
     if end_day < start_day:
         raise HTTPException(status_code=400, detail="end_date must not be earlier than start_date")
 
-    raw_rows: Final = await prisma_client.db.query_raw(
-        _BENCHMARKS_SQL,
+    raw_rows: Final = await _query_raw(
+        prisma_client,
+        AUTOROUTER_BENCHMARKS_SQL,
         start_day.isoformat(),
         (end_day + timedelta(days=1)).isoformat(),
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
-    groups: Final = tuple(
-        AutoRouterBenchmarkGroup(
-            router_name=row.router_name,
-            router_type=row.router_type,
-            **_benchmark_totals(row).model_dump(),
-        )
-        for row in rows
-    )
+    groups: Final = tuple(_benchmark_group(row) for row in rows)
     return AutoRouterBenchmarksResponse(
         start_date=start_day.strftime("%Y-%m-%d"),
         end_date=end_day.strftime("%Y-%m-%d"),
@@ -454,3 +514,394 @@ async def get_auto_router_benchmarks(
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
     )
+
+
+# ---------------------------------------------------------------------------
+# Shadow eval: pre-adoption evaluation of an auto-router against live traffic.
+# The job row is immutable config plus stopped_at; status, counts, spend, and errors
+# are derived from the append-only attempt rows, so reads here are aggregations
+# bounded by each job's max_turns through the attempt table's job_id index.
+# ---------------------------------------------------------------------------
+
+
+def _require_admin_viewer(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        raise HTTPException(status_code=403, detail=f"Only proxy admin roles can {action}")
+
+
+def _require_admin_writer(user_api_key_dict: UserAPIKeyAuth, action: str) -> None:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail=f"Only a proxy admin can {action}")
+
+
+def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) -> bool:
+    return any(
+        router_name in registry
+        for registry in (
+            llm_router.auto_routers,
+            llm_router.complexity_routers,
+            llm_router.adaptive_routers,
+            llm_router.quality_routers,
+        )
+    )
+
+
+def _validate_plain_model(llm_router: "Router | None", model: str, field_name: str) -> None:
+    """Reject a model the dispatch path cannot resolve, at start rather than as a silently
+    growing error count once the job is already sampling and billing. Both the judge and a
+    reverse job's baseline must be plain models: an auto-router in either slot would
+    re-route per turn, so the comparison would have no fixed arm to attribute results to."""
+    if llm_router is not None and _is_configured_pre_routing_strategy(llm_router, model):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} '{model}' is an auto-router; it must be a plain model",
+        )
+    if router_resolves_model(llm_router, model):
+        return
+    import litellm
+
+    try:
+        litellm.get_llm_provider(model=model)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{field_name} '{model}' is neither a model configured on this proxy nor a "
+                "provider-qualified public model name (e.g. 'anthropic/claude-sonnet-5')"
+            ),
+        ) from e
+
+
+def _is_unique_violation(error: Exception) -> bool:
+    """Whether a Prisma create failed on a unique index. One active job per key and
+    direction lives in a partial unique index (raw SQL in the migration; schema.prisma
+    cannot express partial indexes), so the read-then-create check above it is advisory:
+    two concurrent starts pass the read, and the loser must surface as the same 409
+    rather than a 500."""
+    try:
+        from prisma.errors import UniqueViolationError
+    except ImportError:
+        return "unique constraint" in str(error).lower() or "P2002" in str(error)
+    return isinstance(error, UniqueViolationError)
+
+
+class _AttemptAggRow(BaseModel):
+    grp: str
+    turn_count: int
+    real_wins: int
+    shadow_wins: int
+    ties: int
+    avg_confidence: float | None
+
+
+_ATTEMPT_AGG_ROWS: Final = TypeAdapter(list[_AttemptAggRow])
+
+_ATTEMPT_AGG_SELECT: Final = """
+    COUNT(*)::int AS turn_count,
+    COUNT(*) FILTER (WHERE outcome = 'real')::int AS real_wins,
+    COUNT(*) FILTER (WHERE outcome = 'shadow')::int AS shadow_wins,
+    COUNT(*) FILTER (WHERE outcome = 'tie')::int AS ties,
+    AVG(confidence)::float AS avg_confidence
+FROM "LiteLLM_ShadowEvalAttempt"
+WHERE job_id = $1 AND outcome != 'error'
+GROUP BY 1
+"""
+
+_ATTEMPT_AGG_BY_TIER_SQL: Final = "SELECT COALESCE(tier, 'UNCLASSIFIED') AS grp," + _ATTEMPT_AGG_SELECT
+_ATTEMPT_AGG_BY_MODEL_SQL: Final = "SELECT COALESCE(real_model, 'unknown') AS grp," + _ATTEMPT_AGG_SELECT
+
+_SWEEP_FINISHED_JOBS_SQL: Final = """
+UPDATE "LiteLLM_ShadowEvalJob" j SET stopped_at = NOW()
+WHERE j.api_key_id = $1 AND j.stopped_at IS NULL
+  AND (
+    j.ends_at <= NOW()
+    OR (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_turns
+  )
+"""
+
+_ATTEMPT_TOTALS_SQL: Final = """
+SELECT
+    COUNT(*) FILTER (WHERE outcome != 'error')::int AS judged_count,
+    COUNT(*) FILTER (WHERE outcome = 'error')::int AS error_count,
+    COALESCE(SUM(judge_cost), 0)::float AS judge_spend
+FROM "LiteLLM_ShadowEvalAttempt"
+WHERE job_id = $1
+"""
+
+
+class _AttemptTotalsRow(BaseModel):
+    judged_count: int
+    error_count: int
+    judge_spend: float
+
+
+_ATTEMPT_TOTALS_ROWS: Final = TypeAdapter(list[_AttemptTotalsRow])
+
+
+def _pct_of(numerator: int, denominator: int) -> float:
+    return _pct(numerator, denominator)
+
+
+def _slices(rows: Sequence[_AttemptAggRow]) -> tuple[ShadowEvalSlice, ...]:
+    return tuple(
+        ShadowEvalSlice(
+            group=row.grp,
+            turn_count=row.turn_count,
+            real_win_rate_pct=_pct_of(row.real_wins, row.turn_count),
+            shadow_win_rate_pct=_pct_of(row.shadow_wins, row.turn_count),
+            tie_rate_pct=_pct_of(row.ties, row.turn_count),
+            avg_judge_confidence=round(row.avg_confidence or 0.0, 3),
+        )
+        for row in sorted(rows, key=lambda r: r.turn_count, reverse=True)
+    )
+
+
+_NO_KEY_LABELS: Final[tuple[str | None, str | None]] = (None, None)
+
+
+async def _with_key_labels(
+    prisma_client: "PrismaClient", responses: Sequence[ShadowEvalJobResponse]
+) -> tuple[ShadowEvalJobResponse, ...]:
+    """Resolve each job's key hash to the key's alias and masked name in one batched read,
+    so the UI can say whose traffic a job shadows. Deleted keys resolve to None."""
+    if not responses:
+        return ()
+    key_rows: Final = await _verification_tokens(prisma_client).find_many(
+        where={"token": {"in": sorted({response.api_key_id for response in responses})}}  # mutable-ok: Prisma filter
+    )
+    labels: Final[Mapping[str, tuple[str | None, str | None]]] = {
+        row.token: (row.key_alias, row.key_name) for row in key_rows or ()
+    }
+    return tuple(
+        response.model_copy(
+            update={  # mutable-ok: pydantic update payload
+                "key_alias": labels.get(response.api_key_id, _NO_KEY_LABELS)[0],
+                "key_name": labels.get(response.api_key_id, _NO_KEY_LABELS)[1],
+            }
+        )
+        for response in responses
+    )
+
+
+async def _shadow_eval_results(prisma_client: "PrismaClient", job_id: str) -> ShadowEvalResult | None:
+    """Both stratifications of one job's verdicts. Tier answers "where does the router do
+    well"; the model stratification groups by whichever model served the real arm, so it
+    answers "which of the models this key uses today would the router beat" forward, and
+    "for the turns the router sent to X, did X beat the baseline" in reverse. Reads are
+    bounded by the job's own attempts (<= max_turns) via the job_id index."""
+    by_tier: Final = _ATTEMPT_AGG_ROWS.validate_python(
+        await _query_raw(prisma_client, _ATTEMPT_AGG_BY_TIER_SQL, job_id) or ()
+    )
+    if not by_tier:
+        return None
+    by_model: Final = _ATTEMPT_AGG_ROWS.validate_python(
+        await _query_raw(prisma_client, _ATTEMPT_AGG_BY_MODEL_SQL, job_id) or ()
+    )
+    total_turns: Final = sum(r.turn_count for r in by_tier)
+    return ShadowEvalResult(
+        by_tier=_slices(by_tier),
+        by_current_model=_slices(by_model),
+        overall_shadow_win_rate_pct=_pct_of(sum(r.shadow_wins for r in by_tier), total_turns),
+        overall_tie_rate_pct=_pct_of(sum(r.ties for r in by_tier), total_turns),
+    )
+
+
+@router.post(
+    "/auto_router/shadow_eval/start",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ShadowEvalJobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_shadow_eval(
+    data: StartShadowEvalRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ShadowEvalJobResponse:
+    """
+    Start a shadow eval: duplicate a sampled slice of a key's live traffic against a second
+    arm, judge the two responses blind, and stratify win rates by tier and by the model that
+    served the real arm.
+
+    A forward job answers whether the key should adopt router_name: it samples the requests
+    the router did not serve and duplicates them through it. A reverse job answers whether a
+    key already on the router still gains from it: it samples the requests the router did
+    serve and duplicates them against baseline_model. A key can hold one active job per
+    direction, so both questions can run at once.
+
+    Shadow responses are never served to users. The job samples until it has judged
+    max_turns turns, reaches the end of its window, or is stopped; sampling changes
+    propagate to pods within about 10 seconds. Shadow and judge calls bill to the
+    shadowed key but are excluded from request counts and auto-router adoption metrics.
+    """
+    from litellm.proxy.proxy_server import llm_router, prisma_client
+
+    _require_admin_writer(user_api_key_dict, "start a shadow eval")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    if llm_router is None or not _is_configured_pre_routing_strategy(llm_router, data.router_name):
+        raise HTTPException(status_code=400, detail=f"'{data.router_name}' is not a configured auto-router")
+    _validate_plain_model(llm_router, data.judge_model, "judge_model")
+    if data.baseline_model is not None:
+        _validate_plain_model(llm_router, data.baseline_model, "baseline_model")
+    key_row: Final = await _verification_tokens(prisma_client).find_unique(
+        where={"token": data.api_key_id}  # mutable-ok: Prisma filter
+    )
+    if key_row is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"api_key_id '{data.api_key_id}' is not a key on this proxy; pass the key's token hash, "
+                "the value the key list and key info endpoints report"
+            ),
+        )
+
+    # A job that expired or exhausted its turn budget stopped sampling on its own, but
+    # still holds its slot in the per-key, per-direction partial unique index until
+    # stamped; free it so a new eval can start. Sweeping both directions is deliberate.
+    await prisma_client.db.execute_raw(_SWEEP_FINISHED_JOBS_SQL, data.api_key_id)
+    active: Final = await _shadow_eval_jobs(prisma_client).find_first(
+        where={  # mutable-ok: Prisma filter
+            "api_key_id": data.api_key_id,
+            "direction": data.direction,
+            "stopped_at": None,
+        },
+    )
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Key already has an active {data.direction} shadow eval job ({active.id}). Stop it first.",
+        )
+    now: Final = datetime.now(timezone.utc)
+    try:
+        job: Final = await _shadow_eval_jobs(prisma_client).create(
+            data={  # mutable-ok: Prisma payload
+                "api_key_id": data.api_key_id,
+                "router_name": data.router_name,
+                "direction": data.direction,
+                "baseline_model": data.baseline_model,
+                "judge_model": data.judge_model,
+                "shadow_percentage": data.shadow_percentage,
+                "max_turns": data.max_turns,
+                "created_by": user_api_key_dict.user_id,
+                "ends_at": now + timedelta(days=data.duration_days),
+            }
+        )
+    except Exception as e:
+        if not _is_unique_violation(e):
+            raise
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Key already has an active {data.direction} shadow eval job (started concurrently). Stop it first."
+            ),
+        ) from e
+    return ShadowEvalJobResponse.model_validate(job, from_attributes=True).model_copy(
+        update={"key_alias": key_row.key_alias, "key_name": key_row.key_name}  # mutable-ok: pydantic update payload
+    )
+
+
+@router.get(
+    "/auto_router/shadow_eval",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=list[ShadowEvalJobResponse],
+)
+async def list_shadow_eval_jobs(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    api_key_id: Annotated[str | None, Query(description="Filter to jobs shadowing this key")] = None,
+    limit: Annotated[int, Query(ge=1, le=200, description="Newest jobs to return")] = 50,
+) -> tuple[ShadowEvalJobResponse, ...]:
+    """List shadow eval jobs, newest first. Counts and results ride the detail endpoint only."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_admin_viewer(user_api_key_dict, "view shadow evals")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    records: Final = await _shadow_eval_jobs(prisma_client).find_many(
+        where={"api_key_id": api_key_id} if api_key_id else {},  # mutable-ok: Prisma filter
+        order={"created_at": "desc"},  # mutable-ok: Prisma order
+        take=limit,
+    )
+    return await _with_key_labels(
+        prisma_client,
+        tuple(ShadowEvalJobResponse.model_validate(record, from_attributes=True) for record in records or ()),
+    )
+
+
+@router.get(
+    "/auto_router/shadow_eval/{job_id}",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ShadowEvalJobResponse,
+)
+async def get_shadow_eval_job(
+    job_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ShadowEvalJobResponse:
+    """One job with derived counts, judge spend, latest error, and stratified results."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_admin_viewer(user_api_key_dict, "view shadow evals")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    record: Final = await _shadow_eval_jobs(prisma_client).find_unique(
+        where={"id": job_id}  # mutable-ok: Prisma filter
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
+    totals: Final = _ATTEMPT_TOTALS_ROWS.validate_python(
+        await _query_raw(prisma_client, _ATTEMPT_TOTALS_SQL, job_id) or ()
+    )
+    latest_error: Final = await _shadow_eval_attempts(prisma_client).find_first(
+        where={"job_id": job_id, "outcome": "error"},  # mutable-ok: Prisma filter
+        order={"created_at": "desc"},  # mutable-ok: Prisma order
+    )
+    labeled: Final = await _with_key_labels(
+        prisma_client, (ShadowEvalJobResponse.model_validate(record, from_attributes=True),)
+    )
+    return labeled[0].model_copy(
+        update={  # mutable-ok: pydantic update payload
+            "judged_count": totals[0].judged_count if totals else 0,
+            "error_count": totals[0].error_count if totals else 0,
+            "judge_spend": round(totals[0].judge_spend, 6) if totals else 0.0,
+            "last_error": latest_error.error if latest_error else None,
+            "results": await _shadow_eval_results(prisma_client, job_id),
+        }
+    )
+
+
+@router.post(
+    "/auto_router/shadow_eval/{job_id}/stop",
+    tags=("auto router",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ShadowEvalJobResponse,
+)
+async def stop_shadow_eval_job(
+    job_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ShadowEvalJobResponse:
+    """Stop an active shadow eval job. Attempts are kept; sampling halts within ~10s."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_admin_writer(user_api_key_dict, "stop a shadow eval")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    record: Final = await _shadow_eval_jobs(prisma_client).find_unique(
+        where={"id": job_id}  # mutable-ok: Prisma filter
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
+    current: Final = ShadowEvalJobResponse.model_validate(record, from_attributes=True)
+    if current.status != "running":
+        raise HTTPException(status_code=400, detail=f"Job {job_id} is already {current.status}")
+    updated: Final = await _shadow_eval_jobs(prisma_client).update(
+        where={"id": job_id},  # mutable-ok: Prisma filter
+        data={"stopped_at": datetime.now(timezone.utc)},  # mutable-ok: Prisma payload
+    )
+    labeled: Final = await _with_key_labels(
+        prisma_client, (ShadowEvalJobResponse.model_validate(updated, from_attributes=True),)
+    )
+    return labeled[0]

@@ -18,6 +18,7 @@ from litellm.integrations.otel.mappers.utils import (
     serialize_messages,
     tool_definition_attrs,
 )
+from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -27,14 +28,14 @@ from litellm.integrations.otel.model.payloads import (
     ToolDefinition,
 )
 from litellm.integrations.otel.model.semconv import (
-    DB,
     MCP,
     Error,
     GenAI,
+    JsonRpc,
     LiteLLM,
+    RpcSystem,
     Server,
 )
-from litellm.integrations.otel.model.spans import db_system
 
 
 class GenAIMapper:
@@ -94,11 +95,14 @@ class GenAIMapper:
 
     _MCP_ATTRS: dict[str, Callable[[MCPToolCallSpanData], AttrValue | None]] = {
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
+        JsonRpc.SYSTEM: lambda d: RpcSystem.JSONRPC.value if d.server_address and d.server_port else None,
         MCP.METHOD_NAME: lambda d: d.method,
         MCP.SESSION_ID: lambda d: d.session_id,
         GenAI.TOOL_NAME: lambda d: d.tool_name or None,
         GenAI.TOOL_CALL_ARGUMENTS: lambda d: d.arguments_json,
         GenAI.TOOL_CALL_RESULT: lambda d: d.result_json,
+        Server.ADDRESS: lambda d: d.server_address,
+        Server.PORT: lambda d: d.server_port,
         LiteLLM.MCP_SERVER_NAME: lambda d: d.server_name,
         LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
         f"{LiteLLM.COST_PREFIX}total": lambda d: d.response_cost,
@@ -177,12 +181,8 @@ class GenAIMapper:
     def _service(cls, data: ServiceSpanData) -> AttributeMap:
         attrs: Final = collect(cls._SERVICE_ATTRS, data)
         # An outbound datastore call (DB_CALL / CLIENT span) also carries db.*
-        # semconv. Internal services (router, budget jobs, …) have no db.system,
-        # so they get only the litellm.service.* keys above.
-        system: Final = db_system(data.service_name)
-        if system is not None:
-            attrs[DB.SYSTEM_NAME] = system
-            if data.call_type:
-                attrs[DB.OPERATION_NAME] = data.call_type
+        # semconv naming the server it reached. Internal services (router, budget
+        # jobs, …) have no db.system, so they get only the litellm.service.* keys.
+        attrs.update(db_span_attributes(data.service_name, data.call_type))
         attrs.update({f"{LiteLLM.METADATA_PREFIX}{key}": value for key, value in data.event_metadata.items()})
         return attrs
