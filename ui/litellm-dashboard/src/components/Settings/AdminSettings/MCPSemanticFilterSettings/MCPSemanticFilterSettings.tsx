@@ -3,9 +3,9 @@
 import { useMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useMCPSemanticFilterSettings";
 import { useUpdateMCPSemanticFilterSettings } from "@/app/(dashboard)/hooks/mcpSemanticFilterSettings/useUpdateMCPSemanticFilterSettings";
 import { toast } from "@/lib/toast";
-import { Alert, Card, Col, Row, Skeleton } from "antd";
-import { CheckCircleOutlined } from "@ant-design/icons";
-import { CircleHelp, Save } from "lucide-react";
+import { Card, Col, Row, Skeleton } from "antd";
+import { CircleCheck, CircleHelp, Info, Save, X } from "lucide-react";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -177,40 +177,39 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
       {isLoading ? (
         <Skeleton active />
       ) : isError ? (
-        <Alert
-          type="error"
-          message="Could not load MCP Semantic Filter settings"
-          description={error instanceof Error ? error.message : undefined}
-          style={{ marginBottom: 24 }}
-        />
+        <Alert variant="error" className="mb-6">
+          <AlertTitle>Could not load MCP Semantic Filter settings</AlertTitle>
+          {error instanceof Error && <AlertDescription>{error.message}</AlertDescription>}
+        </Alert>
       ) : (
         <>
-          <Alert
-            type="info"
-            message="Semantic Tool Filtering"
-            description="Filter MCP tools semantically based on query relevance. This reduces context window size and improves tool selection accuracy. Click 'Save Settings' to apply changes across all pods (takes effect within 10 seconds)."
-            showIcon
-            style={{ marginBottom: 24 }}
-          />
+          <Alert variant="info" className="mb-6">
+            <Info />
+            <AlertTitle>Semantic Tool Filtering</AlertTitle>
+            <AlertDescription>
+              Filter MCP tools semantically based on query relevance. This reduces context window size and improves tool
+              selection accuracy. Click &apos;Save Settings&apos; to apply changes across all pods (takes effect within
+              10 seconds).
+            </AlertDescription>
+          </Alert>
 
           {saveSuccess && (
-            <Alert
-              type="success"
-              message="Settings saved successfully"
-              icon={<CheckCircleOutlined />}
-              showIcon
-              closable
-              style={{ marginBottom: 16 }}
-            />
+            <Alert className="mb-4">
+              <CircleCheck />
+              <AlertTitle>Settings saved successfully</AlertTitle>
+              <AlertAction>
+                <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setSaveSuccess(false)}>
+                  <X />
+                </Button>
+              </AlertAction>
+            </Alert>
           )}
 
           {updateError && (
-            <Alert
-              type="error"
-              message="Could not update settings"
-              description={updateError instanceof Error ? updateError.message : undefined}
-              style={{ marginBottom: 16 }}
-            />
+            <Alert variant="error" className="mb-4">
+              <AlertTitle>Could not update settings</AlertTitle>
+              {updateError instanceof Error && <AlertDescription>{updateError.message}</AlertDescription>}
+            </Alert>
           )}
 
           <Row gutter={24}>

@@ -1831,6 +1831,20 @@ class CustomStreamWrapper:
         self.chunks.append(model_response.model_copy(update={"choices": []}))
 
     @staticmethod
+    def _resolve_provider_reported_cost(usage_cost: object) -> float | None:
+        """
+        Providers report usage.cost either as a number or, for Perplexity, as a
+        breakdown object whose total lives under ``total_cost``.
+        """
+        if isinstance(usage_cost, bool):
+            return None
+        if isinstance(usage_cost, (int, float)):
+            return float(usage_cost)
+        if isinstance(usage_cost, dict):
+            return CustomStreamWrapper._resolve_provider_reported_cost(usage_cost.get("total_cost"))
+        return None
+
+    @staticmethod
     def _propagate_usage_cost_to_hidden_params(
         response: "ModelResponse",
     ) -> None:
@@ -1840,10 +1854,11 @@ class CustomStreamWrapper:
         calculator uses it instead of a token-based estimate.
         """
         _usage: Final[Usage | None] = getattr(response, "usage", None)
-        if _usage is not None and hasattr(_usage, "cost") and _usage.cost is not None:
+        _cost: Final = CustomStreamWrapper._resolve_provider_reported_cost(getattr(_usage, "cost", None))
+        if _cost is not None:
             if "additional_headers" not in response._hidden_params:
                 response._hidden_params["additional_headers"] = {}
-            response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(_usage.cost)
+            response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
     def __next__(self) -> "ModelResponseStream":
         cache_hit = False

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
-import { Alert, Empty } from "antd";
+import { Empty } from "antd";
+import { CircleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { FieldGroup } from "@/components/shared/form/field";
@@ -325,7 +327,11 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
       )}
 
       {hasSearched && !result && !isLoading && (
-        <Alert message="Error" description="Failed to resolve policies. Check the proxy logs." type="error" showIcon />
+        <Alert variant="error">
+          <CircleAlert />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>Failed to resolve policies. Check the proxy logs.</AlertDescription>
+        </Alert>
       )}
     </div>
   );
