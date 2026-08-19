@@ -10,7 +10,7 @@ import asyncio
 import math
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 from typing_extensions import ReadOnly
 
@@ -104,9 +104,6 @@ class _UserAuthView(TypedDict):
     """Typed read of the optional team attached to the caller's auth object."""
 
     team_id: ReadOnly[str | None]
-
-
-_ResponseT: Final = TypeVar("_ResponseT")
 
 
 class WebSearchInterceptionLogger(CustomLogger):
@@ -929,7 +926,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _inject_native_blocks(response: _ResponseT, native_blocks: Sequence[Mapping[str, object]]) -> _ResponseT:
+    def _inject_native_blocks(response: Any, native_blocks: Sequence[Mapping[str, object]]) -> Any:
         """Prepend native blocks to response content, dict or object form."""
         if not native_blocks:
             return response
@@ -939,7 +936,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             return response
         existing = getattr(response, "content", None) or []
         try:
-            setattr(response, "content", list(native_blocks) + list(existing))
+            response.content = list(native_blocks) + list(existing)
         except (AttributeError, TypeError):
             # Object refused write — fall through and leave the response
             # untouched rather than crash the request.
