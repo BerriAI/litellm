@@ -153,6 +153,7 @@ class SupportedGuardrailIntegrations(Enum):
     LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
     DECISION_MODEL = "decision_model"
+    SENSITIVE_DATA_ROUTING = "sensitive_data_routing"
 
 
 class Role(Enum):
