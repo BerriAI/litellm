@@ -60,10 +60,6 @@ export const useMountRegistry = (): MountRegistry => {
   );
 };
 
-/**
- * Static literal names only: the registry counts by name and this emits flat keys, so a runtime-generated name, a
- * Form.List row and its per-row sub-fields, is never in the mounted set and goes silently missing from the payload.
- */
 export const projectMountedValues = (
   registry: MountRegistry,
   getValues: UseFormGetValues<MountedFormValues>,
