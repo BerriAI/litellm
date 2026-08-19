@@ -1,5 +1,7 @@
 import React from "react";
-import { Modal, Alert, Spin, Tag, Typography } from "antd";
+import { Modal, Spin, Tag, Typography } from "antd";
+import { CircleAlert, Info } from "lucide-react";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { MCPServer, MCPUserEnvVarsStatus, MCPUserEnvVarSpec } from "@/components/mcp_tools/types";
@@ -158,9 +160,15 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
             <Spin />
           </div>
         ) : isError ? (
-          <Alert type="error" showIcon message="Failed to load env vars" />
+          <Alert variant="error">
+            <CircleAlert />
+            <AlertTitle>Failed to load env vars</AlertTitle>
+          </Alert>
         ) : required.length === 0 ? (
-          <Alert type="info" showIcon message="No per-user fields configured for this server." />
+          <Alert variant="info">
+            <Info />
+            <AlertTitle>No per-user fields configured for this server.</AlertTitle>
+          </Alert>
         ) : (
           <>
             <Text className="text-sm text-muted-foreground block">
