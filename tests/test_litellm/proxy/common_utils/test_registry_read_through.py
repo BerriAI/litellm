@@ -312,3 +312,113 @@ async def test_get_guardrail_with_read_through_returns_none_for_unknown_guardrai
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 
     assert await get_initialized_guardrail_with_read_through(guardrail_name="guardrail-nobody-created") is None
+
+
+@pytest.mark.asyncio
+async def test_resync_model_deployments_mutates_router_under_model_reconcile_lock(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_model_deployments
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[MagicMock()])
+    router: Final = MagicMock()
+    router.get_model_list.return_value = []
+    lock_states: list[bool] = []
+
+    def record_add_deployment(db_models) -> None:
+        lock_states.append(proxy_server.MODEL_RECONCILE_LOCK.locked())
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", record_add_deployment)
+
+    assert await _resync_model_deployments("lock-scope-model") is True
+    assert lock_states == [True]
+    assert not proxy_server.MODEL_RECONCILE_LOCK.locked()
+
+
+@pytest.mark.asyncio
+async def test_resync_model_deployments_respects_supported_db_objects(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_model_deployments
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        side_effect=AssertionError("db hit for an object type this replica does not load")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["guardrails"]})
+
+    assert await _resync_model_deployments("gated-out-model") is False
+
+
+@pytest.mark.asyncio
+async def test_resync_guardrails_respects_supported_db_objects(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_guardrails
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
+        side_effect=AssertionError("db hit for an object type this replica does not load")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+
+    assert await _resync_guardrails("gated-out-guardrail") is False
+
+
+@pytest.mark.asyncio
+async def test_resync_agents_respects_supported_db_objects(clean_agent_registry, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_agents
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+        side_effect=AssertionError("db hit for an object type this replica does not load")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+
+    assert await _resync_agents("gated-out-agent") is False
+
+
+@pytest.mark.asyncio
+async def test_resync_agents_waits_for_agent_reload_and_skips_duplicate_registration(clean_agent_registry, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.agent_endpoints.agent_registry import AGENT_RECONCILE_LOCK
+    from litellm.proxy.common_utils.registry_read_through import _resync_agents
+    from litellm.types.agents import AgentResponse
+
+    agent_id: Final = "reload-race-agent-id"
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+        side_effect=AssertionError("db hit while the agent reload held the reconcile lock")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    async with AGENT_RECONCILE_LOCK:
+        resync_task: Final = asyncio.ensure_future(_resync_agents(agent_id))
+        await asyncio.sleep(0.05)
+        assert not resync_task.done()
+        clean_agent_registry.register_agent(
+            agent_config=AgentResponse.model_validate(FakeAgentRow(agent_id, "reload-race-agent").model_dump())
+        )
+
+    assert await resync_task is True
+    assert len(clean_agent_registry.agent_list) == 1
