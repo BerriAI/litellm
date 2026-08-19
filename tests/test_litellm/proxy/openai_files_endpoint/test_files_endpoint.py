@@ -31,6 +31,11 @@ from litellm.caching.caching import DualCache
 from litellm.proxy.proxy_server import hash_token
 from litellm.proxy.utils import ProxyLogging
 
+VALID_BATCH_LINE = (
+    b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions",'
+    b' "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]}}\n'
+)
+
 
 @pytest.fixture
 def llm_router() -> Router:
@@ -1602,7 +1607,7 @@ def _post_file_with_team_metadata(
     user_key = UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata)
     app.dependency_overrides[user_api_key_auth] = lambda: user_key
 
-    test_file = ("mydata.jsonl", b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]}}', "application/jsonl")
+    test_file = ("mydata.jsonl", VALID_BATCH_LINE, "application/jsonl")
     try:
         response = client.post(
             "/v1/files",
@@ -1706,7 +1711,7 @@ def _post_file_raw(
     user_key = UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata)
     app.dependency_overrides[user_api_key_auth] = lambda: user_key
 
-    test_file = ("mydata.jsonl", b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]}}', "application/jsonl")
+    test_file = ("mydata.jsonl", VALID_BATCH_LINE, "application/jsonl")
     try:
         response = client.post(
             "/v1/files",
@@ -2752,7 +2757,7 @@ def test_create_file_provider_only_resolves_named_vertex_credentials(
     try:
         response = client.post(
             "/v1/files",
-            files={"file": ("batch.jsonl", b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]}}', "application/jsonl")},
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
             data={"purpose": "batch"},
             headers={
                 "Authorization": "Bearer test-key",
@@ -2994,7 +2999,7 @@ def test_create_file_provider_only_skips_other_team_vertex_deployment(
     try:
         response = client.post(
             "/v1/files",
-            files={"file": ("batch.jsonl", b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]}}', "application/jsonl")},
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
             data={"purpose": "batch"},
             headers={
                 "Authorization": "Bearer test-key",
@@ -3344,12 +3349,6 @@ def test_raw_provider_file_id_retrieve_allowed_when_managed_files_not_required(
 
     assert response.status_code == 200, response.text
     mock_retrieve.assert_called_once()
-
-
-VALID_BATCH_LINE = (
-    b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions",'
-    b' "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]}}\n'
-)
 
 
 def _setup_batch_upload_endpoint(monkeypatch, llm_router: Router) -> list:
