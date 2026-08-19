@@ -261,19 +261,19 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
           <TabsTrigger value="prompt-caching">Prompt Caching</TabsTrigger>
           <TabsTrigger value="general">General</TabsTrigger>
         </TabsList>
-        <TabsContent value="loadbalancing" className="px-8 py-6">
+        <TabsContent value="loadbalancing" className="px-8 py-6" keepMounted>
           <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="routing-groups" className="px-8 py-6">
+        <TabsContent value="routing-groups" className="px-8 py-6" keepMounted>
           <RoutingGroups />
         </TabsContent>
-        <TabsContent value="fallbacks" className="px-8 py-6">
+        <TabsContent value="fallbacks" className="px-8 py-6" keepMounted>
           <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="prompt-caching" className="px-8 py-6">
+        <TabsContent value="prompt-caching" className="px-8 py-6" keepMounted>
           <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
         </TabsContent>
-        <TabsContent value="general" className="px-8 py-6">
+        <TabsContent value="general" className="px-8 py-6" keepMounted>
           <Card>
             <CardContent>
               <Table>

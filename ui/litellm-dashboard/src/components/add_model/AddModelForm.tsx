@@ -5,7 +5,10 @@ import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { modelCreationScope } from "@/utils/modelPermissions";
 import { Switch } from "@/components/ui/switch";
 import { Field, FieldLabel } from "@/components/shared/form/field";
-import { Select as AntdSelect, Button, Card, Col, Modal, Row, Tooltip, Typography, Alert } from "antd";
+import { Select as AntdSelect, Card, Col, Modal, Row, Tooltip, Typography } from "antd";
+import { Info } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Button } from "@/components/ui/button";
 import type { UploadProps } from "antd/es/upload";
 import React, { useEffect, useMemo, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
@@ -167,13 +170,13 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                       )}
                     </MountedFormField>
                     {!teamAdminSelectedTeam && (
-                      <Alert
-                        message="Team Selection Required"
-                        description="As a team admin, you need to select your team first before adding models."
-                        type="info"
-                        showIcon
-                        className="mb-4"
-                      />
+                      <Alert variant="info" className="mb-4">
+                        <Info />
+                        <AlertTitle>Team Selection Required</AlertTitle>
+                        <AlertDescription>
+                          As a team admin, you need to select your team first before adding models.
+                        </AlertDescription>
+                      </Alert>
                     )}
                   </>
                 )}
@@ -418,10 +421,16 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                     <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
                   </Tooltip>
                   <div className="space-x-2">
-                    <Button data-testid="test-connect-btn" onClick={handleTestConnection} loading={isTestingConnection}>
+                    <Button
+                      variant="outline"
+                      data-testid="test-connect-btn"
+                      onClick={handleTestConnection}
+                      disabled={isTestingConnection}
+                      aria-busy={isTestingConnection}
+                    >
                       Test Connect
                     </Button>
-                    <Button data-testid="add-model-btn" htmlType="submit">
+                    <Button data-testid="add-model-btn" type="submit">
                       Add Model
                     </Button>
                   </div>
@@ -443,6 +452,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
         footer={[
           <Button
             key="close"
+            variant="outline"
             onClick={() => {
               setIsResultModalVisible(false);
               setIsTestingConnection(false);

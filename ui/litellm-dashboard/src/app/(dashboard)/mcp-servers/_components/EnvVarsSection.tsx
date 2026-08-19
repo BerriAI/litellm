@@ -1,5 +1,6 @@
 import React from "react";
-import { Input, Select, Button, Tooltip, Typography } from "antd";
+import { Input, Select, Tooltip, Typography } from "antd";
+import { Button } from "@/components/ui/button";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
 
@@ -106,7 +107,8 @@ const EnvVarsSection: React.FC = () => {
             </div>
           </div>
         ))}
-        <Button type="dashed" onClick={() => append({ scope: "global" })} icon={<PlusOutlined />} block>
+        <Button variant="outline" className="w-full border-dashed" onClick={() => append({ scope: "global" })}>
+          <PlusOutlined />
           Add Variable
         </Button>
       </div>

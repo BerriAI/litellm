@@ -1,5 +1,6 @@
 import { Input } from "@/components/ui/input";
-import { Select as AntdSelect, Button, Modal, Tooltip, Typography } from "antd";
+import { Select as AntdSelect, Modal, Tooltip, Typography } from "antd";
+import { Button } from "@/components/ui/button";
 import type { UploadProps } from "antd/es/upload";
 import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
@@ -156,10 +157,10 @@ export default function CredentialModal({
               </Tooltip>
 
               <div>
-                <Button onClick={closeAndReset} style={{ marginRight: 10 }}>
+                <Button variant="outline" className="mr-2.5" onClick={closeAndReset}>
                   Cancel
                 </Button>
-                <Button htmlType="submit">{isEdit ? "Update Credential" : "Add Credential"}</Button>
+                <Button type="submit">{isEdit ? "Update Credential" : "Add Credential"}</Button>
               </div>
             </div>
           </form>

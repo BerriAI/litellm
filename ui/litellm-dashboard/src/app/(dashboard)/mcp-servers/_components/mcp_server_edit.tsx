@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Select, Button as AntdButton, Tooltip, Input, InputNumber, Alert } from "antd";
+import { Select, Tooltip, Input, InputNumber } from "antd";
+import { TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { FormProvider, useForm } from "react-hook-form";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button } from "@/components/ui/button";
@@ -1041,13 +1043,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 {!isStdioTransport && isOAuthAuthType && (
                   <>
                     {!oauthFlowTypeValue && !isDelegateAuth && (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        className="mb-4 rounded-lg"
-                        message="This server has no OAuth flow set"
-                        description="Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats a machine-to-machine credential shape conservatively."
-                      />
+                      <Alert variant="warning" className="mb-4 rounded-lg">
+                        <TriangleAlert />
+                        <AlertTitle>This server has no OAuth flow set</AlertTitle>
+                        <AlertDescription>
+                          Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you
+                          intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats
+                          a machine-to-machine credential shape conservatively.
+                        </AlertDescription>
+                      </Alert>
                     )}
                     <OAuthFormFields
                       isM2M={isM2MFlow}
@@ -1271,7 +1275,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 </div>
 
                 <div className="flex justify-end gap-2">
-                  <AntdButton onClick={onCancel}>Cancel</AntdButton>
+                  <Button variant="outline" onClick={onCancel}>
+                    Cancel
+                  </Button>
                   <Button type="submit">Save Changes</Button>
                 </div>
               </form>
@@ -1284,7 +1290,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={isLoadingTools} />
 
             <div className="flex justify-end gap-2">
-              <AntdButton onClick={onCancel}>Cancel</AntdButton>
+              <Button variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
               <Button onClick={() => void submitForm()}>Save Changes</Button>
             </div>
           </div>

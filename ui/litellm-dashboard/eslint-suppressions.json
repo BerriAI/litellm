@@ -336,9 +336,6 @@
     "max-params": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 3
     }
@@ -1302,9 +1299,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1410,11 +1404,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/S3VectorsConfig.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/VectorStoreForm.tsx": {
     "no-nested-ternary": {
       "count": 2
@@ -1459,9 +1448,6 @@
     "local/no-complex-jsx-arrow": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1473,11 +1459,6 @@
   },
   "src/app/model_hub_table/page.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/onboarding/OnboardingFormBody.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2001,11 +1982,6 @@
   },
   "src/components/common_components/ModelSelector.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/PassThroughGuardrailsSection.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },

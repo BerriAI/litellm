@@ -491,7 +491,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <TabsTrigger value="alerting-settings">Alerting Settings</TabsTrigger>
             <TabsTrigger value="email-alerts">Email Alerts</TabsTrigger>
           </TabsList>
-          <TabsContent value="logging-callbacks">
+          <TabsContent value="logging-callbacks" keepMounted>
             <LoggingCallbacksTable
               callbacks={callbacks}
               availableCallbacks={allCallbacks}
@@ -512,12 +512,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               }}
             />
           </TabsContent>
-          <TabsContent value="cloudzero-cost-tracking">
+          <TabsContent value="cloudzero-cost-tracking" keepMounted>
             <div className="p-8">
               <CloudZeroCostTracking />
             </div>
           </TabsContent>
-          <TabsContent value="alerting-types">
+          <TabsContent value="alerting-types" keepMounted>
             <Card className="p-6">
               <p className="my-2">
                 Alerts are only supported for Slack Webhook URLs. Get your webhook urls from{" "}
@@ -601,10 +601,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               </Button>
             </Card>
           </TabsContent>
-          <TabsContent value="alerting-settings">
+          <TabsContent value="alerting-settings" keepMounted>
             <AlertingSettings accessToken={accessToken} premiumUser={premiumUser} />
           </TabsContent>
-          <TabsContent value="email-alerts">
+          <TabsContent value="email-alerts" keepMounted>
             <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
           </TabsContent>
         </Tabs>
