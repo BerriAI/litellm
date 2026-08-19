@@ -375,18 +375,29 @@ def _published_pricing(deployment_model: str | None) -> ModelInfo | None:
 def _resolve_vertex_location_for_cost(
     custom_llm_provider: str | None,
     litellm_params: Mapping[str, object] | None,
+    optional_params: Mapping[str, object] | None,
     model: str,
 ) -> str | None:
     """
     The Vertex AI location a request was served from, resolved the same way
     dispatch resolves it, so regional deployments price with the
     regional-endpoint uplift. None for non-Vertex providers.
+
+    Chat dispatch reads the location from request kwargs, which reach this
+    logging object through optional_params: on the proxy the logging object is
+    created before the router picks a deployment, so the deployment's location
+    never lands in litellm_params.
     """
     if custom_llm_provider is None or not custom_llm_provider.startswith("vertex_ai"):
         return None
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
-    configured_location: Final = VertexBase.safe_get_vertex_ai_location(litellm_params or MappingProxyType({}))
+    empty: Final[Mapping[str, object]] = MappingProxyType({})
+    configured_location: Final = (
+        VertexBase.explicit_vertex_ai_location(optional_params or empty)
+        or VertexBase.explicit_vertex_ai_location(litellm_params or empty)
+        or VertexBase.safe_get_vertex_ai_location(empty)
+    )
     return VertexBase.get_vertex_region(configured_location, model)
 
 
@@ -1598,6 +1609,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "vertex_location": _resolve_vertex_location_for_cost(
                     custom_llm_provider=self.model_call_details.get("custom_llm_provider", None),
                     litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None),
+                    optional_params=self.optional_params,
                     model=litellm_model_name or self.model,
                 ),
             }

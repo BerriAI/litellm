@@ -1193,6 +1193,17 @@ class VertexBase:
         )
 
     @staticmethod
+    def explicit_vertex_ai_location(params: Mapping[str, object]) -> str | None:
+        """
+        The location explicitly configured in the given params, without any
+        module-level or environment fallback. None when not configured.
+        """
+        for configured in (params.get("vertex_location"), params.get("vertex_ai_location")):
+            if isinstance(configured, str) and configured:
+                return configured
+        return None
+
+    @staticmethod
     def safe_get_vertex_ai_location(litellm_params: Mapping[str, object]) -> str | None:
         """
         Safely get Vertex AI location without mutating the litellm_params dict.
@@ -1206,7 +1217,9 @@ class VertexBase:
         Returns:
             Vertex AI location/region or None
         """
-        for configured in (litellm_params.get("vertex_location"), litellm_params.get("vertex_ai_location")):
-            if isinstance(configured, str) and configured:
-                return configured
-        return litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION") or get_secret_str("VERTEX_LOCATION")
+        return (
+            VertexBase.explicit_vertex_ai_location(litellm_params)
+            or litellm.vertex_location
+            or get_secret_str("VERTEXAI_LOCATION")
+            or get_secret_str("VERTEX_LOCATION")
+        )
