@@ -2,8 +2,9 @@ import type { ColumnDef, ExpandedState } from "@tanstack/react-table";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { columnVisibilityStorageKey } from "./columnVisibilityPersistence";
 import { DataTable } from "./DataTable";
 import { DataTableMultiSortHeader, DataTableSortHeader } from "./DataTableSortHeader";
 import { DataTableViewOptions } from "./DataTableViewOptions";
@@ -463,6 +464,76 @@ describe("DataTable column visibility", () => {
     await user.click(screen.getByTestId("view-options-trigger"));
     expect(await screen.findByTestId("view-option-email")).toBeInTheDocument();
     expect(screen.queryByTestId("view-option-name")).not.toBeInTheDocument();
+  });
+});
+
+describe("DataTable column visibility persistence", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("keeps a toggled-off column hidden after a remount", async () => {
+    const user = userEvent.setup();
+    const first = render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={nameEmailColumns}
+        toolbar={(table) => <DataTableViewOptions table={table} />}
+      />,
+    );
+
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-email"));
+    await waitFor(() => expect(first.container.querySelector('th[data-header-id="email"]')).toBeNull());
+    first.unmount();
+
+    const second = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} />);
+    await waitFor(() => expect(second.container.querySelector('th[data-header-id="email"]')).toBeNull());
+    expect(second.container.querySelector('th[data-header-id="name"]')).not.toBeNull();
+  });
+
+  it("restores a toggled-on column after a remount", async () => {
+    const user = userEvent.setup();
+    const first = render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={nameEmailColumns}
+        defaultColumnVisibility={{ email: false }}
+        toolbar={(table) => <DataTableViewOptions table={table} />}
+      />,
+    );
+    await waitFor(() => expect(first.container.querySelector('th[data-header-id="email"]')).toBeNull());
+
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-email"));
+    await waitFor(() => expect(first.container.querySelector('th[data-header-id="email"]')).not.toBeNull());
+    first.unmount();
+
+    const second = render(
+      <DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} defaultColumnVisibility={{ email: false }} />,
+    );
+    await waitFor(() => expect(second.container.querySelector('th[data-header-id="email"]')).not.toBeNull());
+  });
+
+  it("lets a column untouched by the user follow defaultColumnVisibility", () => {
+    const key = columnVisibilityStorageKey(["name", "email"]);
+    window.localStorage.setItem(key ?? "", JSON.stringify({ name: false }));
+
+    const { container } = render(
+      <DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} defaultColumnVisibility={{ email: false }} />,
+    );
+    expect(container.querySelector('th[data-header-id="name"]')).toBeNull();
+    expect(container.querySelector('th[data-header-id="email"]')).toBeNull();
+  });
+
+  it("ignores stored state from a different table (different column set)", () => {
+    window.localStorage.setItem(
+      columnVisibilityStorageKey(["name", "email", "other"]) ?? "",
+      JSON.stringify({ email: false }),
+    );
+
+    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} />);
+    expect(container.querySelector('th[data-header-id="email"]')).not.toBeNull();
   });
 });
 
