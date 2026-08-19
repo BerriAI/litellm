@@ -7,8 +7,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Alert as AntdAlert, Modal, Space, Tabs, Typography } from "antd";
-import { Info } from "lucide-react";
+import { Modal, Space, Tabs, Typography } from "antd";
+import { Info, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import NewBadge from "@/components/common_components/NewBadge";
 import { useBaseUrl } from "@/components/constants";
@@ -223,12 +223,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         <>
           <Card className="block p-6">
             <Title level={4}> ✨ Security Settings</Title>
-            <AntdAlert
-              message="SSO Configuration Deprecated"
-              description="Editing SSO Settings on this page is deprecated and will be removed in a future version. Please use the SSO Settings tab for SSO configuration."
-              type="warning"
-              showIcon
-            />
+            <Alert variant="warning">
+              <TriangleAlert />
+              <AlertTitle>SSO Configuration Deprecated</AlertTitle>
+              <AlertDescription>
+                Editing SSO Settings on this page is deprecated and will be removed in a future version. Please use the
+                SSO Settings tab for SSO configuration.
+              </AlertDescription>
+            </Alert>
             <div
               style={{
                 display: "flex",

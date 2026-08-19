@@ -1,7 +1,9 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
-import { Alert, Button, Modal, Space } from "antd";
-import { CircleHelp } from "lucide-react";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
+import { Modal, Space } from "antd";
+import { Button } from "@/components/ui/button";
+import { CircleHelp, TriangleAlert } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -157,9 +159,12 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         regeneratedKey
           ? [
               <Space key="footer-actions">
-                <Button onClick={handleClose}>Close</Button>
+                <Button variant="outline" onClick={handleClose}>
+                  Close
+                </Button>
                 <CopyToClipboard text={regeneratedKey} onCopy={handleCopyKey}>
-                  <Button type="primary" icon={copied ? <CheckOutlined /> : <CopyOutlined />}>
+                  <Button>
+                    {copied ? <CheckOutlined /> : <CopyOutlined />}
                     {copied ? "Copied" : "Copy Key"}
                   </Button>
                 </CopyToClipboard>
@@ -167,8 +172,11 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
             ]
           : [
               <Space key="footer-actions">
-                <Button onClick={handleClose}>Cancel</Button>
-                <Button type="primary" icon={<SyncOutlined />} onClick={handleRegenerateKey} loading={isRegenerating}>
+                <Button variant="outline" onClick={handleClose}>
+                  Cancel
+                </Button>
+                <Button onClick={handleRegenerateKey} disabled={isRegenerating} aria-busy={isRegenerating}>
+                  <SyncOutlined />
                   Regenerate
                 </Button>
               </Space>,
@@ -177,7 +185,10 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     >
       {regeneratedKey ? (
         <div className="flex flex-col gap-4">
-          <Alert type="warning" showIcon message="Save it now, you will not see it again" />
+          <Alert variant="warning">
+            <TriangleAlert />
+            <AlertTitle>Save it now, you will not see it again</AlertTitle>
+          </Alert>
 
           <div className="flex flex-col gap-0.5">
             <span className="text-xs text-muted-foreground">Key Alias</span>

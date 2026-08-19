@@ -1,5 +1,6 @@
 import React from "react";
-import { Button, Checkbox, Input } from "antd";
+import { Checkbox, Input } from "antd";
+import { Button } from "@/components/ui/button";
 import DcrBridgeToggle from "./DcrBridgeToggle";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { textControl } from "./mcpFieldRules";
@@ -119,6 +120,7 @@ export default function PassthroughAuthorizeSection({
         </Checkbox>
       )}
       <Button
+        variant="outline"
         onClick={oauthFlow.startOAuthFlow}
         disabled={oauthFlow.status === "authorizing" || oauthFlow.status === "exchanging"}
       >

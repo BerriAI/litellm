@@ -1,5 +1,6 @@
 """Tests for the per-model PTU flat-cost daily rollup."""
 
+import json
 import types
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -371,6 +372,182 @@ def test_parse_ptu_model_rejects_an_inverted_window():
         )
     )
     assert parsed is None
+
+
+def _router_entry(model_id="dep-1", model_name="gpt-4o-ptu", model_info=None, with_start=True):
+    """A deployment as the router stores one: a plain dict whose id lives in model_info."""
+    info = dict(model_info or {})
+    if (
+        with_start
+        and info.get("ptu_count") is not None
+        and info.get("cost_per_ptu_per_hour") is not None
+        and "ptu_effective_from" not in info
+    ):
+        info["ptu_effective_from"] = _DEFAULT_PTU_START
+    if model_id is not None:
+        info["id"] = model_id
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "azure/gpt-4o"},
+        "model_info": info,
+    }
+
+
+# A team-scoped deployment is stored under a synthetic routing key with the operator's name
+# in team_public_model_name, while the same deployment in config.yaml carries the operator's
+# name directly. Both must resolve to the same PTUModel or the two sources bill differently.
+_PARITY_CASES = (
+    (
+        "an iso string start against the datetime pydantic coerces it to",
+        {"ptu_effective_from": "2026-07-30T23:00:00Z"},
+        {"ptu_effective_from": datetime(2026, 7, 30, 23, 0)},
+        datetime(2026, 7, 30, 23, 0, tzinfo=timezone.utc),
+        None,
+    ),
+    (
+        "an open window, stored as null and dropped by exclude_none",
+        {"ptu_effective_from": "2026-07-01T00:00:00Z", "ptu_effective_to": None},
+        {"ptu_effective_from": datetime(2026, 7, 1, 0, 0)},
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+        None,
+    ),
+    (
+        "a closed window",
+        {"ptu_effective_from": "2026-07-01T00:00:00Z", "ptu_effective_to": "2026-07-31T00:00:00Z"},
+        {
+            "ptu_effective_from": datetime(2026, 7, 1, 0, 0),
+            "ptu_effective_to": datetime(2026, 7, 31, 0, 0),
+        },
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+        datetime(2026, 7, 31, tzinfo=timezone.utc),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "db_window, router_window, expected_from, expected_to",
+    [case[1:] for case in _PARITY_CASES],
+    ids=[case[0] for case in _PARITY_CASES],
+)
+def test_a_deployment_parses_identically_from_the_db_and_from_config_yaml(
+    db_window, router_window, expected_from, expected_to
+):
+    # The contract the router union is built on. If these ever diverge, a PTU deployment
+    # declared in config.yaml is billed differently from the identical one in the database.
+    from_db = _parse_ptu_model(
+        _model_row(
+            model_id="dep-1",
+            model_name="model_name_t_9f3c2b",
+            model_info={**_VALID_PTU, **db_window, "team_public_model_name": "gpt-4o-ptu"},
+            with_start=False,
+        )
+    )
+    from_router = _parse_ptu_model(
+        ptu_rollup._router_deployment(
+            _router_entry(model_id="dep-1", model_info={**_VALID_PTU, **router_window}, with_start=False)
+        )
+    )
+    expected = PTUModel(
+        model_id="dep-1",
+        model_name="gpt-4o-ptu",
+        team_id="t",
+        ptu_count=5,
+        cost_per_ptu_per_hour=2.0,
+        effective_from=expected_from,
+        effective_to=expected_to,
+    )
+    assert from_db == from_router == expected
+
+
+@pytest.mark.parametrize("model_id", [None, "", 12345], ids=["absent", "blank", "not a string"])
+def test_a_router_deployment_without_a_usable_id_is_dropped(model_id):
+    # model_id keys the sentinel row, so an unusable one would file every such deployment
+    # in a team onto one row and bill for a single reservation.
+    entry = _router_entry(model_id=None, model_info=dict(_VALID_PTU))
+    if model_id is not None:
+        entry["model_info"]["id"] = model_id
+    assert ptu_rollup._router_deployment(entry) is None
+
+
+def test_a_router_deployment_keeps_the_name_the_operator_wrote():
+    priced = _parse_ptu_model(
+        ptu_rollup._router_deployment(_router_entry(model_name="gpt-4o-ptu", model_info=dict(_VALID_PTU)))
+    )
+    assert priced is not None
+    assert priced.model_name == "gpt-4o-ptu"
+
+
+def test_a_team_alias_on_a_router_deployment_still_wins_over_the_routing_name():
+    # config.yaml can carry team_public_model_name to expose a team-facing alias, and the
+    # charge has to file under the name that team calls rather than the routing one.
+    priced = _parse_ptu_model(
+        ptu_rollup._router_deployment(
+            _router_entry(
+                model_name="routing-name",
+                model_info={**_VALID_PTU, "team_public_model_name": "public-alias"},
+            )
+        )
+    )
+    assert priced is not None
+    assert priced.model_name == "public-alias"
+
+
+def test_a_router_deployment_with_a_stringified_model_info_still_decodes():
+    entry = _router_entry(model_info=dict(_VALID_PTU))
+    entry["model_info"] = json.dumps(entry["model_info"])
+    parsed = _parse_ptu_model(ptu_rollup._router_deployment(entry))
+    assert parsed is not None
+    assert parsed.model_id == "dep-1"
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [None, "not json", 42, "[1, 2, 3]", '"a string"', "42", "true", "null"],
+    ids=[
+        "absent",
+        "unparseable",
+        "not a string or dict",
+        "json array",
+        "json string",
+        "json number",
+        "json bool",
+        "json null",
+    ],
+)
+def test_a_router_deployment_without_usable_model_info_is_dropped(model_info):
+    # Valid JSON that is not an object decodes to a list or a scalar, and reading fields
+    # off one raises rather than dropping the single bad deployment the rollup expects
+    assert ptu_rollup._router_deployment({"model_name": "x", "model_info": model_info}) is None
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    ["[1, 2, 3]", '"a string"', "42", "true", "null"],
+    ids=["json array", "json string", "json number", "json bool", "json null"],
+)
+def test_a_db_row_holding_non_object_json_is_dropped(model_info):
+    assert _parse_ptu_model(_model_row(model_info=model_info, with_start=False)) is None
+
+
+def test_a_router_deployment_does_not_alias_the_routers_own_model_info():
+    # The rollup runs on a cron while requests are in flight, and the router rewrites
+    # model_info in place, so a held record must neither observe nor cause those writes.
+    live = {"id": "dep-1", **_VALID_PTU}
+    record = ptu_rollup._router_deployment({"model_name": "x", "model_info": live})
+    assert record is not None
+
+    live["ptu_count"] = 999
+    assert record.model_info["ptu_count"] == _VALID_PTU["ptu_count"]
+
+    with pytest.raises(TypeError):
+        record.model_info["ptu_count"] = 1
+
+
+def test_a_raw_router_dict_is_not_a_deployment_record():
+    # The parser reads attributes, so a router dict passed straight to it returns None
+    # instead of raising. Skipping the factory would silently drop every config.yaml
+    # deployment while leaving the suite green.
+    assert _parse_ptu_model(_router_entry(model_info=dict(_VALID_PTU))) is None
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
-import { Button as UIButton } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -39,7 +39,7 @@ import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Button, Tabs, Tooltip } from "antd";
+import { Tabs, Tooltip } from "antd";
 import { toast } from "@/lib/toast";
 import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Plus, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
@@ -950,23 +950,25 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button type="text" icon={<ArrowLeftIcon className="h-4 w-4" />} onClick={onClose} className="mb-4">
+          <Button variant="ghost" onClick={onClose} className="mb-4">
+            <ArrowLeftIcon className="h-4 w-4" />
             Back to Teams
           </Button>
           <h1 className="text-2xl font-semibold">{info.team_alias}</h1>
           <div className="flex items-center">
             <p className="text-sm text-gray-500 font-mono">{info.team_id}</p>
             <Button
-              type="text"
-              size="small"
-              icon={copiedStates["team-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              variant="ghost"
+              size="icon-xs"
               onClick={() => copyToClipboard(info.team_id, "team-id")}
               className={`left-2 z-10 transition-all duration-200 ${
                 copiedStates["team-id"]
                   ? "text-green-600 bg-green-50 border-green-200"
                   : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               }`}
-            />
+            >
+              {copiedStates["team-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            </Button>
           </div>
         </div>
       </div>
@@ -1149,12 +1151,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <h3 className="text-lg font-medium">Team Settings</h3>
                   {canEditTeam && !isEditing && (
                     <Button
-                      icon={<EditOutlined className="h-4 w-4" />}
+                      variant="outline"
                       onClick={() => {
                         setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
                         startEditing();
                       }}
                     >
+                      <EditOutlined className="h-4 w-4" />
                       Edit Settings
                     </Button>
                   )}
@@ -1444,7 +1447,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                   />
                                 )}
                               </FormField>
-                              <UIButton
+                              <Button
                                 type="button"
                                 variant="ghost"
                                 size="icon"
@@ -1453,10 +1456,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                 onClick={() => removeModelLimit(index)}
                               >
                                 <CircleMinus className="size-4" />
-                              </UIButton>
+                              </Button>
                             </div>
                           ))}
-                          <UIButton
+                          <Button
                             type="button"
                             variant="outline"
                             className="w-full border-dashed"
@@ -1464,7 +1467,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           >
                             <Plus className="size-4" />
                             Add Model Limit
-                          </UIButton>
+                          </Button>
                         </Field>
 
                         <FormField
@@ -1749,18 +1752,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                       <div className="sticky z-10 -inset-x-6 -bottom-6 border-t border-gray-200 bg-white p-4 pr-0">
                         <div className="flex items-center justify-end gap-2">
-                          <UIButton
+                          <Button
                             type="button"
                             variant="outline"
                             onClick={() => setIsEditing(false)}
                             disabled={isTeamSaving}
                           >
                             Cancel
-                          </UIButton>
-                          <UIButton type="submit" disabled={isTeamSaving}>
+                          </Button>
+                          <Button type="submit" disabled={isTeamSaving}>
                             {isTeamSaving ? <UiLoadingSpinner className="size-4" /> : <Save className="size-4" />}
                             Save Changes
-                          </UIButton>
+                          </Button>
                         </div>
                       </div>
                     </form>

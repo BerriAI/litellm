@@ -1,9 +1,10 @@
 import React, { useState } from "react";
-import { Upload, Alert } from "antd";
+import { Upload } from "antd";
 import { toast } from "@/lib/toast";
 import { InboxOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
-import { CircleHelp } from "lucide-react";
+import { CircleCheck, CircleHelp, X } from "lucide-react";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { ragIngestCall } from "@/components/networking";
 import { DocumentUpload, RAGIngestResponse } from "@/components/vector_store_management/types";
 import DocumentsTable from "./DocumentsTable";
@@ -359,22 +360,23 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
 
         {/* Success Message */}
         {ingestResults.length > 0 && (
-          <Alert
-            message="Vector Store Created Successfully"
-            description={
-              <div>
-                <p>
-                  <strong>Vector Store ID:</strong> {ingestResults[0]?.vector_store_id}
-                </p>
-                <p>
-                  <strong>Documents Ingested:</strong> {ingestResults.length}
-                </p>
-              </div>
-            }
-            type="success"
-            showIcon
-            closable
-          />
+          <Alert>
+            <CircleCheck />
+            <AlertTitle>Vector Store Created Successfully</AlertTitle>
+            <AlertDescription>
+              <p>
+                <strong>Vector Store ID:</strong> {ingestResults[0]?.vector_store_id}
+              </p>
+              <p>
+                <strong>Documents Ingested:</strong> {ingestResults.length}
+              </p>
+            </AlertDescription>
+            <AlertAction>
+              <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setIngestResults([])}>
+                <X />
+              </Button>
+            </AlertAction>
+          </Alert>
         )}
       </div>
     </TooltipProvider>

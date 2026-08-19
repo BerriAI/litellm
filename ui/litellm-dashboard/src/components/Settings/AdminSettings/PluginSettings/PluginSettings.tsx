@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Button, Card, Modal, Space, Table, Typography } from "antd";
+import { Card, Modal, Space, Table, Typography } from "antd";
+import { Button } from "@/components/ui/button";
 import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { Eye, EyeOff } from "lucide-react";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "@/components/networking";
@@ -113,8 +114,12 @@ export default function PluginSettings() {
       key: "actions",
       render: (_: unknown, __: Plugin, idx: number) => (
         <Space>
-          <Button icon={<EditOutlined />} size="small" onClick={() => openEdit(idx)} />
-          <Button icon={<DeleteOutlined />} size="small" danger onClick={() => handleDelete(idx)} />
+          <Button variant="outline" size="icon-sm" onClick={() => openEdit(idx)}>
+            <EditOutlined />
+          </Button>
+          <Button variant="destructive" size="icon-sm" onClick={() => handleDelete(idx)}>
+            <DeleteOutlined />
+          </Button>
         </Space>
       ),
     },
@@ -131,7 +136,8 @@ export default function PluginSettings() {
         Each plugin must expose <Text code>GET /api/plugin-manifest</Text> returning nav items and capabilities.
       </Paragraph>
 
-      <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ marginBottom: 16 }}>
+      <Button className="mb-4" onClick={openAdd}>
+        <PlusOutlined />
         Add Plugin
       </Button>
 

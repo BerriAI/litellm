@@ -428,16 +428,24 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
           {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
           <Tabs defaultValue="models">
-            <TabsList className="mb-4">
-              <TabsTrigger value="models">Model Hub</TabsTrigger>
-              <TabsTrigger value="agents">Agent Hub</TabsTrigger>
-              <TabsTrigger value="mcp">MCP Hub</TabsTrigger>
-              <TabsTrigger value="skills">Skill Hub</TabsTrigger>
+            <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+              <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
+                Model Hub
+              </TabsTrigger>
+              <TabsTrigger value="agents" className="flex-none rounded-none px-4 py-2">
+                Agent Hub
+              </TabsTrigger>
+              <TabsTrigger value="mcp" className="flex-none rounded-none px-4 py-2">
+                MCP Hub
+              </TabsTrigger>
+              <TabsTrigger value="skills" className="flex-none rounded-none px-4 py-2">
+                Skill Hub
+              </TabsTrigger>
             </TabsList>
 
             <div>
               {/* Model Hub Tab */}
-              <TabsContent value="models">
+              <TabsContent value="models" keepMounted>
                 {/* Model Filters and Table */}
                 <Card className="px-6">
                   {/* Header with Make Public Button */}
@@ -482,7 +490,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               </TabsContent>
 
               {/* Agent Hub Tab */}
-              <TabsContent value="agents">
+              <TabsContent value="agents" keepMounted>
                 <Card className="px-6">
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
@@ -516,7 +524,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               </TabsContent>
 
               {/* MCP Hub Tab */}
-              <TabsContent value="mcp">
+              <TabsContent value="mcp" keepMounted>
                 <Card className="px-6">
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
@@ -553,7 +561,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               </TabsContent>
 
               {/* Skill Hub Tab */}
-              <TabsContent value="skills">
+              <TabsContent value="skills" keepMounted>
                 {publicPage == false && canModify && (
                   <div className="flex justify-end mb-4">
                     <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>Select Skills to Make Public</Button>
