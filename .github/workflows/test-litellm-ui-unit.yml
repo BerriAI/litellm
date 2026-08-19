@@ -17,59 +17,133 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-jobs:
-  ui-unit-tests:
-    runs-on: ubuntu-latest-16-cores
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: ui/litellm-dashboard
+defaults:
+  run:
+    working-directory: ui/litellm-dashboard
 
+jobs:
+  types:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           fetch-depth: 1
           persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: ui/litellm-dashboard/.nvmrc
           cache: "npm"
           cache-dependency-path: ui/litellm-dashboard/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run UI type tests (Vitest)
+      - run: npm ci
+      - run: npm run test:types
         env:
           CI: "true"
-        run: npm run test:types
 
-      - name: Run UI unit tests (Vitest)
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+          cache: "npm"
+          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+      - run: npm ci
+      - name: Run the node-only unit tier
         env:
           CI: "true"
-          GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: npm run test:unit -- --reporter=basic --reporter=json --outputFile=reports/unit.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: test-report-unit
+          path: ui/litellm-dashboard/reports/unit.json
+          retention-days: 1
+
+  component:
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+          cache: "npm"
+          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+      - run: npm ci
+      - name: Run the component tier (shard ${{ matrix.shard }}/4)
+        env:
+          CI: "true"
         run: |
-          if [ -n "$BASE_SHA" ]; then
-            merge_base=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
-            test -n "$merge_base"
-            git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
-            changed_files=()
-            while IFS= read -r f; do
-              changed_files+=("$f")
-            done < <(git diff --name-only --relative "$merge_base" "$HEAD_SHA" -- .)
-            if [ ${#changed_files[@]} -eq 0 ]; then
-              echo "No UI files changed in this PR; skipping unit tests."
-              exit 0
-            fi
-            echo "Pull request: running tests related to ${#changed_files[@]} changed UI files"
-            npm run test -- related "${changed_files[@]}" --run --passWithNoTests \
-              --pool forks --poolOptions.forks.maxForks=14
-          else
-            echo "Push to $GITHUB_REF_NAME: running the full suite"
-            npm run test -- --run --pool forks --poolOptions.forks.maxForks=14
-          fi
+          npm run test:component -- \
+            --shard=${{ matrix.shard }}/4 \
+            --pool forks --poolOptions.forks.maxForks=14 \
+            --reporter=basic --reporter=json --outputFile=reports/component-${{ matrix.shard }}.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: test-report-component-${{ matrix.shard }}
+          path: ui/litellm-dashboard/reports/component-${{ matrix.shard }}.json
+          retention-days: 1
+
+  integration:
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+          cache: "npm"
+          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+      - run: npm ci
+      - name: Run the integration tier
+        env:
+          CI: "true"
+        run: |
+          npm run test:integration -- \
+            --pool forks --poolOptions.forks.maxForks=14 \
+            --reporter=basic --reporter=json --outputFile=reports/integration.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: test-report-integration
+          path: ui/litellm-dashboard/reports/integration.json
+          retention-days: 1
+
+  budgets:
+    needs: [unit, component, integration]
+    if: always()
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: test-report-*
+          merge-multiple: true
+          path: ui/litellm-dashboard/reports
+      - name: Hold every test to its tier's duration budget
+        run: npm run test:budgets -- reports/*.json

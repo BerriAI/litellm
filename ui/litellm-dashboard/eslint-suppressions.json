@@ -9,12 +9,59 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/access-groups/_components/AccessGroupsPage.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/admin-panel/_components/AdminPanel.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/admin-panel/_components/AdminPanel.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/agentControlPlaneView.test.tsx": {
+    "testing-library/no-container": {
+      "count": 4
+    },
+    "testing-library/no-node-access": {
+      "count": 6
+    }
+  },
+  "src/app/(dashboard)/agents/_components/AgentsPanel.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 6
+    }
+  },
+  "src/app/(dashboard)/agents/_components/AgentsTable.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
+  "src/app/(dashboard)/agents/_components/add_agent_form.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 4
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/agents/_components/add_agent_form.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/app/(dashboard)/agents/_components/add_agent_form.tsx": {
@@ -87,6 +134,19 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/budgets/_components/BudgetTable.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/budgets/_components/budget_modal.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 6
+    }
+  },
   "src/app/(dashboard)/budgets/_components/budget_modal.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -100,12 +160,22 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/budgets/_components/edit_budget_modal.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 4
+    }
+  },
   "src/app/(dashboard)/budgets/_components/edit_budget_modal.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     },
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/caching/_components/cache_dashboard.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 8
     }
   },
   "src/app/(dashboard)/caching/_components/cache_dashboard.tsx": {
@@ -124,11 +194,21 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/caching/_components/cache_settings/index.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 8
+    }
+  },
   "src/app/(dashboard)/caching/_components/cache_settings/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/caching/_components/coordination_redis_settings/CoordinationRedisTypeSelector.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -142,6 +222,26 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/cost-optimization/_components/CacheLeakageCard.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    }
+  },
+  "src/app/(dashboard)/cost-optimization/_components/ShadowEvalSection.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 9
+    }
+  },
+  "src/app/(dashboard)/cost-optimization/_components/UsageTab.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 6
+    }
+  },
+  "src/app/(dashboard)/cost-tracking/_components/add_margin_form.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/cost-tracking/_components/add_margin_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -150,6 +250,16 @@
   "src/app/(dashboard)/cost-tracking/_components/add_provider_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/cost-tracking/_components/cost_tracking_settings.integration.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 6
+    }
+  },
+  "src/app/(dashboard)/cost-tracking/_components/cost_tracking_settings.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 10
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/cost_tracking_settings.tsx": {
@@ -168,8 +278,18 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/index.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    }
+  },
   "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/index.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/cost-tracking/_components/pricing_calculator/multi_cost_results.test.tsx": {
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -208,13 +328,28 @@
       "count": 2
     }
   },
+  "src/app/(dashboard)/guardrails-monitor/_components/EvaluationSettingsModal.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/guardrails-monitor/_components/EvaluationSettingsModal.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
+  "src/app/(dashboard)/guardrails-monitor/_components/GuardrailConfig.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailConfig.tsx": {
     "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/guardrails-monitor/_components/GuardrailDetail.test.tsx": {
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -223,14 +358,32 @@
       "count": 3
     }
   },
+  "src/app/(dashboard)/guardrails-monitor/_components/GuardrailsOverview.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/guardrails-monitor/_components/GuardrailsOverview.tsx": {
     "no-nested-ternary": {
       "count": 5
     }
   },
+  "src/app/(dashboard)/guardrails-monitor/_components/ScoreChart.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/guardrails/_components/GuardrailTestPlayground.tsx": {
     "no-nested-ternary": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/guardrails/_components/GuardrailsPanel.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 6
     }
   },
   "src/app/(dashboard)/guardrails/_components/GuardrailsPanel.tsx": {
@@ -253,6 +406,16 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/guardrails/_components/add_guardrail_form.characterization.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/guardrails/_components/add_guardrail_form.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/app/(dashboard)/guardrails/_components/add_guardrail_form.tsx": {
@@ -298,6 +461,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/guardrails/_components/custom_code/CustomCodeModal.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/guardrails/_components/custom_code/CustomCodeModal.tsx": {
     "no-nested-ternary": {
       "count": 6
@@ -311,8 +479,18 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/guardrails/_components/guardrail_garden.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/guardrails/_components/guardrail_garden.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/guardrails/_components/guardrail_garden_card.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -324,6 +502,16 @@
   "src/app/(dashboard)/guardrails/_components/guardrail_garden_detail.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/guardrails/_components/guardrail_info.characterization.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 6
+    }
+  },
+  "src/app/(dashboard)/guardrails/_components/guardrail_info.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 5
     }
   },
   "src/app/(dashboard)/guardrails/_components/guardrail_info.tsx": {
@@ -549,6 +737,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/CreateMCPServer.integration.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 27
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/CreateMCPServer.tsx": {
     "max-lines": {
       "count": 1
@@ -578,6 +771,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
     "react-hooks/immutability": {
       "count": 2
@@ -598,6 +796,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/MCPToolsetsTab.integration.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/MCPToolsetsTab.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -610,8 +813,14 @@
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
     "no-restricted-imports": {
       "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 8
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.tsx": {
@@ -665,6 +874,14 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/ToolTestPanel.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/ToolTestPanel.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -702,6 +919,14 @@
       "count": 3
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_discovery.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 3
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/mcp_discovery.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -713,6 +938,11 @@
       "count": 2
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_config.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_config.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -721,6 +951,11 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_cost_display.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 12
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx": {
@@ -745,6 +980,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_servers.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/mcp-servers/_components/mcp_servers.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -757,6 +997,11 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 2
+    }
+  },
+  "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 7
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx": {
@@ -788,14 +1033,42 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/memory/_components/MemoryTable.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/components/AllModelsTab.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/models-and-endpoints/components/AllModelsTable.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 5
+    }
+  },
   "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.tsx": {
     "no-nested-ternary": {
       "count": 1
     }
   },
+  "src/app/(dashboard)/models-and-endpoints/panels/AddModelPanel.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 6
+    }
+  },
   "src/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer.ts": {
     "prefer-const": {
       "count": 6
+    }
+  },
+  "src/app/(dashboard)/old-usage/_components/usage.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 4
     }
   },
   "src/app/(dashboard)/old-usage/_components/usage.tsx": {
@@ -815,9 +1088,27 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/organizations/OrganizationFilters.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/organizations/_components/OrganizationsTable.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/playground/components/chat_ui/AdditionalModelSettings.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
+    }
+  },
+  "src/app/(dashboard)/playground/components/chat_ui/AgentBuilderView.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 3
     }
   },
   "src/app/(dashboard)/playground/components/chat_ui/AgentBuilderView.tsx": {
@@ -828,6 +1119,17 @@
       "count": 5
     }
   },
+  "src/app/(dashboard)/playground/components/chat_ui/ChatComposer.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/playground/components/chat_ui/ChatImageUtils.test.tsx": {
     "max-nested-callbacks": {
       "count": 1
@@ -836,6 +1138,11 @@
   "src/app/(dashboard)/playground/components/chat_ui/ChatMessageBubble.tsx": {
     "no-nested-ternary": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/playground/components/chat_ui/ChatUI.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/app/(dashboard)/playground/components/chat_ui/ChatUI.tsx": {
@@ -849,6 +1156,14 @@
       "count": 6
     },
     "react-hooks/set-state-in-effect": {
+      "count": 4
+    }
+  },
+  "src/app/(dashboard)/playground/components/chat_ui/CodeInterpreterOutput.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
       "count": 4
     }
   },
@@ -871,6 +1186,14 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/playground/components/compareUI/CompareUI.test.tsx": {
+    "testing-library/no-container": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 3
+    }
+  },
   "src/app/(dashboard)/playground/components/compareUI/CompareUI.tsx": {
     "max-lines": {
       "count": 1
@@ -882,8 +1205,18 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/playground/components/compareUI/components/ComparisonPanel.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
   "src/app/(dashboard)/playground/components/compareUI/components/ComparisonPanel.tsx": {
     "local/no-complex-jsx-arrow": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/playground/components/compareUI/components/MessageDisplay.test.tsx": {
+    "testing-library/no-node-access": {
       "count": 2
     }
   },
@@ -894,6 +1227,11 @@
   },
   "src/app/(dashboard)/playground/components/compareUI/components/ModelSelector.tsx": {
     "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/playground/components/compareUI/components/UnifiedSelector.test.tsx": {
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -1003,6 +1341,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/policies/_components/add_policy_form.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/policies/_components/add_policy_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1014,6 +1357,11 @@
       "count": 2
     },
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/policies/_components/ai_suggestion_modal.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -1107,6 +1455,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/policies/_components/template_parameter_modal.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/policies/_components/template_parameter_modal.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1116,6 +1469,14 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/projects/_components/ProjectDetailsPage.test.tsx": {
+    "testing-library/no-container": {
+      "count": 7
+    },
+    "testing-library/no-node-access": {
+      "count": 10
     }
   },
   "src/app/(dashboard)/projects/_components/ProjectDetailsPage.tsx": {
@@ -1128,13 +1489,28 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/projects/_components/ProjectModals/CreateProjectModal.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/projects/_components/ProjectModals/CreateProjectModal.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
+  "src/app/(dashboard)/projects/_components/ProjectModals/EditProjectModal.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    }
+  },
   "src/app/(dashboard)/projects/_components/ProjectModals/EditProjectModal.tsx": {
     "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/projects/_components/ProjectModals/ProjectBaseForm.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -1143,12 +1519,27 @@
       "count": 2
     }
   },
+  "src/app/(dashboard)/projects/_components/ProjectsPage.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
+  "src/app/(dashboard)/prompts/_components/add_prompt_form.integration.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/prompts/_components/add_prompt_form.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     },
     "no-restricted-imports": {
       "count": 2
+    }
+  },
+  "src/app/(dashboard)/prompts/_components/index.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
     }
   },
   "src/app/(dashboard)/prompts/_components/index.tsx": {
@@ -1180,6 +1571,11 @@
       "count": 1
     },
     "react-hooks/immutability": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/prompts/_components/prompt_editor_view/conversation_panel/MessageBubble.test.tsx": {
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -1230,6 +1626,14 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/router-settings/_components/general_settings.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 5
+    }
+  },
   "src/app/(dashboard)/router-settings/_components/general_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1241,9 +1645,32 @@
       "count": 2
     }
   },
+  "src/app/(dashboard)/search-tools/_components/CreateSearchTools.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/search-tools/_components/CreateSearchTools.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/search-tools/_components/CreateSearchTools.tsx": {
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/search-tools/_components/SearchToolTester.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
+  "src/app/(dashboard)/search-tools/_components/SearchToolView.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 11
     }
   },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
@@ -1269,6 +1696,11 @@
   },
   "src/app/(dashboard)/skills/_components/ClaudeCodePluginsPanel.tsx": {
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/skills/_components/PluginTable.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -1317,14 +1749,60 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageBarChart.test.tsx": {
+    "testing-library/no-container": {
+      "count": 4
+    },
+    "testing-library/no-node-access": {
+      "count": 5
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageLineChart.test.tsx": {
+    "testing-library/no-container": {
+      "count": 5
+    },
+    "testing-library/no-node-access": {
+      "count": 9
+    }
+  },
   "src/app/(dashboard)/usage/_components/components/EndpointUsage/components/EndpointUsageTable.tsx": {
     "no-nested-ternary": {
       "count": 1
     }
   },
+  "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 4
+    },
+    "testing-library/no-container": {
+      "count": 4
+    },
+    "testing-library/no-node-access": {
+      "count": 10
+    }
+  },
   "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 2
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/EntityUsage/SpendByProvider.test.tsx": {
+    "testing-library/no-container": {
+      "count": 6
+    },
+    "testing-library/no-node-access": {
+      "count": 8
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/EntityUsage/TopModelView.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 10
     }
   },
   "src/app/(dashboard)/usage/_components/components/UsageAIChatPanel.tsx": {
@@ -1333,6 +1811,17 @@
     },
     "react-hooks/immutability": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/usage/_components/components/UsagePageView.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-container": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 10
     }
   },
   "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
@@ -1365,6 +1854,11 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/users/_components/default-user-settings/DefaultUserSettingsForm.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
   "src/app/(dashboard)/users/_components/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1372,6 +1866,9 @@
   },
   "src/app/(dashboard)/users/_components/user_edit_view.test.tsx": {
     "no-nested-ternary": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -1381,6 +1878,11 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/users/_components/view_users.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 4
     }
   },
   "src/app/(dashboard)/users/_components/view_users.tsx": {
@@ -1394,6 +1896,24 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/users/_components/view_users/UsersTable.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/users/_components/view_users/user_info_view.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    }
+  },
+  "src/app/(dashboard)/users/_components/view_users/user_info_view.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
   "src/app/(dashboard)/users/_components/view_users/user_info_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1405,13 +1925,36 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/vector-stores/_components/CreateVectorStore.characterization.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 3
+    }
+  },
+  "src/app/(dashboard)/vector-stores/_components/CreateVectorStore.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 8
+    }
+  },
   "src/app/(dashboard)/vector-stores/_components/CreateVectorStore.tsx": {
     "no-restricted-imports": {
       "count": 2
     }
   },
+  "src/app/(dashboard)/vector-stores/_components/IndexesTable.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
   "src/app/(dashboard)/vector-stores/_components/S3VectorsConfig.tsx": {
     "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/vector-stores/_components/TestVectorStoreTab.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -1421,6 +1964,14 @@
     },
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "src/app/(dashboard)/vector-stores/_components/VectorStoreTester.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/app/(dashboard)/vector-stores/_components/index.tsx": {
@@ -1439,6 +1990,17 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/workflows/WorkflowRuns.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    },
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/workflows/WorkflowRuns.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -1450,8 +2012,18 @@
       "count": 1
     }
   },
+  "src/app/chat/page.integration.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/app/chat/page.tsx": {
     "no-nested-ternary": {
+      "count": 1
+    }
+  },
+  "src/app/login/LoginPage.integration.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -1481,6 +2053,11 @@
       "count": 1
     }
   },
+  "src/app/onboarding/OnboardingLoadingView.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/AIHub/ModelHubTable.test.tsx": {
     "max-params": {
       "count": 1
@@ -1495,6 +2072,11 @@
     },
     "prefer-const": {
       "count": 4
+    }
+  },
+  "src/components/AIHub/UsefulLinksManagement.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
     }
   },
   "src/components/AIHub/UsefulLinksManagement.tsx": {
@@ -1527,12 +2109,25 @@
       "count": 1
     }
   },
+  "src/components/CreateUserButton.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 24
+    }
+  },
   "src/components/CreateUserButton.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
+    }
+  },
+  "src/components/DashboardHeader.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/components/EntityUsageExport/utils.ts": {
@@ -1550,9 +2145,32 @@
       "count": 1
     }
   },
+  "src/components/HelpLink.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/components/LicenseExpiryBanner.test.tsx": {
+    "testing-library/no-container": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 3
+    }
+  },
+  "src/components/ModelSelect/ModelSelect.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    }
+  },
   "src/components/Navbar/BlogDropdown/BlogDropdown.test.tsx": {
     "max-nested-callbacks": {
       "count": 10
+    }
+  },
+  "src/components/Navbar/UserDropdown/UserDropdown.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
     }
   },
   "src/components/Navbar/UserDropdown/UserDropdown.tsx": {
@@ -1560,8 +2178,28 @@
       "count": 1
     }
   },
+  "src/components/Navbar/ViewSwitcher.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 5
+    }
+  },
+  "src/components/Navbar/WorkerDropdown/WorkerDropdown.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/components/PassThroughSettings/PassThroughSettings.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
   "src/components/SCIM.tsx": {
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/components/SSOModals.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -1580,8 +2218,21 @@
       "count": 1
     }
   },
+  "src/components/Settings/AdminSettings/LoggingSettings/LoggingSettings.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
   "src/components/Settings/AdminSettings/LoggingSettings/LoggingSettings.tsx": {
     "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -1616,6 +2267,11 @@
       "count": 1
     }
   },
+  "src/components/Settings/AdminSettings/SSOSettings/RedactableField.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
   "src/components/Settings/AdminSettings/SSOSettings/RedactableField.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -1626,6 +2282,14 @@
       "count": 1
     }
   },
+  "src/components/Settings/AdminSettings/SSOSettings/SSOSettingsLoadingSkeleton.test.tsx": {
+    "testing-library/no-container": {
+      "count": 4
+    },
+    "testing-library/no-node-access": {
+      "count": 5
+    }
+  },
   "src/components/Settings/AdminSettings/UISettings/PageVisibilitySettings.tsx": {
     "react-hooks/set-state-in-render": {
       "count": 1
@@ -1633,6 +2297,14 @@
   },
   "src/components/Settings/AdminSettings/UISettings/UISettings.tsx": {
     "no-nested-ternary": {
+      "count": 1
+    }
+  },
+  "src/components/Settings/AdminSettings/UserBannerSettings/UserBannerSettings.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -1667,9 +2339,36 @@
       "count": 2
     }
   },
+  "src/components/SidebarAccountMenu/SidebarAccountMenu.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/components/SidebarUsageCard.test.tsx": {
+    "testing-library/no-container": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 5
+    }
+  },
+  "src/components/TeamSSOSettings.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/Teams.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 6
+    },
     "max-nested-callbacks": {
       "count": 4
+    },
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/components/Teams.tsx": {
@@ -1692,9 +2391,40 @@
       "count": 1
     }
   },
+  "src/components/TeamsPage/TeamsTable.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
   "src/components/TeamsPage/teamTableColumns.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/ToolPolicies/ToolPoliciesPanel.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 7
+    }
+  },
+  "src/components/ToolPolicies/ToolPoliciesTable.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/components/ToolPolicies/ToolPoliciesTableColumns.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/components/UsagePage/components/EntityUsage/TopKeyView.test.tsx": {
+    "testing-library/no-container": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 18
     }
   },
   "src/components/UsagePage/components/EntityUsage/TopKeyView.tsx": {
@@ -1702,9 +2432,33 @@
       "count": 1
     }
   },
+  "src/components/UsagePage/components/KeyModelUsageView.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 8
+    }
+  },
   "src/components/UsagePage/utils/value_formatters.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/UserBanner.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/components/VirtualKeysPage/VirtualKeysTable.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 6
+    },
+    "testing-library/no-node-access": {
+      "count": 6
     }
   },
   "src/components/VirtualKeysPage/keyTableColumns.tsx": {
@@ -1713,6 +2467,17 @@
     },
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "src/components/activity_metrics.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    },
+    "testing-library/no-container": {
+      "count": 6
+    },
+    "testing-library/no-node-access": {
+      "count": 20
     }
   },
   "src/components/activity_metrics.tsx": {
@@ -1729,6 +2494,9 @@
     }
   },
   "src/components/add_model/AddModelForm.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 6
+    },
     "no-restricted-imports": {
       "count": 1
     }
@@ -1749,6 +2517,14 @@
       "count": 1
     }
   },
+  "src/components/add_model/ComplexityRouterConfig.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 45
+    },
+    "testing-library/no-node-access": {
+      "count": 18
+    }
+  },
   "src/components/add_model/ComplexityRouterConfig.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1757,6 +2533,11 @@
   "src/components/add_model/EscalationKeywords.tsx": {
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "src/components/add_model/HeuristicScoringConfig.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
     }
   },
   "src/components/add_model/KeywordTierRules.tsx": {
@@ -1774,6 +2555,17 @@
       "count": 1
     }
   },
+  "src/components/add_model/add_auto_router_tab.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 10
+    },
+    "testing-library/no-container": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 13
+    }
+  },
   "src/components/add_model/add_auto_router_tab.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1787,6 +2579,11 @@
       "count": 1
     }
   },
+  "src/components/add_model/advanced_settings.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 4
+    }
+  },
   "src/components/add_model/advanced_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1797,6 +2594,11 @@
   },
   "src/components/add_model/auto_router_connection_test.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/add_model/cache_control_settings.test.tsx": {
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -1899,6 +2701,14 @@
       "count": 1
     }
   },
+  "src/components/bulk_create_users_button.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 10
+    }
+  },
   "src/components/bulk_create_users_button.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1912,9 +2722,27 @@
       "count": 1
     }
   },
+  "src/components/chat/ConnectFlowBanner.test.tsx": {
+    "testing-library/no-container": {
+      "count": 4
+    },
+    "testing-library/no-node-access": {
+      "count": 8
+    }
+  },
   "src/components/chat/KeysPanel.tsx": {
     "no-nested-ternary": {
       "count": 1
+    }
+  },
+  "src/components/chat/LogsPanel.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/components/chat/MCPAppsPanel.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 6
     }
   },
   "src/components/chat/MCPAppsPanel.tsx": {
@@ -1940,6 +2768,11 @@
       "count": 2
     }
   },
+  "src/components/chat_ui/ReasoningContent.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
   "src/components/chat_ui/mode_endpoint_mapping.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1952,6 +2785,11 @@
   },
   "src/components/claude_code_plugins/skill_detail.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/cloudzero_export_modal.integration.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -1974,13 +2812,39 @@
       "count": 1
     }
   },
+  "src/components/common_components/DeleteResourceModal.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
   "src/components/common_components/DeleteResourceModal.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
+  "src/components/common_components/DurationSelect.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 6
+    }
+  },
   "src/components/common_components/Filters/FilterInput.tsx": {
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/components/common_components/Filters/FiltersButton.test.tsx": {
+    "testing-library/no-container": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
+  "src/components/common_components/KeyLifecycleSettings.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 5
+    },
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -1994,13 +2858,28 @@
       "count": 1
     }
   },
+  "src/components/common_components/ModelAliasManager.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
   "src/components/common_components/ModelAliasManager.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
+  "src/components/common_components/ModelSelector.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
   "src/components/common_components/ModelSelector.tsx": {
     "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/components/common_components/OrganizationDropdown.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -2010,7 +2889,23 @@
     }
   },
   "src/components/common_components/RateLimitTypeFormItem.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
     "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/common_components/RouterSettingsAccordion.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    }
+  },
+  "src/components/common_components/UserDropdown.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -2069,6 +2964,14 @@
       "count": 1
     }
   },
+  "src/components/edit_auto_router/edit_auto_router_modal.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 18
+    },
+    "testing-library/no-node-access": {
+      "count": 7
+    }
+  },
   "src/components/edit_auto_router/edit_auto_router_modal.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2085,6 +2988,11 @@
       "count": 1
     }
   },
+  "src/components/email_settings.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 3
+    }
+  },
   "src/components/email_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2096,6 +3004,17 @@
   "src/components/key_info_utils.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/key_team_helpers/BudgetFallbacksEditor.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/components/key_team_helpers/BudgetFallbacksEditor.tsx": {
@@ -2134,6 +3053,17 @@
       "count": 1
     }
   },
+  "src/components/leftnav.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 9
+    },
+    "testing-library/no-container": {
+      "count": 5
+    },
+    "testing-library/no-node-access": {
+      "count": 14
+    }
+  },
   "src/components/leftnav.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2166,9 +3096,19 @@
       "count": 1
     }
   },
+  "src/components/logging_settings_view.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/logging_settings_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/mcp_server_management/MCPServerSelector.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 4
     }
   },
   "src/components/mcp_server_management/MCPServerSelector.tsx": {
@@ -2179,8 +3119,18 @@
       "count": 1
     }
   },
+  "src/components/mcp_server_management/MCPToolPermissions.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
   "src/components/mcp_server_management/MCPToolPermissions.tsx": {
     "local/no-complex-jsx-arrow": {
+      "count": 1
+    }
+  },
+  "src/components/mcp_tools/ByokCredentialModal.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -2220,6 +3170,21 @@
       "count": 1
     }
   },
+  "src/components/model_dashboard/HealthCheckComponent.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
+  "src/components/model_dashboard/HealthChecksTable.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/components/model_dashboard/ModelSettingsModal/ModelSettingsModal.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
   "src/components/model_dashboard/ModelSettingsModal/ModelSettingsModal.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2238,6 +3203,14 @@
       "count": 1
     }
   },
+  "src/components/model_info_view.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 5
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/model_info_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2252,8 +3225,18 @@
       "count": 1
     }
   },
+  "src/components/molecules/cost_optimization_feedback_banner.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
   "src/components/molecules/cost_optimization_feedback_banner.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/navbar.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -2300,6 +3283,14 @@
       "count": 1
     }
   },
+  "src/components/organisms/create_key_button.integration.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/organisms/create_key_button.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2332,12 +3323,25 @@
       "count": 1
     }
   },
+  "src/components/per_user_usage.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 7
+    }
+  },
   "src/components/per_user_usage.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
+    }
+  },
+  "src/components/permissions/MCPServerPermissions.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 6
     }
   },
   "src/components/permissions/MCPServerPermissions.tsx": {
@@ -2361,6 +3365,11 @@
     },
     "prefer-const": {
       "count": 3
+    }
+  },
+  "src/components/public_model_hub.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 6
     }
   },
   "src/components/public_model_hub.tsx": {
@@ -2391,6 +3400,11 @@
       "count": 1
     }
   },
+  "src/components/router_settings/index.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/router_settings/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2402,6 +3416,11 @@
   "src/components/routing_groups/RoutingGroupModal.tsx": {
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "src/components/routing_groups/RoutingGroupsTable.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 6
     }
   },
   "src/components/routing_groups/index.tsx": {
@@ -2420,6 +3439,11 @@
       "count": 1
     }
   },
+  "src/components/settings.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 6
+    }
+  },
   "src/components/settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2429,6 +3453,78 @@
     },
     "prefer-const": {
       "count": 4
+    }
+  },
+  "src/components/shared/CopyButton.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 7
+    }
+  },
+  "src/components/shared/DataTable/DataTable.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 6
+    },
+    "testing-library/no-container": {
+      "count": 17
+    },
+    "testing-library/no-node-access": {
+      "count": 45
+    }
+  },
+  "src/components/shared/DataTable/DataTableSortHeader.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 5
+    }
+  },
+  "src/components/shared/MultiSelect.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 5
+    }
+  },
+  "src/components/shared/PageHeader.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/components/shared/PaginatedSearchSelect.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/components/shared/SearchSelect.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
+  "src/components/shared/ToolbarSeparator.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/components/shared/advanced_date_picker.test.tsx": {
+    "testing-library/no-container": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 12
     }
   },
   "src/components/shared/advanced_date_picker.tsx": {
@@ -2444,9 +3540,25 @@
       "count": 1
     }
   },
+  "src/components/shared/charts/area_chart.test.tsx": {
+    "testing-library/no-container": {
+      "count": 6
+    },
+    "testing-library/no-node-access": {
+      "count": 9
+    }
+  },
   "src/components/shared/charts/area_chart.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/shared/charts/bar_chart.test.tsx": {
+    "testing-library/no-container": {
+      "count": 9
+    },
+    "testing-library/no-node-access": {
+      "count": 15
     }
   },
   "src/components/shared/charts/bar_chart.tsx": {
@@ -2454,9 +3566,25 @@
       "count": 1
     }
   },
+  "src/components/shared/charts/chart_legend.test.tsx": {
+    "testing-library/no-container": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
   "src/components/shared/charts/chart_legend.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/shared/charts/chart_tooltip.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/components/shared/charts/chart_tooltip.tsx": {
@@ -2464,9 +3592,25 @@
       "count": 1
     }
   },
+  "src/components/shared/charts/donut_chart.test.tsx": {
+    "testing-library/no-container": {
+      "count": 7
+    },
+    "testing-library/no-node-access": {
+      "count": 12
+    }
+  },
   "src/components/shared/charts/donut_chart.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/shared/charts/line_chart.test.tsx": {
+    "testing-library/no-container": {
+      "count": 8
+    },
+    "testing-library/no-node-access": {
+      "count": 16
     }
   },
   "src/components/shared/charts/line_chart.tsx": {
@@ -2476,6 +3620,11 @@
   },
   "src/components/shared/errorUtils.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/shared/form/FormField.test.tsx": {
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -2494,6 +3643,11 @@
       "count": 1
     }
   },
+  "src/components/shared/table_cells/AutoRouterTag.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/shared/table_cells/cell_tooltip.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2509,8 +3663,18 @@
       "count": 1
     }
   },
+  "src/components/shared/table_cells/identity_cell.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 3
+    }
+  },
   "src/components/shared/table_cells/identity_cell.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/shared/table_cells/models_cell.test.tsx": {
+    "local/no-click-by-text": {
       "count": 1
     }
   },
@@ -2519,8 +3683,21 @@
       "count": 1
     }
   },
+  "src/components/shared/table_cells/money_cell.test.tsx": {
+    "testing-library/no-container": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 3
+    }
+  },
   "src/components/shared/table_cells/money_cell.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/components/shared/table_cells/spend_budget_cell.test.tsx": {
+    "testing-library/no-node-access": {
       "count": 1
     }
   },
@@ -2529,9 +3706,25 @@
       "count": 1
     }
   },
+  "src/components/shared/table_cells/status_badge.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/shared/table_cells/status_badge.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/tag_management/TagSelector.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/components/tag_management/types.tsx": {
@@ -2550,6 +3743,14 @@
   "src/components/team/LoggingSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "src/components/team/TeamInfo.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 11
+    },
+    "testing-library/no-node-access": {
+      "count": 4
     }
   },
   "src/components/team/TeamInfo.tsx": {
@@ -2576,6 +3777,11 @@
       "count": 1
     }
   },
+  "src/components/team/member_permissions.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/team/member_permissions.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2594,9 +3800,37 @@
       "count": 1
     }
   },
+  "src/components/templates/KeyInfoHeader.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
+  "src/components/templates/KeyInfoView.handleKeyUpdate.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 27
+    }
+  },
+  "src/components/templates/key_edit_view.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 4
+    }
+  },
   "src/components/templates/key_edit_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/templates/key_info_view.budget_display.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/components/templates/key_info_view.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 4
     }
   },
   "src/components/templates/key_info_view.tsx": {
@@ -2625,6 +3859,14 @@
       "count": 1
     }
   },
+  "src/components/ui/breadcrumb.test.tsx": {
+    "testing-library/no-container": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 3
+    }
+  },
   "src/components/ui/breadcrumb.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2643,6 +3885,14 @@
   "src/components/ui/card.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/ui/chart.test.tsx": {
+    "testing-library/no-container": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 3
     }
   },
   "src/components/ui/chart.tsx": {
@@ -2693,6 +3943,14 @@
   "src/components/ui/label.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/ui/meter.test.tsx": {
+    "testing-library/no-container": {
+      "count": 2
+    },
+    "testing-library/no-node-access": {
+      "count": 4
     }
   },
   "src/components/ui/meter.tsx": {
@@ -2773,6 +4031,11 @@
       "count": 1
     }
   },
+  "src/components/ui/tooltip.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/ui/tooltip.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2789,6 +4052,11 @@
     },
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "src/components/user_agent_activity.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 15
     }
   },
   "src/components/user_agent_activity.tsx": {
@@ -2820,6 +4088,21 @@
       "count": 1
     }
   },
+  "src/components/view_logs/AuditLogDrawer/AuditLogDrawer.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
+  "src/components/view_logs/AuditLogsTable.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/components/view_logs/CostBreakdownViewer.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
   "src/components/view_logs/EvalViewer/EvalViewer.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -2838,14 +4121,55 @@
       "count": 1
     }
   },
+  "src/components/view_logs/GuardrailViewer/GuardrailViewer.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 8
+    }
+  },
   "src/components/view_logs/GuardrailViewer/GuardrailViewer.tsx": {
     "no-nested-ternary": {
+      "count": 4
+    }
+  },
+  "src/components/view_logs/GuardrailViewer/PresidioDetectedEntities.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
+  "src/components/view_logs/LogDetailsDrawer/CollapsibleMessage.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/components/view_logs/LogDetailsDrawer/HistoryTree.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/components/view_logs/LogDetailsDrawer/InputCard.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
+  "src/components/view_logs/LogDetailsDrawer/LogDetailContent.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 4
+    },
+    "testing-library/no-node-access": {
       "count": 4
     }
   },
   "src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx": {
     "no-nested-ternary": {
       "count": 3
+    }
+  },
+  "src/components/view_logs/LogDetailsDrawer/LogDetailsDrawer.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 6
     }
   },
   "src/components/view_logs/LogDetailsDrawer/LogDetailsDrawer.tsx": {
@@ -2856,14 +4180,63 @@
       "count": 2
     }
   },
+  "src/components/view_logs/LogDetailsDrawer/OutputCard.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 4
+    }
+  },
+  "src/components/view_logs/LogDetailsDrawer/RealtimePrettyView.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 2
+    }
+  },
+  "src/components/view_logs/LogDetailsDrawer/SectionHeader.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 2
+    }
+  },
   "src/components/view_logs/LogDetailsDrawer/useKeyboardNavigation.ts": {
     "react-hooks/immutability": {
       "count": 2
     }
   },
+  "src/components/view_logs/RequestLogsFilters.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 1
+    }
+  },
+  "src/components/view_logs/RequestLogsPanel.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
+  "src/components/view_logs/RequestLogsTableColumns.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 3
+    }
+  },
+  "src/components/view_logs/ToolsSection/ToolsSection.test.tsx": {
+    "local/no-click-by-text": {
+      "count": 5
+    },
+    "testing-library/no-node-access": {
+      "count": 1
+    }
+  },
   "src/components/view_logs/columns.tsx": {
     "local/filename-pascal-case": {
       "count": 1
+    }
+  },
+  "src/components/view_logs/index.test.tsx": {
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "src/components/view_logs/index.tsx": {
@@ -2976,10 +4349,16 @@
     },
     "react/display-name": {
       "count": 1
+    },
+    "testing-library/no-node-access": {
+      "count": 2
     }
   },
   "tests/setupTests.ts": {
     "@typescript-eslint/no-this-alias": {
+      "count": 1
+    },
+    "testing-library/no-node-access": {
       "count": 1
     }
   }
