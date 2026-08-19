@@ -25,6 +25,7 @@ from litellm.proxy.client.cli.commands.auth import (
     save_token,
     whoami,
 )
+from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 
 
 def _mock_cli_sso_start_response(
@@ -267,7 +268,7 @@ class TestTokenUtilities:
     def test_load_token_io_error(self):
         """Test loading token with IO error"""
         with (
-            patch("builtins.open", side_effect=IOError("Permission denied")),
+            patch("builtins.open", side_effect=OSError("Permission denied")),
             patch("litellm.proxy.client.cli.commands.auth.get_token_file_path") as mock_path,
             patch("os.path.exists", return_value=True),
         ):
@@ -1029,3 +1030,83 @@ class TestSaveTokenPrivateWrite:
 
         assert json.loads(token_file.read_text()) == {"key": "sk-original", "timestamp": 1234567890}
         assert list(token_file.parent.glob(".tmp-*")) == []
+
+
+class TestLoginConfigClaude:
+    """`lite login --config-claude` wiring into ~/.claude/settings.json"""
+
+    def setup_method(self):
+        self.runner = CliRunner()
+
+    def _run_login(self, tmp_path, args, base_url="https://test.example.com"):
+        settings_path = tmp_path / "claude" / "settings.json"
+        backup_path = tmp_path / "claude_settings_backup.json"
+        poll_response = Mock()
+        poll_response.status_code = 200
+        poll_response.json.return_value = {
+            "status": "ready",
+            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt",
+            "user_id": "test-user-123",
+            "team_id": "team-1",
+            "teams": ["team-1"],
+        }
+        with (
+            patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
+            patch("requests.get", return_value=poll_response),
+            patch("litellm.proxy.client.cli.commands.auth.save_token"),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+            patch("litellm.proxy.client.cli.commands.auth.CLAUDE_SETTINGS_PATH", settings_path),
+            patch(
+                "litellm.proxy.client.cli.commands.auth.SETTINGS_FILE_OWNERS",
+                (SettingsFileOwner(backup_path, "lite up", "lite down"),),
+            ),
+            patch(
+                "litellm.proxy.client.cli.commands.claude_settings.shutil.which",
+                return_value="/usr/local/bin/lite",
+            ),
+        ):
+            result = self.runner.invoke(login, args, obj={"base_url": base_url})
+        return result, settings_path, backup_path
+
+    def test_default_login_does_not_touch_claude_settings(self, tmp_path):
+        result, settings_path, _backup_path = self._run_login(tmp_path, [])
+
+        assert result.exit_code == 0
+        assert "Login successful!" in result.output
+        assert not settings_path.exists()
+        assert "Configured Claude Code" not in result.output
+
+    def test_flag_writes_the_settings_file_and_reports_success(self, tmp_path):
+        result, settings_path, _backup_path = self._run_login(tmp_path, ["--config-claude"])
+
+        assert result.exit_code == 0
+        written = json.loads(settings_path.read_text())
+        assert written["env"]["ANTHROPIC_BASE_URL"] == "https://test.example.com"
+        assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://test.example.com auth print-token"
+        assert "Configured Claude Code" in result.output
+
+    def test_flag_preserves_unrelated_settings_on_an_existing_file(self, tmp_path):
+        settings_path = tmp_path / "claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text(json.dumps({"theme": "dark", "env": {"KEEP": "me"}}))
+
+        result, _settings_path, _backup_path = self._run_login(tmp_path, ["--config-claude"])
+
+        assert result.exit_code == 0
+        written = json.loads(settings_path.read_text())
+        assert written["theme"] == "dark"
+        assert written["env"]["KEEP"] == "me"
+
+    def test_settings_failure_is_reported_without_claiming_login_failed(self, tmp_path):
+        settings_path = tmp_path / "claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text("not json at all {{{")
+
+        result, _settings_path, _backup_path = self._run_login(tmp_path, ["--config-claude"])
+
+        assert result.exit_code != 0
+        assert "Login successful!" in result.output
+        assert "could not configure Claude Code" in result.output
+        assert "invalid JSON" in result.output
+        assert "Authentication failed" not in result.output

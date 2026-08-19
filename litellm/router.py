@@ -10253,11 +10253,13 @@ class Router:
         returned_models.extend(self.get_model_list_from_routing_groups(model_name=model_name))
 
         if len(returned_models) == 0:  # check if wildcard route
-            potential_wildcard_models: Final = self.pattern_router.route(model_name) or []
+            potential_wildcard_models: Final = self.pattern_router.get_deployments_by_pattern(model=model_name or "")
 
             ## check for team-specific wildcard models
             if team_id is not None and team_id in self.team_pattern_routers:
-                potential_team_only_wildcard_models: Final = self.team_pattern_routers[team_id].route(model_name) or []
+                potential_team_only_wildcard_models: Final = self.team_pattern_routers[
+                    team_id
+                ].get_deployments_by_pattern(model=model_name or "")
                 potential_wildcard_models.extend(potential_team_only_wildcard_models)
 
             if model_name is not None and potential_wildcard_models is not None:
