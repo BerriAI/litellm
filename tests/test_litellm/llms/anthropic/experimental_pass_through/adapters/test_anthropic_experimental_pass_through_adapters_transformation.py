@@ -3947,3 +3947,95 @@ def test_tool_result_document_preserves_reference_or_degrades_safely(source, exp
     tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == expected_content
+
+
+@pytest.mark.parametrize(
+    ("inner_content", "expected_content"),
+    [
+        ("plain result", "plain result"),
+        (42, "42"),
+    ],
+)
+def test_tool_result_top_level_scalar_content_emits_tool_message(inner_content, expected_content):
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_scalar", "name": "lookup", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_scalar",
+                    "content": inner_content,
+                }
+            ],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == expected_content
+
+
+def test_tool_result_single_scalar_item_degrades_to_text():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_scalar", "name": "lookup", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_scalar",
+                    "content": [42],
+                }
+            ],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == "42"
+
+
+def test_tool_result_mixed_extension_blocks_preserve_each_item():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_mixed", "name": "lookup", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_mixed",
+                    "content": [
+                        {"type": "text", "text": "result"},
+                        {"type": "tool_reference", "tool_name": "Read"},
+                        {"type": "custom_data", "payload": "xyz"},
+                        42,
+                    ],
+                }
+            ],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == [
+        {"type": "text", "text": "result"},
+        {"type": "text", "text": "[Loaded tool: Read]"},
+        {"type": "text", "text": "[custom_data block]"},
+        {"type": "text", "text": "42"},
+    ]
