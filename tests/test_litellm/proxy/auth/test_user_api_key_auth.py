@@ -6228,3 +6228,115 @@ async def test_unlicensed_jwt_auth_is_forbidden_not_unauthorized():
     assert error.code == "403"
     assert "enterprise" in error.message.lower()
 
+
+class _MembershipCache:
+    """Serves the team-membership lookups both budget check implementations perform."""
+
+    def __init__(self, values):
+        self.values = values
+
+    async def async_get_cache(self, key, **kwargs):
+        return self.values.get(key)
+
+    async def async_set_cache(self, key, value, **kwargs):
+        self.values[key] = value
+
+    def get_cache(self, key, **kwargs):
+        return self.values.get(key)
+
+    def set_cache(self, key, value, **kwargs):
+        self.values[key] = value
+
+    async def async_batch_get_cache(self, keys, **kwargs):
+        return [self.values.get(key) for key in keys]
+
+    def delete_cache(self, key, **kwargs):
+        self.values.pop(key, None)
+
+    async def async_delete_cache(self, key, **kwargs):
+        self.values.pop(key, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/key/info", "/key/some-key-hash/budgets"])
+async def test_exhausted_team_member_budget_does_not_block_management_routes(route):
+    """
+    A member who has spent their in-team budget must still be able to read key management routes.
+
+    Regression: the team member budget check was implemented twice. The copy inside common_checks
+    is correctly skipped for non-LLM routes, but a second inline copy in _user_api_key_auth_builder
+    ran on every route, so the member got a 429 from /key/info and could not find out which budget
+    had stopped them. LLM routes are still blocked by the surviving check in common_checks.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
+
+    api_key = "sk-team-member-out-of-budget"
+    valid_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token="hashed-team-member-key",
+        user_id="member-user",
+        team_id="member-team",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_member_spend=99.0,
+    )
+    membership = LiteLLM_TeamMembership(
+        user_id="member-user",
+        team_id="member-team",
+        spend=99.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+    cache = _MembershipCache(
+        {
+            "member-team_member-user": membership,
+            "team_membership:member-user:member-team": membership,
+        }
+    )
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url=route)
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(return_value=None)
+    proxy_logging_obj.internal_usage_cache.dual_cache.async_set_cache = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+            new_callable=AsyncMock,
+            return_value=valid_token,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            return_value=LiteLLM_TeamTableCachedObj(team_id="member-team", team_alias="Member Team"),
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_user_object",
+            new_callable=AsyncMock,
+            return_value=LiteLLM_UserTable(user_id="member-user", spend=0.0),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master-key"),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.user_custom_auth", None),
+        patch("litellm.proxy.proxy_server.jwt_handler", None),
+    ):
+        result = await _user_api_key_auth_builder(
+            request=request,
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+    assert result.user_id == "member-user"
+    assert result.team_id == "member-team"

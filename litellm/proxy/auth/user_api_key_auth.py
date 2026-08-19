@@ -91,7 +91,6 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
-from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -1834,58 +1833,6 @@ async def _user_api_key_auth_builder(
                 skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
                 if skip_budget_checks:
                     verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
-
-            # Check 3. Check if user is in their team budget
-            if not skip_budget_checks and valid_token.team_member_spend is not None:
-                if prisma_client is not None:
-                    _cache_key: Final = f"{valid_token.team_id}_{valid_token.user_id}"
-
-                    team_member_info = await user_api_key_cache.async_get_cache(
-                        key=_cache_key,
-                        model_type=LiteLLM_TeamMembership,
-                    )
-                    if team_member_info is None:
-                        # read from DB
-                        _user_id: Final = valid_token.user_id
-                        _team_id: Final = valid_token.team_id
-
-                        if _user_id is not None and _team_id is not None:
-                            _db_member: Final = await TeamMembershipRepository(prisma_client).table.find_first(
-                                where={
-                                    "user_id": _user_id,
-                                    "team_id": _team_id,
-                                },
-                                include={"litellm_budget_table": True},
-                            )
-                            if _db_member is not None:
-                                team_member_info = LiteLLM_TeamMembership(**_db_member.dict())
-                                await user_api_key_cache.async_set_cache(
-                                    key=_cache_key,
-                                    value=team_member_info,
-                                    model_type=LiteLLM_TeamMembership,
-                                    ttl=5,
-                                )
-
-                    if team_member_info is not None and team_member_info.litellm_budget_table is not None:
-                        team_member_budget: Final = team_member_info.litellm_budget_table.max_budget
-                        if team_member_budget is not None and team_member_budget > 0:
-                            # Read from cross-pod counter (Redis-first) if available
-                            from litellm.proxy.proxy_server import get_current_spend
-
-                            team_member_spend = valid_token.team_member_spend
-                            if valid_token.user_id is not None and valid_token.team_id is not None:
-                                team_member_spend = await get_current_spend(
-                                    counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
-                                    fallback_spend=team_member_spend,
-                                    max_budget=team_member_budget,
-                                )
-                            if team_member_spend > team_member_budget:
-                                raise litellm.BudgetExceededError(
-                                    current_cost=team_member_spend,
-                                    max_budget=team_member_budget,
-                                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                                    entity_id=f"{valid_token.user_id}:{valid_token.team_id}",
-                                )
 
             # Check 3. If token is expired
             if valid_token.expires is not None:

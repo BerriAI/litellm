@@ -437,3 +437,51 @@ async def test_team_member_budget_check_personal_key_not_team():
         assert result is True
         mock_get_team_membership.assert_not_called()
 
+
+@pytest.mark.asyncio
+async def test_team_member_budget_not_enforced_on_management_routes():
+    """
+    An exhausted team member budget must not lock the member out of the management API.
+
+    Regression: the same check was implemented a second time inline in user_api_key_auth,
+    outside the route gating in common_checks, so /key/info answered 429 and the member
+    could not see which budget had stopped them.
+    """
+    team_object = LiteLLM_TeamTable(team_id="test-team-1", team_alias="Test Team", spend=0.0, max_budget=None)
+    user_object = LiteLLM_UserTable(user_id="test-user-1", spend=0.0, max_budget=None)
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user-1",
+        team_id="test-team-1",
+        team_member_spend=99.0,
+    )
+    team_membership = LiteLLM_TeamMembership(
+        user_id="test-user-1",
+        team_id="test-team-1",
+        spend=99.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+    ):
+        for route in ("/key/info", "/key/test-token/budgets"):
+            await common_checks(
+                request_body={},
+                team_object=team_object,
+                user_object=user_object,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route=route,
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=valid_token,
+                request=MagicMock(spec=Request),
+            )
