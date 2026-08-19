@@ -89,7 +89,7 @@ async def anthropic_messages_with_mcp(
             max_tokens=max_tokens,
             messages=list(messages),
             model=model,
-            tools=list(lists) if tools else None,  # kwargs-ok: param pass-through
+            tools=list(tools) if tools else None,  # kwargs-ok: param pass-through
             _skip_mcp_handler=True,
             **kwargs,
         )
