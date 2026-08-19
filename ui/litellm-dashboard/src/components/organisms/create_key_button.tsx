@@ -17,7 +17,7 @@ import { Input as AntdInput, Modal, Radio, Select, Switch, Tag, Tooltip, Typogra
 import { ChevronDown } from "lucide-react";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
@@ -246,6 +246,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
+  const latestUserSearchRef = useRef(0);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
   const [keyType, setKeyType] = useState<string>("llm_api");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
@@ -556,8 +557,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   };
 
   const fetchUsers = async (searchText: string): Promise<void> => {
+    const searchId = latestUserSearchRef.current + 1;
+    latestUserSearchRef.current = searchId;
+    const isLatestSearch = (): boolean => searchId === latestUserSearchRef.current;
+
     if (!searchText) {
       setUserOptions([]);
+      setUserSearchLoading(false);
       return;
     }
 
@@ -569,6 +575,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         return;
       }
       const response = await userFilterUICall(accessToken, params);
+      if (!isLatestSearch()) return;
 
       const data: User[] = response;
       const options: UserOption[] = data.map((user) => ({
@@ -580,9 +587,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setUserOptions(options);
     } catch (error) {
       console.error("Error fetching users:", error);
-      toast.fromError("Failed to search for users");
+      if (isLatestSearch()) toast.fromError("Failed to search for users");
     } finally {
-      setUserSearchLoading(false);
+      if (isLatestSearch()) setUserSearchLoading(false);
     }
   };
 
