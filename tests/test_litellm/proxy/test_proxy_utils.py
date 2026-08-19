@@ -1169,3 +1169,55 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
     assert emitted
     assert all("hunter2" not in message for message in emitted)
     assert any("postgresql://REDACTED@db.internal" in message for message in emitted)
+
+
+@pytest.mark.asyncio
+async def test_update_data_key_branch_stamps_settings_updated_at():
+    """`updated_at` carries Prisma's @updatedAt and is rewritten by every spend
+    flush, so key config edits need their own audit column."""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    client = MagicMock()
+    client.jsonify_object = MagicMock(side_effect=lambda data: dict(data))
+    client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+
+    before = datetime.now(timezone.utc)
+    await PrismaClient.update_data(client, token="sk-test-key", data={"models": ["gpt-4"]})
+    after = datetime.now(timezone.utc)
+
+    sent = client.db.litellm_verificationtoken.update.call_args.kwargs["data"]
+    assert sent["models"] == ["gpt-4"]
+    assert before <= sent["settings_updated_at"] <= after
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_skips_opted_out_guardrail(restore_callbacks):
+    """A guardrail that keeps its native lifecycle hooks must not have MCP tool results
+    scanned through the unified path, even though it implements apply_guardrail."""
+    from mcp.types import CallToolResult, TextContent
+
+    class _OptedOutMCPGuardrail(_RecordingMCPGuardrail):
+        # apply_guardrail is redefined rather than inherited because the dispatch check
+        # reads the leaf class __dict__, so an inherited override would skip for the
+        # wrong reason and leave the flag untested
+        use_native_lifecycle_hooks = True
+
+        async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+            return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+    guardrail = _OptedOutMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"mcp_tool_name": "echo"},
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 0
+    assert [item.text for item in returned.content] == ["jane@example.com"]

@@ -5,7 +5,7 @@ import React, { useCallback, useMemo, useState } from "react";
 
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { ToolRow, updateToolPolicy } from "@/components/networking";
 
 import { toolPoliciesListOptions } from "./toolPoliciesQueries";
@@ -79,7 +79,7 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
         await updateToolPolicy(accessToken, toolName, { input_policy: newPolicy });
         await patchTool(toolName, { input_policy: newPolicy });
       } catch (e) {
-        NotificationsManager.fromBackend(`Failed to update input policy: ${toMessage(e, "unknown error")}`);
+        toast.fromError(`Failed to update input policy: ${toMessage(e, "unknown error")}`);
       } finally {
         setSavingInput((previous) => withoutTool(previous, toolName));
       }
@@ -95,7 +95,7 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
         await updateToolPolicy(accessToken, toolName, { output_policy: newPolicy });
         await patchTool(toolName, { output_policy: newPolicy });
       } catch (e) {
-        NotificationsManager.fromBackend(`Failed to update output policy: ${toMessage(e, "unknown error")}`);
+        toast.fromError(`Failed to update output policy: ${toMessage(e, "unknown error")}`);
       } finally {
         setSavingOutput((previous) => withoutTool(previous, toolName));
       }

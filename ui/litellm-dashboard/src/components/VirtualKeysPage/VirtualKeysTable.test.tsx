@@ -23,6 +23,8 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
   };
 });
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(() => ({
     accessToken: "test-token",
@@ -337,13 +339,9 @@ it("emphasizes the active field in the Spend / Budget header so the sorted colum
   await user.click(await screen.findByText("Budget descending"));
 
   await waitFor(() => {
-    expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" }).className).toContain(
-      "font-semibold",
-    );
+    expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" })).toHaveClass("font-semibold");
   });
-  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" }).className).toContain(
-    "text-muted-foreground",
-  );
+  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" })).toHaveClass("text-muted-foreground");
 });
 
 it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / Budget menu", async () => {
@@ -535,7 +533,7 @@ describe("refresh button", () => {
 
     const refresh = screen.getByTestId("datatable-refresh");
     expect(refresh).toBeInTheDocument();
-    expect(refresh).not.toBeDisabled();
+    expect(refresh).toBeEnabled();
   });
 
   it("disables the refresh control while a fetch is in flight but keeps data visible", () => {

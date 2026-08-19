@@ -1,6 +1,5 @@
 import "@testing-library/jest-dom";
 import { cleanup } from "@testing-library/react";
-import React from "react";
 import { afterEach, vi } from "vitest";
 
 const ensureTestLocalStorage = () => {
@@ -88,52 +87,17 @@ const ensureTestLocalStorage = () => {
 
 ensureTestLocalStorage();
 
-// Global mock for NotificationManager to prevent React rendering issues in tests
-// This avoids "window is not defined" errors when notifications try to render
-// after test environment is torn down
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
+// Global mock so every test can assert on toast calls; toast.test.ts opts back in with vi.unmock
+vi.mock("@/lib/toast", () => ({
+  toast: {
     success: vi.fn(),
-    fromBackend: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
     info: vi.fn(),
-    clear: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    fromError: vi.fn(),
+    dismiss: vi.fn(),
   },
 }));
-
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-      // Render as a native button to avoid Tremor-specific behaviors in tests
-      React.createElement("button", { ...props, ref }, children),
-    ),
-    Tooltip: ({ children, ..._props }: { children?: React.ReactNode; [key: string]: unknown }) => {
-      // Return children directly without tooltip functionality to prevent flaky tests
-      // This avoids issues with hover states, positioning, and DOM queries in tests
-      return React.createElement(React.Fragment, null, children);
-    },
-    // Render as a plain checkbox so toggle interactions are testable without Tremor internals
-    Switch: ({
-      checked,
-      onChange,
-      className,
-    }: {
-      checked?: boolean;
-      onChange?: (v: boolean) => void;
-      className?: string;
-    }) =>
-      React.createElement("input", {
-        type: "checkbox",
-        role: "switch",
-        checked,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange?.(e.target.checked),
-        className,
-      }),
-  };
-});
 
 // Global mock for useAuthorized hook to avoid repeating the same mock in every test file
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -216,6 +180,15 @@ if (typeof window !== "undefined") {
     document.getAnimations = () => [];
   }
 
+  // Base UI's ScrollAreaViewport calls viewport.getAnimations() from a timer, which jsdom
+  // does not implement, so the TypeError surfaces as an unhandled error and fails the run.
+  // BASE_UI_ANIMATIONS_DISABLED keeps useAnimationsFinished on the synchronous path it
+  // already took while getAnimations was missing, so popup unmount timing is unchanged.
+  (globalThis as { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true;
+  if (!Element.prototype.getAnimations) {
+    Element.prototype.getAnimations = () => [];
+  }
+
   // Stub URL.revokeObjectURL so vi.spyOn can intercept it in tests
   if (!URL.revokeObjectURL) {
     URL.revokeObjectURL = () => {};
@@ -225,9 +198,8 @@ if (typeof window !== "undefined") {
   // JSDOM has no layout, so for observers inside a shadcn ChartContainer ([data-slot="chart"])
   // the mock immediately reports a fixed 800x400 box; recharts renders nothing until it
   // observes a size. Scoped to chart subtrees only: firing for every observer re-enters
-  // React mid-effect for tremor/headlessui consumers whose tests assume the old no-op
-  // (chart text would duplicate getByText targets, popover clicks go stale). Widen or
-  // drop the scoping once tremor is gone.
+  // React mid-effect for headlessui consumers whose tests assume the old no-op
+  // (chart text would duplicate getByText targets, popover clicks go stale).
   const MOCK_RESIZE_BOX = { inlineSize: 800, blockSize: 400 };
   const MOCK_RESIZE_RECT: DOMRectReadOnly = {
     width: 800,

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Form, Table } from "antd";
-import { TextInput } from "@tremor/react";
-import { Tooltip } from "../atoms/index";
+import { Input } from "@/components/ui/input";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Providers } from "../provider_info_helpers";
 
 const ConditionalPublicModelName: React.FC = () => {
@@ -119,14 +119,14 @@ const ConditionalPublicModelName: React.FC = () => {
       title: (
         <span className="flex items-center">
           Public Model Name
-          <Tooltip content={publicNameTooltipContent} width="500px" />
+          <SimpleTooltip content={publicNameTooltipContent} width="500px" />
         </span>
       ),
       dataIndex: "public_name",
       key: "public_name",
       render: (text: string, record: any, index: number) => {
         return (
-          <TextInput
+          <Input
             value={text}
             onChange={(e) => {
               const newValue = e.target.value;
@@ -164,7 +164,7 @@ const ConditionalPublicModelName: React.FC = () => {
       title: (
         <span className="flex items-center">
           LiteLLM Model Name
-          <Tooltip content={liteLLMModelTooltipContent} width="360px" />
+          <SimpleTooltip content={liteLLMModelTooltipContent} width="360px" />
         </span>
       ),
       dataIndex: "litellm_model",

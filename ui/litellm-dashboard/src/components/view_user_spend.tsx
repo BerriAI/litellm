@@ -115,16 +115,12 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
     <div className="flex items-center">
       <div className="flex justify-between gap-x-6">
         <div>
-          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend</p>
-          <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
-            ${roundedSpend}
-          </p>
+          <p className="text-sm text-muted-foreground">Total Spend</p>
+          <p className="text-2xl font-semibold text-foreground">${roundedSpend}</p>
         </div>
         <div>
-          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Max Budget</p>
-          <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
-            {displayMaxBudget}
-          </p>
+          <p className="text-sm text-muted-foreground">Max Budget</p>
+          <p className="text-2xl font-semibold text-foreground">{displayMaxBudget}</p>
         </div>
       </div>
       {/* <div className="ml-auto">

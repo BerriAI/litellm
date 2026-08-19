@@ -1,7 +1,9 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input, InputNumber, Collapse } from "antd";
+import { Modal, Tooltip, Form, Select, Input as AntdInput, InputNumber, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TextInput } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "@/components/networking";
 import { setToken } from "@/utils/mcpTokenStore";
 import {
@@ -44,7 +46,7 @@ import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import mcpLogo from "../../../../../public/assets/logos/mcp_logo.png";
@@ -222,7 +224,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         // which would persist it as server-level credentials on the created server row. Mirrors the
         // edit form's onTokenReceived early return.
         setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
-        NotificationsManager.success(
+        toast.success(
           "Token held for this browser session. Tools can now be previewed and configured; the token is not saved to LiteLLM.",
         );
         return;
@@ -255,9 +257,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // its own credential write.
       setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
 
-      NotificationsManager.success(
-        "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
-      );
+      toast.success("OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.");
     },
     onBeforeRedirect: persistCreateUiState,
     flowSource: "create",
@@ -398,7 +398,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       dcrClient: dcrClientRef.current,
     });
     if (built.kind !== "ok") {
-      NotificationsManager.fromBackend(payloadErrorMessage(built));
+      toast.fromError(payloadErrorMessage(built));
       return;
     }
     const payload = built.payload;
@@ -439,14 +439,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           }
         }
 
-        NotificationsManager.success(
-          isAdmin
-            ? "MCP Server created successfully"
-            : {
-                message: "MCP Server submitted for admin review",
-                description: "Once an admin approves it, the server will appear in your MCP Servers list.",
-              },
-        );
+        if (isAdmin) {
+          toast.success("MCP Server created successfully");
+        } else {
+          toast.success("MCP Server submitted for admin review", {
+            description: "Once an admin approves it, the server will appear in your MCP Servers list.",
+          });
+        }
         form.resetFields();
         setCostConfig({});
         clearTools();
@@ -459,9 +458,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      NotificationsManager.fromBackend(
-        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`,
-      );
+      toast.fromError(isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`);
     } finally {
       setIsLoading(false);
     }
@@ -668,7 +665,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 { validator: (_, value) => validateMCPServerName(value) },
               ]}
             >
-              <TextInput
+              <Input
                 placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
@@ -686,7 +683,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               name="alias"
               rules={[{ required: false }, { validator: (_, value) => validateMCPServerName(value) }]}
             >
-              <TextInput
+              <Input
                 placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 onChange={() => setAliasManuallyEdited(true)}
@@ -703,7 +700,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 },
               ]}
             >
-              <TextInput
+              <Input
                 placeholder="Brief description of what this server does"
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
@@ -715,7 +712,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
               name="source_url"
             >
-              <TextInput
+              <Input
                 placeholder="https://github.com/org/mcp-server"
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
               />
@@ -750,7 +747,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   { validator: (_, value) => validateMCPServerUrl(value) },
                 ]}
               >
-                <Input
+                <AntdInput
                   placeholder="https://your-mcp-server.com"
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
@@ -857,8 +854,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                               },
                             ]}
                           >
-                            <TextInput
-                              type="password"
+                            <AntdInput.Password
                               placeholder="Enter token or secret"
                               className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                             />
@@ -962,7 +958,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             <Button variant="secondary" onClick={handleCancel}>
               Cancel
             </Button>
-            <Button variant="primary" loading={isLoading}>
+            <Button type="submit" disabled={isLoading} aria-busy={isLoading}>
+              {isLoading && <UiLoadingSpinner className="size-4" />}
               {isLoading ? "Creating..." : "Add MCP Server"}
             </Button>
           </div>

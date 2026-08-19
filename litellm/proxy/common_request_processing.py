@@ -1,13 +1,15 @@
 import asyncio
+import contextlib
 import json
 import logging
 import math
 import time
 import traceback
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from datetime import datetime
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, Literal
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeAlias, TypeVar, overload
 
 import anyio
 import httpx
@@ -30,11 +32,13 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
@@ -46,7 +50,12 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
-from litellm.proxy.common_utils.sse_keepalive import wrap_sse_stream_with_keepalive_pings
+from litellm.proxy.common_utils.sse_keepalive import (
+    SSE_COMMENT_PING_BYTES,
+    coerce_keepalive_interval,
+    resolve_ttft_keepalive_interval,
+    wrap_sse_stream_with_keepalive_pings,
+)
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
@@ -55,6 +64,100 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
+
+_LateResponseT = TypeVar("_LateResponseT", bound=Response)
+_LlmCallT = TypeVar("_LlmCallT")
+
+ProxyRouteType: TypeAlias = Literal[
+    "acompletion",
+    "aembedding",
+    "aresponses",
+    "_arealtime",
+    "_aresponses_websocket",
+    "acreate_realtime_client_secret",
+    "arealtime_calls",
+    "aget_responses",
+    "adelete_responses",
+    "acancel_responses",
+    "acompact_responses",
+    "acreate_batch",
+    "aretrieve_batch",
+    "alist_batches",
+    "acancel_batch",
+    "afile_content",
+    "afile_retrieve",
+    "afile_delete",
+    "atext_completion",
+    "acreate_fine_tuning_job",
+    "acancel_fine_tuning_job",
+    "alist_fine_tuning_jobs",
+    "aretrieve_fine_tuning_job",
+    "alist_input_items",
+    "aimage_edit",
+    "agenerate_content",
+    "agenerate_content_stream",
+    "allm_passthrough_route",
+    "avector_store_search",
+    "avector_store_create",
+    "avector_store_retrieve",
+    "avector_store_list",
+    "avector_store_update",
+    "avector_store_delete",
+    "avector_store_file_create",
+    "avector_store_file_list",
+    "avector_store_file_retrieve",
+    "avector_store_file_content",
+    "avector_store_file_update",
+    "avector_store_file_delete",
+    "aocr",
+    "asearch",
+    "avideo_generation",
+    "avideo_list",
+    "avideo_status",
+    "avideo_content",
+    "avideo_remix",
+    "avideo_create_character",
+    "avideo_get_character",
+    "avideo_edit",
+    "avideo_extension",
+    "acreate_container",
+    "alist_containers",
+    "aingest",
+    "aretrieve_container",
+    "adelete_container",
+    "aupload_container_file",
+    "alist_container_files",
+    "aretrieve_container_file",
+    "adelete_container_file",
+    "aretrieve_container_file_content",
+    "acreate_skill",
+    "alist_skills",
+    "aget_skill",
+    "adelete_skill",
+    "anthropic_messages",
+    "acreate_interaction",
+    "aget_interaction",
+    "adelete_interaction",
+    "acancel_interaction",
+    "acreate_agent",
+    "alist_agents",
+    "aget_agent",
+    "adelete_agent",
+    "alist_agent_versions",
+    "asend_message",
+    "call_mcp_tool",
+    "acreate_eval",
+    "alist_evals",
+    "aget_eval",
+    "aupdate_eval",
+    "adelete_eval",
+    "acancel_eval",
+    "acreate_run",
+    "alist_runs",
+    "aget_run",
+    "acancel_run",
+    "adelete_run",
+]
 from litellm.types.utils import ServerToolUse
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
@@ -311,8 +414,49 @@ def _stream_usage_tracking_updates(
     }
 
 
+def _getattr_object(value: object, name: str, default: object = None) -> object:
+    return getattr(value, name, default)
+
+
+class _UpstreamHttpResponse(Protocol):
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def headers(self) -> httpx.Headers: ...
+
+    async def aread(self) -> bytes: ...
+
+
+def _as_upstream_response(response: _UpstreamHttpResponse) -> _UpstreamHttpResponse:
+    return response
+
+
+class _ReadsHeaderValues(Protocol):
+    def get(self, key: str, default: str = "") -> str: ...
+
+
+def _as_header_reader(headers: _ReadsHeaderValues) -> _ReadsHeaderValues:
+    return headers
+
+
+class _DispatchesSuccessHandlers(Protocol):
+    async def dispatch_success_handlers(
+        self,
+        result: object = None,
+        start_time: object = None,
+        end_time: object = None,
+        cache_hit: object = None,
+        prefer_async_handlers: bool = False,
+    ) -> None: ...
+
+
+def _as_success_dispatcher(logging_obj: _DispatchesSuccessHandlers) -> _DispatchesSuccessHandlers:
+    return logging_obj
+
+
 def _serialize_http_exception_detail(
-    detail: Any,
+    detail: object,
 ) -> tuple[str, dict | None]:
     """
     Convert an HTTPException.detail value into (message, structured_fields)
@@ -342,7 +486,7 @@ def _serialize_http_exception_detail(
     return str(detail), None
 
 
-def _collect_response_file_search_vector_store_ids(data: dict[str, Any]) -> set[str]:
+def _collect_response_file_search_vector_store_ids(data: Mapping[str, object]) -> set[str]:
     vector_store_ids: Final[set[str]] = set()
     tools: Final = data.get("tools")
     if not isinstance(tools, list):
@@ -369,7 +513,7 @@ def _collect_response_file_search_vector_store_ids(data: dict[str, Any]) -> set[
 
 
 async def _authorize_response_file_search_vector_stores(
-    data: dict[str, Any],
+    data: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     vector_store_ids: Final = _collect_response_file_search_vector_store_ids(data)
@@ -517,6 +661,11 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
         super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
         self._upstream_generator = upstream_generator
 
+    @property
+    def upstream_generator(self) -> AsyncGenerator[str, None] | None:
+        """The upstream LLM stream, for a caller that has to run this response's cleanup itself."""
+        return self._upstream_generator
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
             await super().__call__(scope, receive, send)
@@ -605,6 +754,39 @@ async def _buffer_first_chunk_honoring_disconnect(
             verbose_proxy_logger.debug("create_response: error closing generator on disconnect: %s", exc)
     verbose_proxy_logger.info("create_response: client disconnected before first chunk, upstream LLM request cancelled")
     raise _ClientDisconnectedBeforeFirstChunk()
+
+
+def _sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
+    """Build the ProxyException-shaped ``{"error": ...}`` body used in SSE error frames.
+
+    Matches ``ProxyException.to_dict()`` so streaming and non-streaming error frames
+    are byte-identical.
+    """
+    # Preserve status code from HTTPException (e.g. guardrail blocks)
+    error_status: Final = getattr(exc, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    raw_detail: Final = _getattr_object(exc, "detail", "Error processing stream start")
+    message, structured_fields = _serialize_http_exception_detail(raw_detail)
+
+    existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
+    merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
+
+    # Built in one statement then given its one optional key, rather than spread
+    # conditionally: the spread form costs two extra dict constructions, which
+    # type-discipline-budget.json's LIT002 ceiling has no room for.
+    error_obj: Final = {
+        "message": message,
+        "type": getattr(exc, "type", "None"),
+        "param": getattr(exc, "param", "None"),
+        "code": str(error_status),
+    }
+    if merged_fields:
+        error_obj["provider_specific_fields"] = merged_fields
+    return error_status, error_obj
+
+
+def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
+    """The two frames an SSE stream ends with once it can no longer raise."""
+    return f"data: {json.dumps({'error': error_obj})}\n\n", "data: [DONE]\n\n"
 
 
 async def create_response(
@@ -698,31 +880,11 @@ async def create_response(
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception("Error consuming first chunk from generator: %s", e)
 
-        # Preserve status code from HTTPException (e.g., guardrail blocks)
-        error_status: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
-        raw_detail: Final = getattr(e, "detail", "Error processing stream start")
-        message, structured_fields = _serialize_http_exception_detail(raw_detail)
-
-        existing_fields: Final = getattr(e, "provider_specific_fields", None) or {}
-        if structured_fields:
-            merged_fields: dict | None = {**existing_fields, **structured_fields}
-        else:
-            merged_fields = existing_fields or None
-
-        # Match ProxyException.to_dict() shape so streaming and non-streaming
-        # error frames are byte-identical.
-        error_obj: Final[dict[str, Any]] = {
-            "message": message,
-            "type": getattr(e, "type", "None"),
-            "param": getattr(e, "param", "None"),
-            "code": str(error_status),
-        }
-        if merged_fields:
-            error_obj["provider_specific_fields"] = merged_fields
+        error_status, error_obj = _sse_error_payload(e)
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
-            yield f"data: {json.dumps({'error': error_obj})}\n\n"
-            yield "data: [DONE]\n\n"
+            for frame in _sse_error_frames(error_obj):
+                yield frame
 
         return StreamingResponse(
             error_gen_message(),
@@ -755,6 +917,176 @@ async def create_response(
     )
 
 
+_TTFT_KEEPALIVE_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+)
+
+
+def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Router | None = None) -> float | None:
+    """The operator's keepalive interval, but only for a request that asked to stream.
+
+    Resolved through the deployments the request could land on, so a deployment's
+    `keepalive_seconds: 0` stays the hard disable it is documented to be rather
+    than being switched back on by the global default.
+    """
+    if request_data.get("stream") is not True:
+        return None
+    requested_model: Final = request_data.get("model")
+    deployments: Final = (
+        llm_router.get_model_list(model_name=requested_model) or ()
+        if llm_router is not None and isinstance(requested_model, str)
+        else ()
+    )
+    return resolve_ttft_keepalive_interval(deployments, litellm.sse_keepalive_ping_interval_seconds)
+
+
+async def _aclose_late_response(produced: Response) -> None:
+    """Run the cleanup Starlette would have run, for a response it never called.
+
+    Closing an already-closed async generator is a no-op, so this is safe to call
+    from both the relay's own teardown and the outer one.
+    """
+    if not isinstance(produced, StreamingResponse):
+        return
+    targets: Final = (
+        (produced.body_iterator, produced.upstream_generator)
+        if isinstance(produced, _UpstreamClosingStreamingResponse)
+        else (produced.body_iterator,)
+    )
+    for target in targets:
+        aclose = getattr(target, "aclose", None)
+        if aclose is None:
+            continue
+        try:
+            await aclose()
+        except BaseException as exc:  # noqa: BLE001  # teardown must not mask why the stream ended
+            verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
+
+
+async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
+    """Replay a Response that was built after a keepalive had already opened the wire."""
+    if not isinstance(produced, StreamingResponse):
+        # The status line is already on the wire, so a non-streaming body, an error
+        # body included, can only reach the client as an SSE frame.
+        yield b"data: " + (bytes(produced.body) or b"{}") + b"\n\n"
+        yield b"data: [DONE]\n\n"
+        return
+
+    try:
+        async for chunk in produced.body_iterator:
+            yield chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
+    finally:
+        # Starlette never called this response, so the cleanup its __call__ would
+        # have run has to happen here or the upstream LLM connection leaks.
+        with anyio.CancelScope(shield=True):
+            await _aclose_late_response(produced)
+
+
+async def _sanitized_late_failure(
+    exc: Exception,
+    on_late_failure: "Callable[[Exception], Awaitable[HTTPException | None]] | None",
+) -> Exception:
+    """Report a late failure and return whatever should reach the client.
+
+    ``post_call_failure_hook`` lets a callback replace the client-facing error, by
+    returning a replacement or by raising one, and both are used elsewhere in this
+    module. Serializing the original would leak provider detail a deployment had
+    configured away, so the hook's answer wins. A callback that fails some other
+    way is a bug in the callback, not a reason to lose the real error.
+    """
+    if on_late_failure is None:
+        return exc
+    try:
+        replacement: Final = await on_late_failure(exc)
+    except HTTPException as raised_replacement:
+        return raised_replacement
+    except Exception as hook_failure:  # noqa: BLE001  # a broken callback must not replace the real error
+        verbose_proxy_logger.exception("post_call_failure_hook raised while reporting a late failure: %s", hook_failure)
+        return exc
+    return replacement if replacement is not None else exc
+
+
+async def open_sse_before_first_byte(
+    produce_response: Awaitable[_LateResponseT],
+    ping_interval_seconds: float | str | None,
+    media_type: str = "text/event-stream",
+    on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
+) -> _LateResponseT | StreamingResponse:
+    """Write SSE keepalive comments while the upstream LLM call is still in flight.
+
+    The whole time-to-first-token is spent inside `produce_response`: the upstream
+    withholds its response headers until it emits its first token, so nothing has
+    entered the ASGI response phase yet and the proxy writes zero bytes. An
+    intermediary with an idle read timeout (AWS ALB and nginx both default to 60s)
+    then drops a connection that is perfectly healthy.
+
+    When `produce_response` does not finish within one interval, the response is
+    opened immediately and `: ping` comments, which every conformant SSE client
+    ignores, fill the wire until the real response is ready to be replayed onto it.
+    Committing the status line that early is the cost: a failure discovered after
+    the first ping reaches the client as an SSE error frame under a 200 rather than
+    as an HTTP error status, and LiteLLM's own `x-litellm-*` response headers are
+    not yet known. Both are why this stays off until an operator sets an interval.
+    """
+    interval: Final = coerce_keepalive_interval(ping_interval_seconds)
+    if interval is None:
+        return await produce_response
+
+    produce_task: Final = asyncio.ensure_future(produce_response)
+    await asyncio.wait((produce_task,), timeout=interval)
+    if produce_task.done():
+        # Fast path: the upstream answered inside one interval, so nothing was
+        # written early and this is byte-identical to not being wrapped at all.
+        return produce_task.result()
+
+    async def keepalive_then_relay() -> AsyncGenerator[bytes, None]:
+        try:
+            while not produce_task.done():
+                yield SSE_COMMENT_PING_BYTES
+                await asyncio.wait((produce_task,), timeout=interval)
+            try:
+                produced: Final = produce_task.result()
+            except Exception as exc:  # noqa: BLE001  # the status line is already sent; surface it as a frame
+                verbose_proxy_logger.exception(
+                    "request failed after its SSE keepalive had opened the response: %s", exc
+                )
+                # The caller's own `except` never sees this, so its failure hook
+                # would never fire and the failure would go unaudited. The hook
+                # also gets to sanitize what reaches the client, by returning or
+                # raising a replacement, so its answer decides the frame.
+                _, error_obj = _sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
+                for frame in _sse_error_frames(error_obj):
+                    yield frame.encode()
+                return
+            async for chunk in _relay_late_response(produced):
+                yield chunk
+        finally:
+            if not produce_task.done():
+                produce_task.cancel()
+                with anyio.CancelScope(shield=True):
+                    with contextlib.suppress(BaseException):
+                        await produce_task
+            elif not produce_task.cancelled():
+                # The upstream may have answered while nobody was draining this
+                # relay, e.g. the client vanished first. Nothing else holds that
+                # response, so its stream only gets closed here.
+                with anyio.CancelScope(shield=True):
+                    with contextlib.suppress(BaseException):
+                        await _aclose_late_response(produce_task.result())
+
+    verbose_proxy_logger.info(
+        "no upstream response after %ss, opening the SSE response early and sending keepalives", interval
+    )
+    return StreamingResponse(
+        keepalive_then_relay(),
+        media_type=media_type,
+        headers=_TTFT_KEEPALIVE_HEADERS,
+    )
+
+
 def _is_azure_model_router_request(model: str) -> bool:
     """
     Check if the requested model is an Azure Model Router.
@@ -777,7 +1109,7 @@ def _is_azure_model_router_request(model: str) -> bool:
 
 def _override_openai_response_model(
     *,
-    response_obj: Any,
+    response_obj: object,
     requested_model: str,
     log_context: str,
     return_raw_model_name: bool = False,
@@ -886,28 +1218,57 @@ def _override_openai_response_model(
         )
 
 
+class CostBreakdownHeaderValues(NamedTuple):
+    original_cost: float | None = None
+    discount_amount: float | None = None
+    margin_total_amount: float | None = None
+    margin_percent: float | None = None
+    input_cost: float | None = None
+    output_cost: float | None = None
+    cache_read_cost: float | None = None
+    cache_creation_cost: float | None = None
+    reasoning_cost: float | None = None
+    tool_usage_cost: float | None = None
+
+
+def _uncached_input_cost(
+    input_cost: float | None,
+    cache_read_cost: float | None,
+    cache_creation_cost: float | None,
+) -> float | None:
+    """The stored input cost nests the cache costs inside it; headers advertise the additive split instead."""
+    if input_cost is None:
+        return None
+    return input_cost - (cache_read_cost or 0.0) - (cache_creation_cost or 0.0)
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: LiteLLMLoggingObj | None,
-) -> tuple[float | None, float | None, float | None, float | None]:
-    """
-    Extract discount and margin information from logging object's cost breakdown.
-
-    Returns:
-        Tuple of (original_cost, discount_amount, margin_total_amount, margin_percent)
-    """
+) -> CostBreakdownHeaderValues:
+    """Extract discount, margin, and per-component cost information from logging object's cost breakdown."""
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
-        return None, None, None, None
+        return CostBreakdownHeaderValues()
 
     cost_breakdown: Final = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
-        return None, None, None, None
+        return CostBreakdownHeaderValues()
 
-    original_cost: Final = cost_breakdown.get("original_cost")
-    discount_amount: Final = cost_breakdown.get("discount_amount")
-    margin_total_amount: Final = cost_breakdown.get("margin_total_amount")
-    margin_percent: Final = cost_breakdown.get("margin_percent")
-
-    return original_cost, discount_amount, margin_total_amount, margin_percent
+    return CostBreakdownHeaderValues(
+        original_cost=cost_breakdown.get("original_cost"),
+        discount_amount=cost_breakdown.get("discount_amount"),
+        margin_total_amount=cost_breakdown.get("margin_total_amount"),
+        margin_percent=cost_breakdown.get("margin_percent"),
+        input_cost=_uncached_input_cost(
+            input_cost=cost_breakdown.get("input_cost"),
+            cache_read_cost=cost_breakdown.get("cache_read_cost"),
+            cache_creation_cost=cost_breakdown.get("cache_creation_cost"),
+        ),
+        output_cost=cost_breakdown.get("output_cost"),
+        cache_read_cost=cost_breakdown.get("cache_read_cost"),
+        cache_creation_cost=cost_breakdown.get("cache_creation_cost"),
+        reasoning_cost=cost_breakdown.get("reasoning_cost"),
+        tool_usage_cost=cost_breakdown.get("tool_usage_cost"),
+    )
 
 
 def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None) -> float | None:
@@ -972,7 +1333,7 @@ def _log_llm_api_exception(e: Exception) -> None:
 
 async def _cancel_llm_call_on_client_disconnect(
     request: Request,
-    llm_api_call: "asyncio.Future[Any]",
+    llm_api_call: "asyncio.Future[_LlmCallT]",
     disconnect_event: asyncio.Event,
 ) -> None:
     try:
@@ -991,8 +1352,8 @@ async def _cancel_llm_call_on_client_disconnect(
 
 async def _await_llm_call_cancelling_on_disconnect(
     request: Request,
-    llm_api_call: "asyncio.Future[Any]",
-) -> Any:
+    llm_api_call: "asyncio.Future[_LlmCallT]",
+) -> _LlmCallT:
     disconnect_event: Final = asyncio.Event()
     monitor: Final = asyncio.create_task(_cancel_llm_call_on_client_disconnect(request, llm_api_call, disconnect_event))
     try:
@@ -1023,7 +1384,7 @@ class ProxyBaseLLMRequestProcessing:
         version: str | None = None,
         model_region: str | None = None,
         response_cost: float | str | None = None,
-        hidden_params: dict | None = None,
+        hidden_params: Mapping[str, object] | None = None,
         fastest_response_batch_completion: bool | None = None,
         request_data: dict | None = {},
         timeout: float | httpx.Timeout | None = None,
@@ -1033,13 +1394,7 @@ class ProxyBaseLLMRequestProcessing:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
 
-        # Extract discount and margin info from cost_breakdown if available
-        (
-            original_cost,
-            discount_amount,
-            margin_total_amount,
-            margin_percent,
-        ) = _get_cost_breakdown_from_logging_obj(litellm_logging_obj=litellm_logging_obj)
+        cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(litellm_logging_obj=litellm_logging_obj)
 
         # Calculate updated spend for header (include current response_cost)
         current_spend: Final = user_api_key_dict.spend or 0.0
@@ -1068,12 +1423,36 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
             "x-litellm-response-cost": str(response_cost),
-            "x-litellm-response-cost-original": (str(original_cost) if original_cost is not None else None),
-            "x-litellm-response-cost-discount-amount": (str(discount_amount) if discount_amount is not None else None),
-            "x-litellm-response-cost-margin-amount": (
-                str(margin_total_amount) if margin_total_amount is not None else None
+            "x-litellm-response-cost-original": (
+                str(cost_breakdown.original_cost) if cost_breakdown.original_cost is not None else None
             ),
-            "x-litellm-response-cost-margin-percent": (str(margin_percent) if margin_percent is not None else None),
+            "x-litellm-response-cost-discount-amount": (
+                str(cost_breakdown.discount_amount) if cost_breakdown.discount_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-amount": (
+                str(cost_breakdown.margin_total_amount) if cost_breakdown.margin_total_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-percent": (
+                str(cost_breakdown.margin_percent) if cost_breakdown.margin_percent is not None else None
+            ),
+            "x-litellm-response-cost-input": (
+                str(cost_breakdown.input_cost) if cost_breakdown.input_cost is not None else None
+            ),
+            "x-litellm-response-cost-output": (
+                str(cost_breakdown.output_cost) if cost_breakdown.output_cost is not None else None
+            ),
+            "x-litellm-response-cost-cache-read": (
+                str(cost_breakdown.cache_read_cost) if cost_breakdown.cache_read_cost is not None else None
+            ),
+            "x-litellm-response-cost-cache-creation": (
+                str(cost_breakdown.cache_creation_cost) if cost_breakdown.cache_creation_cost is not None else None
+            ),
+            "x-litellm-response-cost-reasoning": (
+                str(cost_breakdown.reasoning_cost) if cost_breakdown.reasoning_cost is not None else None
+            ),
+            "x-litellm-response-cost-tool-usage": (
+                str(cost_breakdown.tool_usage_cost) if cost_breakdown.tool_usage_cost is not None else None
+            ),
             "x-litellm-classifier-cost": (str(classifier_cost) if classifier_cost is not None else None),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
@@ -1115,7 +1494,7 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     async def build_litellm_proxy_success_headers_from_llm_response(
         *,
-        response: Any,
+        response: object,
         request_data: dict,
         request: Request,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1625,100 +2004,11 @@ class ProxyBaseLLMRequestProcessing:
         request: Request,
         fastapi_response: Response,
         user_api_key_dict: UserAPIKeyAuth,
-        route_type: Literal[
-            "acompletion",
-            "aembedding",
-            "aresponses",
-            "_arealtime",
-            "_aresponses_websocket",
-            "acreate_realtime_client_secret",
-            "arealtime_calls",
-            "aget_responses",
-            "adelete_responses",
-            "acancel_responses",
-            "acompact_responses",
-            "acreate_batch",
-            "aretrieve_batch",
-            "alist_batches",
-            "acancel_batch",
-            "afile_content",
-            "afile_retrieve",
-            "afile_delete",
-            "atext_completion",
-            "acreate_fine_tuning_job",
-            "acancel_fine_tuning_job",
-            "alist_fine_tuning_jobs",
-            "aretrieve_fine_tuning_job",
-            "alist_input_items",
-            "aimage_edit",
-            "agenerate_content",
-            "agenerate_content_stream",
-            "allm_passthrough_route",
-            "avector_store_search",
-            "avector_store_create",
-            "avector_store_retrieve",
-            "avector_store_list",
-            "avector_store_update",
-            "avector_store_delete",
-            "avector_store_file_create",
-            "avector_store_file_list",
-            "avector_store_file_retrieve",
-            "avector_store_file_content",
-            "avector_store_file_update",
-            "avector_store_file_delete",
-            "aocr",
-            "asearch",
-            "avideo_generation",
-            "avideo_list",
-            "avideo_status",
-            "avideo_content",
-            "avideo_remix",
-            "avideo_create_character",
-            "avideo_get_character",
-            "avideo_edit",
-            "avideo_extension",
-            "acreate_container",
-            "alist_containers",
-            "aingest",
-            "aretrieve_container",
-            "adelete_container",
-            "aupload_container_file",
-            "alist_container_files",
-            "aretrieve_container_file",
-            "adelete_container_file",
-            "aretrieve_container_file_content",
-            "acreate_skill",
-            "alist_skills",
-            "aget_skill",
-            "adelete_skill",
-            "anthropic_messages",
-            "acreate_interaction",
-            "aget_interaction",
-            "adelete_interaction",
-            "acancel_interaction",
-            "acreate_agent",
-            "alist_agents",
-            "aget_agent",
-            "adelete_agent",
-            "alist_agent_versions",
-            "asend_message",
-            "call_mcp_tool",
-            "acreate_eval",
-            "alist_evals",
-            "aget_eval",
-            "aupdate_eval",
-            "adelete_eval",
-            "acancel_eval",
-            "acreate_run",
-            "alist_runs",
-            "aget_run",
-            "acancel_run",
-            "adelete_run",
-        ],
+        route_type: ProxyRouteType,
         proxy_logging_obj: ProxyLogging,
-        general_settings: dict,
+        general_settings: dict[str, object],
         proxy_config: ProxyConfig,
-        select_data_generator: Callable | None = None,
+        select_data_generator: Callable[..., object] | None = None,
         llm_router: Router | None = None,
         model: str | None = None,
         user_model: str | None = None,
@@ -1728,7 +2018,72 @@ class ProxyBaseLLMRequestProcessing:
         user_api_base: str | None = None,
         version: str | None = None,
         is_streaming_request: bool | None = False,
-        contents: list | None = None,  # Add contents parameter
+        contents: list[object] | None = None,
+        skip_pre_call_logic: bool = False,
+    ) -> Any:
+        """Run the request, sending SSE keepalives while the upstream is still silent.
+
+        Everything below this point, the upstream call included, happens before the
+        proxy can write a byte, so a slow time-to-first-token leaves the response
+        idle. See ``open_sse_before_first_byte``; unwrapped unless an operator sets
+        ``litellm_settings.sse_keepalive_ping_interval_seconds``.
+        """
+
+        async def _audit_late_failure(exc: Exception) -> HTTPException | None:
+            # Once a keepalive is on the wire this can no longer raise, so the
+            # caller's `except` never runs its own post_call_failure_hook.
+            return await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=exc,
+                request_data=self.data,
+            )
+
+        return await open_sse_before_first_byte(
+            self._process_llm_request(
+                request=request,
+                fastapi_response=fastapi_response,
+                user_api_key_dict=user_api_key_dict,
+                route_type=route_type,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings=general_settings,
+                proxy_config=proxy_config,
+                select_data_generator=select_data_generator,
+                llm_router=llm_router,
+                model=model,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                version=version,
+                is_streaming_request=is_streaming_request,
+                contents=contents,
+                skip_pre_call_logic=skip_pre_call_logic,
+            ),
+            ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
+            on_late_failure=_audit_late_failure,
+        )
+
+    async def _process_llm_request(
+        self,
+        request: Request,
+        fastapi_response: Response,
+        user_api_key_dict: UserAPIKeyAuth,
+        route_type: ProxyRouteType,
+        proxy_logging_obj: ProxyLogging,
+        general_settings: dict[str, object],
+        proxy_config: ProxyConfig,
+        select_data_generator: Callable[..., object] | None = None,
+        llm_router: Router | None = None,
+        model: str | None = None,
+        user_model: str | None = None,
+        user_temperature: float | None = None,
+        user_request_timeout: float | None = None,
+        user_max_tokens: int | None = None,
+        user_api_base: str | None = None,
+        version: str | None = None,
+        is_streaming_request: bool | None = False,
+        contents: list[object] | None = None,  # Add contents parameter
         skip_pre_call_logic: bool = False,
     ) -> Any:
         """
@@ -1906,7 +2261,7 @@ class ProxyBaseLLMRequestProcessing:
                     _captured_user_api_key_dict: Final = user_api_key_dict
                     _captured_logging_obj: Final = logging_obj
 
-                    async def _on_deferred_stream_complete(assembled_response, cache_hit):
+                    async def _on_deferred_stream_complete(assembled_response: object, cache_hit: object) -> None:
                         await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
                             captured_data=_captured_data,
                             captured_user_api_key_dict=_captured_user_api_key_dict,
@@ -1950,6 +2305,7 @@ class ProxyBaseLLMRequestProcessing:
                         return StreamingResponse(
                             content=generator,
                             status_code=status.HTTP_200_OK,
+                            media_type=self._passthrough_event_stream_media_type(),
                             headers=custom_headers,
                         )
                     else:
@@ -2108,10 +2464,20 @@ class ProxyBaseLLMRequestProcessing:
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         recover_response_cost: Final = not response_cost and hidden_params.get("response_cost") is None
-        response_cost_for_headers: Final = (
+        llm_cost_for_headers: Final = (
             self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
             if recover_response_cost
             else response_cost
+        )
+        _, request_metadata_bucket = get_or_create_metadata_bucket(self.data)
+        guardrail_cost_for_headers: Final = guardrail_information_cost(
+            request_metadata_bucket.get("standard_logging_guardrail_information")
+        )
+        response_cost_for_headers: Final = (
+            (llm_cost_for_headers if isinstance(llm_cost_for_headers, (int, float)) else 0.0)
+            + guardrail_cost_for_headers
+            if guardrail_cost_for_headers > 0
+            else llm_cost_for_headers
         )
 
         fastapi_response.headers.update(
@@ -2157,7 +2523,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     async def _record_container_owners_from_responses_if_needed(
-        response: Any,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         """Register code-interpreter containers so follow-up file APIs pass ownership checks."""
@@ -2180,7 +2546,7 @@ class ProxyBaseLLMRequestProcessing:
             )
 
     @staticmethod
-    def _extract_completed_responses_response(stream_response: Any) -> Any:
+    def _extract_completed_responses_response(stream_response: object) -> object:
         """Pull the assembled ``ResponsesAPIResponse`` off a streaming iterator.
 
         ``ResponsesAPIStreamingIterator`` stores the terminal stream event
@@ -2190,17 +2556,17 @@ class ProxyBaseLLMRequestProcessing:
         ``ResponsesAPIResponse`` directly. Handle both shapes so the
         container-ownership recording path can walk ``.output`` either way.
         """
-        completed: Final = getattr(stream_response, "completed_response", None)
+        completed: Final = _getattr_object(stream_response, "completed_response")
         if completed is None:
             return None
-        response_obj: Final = getattr(completed, "response", None)
+        response_obj: Final = _getattr_object(completed, "response")
         if response_obj is not None:
             return response_obj
         return completed
 
     @staticmethod
     async def _wrap_responses_stream_for_container_ownership(
-        original_stream_response: Any,
+        original_stream_response: object,
         wrapped_generator: Any,
         user_api_key_dict: UserAPIKeyAuth,
     ):
@@ -2299,12 +2665,13 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(result, Response):
             return result
 
-        content: Final = await result.aread()
+        upstream: Final = _as_upstream_response(result)
+        content: Final = await upstream.aread()
         return Response(
             content=content,
-            status_code=result.status_code,
+            status_code=upstream.status_code,
             headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=result.headers,
+                headers=upstream.headers,
                 custom_headers=dict(fastapi_response.headers),
             ),
         )
@@ -2404,10 +2771,16 @@ class ProxyBaseLLMRequestProcessing:
 
     def _passthrough_event_stream_media_type(self) -> str | None:
         """
-        Content-type for a buffered passthrough event-stream response, resolved
-        from the provider handler so the proxy stays provider-agnostic. Mirrors
-        the upstream content-type the non-streaming path forwards, since the
-        buffered streaming generator carries no headers of its own.
+        Content-type for a passthrough event-stream response, resolved from the
+        provider handler so the proxy stays provider-agnostic. Mirrors the
+        upstream content-type the non-streaming path forwards, since the
+        streaming generator carries no headers of its own. Used for both the
+        buffered (guardrail-rewritten) and the unbuffered relay paths so
+        clients that enforce the event-stream content-type (e.g. Claude Code on
+        Bedrock invoke-with-response-stream) see the correct header instead of
+        no content-type at all, which they fall back to reading as
+        application/octet-stream. Returns None for providers with no
+        event-stream media type, leaving the response headers unchanged.
         """
         from litellm.llms.pass_through.guardrail_translation.handler import (
             LlmPassthroughRouteHandler,
@@ -2435,9 +2808,10 @@ class ProxyBaseLLMRequestProcessing:
             HttpPassThroughEndpointHelpers,
         )
 
+        upstream: Final = _as_upstream_response(response)
         try:
-            response_status: Final[int] = response.status_code
-            content_type: Final[str] = response.headers.get("content-type", "")
+            response_status: Final[int] = upstream.status_code
+            content_type: Final[str] = _as_header_reader(upstream.headers).get("content-type", "")
         except AttributeError:
             return None
 
@@ -2451,20 +2825,20 @@ class ProxyBaseLLMRequestProcessing:
             return None
 
         response_headers: Final = HttpPassThroughEndpointHelpers.get_response_headers(
-            headers=response.headers,
+            headers=upstream.headers,
             custom_headers=custom_headers,
         )
         callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
             data=self.data,
             user_api_key_dict=user_api_key_dict,
-            response=response,
+            response=upstream,
             request_headers=request_headers,
         )
         if callback_headers:
             response_headers.update(callback_headers)
 
         if is_event_stream:
-            body_bytes = await response.aread()
+            body_bytes = await upstream.aread()
             modified_bytes: Final = await self._handle_event_stream_allm_passthrough_route(
                 body_bytes=body_bytes,
                 proxy_logging_obj=proxy_logging_obj,
@@ -2477,7 +2851,7 @@ class ProxyBaseLLMRequestProcessing:
                 headers=response_headers,
             )
 
-        body_bytes = await response.aread()
+        body_bytes = await upstream.aread()
         try:
             parsed: Final = _json.loads(body_bytes)
         except (_json.JSONDecodeError, UnicodeDecodeError):
@@ -2566,9 +2940,9 @@ class ProxyBaseLLMRequestProcessing:
     async def _run_deferred_stream_guardrails(
         captured_data: dict,
         captured_user_api_key_dict: "UserAPIKeyAuth",
-        captured_logging_obj: Any,
+        captured_logging_obj: LiteLLMLoggingObj,
         assembled_response: Any,
-        cache_hit: Any,
+        cache_hit: object,
     ) -> None:
         """
         Run non-streaming post-call guardrail hooks on an assembled streaming
@@ -2578,10 +2952,10 @@ class ProxyBaseLLMRequestProcessing:
         streaming pipeline (including unified_guardrail end-of-stream blocks)
         has completed.
 
-        Guardrails with apply_guardrail are skipped — they already ran via
-        unified_guardrail's streaming iterator.  Only guardrails that override
-        async_post_call_success_hook directly (without apply_guardrail) run
-        here.
+        Guardrails routed through unified_guardrail are skipped, since they already ran
+        via its streaming iterator.  Guardrails that override
+        async_post_call_success_hook directly run here, including those that implement
+        apply_guardrail but keep their native lifecycle hooks.
 
         This is audit-only — content has already been delivered to the client.
 
@@ -2604,8 +2978,8 @@ class ProxyBaseLLMRequestProcessing:
                     continue
                 try:
                     guardrail_result = None
-                    if "apply_guardrail" in type(cb).__dict__:
-                        # Skip — apply_guardrail guardrails already ran via
+                    if "apply_guardrail" in type(cb).__dict__ and not cb.use_native_lifecycle_hooks:
+                        # Skip — unified-routed guardrails already ran via
                         # unified_guardrail's end-of-stream block in the
                         # streaming iterator pipeline.  Running them again
                         # here would duplicate the guardrail API call
@@ -2646,7 +3020,7 @@ class ProxyBaseLLMRequestProcessing:
                 # _is_sync_litellm_request (which only recognizes a subset of
                 # async markers stored in litellm_params).
                 asyncio.create_task(
-                    captured_logging_obj.dispatch_success_handlers(
+                    _as_success_dispatcher(captured_logging_obj).dispatch_success_handlers(
                         _response,
                         cache_hit=cache_hit,
                         start_time=None,
@@ -2717,7 +3091,7 @@ class ProxyBaseLLMRequestProcessing:
         headers = getattr(e, "headers", None) or {}
         if not headers:
             # Try to get headers from e.response.headers (httpx.Response)
-            _response: Final = getattr(e, "response", None)
+            _response: Final = _getattr_object(e, "response")
             if _response is not None:
                 _response_headers: Final = getattr(_response, "headers", None)
                 if _response_headers:
@@ -2749,7 +3123,7 @@ class ProxyBaseLLMRequestProcessing:
             raise e
 
         if isinstance(e, HTTPException):
-            raw_detail: Final = getattr(e, "detail", str(e))
+            raw_detail: Final = _getattr_object(e, "detail", str(e))
             message, structured_fields = _serialize_http_exception_detail(raw_detail)
             existing_fields: Final = getattr(e, "provider_specific_fields", None) or {}
             if structured_fields:
@@ -3042,8 +3416,16 @@ class ProxyBaseLLMRequestProcessing:
             request=request,
         )
 
+    @overload
     @staticmethod
-    def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:
+    def _process_chunk_with_cost_injection(chunk: bytes, model_name: str) -> bytes: ...
+
+    @overload
+    @staticmethod
+    def _process_chunk_with_cost_injection(chunk: object, model_name: str) -> object: ...
+
+    @staticmethod
+    def _process_chunk_with_cost_injection(chunk: object, model_name: str) -> object:
         """
         Process a streaming chunk and inject cost information if enabled.
 
@@ -3063,12 +3445,12 @@ class ProxyBaseLLMRequestProcessing:
                 if maybe_modified is not None:
                     return maybe_modified
             elif isinstance(chunk, (bytes, bytearray)):
-                # Decode to str, inject, and rebuild as bytes
                 try:
-                    s: Final = chunk.decode("utf-8", errors="ignore")
-                    maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
-                    if maybe_mod is not None:
-                        return (maybe_mod + ("" if maybe_mod.endswith("\n\n") else "\n\n")).encode("utf-8")
+                    s: Final = chunk.decode("utf-8")
+                    if s.endswith(("\n\n", "\r\n\r\n")):
+                        maybe_mod = ProxyBaseLLMRequestProcessing._inject_cost_into_sse_frame_str(s, model_name)
+                        if maybe_mod is not None:
+                            return maybe_mod.encode("utf-8")
                 except Exception:
                     pass
             elif isinstance(chunk, str):
@@ -3106,17 +3488,85 @@ class ProxyBaseLLMRequestProcessing:
                         obj = json.loads(json_part)
                         maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(obj, model_name)
                         if maybe_modified is not None:
-                            # Replace just this line with updated JSON using safe_dumps
-                            lines[idx] = f"data: {safe_dumps(maybe_modified)}"
+                            lines[idx] = "data: " + safe_dumps(maybe_modified) + ("\r" if ln.endswith("\r") else "")
                             return "\n".join(lines)
             return None
         except Exception:
             return None
 
     @staticmethod
+    def _anthropic_stream_usage_kwargs(usage: Mapping[str, Any]) -> Mapping[str, Any]:
+        prompt_tokens: Final = int(usage.get("input_tokens", 0) or 0)
+        completion_tokens: Final = int(usage.get("output_tokens", 0) or 0)
+        total_tokens: Final = int(
+            usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
+        )
+        web_search_requests: Final = usage.get("web_search_requests")
+        server_tool_use: Final = (
+            ServerToolUse(web_search_requests=web_search_requests) if web_search_requests is not None else None
+        )
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("prompt_tokens", prompt_tokens),
+                    ("completion_tokens", completion_tokens),
+                    ("total_tokens", total_tokens),
+                    ("completion_tokens_details", usage.get("completion_tokens_details")),
+                    ("prompt_tokens_details", usage.get("prompt_tokens_details")),
+                    ("cache_creation_input_tokens", usage.get("cache_creation_input_tokens")),
+                    ("cache_read_input_tokens", usage.get("cache_read_input_tokens")),
+                    ("server_tool_use", server_tool_use),
+                )
+                if value is not None
+            }
+        )
+
+    @staticmethod
+    def _openai_stream_usage_kwargs(usage: Mapping[str, Any]) -> Mapping[str, Any]:
+        prompt_tokens: Final = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens: Final = int(usage.get("completion_tokens", 0) or 0)
+        total_tokens: Final = int(
+            usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
+        )
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("prompt_tokens", prompt_tokens),
+                    ("completion_tokens", completion_tokens),
+                    ("total_tokens", total_tokens),
+                    ("completion_tokens_details", usage.get("completion_tokens_details")),
+                    ("prompt_tokens_details", usage.get("prompt_tokens_details")),
+                )
+                if value is not None
+            }
+        )
+
+    @staticmethod
+    def _stream_usage_kwargs_for_event(obj: Mapping[str, object], usage: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        if obj.get("type") == "message_delta":
+            return ProxyBaseLLMRequestProcessing._anthropic_stream_usage_kwargs(usage)
+        if obj.get("object") == "chat.completion.chunk":
+            return ProxyBaseLLMRequestProcessing._openai_stream_usage_kwargs(usage)
+        return None
+
+    @staticmethod
+    def _completion_cost_or_none(
+        model_response: ModelResponse, model_name: str, service_tier: str | None
+    ) -> float | None:
+        try:
+            return litellm.completion_cost(
+                completion_response=model_response, model=model_name, service_tier=service_tier
+            )
+        except Exception:
+            return None
+
+    @staticmethod
     def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> dict | None:
         """
-        Inject cost information into a usage dictionary for message_delta events.
+        Inject cost information into the usage object of a streamed usage event
+        (Anthropic ``message_delta`` or OpenAI ``chat.completion.chunk``).
 
         Args:
             obj: Dictionary containing the SSE event data
@@ -3125,57 +3575,21 @@ class ProxyBaseLLMRequestProcessing:
         Returns:
             Modified dictionary with cost injected, or None if no modification needed
         """
-        if obj.get("type") == "message_delta" and isinstance(obj.get("usage"), dict):
-            _usage: Final = obj["usage"]
-            prompt_tokens: Final = int(_usage.get("input_tokens", 0) or 0)
-            completion_tokens: Final = int(_usage.get("output_tokens", 0) or 0)
-            total_tokens: Final = int(
-                _usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
-            )
-
-            # Extract additional usage fields
-            cache_creation_input_tokens: Final = _usage.get("cache_creation_input_tokens")
-            cache_read_input_tokens: Final = _usage.get("cache_read_input_tokens")
-            web_search_requests: Final = _usage.get("web_search_requests")
-            completion_tokens_details: Final = _usage.get("completion_tokens_details")
-            prompt_tokens_details: Final = _usage.get("prompt_tokens_details")
-
-            usage_kwargs: Final[dict[str, Any]] = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            }
-
-            # Add optional named parameters
-            if completion_tokens_details is not None:
-                usage_kwargs["completion_tokens_details"] = completion_tokens_details
-            if prompt_tokens_details is not None:
-                usage_kwargs["prompt_tokens_details"] = prompt_tokens_details
-
-            # Handle web_search_requests by wrapping in ServerToolUse
-            if web_search_requests is not None:
-                usage_kwargs["server_tool_use"] = ServerToolUse(web_search_requests=web_search_requests)
-
-            # Add cache-related fields to **params (handled by Usage.__init__)
-            if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = cache_creation_input_tokens
-            if cache_read_input_tokens is not None:
-                usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
-
-            _mr: Final = ModelResponse(usage=Usage(**usage_kwargs))
-
-            try:
-                cost_val = litellm.completion_cost(
-                    completion_response=_mr,
-                    model=model_name,
-                )
-            except Exception:
-                cost_val = None
-
-            if cost_val is not None:
-                obj.setdefault("usage", {})["cost"] = cost_val
-                return obj
-        return None
+        usage: Final = obj.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        usage_kwargs: Final = ProxyBaseLLMRequestProcessing._stream_usage_kwargs_for_event(obj, usage)
+        if usage_kwargs is None:
+            return None
+        service_tier: Final = obj.get("service_tier")
+        cost_val: Final = ProxyBaseLLMRequestProcessing._completion_cost_or_none(
+            ModelResponse(usage=Usage(**usage_kwargs)),
+            model_name,
+            service_tier if isinstance(service_tier, str) else None,
+        )
+        if cost_val is None:
+            return None
+        return {**obj, "usage": {**usage, "cost": cost_val}}
 
     def maybe_get_model_id(self, _logging_obj: LiteLLMLoggingObj | None) -> str | None:
         """

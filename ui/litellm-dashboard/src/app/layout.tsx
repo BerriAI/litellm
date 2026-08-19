@@ -7,6 +7,7 @@ import { NuqsAdapter } from "nuqs/adapters/next/app";
 import AntdGlobalProvider from "@/contexts/AntdGlobalProvider";
 import { AuthProvider } from "@/contexts/AuthContext";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
+import { Toaster } from "@/components/ui/sonner";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -28,6 +29,7 @@ export default function RootLayout({
           <ReactQueryProvider>
             <AntdGlobalProvider>
               <AuthProvider>{children}</AuthProvider>
+              <Toaster />
             </AntdGlobalProvider>
           </ReactQueryProvider>
         </NuqsAdapter>

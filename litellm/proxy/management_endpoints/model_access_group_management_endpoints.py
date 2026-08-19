@@ -7,10 +7,7 @@ Endpoints here:
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
-
-if TYPE_CHECKING:
-    from litellm.router import Router
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -36,10 +33,31 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     UpdateModelGroupRequest,
 )
 
+if TYPE_CHECKING:
+    from litellm import Router
+
 router: Final = APIRouter()
 
 
-def validate_models_exist(model_names: list[str], llm_router) -> tuple[bool, list[str]]:
+class _DeploymentRow(Protocol):
+    model_id: str
+    model_name: str
+    model_info: object
+
+
+class _ModelTableClient(Protocol):
+    async def find_many(self, where: Mapping[str, object] | None = None) -> Sequence[_DeploymentRow]: ...
+
+    async def find_unique(self, where: Mapping[str, object]) -> _DeploymentRow | None: ...
+
+    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+
+
+def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
+    return ModelRepository(prisma_client).table
+
+
+def validate_models_exist(model_names: list[str], llm_router: "Router | None") -> tuple[bool, list[str]]:
     """
     Validate that all requested model names exist in the router.
     Checks only exact model name matches.
@@ -137,7 +155,7 @@ async def _tag_deployment_with_access_group(
     )
     if not was_modified:
         return None
-    await ModelRepository(prisma_client).table.update(
+    await _model_table(prisma_client).update(
         where={"model_id": model_id},
         data={"model_info": json.dumps(updated_model_info)},
     )
@@ -170,7 +188,7 @@ async def _strip_access_group_from_deployment(
     )
     if not was_modified:
         return None
-    await ModelRepository(prisma_client).table.update(
+    await _model_table(prisma_client).update(
         where={"model_id": model_id},
         data={"model_info": json.dumps(updated_model_info)},
     )
@@ -194,7 +212,7 @@ async def update_deployments_with_access_group(
         The (model_id, updated model_info) pair of every deployment actually written,
         so callers can verify each one survived the post-write reload
     """
-    deployments: Final = await ModelRepository(prisma_client).table.find_many(where={"model_name": {"in": model_names}})
+    deployments: Final = await _model_table(prisma_client).find_many(where={"model_name": {"in": model_names}})
     verbose_proxy_logger.debug("Found %s deployments for model_names: %s", len(deployments), model_names)
 
     found_names: Final = {deployment.model_name for deployment in deployments}
@@ -245,8 +263,8 @@ async def update_specific_deployments_with_access_group(
     return tuple(pair for pair in tagged if pair is not None)
 
 
-async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) -> Mapping[str, object] | None:
-    deployment: Final = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_id})
+async def _find_deployment_or_400(model_id: str, prisma_client: PrismaClient) -> object:
+    deployment: Final = await _model_table(prisma_client).find_unique(where={"model_id": model_id})
     if deployment is None:
         raise HTTPException(
             status_code=400,
@@ -666,7 +684,7 @@ async def update_access_group(
 
     try:
         # Step 1: Remove access group from ALL DB deployments (skip config models)
-        all_deployments: Final = await ModelRepository(prisma_client).table.find_many()
+        all_deployments: Final = await _model_table(prisma_client).find_many()
 
         stripped: Final = [
             await _strip_access_group_from_deployment(
@@ -784,7 +802,7 @@ async def delete_access_group(
 
     try:
         # Remove access group from all DB deployments (skip config models)
-        all_deployments: Final = await ModelRepository(prisma_client).table.find_many()
+        all_deployments: Final = await _model_table(prisma_client).find_many()
 
         removed: Final = [
             await _strip_access_group_from_deployment(

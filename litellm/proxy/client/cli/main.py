@@ -12,7 +12,7 @@ from .commands.agents import agent_commands
 from .commands.auth import auth_group, get_stored_api_key, login, logout, whoami
 from .commands.autoroute.commands import autoroute_group
 from .commands.chat import chat
-from .commands.config import config_commands, get_config_value
+from .commands.config import config_commands, get_config_value, hidden_command_names
 from .commands.credentials import credentials
 from .commands.encryption import encryption
 from .commands.http import http
@@ -43,7 +43,21 @@ def print_version(base_url: str, api_key: str | None):
         click.echo(f"Could not retrieve server version: {e}")
 
 
-@click.group(invoke_without_command=True)
+class HideConfiguredCommandsGroup(click.Group):
+    """Group that omits operator-hidden commands from listings, still running them.
+
+    Deployments hand `lite` to users who should only see a curated subset of
+    commands (`lite config set hidden_commands codex,opencode`). Filtering the
+    listing rather than dropping the commands keeps anyone's existing scripts
+    working.
+    """
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        hidden: Final = hidden_command_names()
+        return [name for name in super().list_commands(ctx) if name not in hidden]
+
+
+@click.group(cls=HideConfiguredCommandsGroup, invoke_without_command=True)
 @click.option(
     "--version",
     "-v",

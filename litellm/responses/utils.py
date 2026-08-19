@@ -93,9 +93,9 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def merge_client_forwarded_headers(
-        extra_headers: dict[str, Any] | None,
+        extra_headers: dict[str, object] | None,
         client_headers: dict[str, str] | None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """
         Merge headers forwarded by the proxy (`headers` kwarg, set when
         `forward_client_headers_to_llm_api` is enabled) into `extra_headers`.
@@ -210,9 +210,9 @@ class ResponsesAPIRequestUtils:
 
         valid_keys: Final = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
         custom_llm_provider: Final = params.pop("custom_llm_provider", None)
-        special_params: Final = params.pop("kwargs", {})
+        special_params: Final[dict[str, object]] = params.pop("kwargs", {})
 
-        additional_drop_params: Final = params.pop("additional_drop_params", None)
+        additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
         non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
             passed_params=params,
             special_params=special_params,
@@ -401,9 +401,9 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def _update_encrypted_content_item_ids_in_response(
-        response: Union["ResponsesAPIResponse", dict[str, Any]],
+        response: Union["ResponsesAPIResponse", dict[str, object]],
         model_id: str | None,
-    ) -> Union["ResponsesAPIResponse", dict[str, Any]]:
+    ) -> Union["ResponsesAPIResponse", dict[str, object]]:
         """Rewrite item IDs for output items that contain ``encrypted_content``.
 
         Encodes ``model_id`` into the item ID so that follow-up requests can be
@@ -415,7 +415,7 @@ class ResponsesAPIRequestUtils:
         if not model_id:
             return response
 
-        output: list | None = None
+        output: object = None
         if isinstance(response, dict):
             output = response.get("output")
         else:
@@ -459,7 +459,7 @@ class ResponsesAPIRequestUtils:
         return response
 
     @staticmethod
-    def _restore_encrypted_content_item_ids_in_input(request_input: Any) -> Any:
+    def _restore_encrypted_content_item_ids_in_input(request_input: object) -> Any:
         """Decode litellm-encoded item IDs in request input back to original IDs.
 
         Called before forwarding the request to the upstream provider so the
@@ -867,7 +867,7 @@ class ResponsesAPIRequestUtils:
             )
 
     @staticmethod
-    def collect_container_ids_from_responses_response(response: Any) -> list[str]:
+    def collect_container_ids_from_responses_response(response: object) -> list[str]:
         """Return unique container IDs referenced in a Responses API payload."""
         if response is None:
             return []
@@ -953,7 +953,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def extract_mcp_headers_from_request(
         secret_fields: dict[str, Any] | None,
-        tools: Iterable[Any] | None,
+        tools: Iterable[object] | None,
     ) -> tuple[
         str | None,
         dict[str, dict[str, str]] | None,
@@ -1033,13 +1033,18 @@ class ResponseAPILoggingUtils:
 
     @staticmethod
     def _transform_response_api_usage_to_chat_usage(
-        usage_input: dict | ResponseAPIUsage | None,
+        usage_input: Mapping[str, object] | ResponseAPIUsage | Usage | None,
     ) -> Usage:
         """
         Transforms ResponseAPIUsage or ImageUsage to a Usage object.
 
         Both have the same spec with input_tokens, output_tokens, and
         input_tokens_details (text_tokens, image_tokens).
+
+        Usage inputs are returned as-is so re-running this helper never drops
+        fields. Non-standard provider fields (e.g. xAI's
+        server_side_tool_usage_details) are carried onto the returned Usage so
+        provider cost calculators can read them after normalization.
         """
         if usage_input is None:
             return Usage(
@@ -1047,6 +1052,10 @@ class ResponseAPILoggingUtils:
                 completion_tokens=0,
                 total_tokens=0,
             )
+        if isinstance(usage_input, Usage):
+            return usage_input
+        if isinstance(usage_input, dict) and not ResponseAPILoggingUtils._is_response_api_usage(usage_input):
+            return Usage(**usage_input)
         response_api_usage: ResponseAPIUsage
         if isinstance(usage_input, dict):
             usage_input = dict(usage_input)  # shallow copy; avoid mutating caller
@@ -1055,13 +1064,11 @@ class ResponseAPILoggingUtils:
                 usage_input["input_tokens_details"] = usage_input["input_token_details"]
             if usage_input.get("output_tokens_details") is None and "output_token_details" in usage_input:
                 usage_input["output_tokens_details"] = usage_input["output_token_details"]
-            total_tokens = usage_input.get("total_tokens")
-            if total_tokens is None:
+            if usage_input.get("total_tokens") is None:
                 input_tokens: Final = usage_input.get("input_tokens")
                 output_tokens: Final = usage_input.get("output_tokens")
-                if input_tokens is not None and output_tokens is not None:
-                    total_tokens = input_tokens + output_tokens
-                    usage_input["total_tokens"] = total_tokens
+                if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+                    usage_input["total_tokens"] = input_tokens + output_tokens
             response_api_usage = ResponseAPIUsage(**usage_input)
         else:
             response_api_usage = usage_input
@@ -1089,12 +1096,27 @@ class ResponseAPILoggingUtils:
                 audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
             )
 
+        extra_usage_fields: Final = {
+            key: value
+            for key, value in (response_api_usage.model_extra or {}).items()
+            if key
+            not in (
+                "input_token_details",
+                "output_token_details",
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "prompt_tokens_details",
+                "completion_tokens_details",
+            )
+        }
         chat_usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
             completion_tokens_details=completion_tokens_details,
+            **extra_usage_fields,
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage

@@ -1,9 +1,9 @@
 from collections.abc import Iterable
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import NotRequired, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from .openai import (
     ChatCompletionCachedContent,
@@ -48,6 +48,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     name: Required[str]
     description: str
     input_schema: AnthropicInputSchema | None
+    strict: ReadOnly[bool]
     type: Literal["custom"]
     cache_control: dict | ChatCompletionCachedContent | None
     defer_loading: bool
@@ -348,7 +349,17 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
     cache_control: dict | ChatCompletionCachedContent | None
 
 
+class AnthropicMessagesSystemMessageParam(TypedDict, total=False):
+    role: Required[Literal["system"]]
+    content: Required[str | Iterable[AnthropicSystemMessageContent]]
+
+
 AllAnthropicMessageValues = AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam
+
+# System is not a native Anthropic message role; only pass-through adapters use this union.
+AllAnthropicPassThroughMessageValues: TypeAlias = (
+    AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam | AnthropicMessagesSystemMessageParam
+)
 
 
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
