@@ -1055,11 +1055,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/policies/_components/impact_popover.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/policies/_components/impact_popover.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1070,11 +1065,6 @@
   },
   "src/app/(dashboard)/policies/_components/impact_preview_alert.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/policies/_components/index.test.tsx": {
-    "react/display-name": {
       "count": 1
     }
   },
@@ -2060,14 +2050,6 @@
   },
   "src/components/common_components/budget_duration_dropdown.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/chartUtils.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-nested-ternary": {
       "count": 1
     }
   },
@@ -3061,9 +3043,6 @@
   },
   "tests/setupTests.ts": {
     "@typescript-eslint/no-this-alias": {
-      "count": 1
-    },
-    "react/display-name": {
       "count": 1
     }
   }
