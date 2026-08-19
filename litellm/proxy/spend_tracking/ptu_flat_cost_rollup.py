@@ -17,6 +17,7 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
@@ -110,15 +111,54 @@ def _public_model_name(row: object, model_info: Mapping[str, object]) -> str:
 
 
 def _decode_model_info(raw: object) -> "Mapping[str, object] | None":
-    """A deployment's model_info as a dict, decoding a JSON string, else None."""
+    """A deployment's model_info as a mapping, decoding a JSON string, else None.
+
+    Valid JSON that is not an object decodes to a list or a scalar, which every caller
+    would then read fields off, so it is rejected here rather than raised past them.
+    """
     if isinstance(raw, str):
         try:
-            return json.loads(raw)
+            decoded: Final = json.loads(raw)
         except (TypeError, ValueError):
             return None
-    if isinstance(raw, dict):
+        return decoded if isinstance(decoded, dict) else None
+    if isinstance(raw, Mapping):
         return raw
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class _PTUDeployment:
+    """A deployment in the shape ``_parse_ptu_model`` reads, whatever declared it.
+
+    A ``LiteLLM_ProxyModelTable`` row already has it. A router entry does not: its id
+    lives in ``model_info.id`` rather than on the entry itself.
+    """
+
+    model_id: str
+    model_name: str
+    model_info: Mapping[str, object]
+
+
+def _router_deployment(deployment: Mapping[str, object]) -> _PTUDeployment | None:
+    """A router ``model_list`` entry in the shape the parser reads, else None.
+
+    An id is required rather than defaulted because it keys the sentinel row: every
+    deployment without one would collapse onto a single row per team and only the last
+    would be billed. The mapping is copied because the router rewrites entries in place
+    while the rollup runs.
+    """
+    model_info: Final = _decode_model_info(deployment.get("model_info"))
+    if model_info is None:
+        return None
+    model_id: Final = model_info.get("id")
+    if not isinstance(model_id, str) or not model_id:
+        return None
+    return _PTUDeployment(
+        model_id=model_id,
+        model_name=str(deployment.get("model_name") or ""),
+        model_info=MappingProxyType(dict(model_info)),
+    )
 
 
 def _parse_ptu_model(row: object) -> PTUModel | None:
