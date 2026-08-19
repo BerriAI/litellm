@@ -3694,3 +3694,94 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == "42 files found"
     assert _image_urls_in_user_messages(result) == []
+
+
+def test_tool_result_with_tool_reference_emits_tool_message():
+    """
+    Regression: https://github.com/BerriAI/litellm/issues/37462
+    tool_result with tool_reference content block must not be dropped.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "search"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "call_1", "name": "ToolSearch", "input": {"q": "read"}},
+                {"type": "tool_use", "id": "call_2", "name": "get_weather", "input": {"city": "Paris"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_1",
+                    "content": [{"type": "tool_reference", "tool_name": "Read"}],
+                },
+                {"type": "tool_result", "tool_use_id": "call_2", "content": "20C"},
+            ],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 2
+    assert [m["tool_call_id"] for m in tool_messages] == ["call_1", "call_2"]
+    assert tool_messages[0]["content"] == "[Loaded tool: Read]"
+    assert tool_messages[1]["content"] == "20C"
+
+
+def test_tool_result_empty_list_emits_tool_message():
+    """
+    Regression: https://github.com/BerriAI/litellm/issues/37462
+    tool_result with empty content list must emit tool message with empty string content.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {"role": "user", "content": "run"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_1", "name": "noop", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": []}],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool_call_id"] == "call_1"
+    assert tool_messages[0]["content"] == ""
+
+
+def test_tool_result_unknown_block_degrades_to_placeholder():
+    """
+    Regression: https://github.com/BerriAI/litellm/issues/37462
+    Unknown block type inside tool_result must degrade to placeholder text.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_abc", "name": "custom_tool", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_abc",
+                    "content": [{"type": "custom_data", "payload": "xyz"}],
+                }
+            ],
+        },
+    ]
+
+    out = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in out if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == "[custom_data block]"
+
