@@ -20,6 +20,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTELSemconvCategory,
     parse_semconv_opt_in,
 )
+from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.semconv import Metric
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -718,6 +719,28 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_failure(kwargs, response_obj, start_time, end_time)
 
+    def _start_service_span(self, payload: ServiceLoggerPayload, parent_otel_span: Span, start_time_ns: int) -> Span:
+        """Open a service span, named and classified by what the service is.
+
+        A datastore call is an outbound CLIENT span carrying ``db.*`` semconv.
+        Without those a Postgres span says only ``service=postgres``, so the
+        backend falls back to the transport peer, which for Prisma is the local
+        query engine on loopback. Everything else stays an INTERNAL span.
+        """
+        from opentelemetry import trace
+        from opentelemetry.trace import SpanKind
+
+        attributes: Final = db_span_attributes(payload.service.value, payload.call_type)
+        span: Final = self.tracer.start_span(
+            name=payload.service,
+            context=trace.set_span_in_context(parent_otel_span),
+            start_time=start_time_ns,
+            kind=SpanKind.CLIENT if attributes else SpanKind.INTERNAL,
+        )
+        for key, value in attributes.items():
+            self.safe_set_attribute(span=span, key=key, value=value)
+        return span
+
     async def async_service_success_hook(
         self,
         payload: ServiceLoggerPayload,
@@ -726,7 +749,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         end_time: datetime | float | None = None,
         event_metadata: dict | None = None,
     ):
-        from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -743,12 +765,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             _end_time_ns = self._to_ns(end_time)
 
         if parent_otel_span is not None:
-            _span_name: Final = payload.service
-            service_logging_span: Final = self.tracer.start_span(
-                name=_span_name,
-                context=trace.set_span_in_context(parent_otel_span),
-                start_time=_start_time_ns,
-            )
+            service_logging_span: Final = self._start_service_span(payload, parent_otel_span, _start_time_ns)
             self.safe_set_attribute(
                 span=service_logging_span,
                 key="call_type",
@@ -786,7 +803,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         end_time: float | datetime | None = None,
         event_metadata: dict | None = None,
     ):
-        from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -803,12 +819,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             _end_time_ns = self._to_ns(end_time)
 
         if parent_otel_span is not None:
-            _span_name: Final = payload.service
-            service_logging_span: Final = self.tracer.start_span(
-                name=_span_name,
-                context=trace.set_span_in_context(parent_otel_span),
-                start_time=_start_time_ns,
-            )
+            service_logging_span: Final = self._start_service_span(payload, parent_otel_span, _start_time_ns)
             self.safe_set_attribute(
                 span=service_logging_span,
                 key="call_type",

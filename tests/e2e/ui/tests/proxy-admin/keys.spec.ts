@@ -36,9 +36,8 @@ test.describe("Proxy Admin - Keys", () => {
     // Wait for the key creation modal
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
-    // Fill key name (has data-testid="base-input" in the built UI)
     const keyName = `e2e-admin-key-${Date.now()}`;
-    await page.getByTestId("base-input").fill(keyName);
+    await page.getByLabel(/Key Name/).fill(keyName);
 
     // Select team
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
@@ -192,7 +191,7 @@ test.describe("Proxy Admin - Keys", () => {
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
     const keyName = `e2e-admin-allproxy-${Date.now()}`;
-    await page.getByTestId("base-input").fill(keyName);
+    await page.getByLabel(/Key Name/).fill(keyName);
 
     // No team selection — leave team dropdown empty so the key is owned by the admin user
 
@@ -220,7 +219,7 @@ test.describe("Proxy Admin - Keys", () => {
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
     const keyName = `e2e-admin-specific-${Date.now()}`;
-    await page.getByTestId("base-input").fill(keyName);
+    await page.getByLabel(/Key Name/).fill(keyName);
 
     // Open the model multi-select and pick a single specific model. Use
     // getByRole("option", ...) to avoid the strict-mode collision between
