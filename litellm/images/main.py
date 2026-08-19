@@ -376,6 +376,7 @@ def image_generation(
         # Providers using llm_http_handler
         #########################################################
         elif custom_llm_provider in (
+            litellm.LlmProviders.CHATGPT,
             litellm.LlmProviders.RECRAFT,
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
