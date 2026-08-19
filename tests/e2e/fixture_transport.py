@@ -391,18 +391,23 @@ def _miss_message(test_key: str, slug: str, canonical: CanonicalRequest, bundle:
 @dataclass(slots=True)
 class ReplaySource:
     """One shared pool per test over a loaded bundle, so every client built in
-    the session consumes the same recorded interactions. Calls match by
-    canonical content key: order-independent across distinct keys (concurrent
-    tests interleave calls nondeterministically), FIFO within one key (a poll
-    loop replays its recorded responses in recorded order)."""
+    the session consumes the same recorded interactions. Every pool is built
+    once at construction and per-key consumption is a single atomic deque pop,
+    so concurrent replay calls never race. Calls match by canonical content
+    key: order-independent across distinct keys (concurrent tests interleave
+    calls nondeterministically), FIFO within one key (a poll loop replays its
+    recorded responses in recorded order)."""
 
     bundle: LoadedBundle
-    _pools: dict[str, dict[str, deque[Interaction]]] = field(default_factory=dict)
+    _pools: dict[str, dict[str, deque[Interaction]]] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._pools = {
+            slug: _build_pool(recorded) for slug, recorded in self.bundle.interactions.items()
+        }
 
     def _pool(self, slug: str) -> dict[str, deque[Interaction]]:
-        if slug not in self._pools:
-            self._pools[slug] = _build_pool(self.bundle.interactions.get(slug, ()))
-        return self._pools[slug]
+        return self._pools.get(slug, {})
 
     def next_interaction(self, request: RecordedRequest) -> Interaction:
         test_key: Final = current_test_key()
@@ -412,12 +417,13 @@ class ReplaySource:
         queue: Final = pool.get(canonical.key)
         if queue is None:
             raise ReplayMiss(_miss_message(test_key, slug, canonical, self.bundle))
-        if not queue:
+        try:
+            return queue.popleft()
+        except IndexError:
             raise ReplayMiss(
                 f"replay exhausted for {test_key}: every recorded interaction for key "
                 f"{canonical.key} is already consumed; re-record with E2E_FIXTURE_MODE=record"
-            )
-        return queue.popleft()
+            ) from None
 
     def leftover_error(self, test_key: str) -> str | None:
         """Non-None when the test consumed fewer interactions than were recorded,
