@@ -203,7 +203,9 @@ class LangfuseOtelLogger(OpenTelemetry):
                         else:
                             arguments_str = getattr(item, "arguments", "{}")
                             payload_key = "arguments"
-                            payload_value = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                            payload_value = (
+                                json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                            )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
                             "name": getattr(item, "name", ""),
