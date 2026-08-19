@@ -27684,6 +27684,8 @@ export interface components {
              * @default 0
              */
             completion_tokens: number | null;
+            /** Created At */
+            created_at?: string | null;
             /** Endtime */
             endTime: string | null;
             /** Messages */
@@ -27727,6 +27729,8 @@ export interface components {
              * @default 0
              */
             total_tokens: number | null;
+            /** Updated At */
+            updated_at?: string | null;
             /**
              * User
              * @default
