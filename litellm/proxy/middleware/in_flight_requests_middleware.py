@@ -83,10 +83,12 @@ class InFlightRequestsMiddleware:
         return InFlightRequestsMiddleware._gauge
 
 
-# Statuses the proxy uses when it declines to serve. A response only counts once
-# the request is also marked as shed by this proxy, since litellm forwards
-# upstream 429s with the same status.
-_SHED_STATUSES: Final = frozenset({429, 503})
+# The status this proxy uses when it declines load, and only counted once the
+# request is also marked as shed here, since litellm forwards upstream 429s with
+# the same status. The proxy's 503s are fail-closed budget rejections, a
+# dependency being unreachable rather than this pod at capacity, so counting
+# them would blur the throttle-vs-scale signal the metric exists to give.
+_SHED_STATUSES: Final = frozenset({429})
 
 
 def _record_shed_response(status: int) -> None:

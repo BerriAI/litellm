@@ -98,10 +98,11 @@ def test_non_http_scopes_not_counted():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status, expected_calls", [(429, 1), (503, 1), (200, 0), (400, 0), (500, 0)])
+@pytest.mark.parametrize("status, expected_calls", [(429, 1), (503, 0), (200, 0), (400, 0), (500, 0)])
 async def test_only_shed_responses_the_proxy_itself_produced_are_counted(status, expected_calls):
-    """A 500 is the proxy failing, not declining. Counting it would blur the
-    signal an operator uses to decide between throttling and scaling out."""
+    """A 500 is the proxy failing, not declining, and the proxy's 503s are
+    fail-closed budget rejections raised when a dependency is unreachable.
+    Counting either would blur the throttle-vs-scale signal."""
     from unittest.mock import MagicMock, patch
 
     from litellm.proxy.common_utils.request_pressure_metrics import mark_request_shed_by_proxy
