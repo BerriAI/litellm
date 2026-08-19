@@ -67,9 +67,12 @@ AGENTCORE_DEFAULT_TOOL_NAME: Final = "web-search-tool___WebSearch"
 AGENTCORE_TOOL_NAME_SUFFIX: Final = "___WebSearch"
 
 # MCP revision this provider speaks. Sent on every request because the gateway is
-# called statelessly, without an initialize handshake to negotiate a version;
-# servers that predate the header ignore it.
-AGENTCORE_MCP_PROTOCOL_VERSION: Final = "2025-06-18"
+# called statelessly, without an initialize handshake to negotiate a version.
+# AgentCore gateways whose protocolConfiguration leaves supportedVersions unset
+# accept only 2025-03-26 and reject anything newer with a -32600 error, so that
+# is the default; a gateway pinned to another version needs
+# AGENTCORE_MCP_PROTOCOL_VERSION set to match.
+AGENTCORE_DEFAULT_MCP_PROTOCOL_VERSION: Final = "2025-03-26"
 
 # Matched against the URL host so a crafted path or query string can't pass for
 # a gateway hostname.
@@ -168,7 +171,8 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             **headers,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
-            "MCP-Protocol-Version": AGENTCORE_MCP_PROTOCOL_VERSION,
+            "MCP-Protocol-Version": get_secret_str("AGENTCORE_MCP_PROTOCOL_VERSION")
+            or AGENTCORE_DEFAULT_MCP_PROTOCOL_VERSION,
         }
 
     def get_complete_url(
