@@ -205,3 +205,37 @@ def test_the_shed_metric_documents_exactly_the_statuses_it_counts(monkeypatch):
     documented = {int(value.strip()) for value in advertised.group(1).split(",")}
 
     assert documented == set(_SHED_STATUSES)
+
+@pytest.mark.asyncio
+async def test_a_failure_counting_a_shed_response_still_returns_the_response():
+    """The counting rides the response boundary, so a metrics failure there would
+    otherwise turn a served 429 into no response at all."""
+    from unittest.mock import patch
+
+    from litellm.proxy.common_utils.request_pressure_metrics import mark_request_shed_by_proxy
+    from litellm.proxy.middleware.in_flight_requests_middleware import (
+        InFlightRequestsMiddleware,
+    )
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        return {"type": "http.request"}
+
+    async def app(scope, receive, send):
+        mark_request_shed_by_proxy()
+        await send({"type": "http.response.start", "status": 429, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    with patch(
+        "litellm.integrations.prometheus.PrometheusLogger.get_instance",
+        side_effect=RuntimeError("metrics down"),
+    ):
+        await InFlightRequestsMiddleware(app)({"type": "http"}, receive, send)
+
+    assert [m["type"] for m in sent] == ["http.response.start", "http.response.body"]
+    assert sent[0]["status"] == 429
+
