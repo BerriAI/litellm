@@ -108,7 +108,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
   const isIdJagAuthType = authType === AUTH_TYPE.OAUTH2_ID_JAG;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
-  const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
+  // Same fallback as the delegate switch below: the watch is undefined until the field mounts and
+  // registers, so reading it alone flashes the "no OAuth flow set" warning at a server that has one.
+  const oauthFlowTypeValue =
+    (Form.useWatch("oauth_flow_type", form) as string | undefined) ?? oauth2FlowToFormValue(mcpServer.oauth2_flow);
   const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
   // Watch reflects a live toggle when the delegate switch is mounted; fall back to
   // the stored value otherwise (useWatch returns undefined for an unmounted field,
