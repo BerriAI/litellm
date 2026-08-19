@@ -69,6 +69,14 @@ def test_complex_types():
     assert result["tuple"] == [4, 5, 6]  # Tuples are converted to lists
 
 
+def test_set_with_mixed_types():
+    data = {"metadata": {"labels": {"beta", 7, None}}}
+
+    result = json.loads(safe_dumps(data))
+
+    assert result["metadata"]["labels"] == ["beta", 7, None]
+
+
 def test_unserializable_object():
     # Test handling of unserializable objects
     class TestClass:
