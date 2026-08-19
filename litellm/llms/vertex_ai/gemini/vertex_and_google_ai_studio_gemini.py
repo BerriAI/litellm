@@ -889,7 +889,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":
-            # Gemini 3 cannot fully disable thinking, so we use "minimal" for the models that accept it, "low" for others.
+            # Gemini 3 cannot fully disable thinking; "minimal" where accepted, "low" otherwise.
             if is_gemini3flash:
                 return {"thinkingLevel": "minimal", "includeThoughts": False}
             else:
