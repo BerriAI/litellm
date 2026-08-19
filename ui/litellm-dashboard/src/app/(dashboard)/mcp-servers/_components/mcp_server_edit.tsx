@@ -41,7 +41,7 @@ import OAuthFormFields from "./OAuthFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { validateMCPServerUrl, validateMCPServerName, normalizeToolOverrideMap } from "./utils";
-import { buildEditServerPayload, editPayloadErrorMessage } from "./editServerPayload";
+import { EditServerFormValues, buildEditServerPayload, editPayloadErrorMessage } from "./editServerPayload";
 import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -655,7 +655,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   };
 
-  const handleSave = async (values: Record<string, any>) => {
+  const handleSave = async (values: EditServerFormValues) => {
     if (!accessToken) return;
     try {
       const built = buildEditServerPayload(values, {
