@@ -8,7 +8,14 @@ export interface KeyLoggingSetting {
   callback_name?: string;
 }
 
-export interface CreateKeyUiState {
+export interface ExistingKey {
+  readonly team_id?: string | null;
+  readonly key_alias?: string | null;
+}
+
+export interface KeyCreateInput {
+  readonly formValues: Record<string, unknown>;
+  readonly existingKeys: readonly ExistingKey[] | null;
   readonly keyOwner: string;
   readonly userID: string | null;
   readonly selectedAgentId: string | null;
@@ -23,9 +30,14 @@ export interface CreateKeyUiState {
   readonly budgetFallbacks: Record<string, string[]>;
 }
 
-export type BuildCreateKeyPayloadResult =
-  | { readonly kind: "ok"; readonly payload: Record<string, unknown> }
-  | { readonly kind: "agent_required" };
+export type KeyPayloadResult =
+  | {
+      readonly kind: "ok";
+      readonly payload: Record<string, unknown>;
+      readonly endpoint: "standard" | "service_account";
+    }
+  | { readonly kind: "duplicate_alias"; readonly alias: string; readonly teamId: string | null }
+  | { readonly kind: "agent_not_selected" };
 
 interface McpSelection {
   readonly servers?: unknown[];
@@ -81,16 +93,16 @@ const assignServiceAccountId = (metadata: unknown, keyAlias: unknown): unknown =
   return metadata;
 };
 
-const buildMetadataJson = (values: Record<string, unknown>, ui: CreateKeyUiState): string => {
+const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInput): string => {
   const parsed = parseMetadata(values.metadata);
-  const owned = ui.keyOwner === "service_account" ? assignServiceAccountId(parsed, values.key_alias) : parsed;
+  const owned = input.keyOwner === "service_account" ? assignServiceAccountId(parsed, values.key_alias) : parsed;
   const logged =
-    ui.loggingSettings.length > 0
-      ? { ...(owned as object), logging: ui.loggingSettings.filter((config) => config.callback_name) }
+    input.loggingSettings.length > 0
+      ? { ...(owned as object), logging: input.loggingSettings.filter((config) => config.callback_name) }
       : owned;
   const disabled =
-    ui.disabledCallbacks.length > 0
-      ? { ...(logged as object), litellm_disabled_callbacks: mapDisplayToInternalNames(ui.disabledCallbacks) }
+    input.disabledCallbacks.length > 0
+      ? { ...(logged as object), litellm_disabled_callbacks: mapDisplayToInternalNames(input.disabledCallbacks) }
       : logged;
   return JSON.stringify(disabled);
 };
@@ -147,24 +159,34 @@ const consumedSourceKeys = (
 const withoutKeys = (values: Record<string, unknown>, dropped: ReadonlySet<string>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(values).filter(([key]) => !dropped.has(key)));
 
-export const buildCreateKeyPayload = (
-  values: Record<string, unknown>,
-  ui: CreateKeyUiState,
-): BuildCreateKeyPayloadResult => {
-  if (ui.keyOwner === "agent" && !ui.selectedAgentId) {
-    return { kind: "agent_required" };
+const duplicateAlias = (input: KeyCreateInput): { alias: string; teamId: string | null } | undefined => {
+  const alias = (input.formValues?.key_alias as string | undefined) ?? "";
+  const teamId = (input.formValues?.team_id as string | undefined) ?? null;
+  const taken = (input.existingKeys ?? []).filter((key) => key.team_id === teamId).map((key) => key.key_alias);
+  return taken.includes(alias) ? { alias, teamId } : undefined;
+};
+
+export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult => {
+  const duplicate = duplicateAlias(input);
+  if (duplicate) {
+    return { kind: "duplicate_alias", ...duplicate };
   }
+  if (input.keyOwner === "agent" && !input.selectedAgentId) {
+    return { kind: "agent_not_selected" };
+  }
+
+  const values = input.formValues;
 
   const sources = readPermissionSources(values);
   const objectPermission = buildObjectPermission(sources);
   const dropped = consumedSourceKeys(values, sources);
 
   const duration = values.duration;
-  const validWindows = ui.budgetLimits.filter(
+  const validWindows = input.budgetLimits.filter(
     (window) => window.budget_duration && window.max_budget !== null && window.max_budget !== undefined,
   );
-  const { tag_rpm_limit } = tagRowsToLimits(ui.tagRateLimits);
-  const routerSettings = ui.routerSettings?.router_settings;
+  const { tag_rpm_limit } = tagRowsToLimits(input.tagRateLimits);
+  const routerSettings = input.routerSettings?.router_settings;
   const configuredRouterSettings =
     routerSettings &&
     Object.values(routerSettings).some((value) => value !== null && value !== undefined && value !== "")
@@ -173,19 +195,20 @@ export const buildCreateKeyPayload = (
 
   return {
     kind: "ok",
+    endpoint: input.keyOwner === "service_account" ? "service_account" : "standard",
     payload: {
       ...withoutKeys(values, dropped),
-      ...(ui.keyOwner === "you" && { user_id: ui.userID }),
-      ...(ui.keyOwner === "agent" && { agent_id: ui.selectedAgentId }),
-      ...(ui.autoRotationEnabled && { auto_rotate: true, rotation_interval: ui.rotationInterval }),
+      ...(input.keyOwner === "you" && { user_id: input.userID }),
+      ...(input.keyOwner === "agent" && { agent_id: input.selectedAgentId }),
+      ...(input.autoRotationEnabled && { auto_rotate: true, rotation_interval: input.rotationInterval }),
       duration: !duration || (duration as string).trim() === "" ? null : duration,
-      metadata: buildMetadataJson(values, ui),
+      metadata: buildMetadataJson(values, input),
       ...(objectPermission && { object_permission: objectPermission }),
-      ...(Object.keys(ui.modelAliases).length > 0 && { aliases: JSON.stringify(ui.modelAliases) }),
+      ...(Object.keys(input.modelAliases).length > 0 && { aliases: JSON.stringify(input.modelAliases) }),
       ...(configuredRouterSettings && { router_settings: configuredRouterSettings }),
       ...(validWindows.length > 0 && { budget_limits: validWindows }),
       ...(Object.keys(tag_rpm_limit).length > 0 && { tag_rpm_limit }),
-      ...(Object.keys(ui.budgetFallbacks).length > 0 && { budget_fallbacks: ui.budgetFallbacks }),
+      ...(Object.keys(input.budgetFallbacks).length > 0 && { budget_fallbacks: input.budgetFallbacks }),
       ...(values.budget_duration === NEVER_RESETS_BUDGET_DURATION && { budget_duration: null }),
     },
   };

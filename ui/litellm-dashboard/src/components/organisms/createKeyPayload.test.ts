@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildCreateKeyPayload, type BuildCreateKeyPayloadResult, type CreateKeyUiState } from "./createKeyPayload";
+import { buildKeyCreatePayload, type KeyCreateInput, type KeyPayloadResult } from "./createKeyPayload";
 
-const baseUi: CreateKeyUiState = {
+const baseInput: KeyCreateInput = {
+  formValues: {},
+  existingKeys: null,
   keyOwner: "you",
   userID: "test-user",
   selectedAgentId: null,
@@ -16,13 +18,61 @@ const baseUi: CreateKeyUiState = {
   budgetFallbacks: {},
 };
 
-const build = (values: Record<string, unknown>, ui: Partial<CreateKeyUiState> = {}): BuildCreateKeyPayloadResult =>
-  buildCreateKeyPayload(values, { ...baseUi, ...ui });
+const build = (formValues: Record<string, unknown>, overrides: Partial<KeyCreateInput> = {}): KeyPayloadResult =>
+  buildKeyCreatePayload({ ...baseInput, ...overrides, formValues });
 
-const payloadOf = (result: BuildCreateKeyPayloadResult): Record<string, unknown> => {
+const payloadOf = (result: KeyPayloadResult): Record<string, unknown> => {
   expect(result.kind).toBe("ok");
   if (result.kind !== "ok") throw new Error("unreachable");
   return result.payload;
+};
+
+const wireKeys = (payload: Record<string, unknown>): string[] =>
+  Object.keys(JSON.parse(JSON.stringify(payload)) as Record<string, unknown>);
+
+const DROPPED_AT_SERIALISATION = [
+  "access_group_ids",
+  "allowed_passthrough_routes",
+  "allowed_vector_store_ids",
+  "budget_duration",
+  "enable_prompt_caching",
+  "guardrails",
+  "max_budget",
+  "organization_id",
+  "policies",
+  "prompts",
+  "rpm_limit",
+  "tags",
+  "throttle_on_budget_exceeded",
+  "tpm_limit",
+];
+
+const CLOSED_SECTIONS_VALUES = {
+  organization_id: undefined,
+  team_id: null,
+  key_alias: "my-key",
+  models: [],
+  key_type: "llm_api",
+};
+
+const OPTIONAL_SETTINGS_VALUES = {
+  ...CLOSED_SECTIONS_VALUES,
+  max_budget: undefined,
+  budget_duration: undefined,
+  tpm_limit: undefined,
+  tpm_limit_type: "key",
+  rpm_limit: undefined,
+  rpm_limit_type: "key",
+  throttle_on_budget_exceeded: undefined,
+  enable_prompt_caching: undefined,
+  guardrails: undefined,
+  disable_global_guardrails: undefined,
+  policies: undefined,
+  prompts: undefined,
+  access_group_ids: undefined,
+  allowed_passthrough_routes: undefined,
+  allowed_vector_store_ids: undefined,
+  tags: undefined,
 };
 
 const aliasOnly = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -39,13 +89,7 @@ afterEach(() => {
 
 describe("always-present keys", () => {
   it("emits the eight keys the closed form sends, and nothing else", () => {
-    const closedFormValues = {
-      organization_id: undefined,
-      team_id: undefined,
-      key_alias: "my-key",
-      models: [],
-      key_type: "llm_api",
-    };
+    const closedFormValues = { ...CLOSED_SECTIONS_VALUES };
     const closedFormPayload = {
       ...closedFormValues,
       user_id: "test-user",
@@ -105,9 +149,9 @@ describe("key ownership", () => {
     );
   });
 
-  it("reports agent_required instead of building a payload when no agent is selected", () => {
+  it("reports agent_not_selected instead of building a payload when no agent is selected", () => {
     expect(build({ key_alias: "my-key" }, { keyOwner: "agent", selectedAgentId: null })).toStrictEqual({
-      kind: "agent_required",
+      kind: "agent_not_selected",
     });
   });
 
@@ -411,5 +455,102 @@ describe("purity", () => {
     const before = structuredClone(values);
     build(values);
     expect(values).toStrictEqual(before);
+  });
+});
+
+describe("serialised wire shape", () => {
+  it("keeps an untouched closed form at eight object keys and seven wire keys", () => {
+    const payload = payloadOf(build(CLOSED_SECTIONS_VALUES));
+    expect(Object.keys(payload)).toHaveLength(8);
+    expect(wireKeys(payload)).toStrictEqual([
+      "team_id",
+      "key_alias",
+      "models",
+      "key_type",
+      "user_id",
+      "duration",
+      "metadata",
+    ]);
+    expect(payload.duration).toBeNull();
+  });
+
+  it("drops the undefined picker and keeps the null one, which is what the two Form.Items differ on", () => {
+    const payload = payloadOf(build(CLOSED_SECTIONS_VALUES));
+    expect(payload.organization_id).toBeUndefined();
+    expect(payload.team_id).toBeNull();
+    expect(wireKeys(payload)).not.toContain("organization_id");
+    expect(wireKeys(payload)).toContain("team_id");
+  });
+
+  it("forwards a selected team by value", () => {
+    expect(payloadOf(build({ ...CLOSED_SECTIONS_VALUES, team_id: "team-1" })).team_id).toBe("team-1");
+  });
+
+  it("adds fifteen keys to the object and only the two limit types to the wire when Optional Settings opens", () => {
+    const payload = payloadOf(build(OPTIONAL_SETTINGS_VALUES));
+    expect(Object.keys(payload)).toHaveLength(23);
+    expect(wireKeys(payload)).toStrictEqual([
+      "team_id",
+      "key_alias",
+      "models",
+      "key_type",
+      "tpm_limit_type",
+      "rpm_limit_type",
+      "user_id",
+      "duration",
+      "metadata",
+    ]);
+  });
+
+  it("never turns an undefined-valued key into null or an empty string", () => {
+    const payload = payloadOf(build(OPTIONAL_SETTINGS_VALUES));
+    DROPPED_AT_SERIALISATION.forEach((key) => {
+      expect(payload[key]).toBeUndefined();
+    });
+    expect(wireKeys(payload)).toEqual(expect.not.arrayContaining(DROPPED_AT_SERIALISATION));
+  });
+});
+
+describe("duplicate alias", () => {
+  it("reports the clash instead of building a payload", () => {
+    expect(
+      build({ key_alias: "taken", team_id: "team-1" }, { existingKeys: [{ team_id: "team-1", key_alias: "taken" }] }),
+    ).toStrictEqual({ kind: "duplicate_alias", alias: "taken", teamId: "team-1" });
+  });
+
+  it("scopes the clash to the same team", () => {
+    expect(
+      payloadOf(
+        build({ key_alias: "taken", team_id: "team-2" }, { existingKeys: [{ team_id: "team-1", key_alias: "taken" }] }),
+      ).key_alias,
+    ).toBe("taken");
+  });
+
+  it("treats a keyless form and a teamless key as the same bucket", () => {
+    expect(build({}, { existingKeys: [{ team_id: null, key_alias: "" }] })).toStrictEqual({
+      kind: "duplicate_alias",
+      alias: "",
+      teamId: null,
+    });
+  });
+
+  it("checks the alias before the agent selection", () => {
+    expect(
+      build(
+        { key_alias: "taken" },
+        { existingKeys: [{ team_id: null, key_alias: "taken" }], keyOwner: "agent", selectedAgentId: null },
+      ).kind,
+    ).toBe("duplicate_alias");
+  });
+});
+
+describe("endpoint", () => {
+  it.each([
+    ["you", "standard"],
+    ["another_user", "standard"],
+    ["service_account", "service_account"],
+  ])("routes a %s key to the %s endpoint", (keyOwner, endpoint) => {
+    const result = build({ key_alias: "my-key" }, { keyOwner });
+    expect(result.kind === "ok" && result.endpoint).toBe(endpoint);
   });
 });

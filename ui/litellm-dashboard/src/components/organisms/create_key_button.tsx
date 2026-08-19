@@ -71,7 +71,7 @@ import {
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import { buildCreateKeyPayload, type CreateKeyUiState } from "./createKeyPayload";
+import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
 import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
@@ -378,21 +378,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
-      const newKeyAlias = formValues?.key_alias ?? "";
-      const newKeyTeamId = formValues?.team_id ?? null;
-
-      const existingKeyAliases = data?.filter((k) => k.team_id === newKeyTeamId).map((k) => k.key_alias) ?? [];
-
-      if (existingKeyAliases.includes(newKeyAlias)) {
-        throw new Error(
-          `Key alias ${newKeyAlias} already exists for team with ID ${newKeyTeamId}, please provide another key alias`,
-        );
-      }
-
-      toast.info("Making API Call");
-      setIsModalVisible(true);
-
-      const uiState: CreateKeyUiState = {
+      const input: KeyCreateInput = {
+        formValues,
+        existingKeys: data,
         keyOwner,
         userID,
         selectedAgentId,
@@ -406,19 +394,26 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         tagRateLimits,
         budgetFallbacks,
       };
-      const built = buildCreateKeyPayload(formValues, uiState);
-      if (built.kind === "agent_required") {
+      const built = buildKeyCreatePayload(input);
+      if (built.kind === "duplicate_alias") {
+        throw new Error(
+          `Key alias ${built.alias} already exists for team with ID ${built.teamId}, please provide another key alias`,
+        );
+      }
+
+      toast.info("Making API Call");
+      setIsModalVisible(true);
+
+      if (built.kind === "agent_not_selected") {
         toast.fromError("Please select an agent");
         return;
       }
-      const payload = built.payload;
+      const { payload, endpoint } = built;
 
-      let response;
-      if (keyOwner === "service_account") {
-        response = await keyCreateServiceAccountCall(accessToken, payload);
-      } else {
-        response = await keyCreateCall(accessToken, userID, payload);
-      }
+      const response =
+        endpoint === "service_account"
+          ? await keyCreateServiceAccountCall(accessToken, payload)
+          : await keyCreateCall(accessToken, userID, payload);
 
       // Add the data to the state in the parent component
       // Also directly update the keys list in VirtualKeysTable without an API call
