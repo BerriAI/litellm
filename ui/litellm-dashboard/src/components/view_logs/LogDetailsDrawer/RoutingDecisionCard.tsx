@@ -72,7 +72,7 @@ function describeCause(decision: RoutingDecision): string {
     case "heuristic_scorer":
       return "Heuristic scorer";
     case "reasoning_override":
-      return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers)`;
+      return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers, score above the lowest tier)`;
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
     case "literal_keyword_match":

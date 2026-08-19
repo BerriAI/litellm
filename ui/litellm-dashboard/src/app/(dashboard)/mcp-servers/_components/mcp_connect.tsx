@@ -1,10 +1,22 @@
 /* eslint-disable react/no-unescaped-entities */
 
 import React, { useState } from "react";
-import { Card, Typography, Space, Alert, Switch } from "antd";
+import { Card, Typography, Space, Switch } from "antd";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
+import {
+  CopyIcon,
+  Code,
+  Terminal,
+  Globe,
+  CheckIcon,
+  ExternalLinkIcon,
+  Info,
+  KeyIcon,
+  ServerIcon,
+  Zap,
+} from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 
@@ -69,25 +81,21 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
             </Text>
           </div>
           {useServerHeader && (
-            <Alert
-              className="mt-2"
-              type="info"
-              showIcon
-              message="Two Options"
-              description={
-                <div>
-                  <p>
-                    <strong>Option 1:</strong> Get a specific server: <code>"{serverName.replace(/\s+/g, "_")}"</code>
-                  </p>
-                  <p>
-                    <strong>Option 2:</strong> Get a group of MCPs: <code>"dev-group"</code>
-                  </p>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    You can also mix both: <code>"Server1,dev-group"</code>
-                  </p>
-                </div>
-              }
-            />
+            <Alert className="mt-2" variant="info">
+              <Info />
+              <AlertTitle>Two Options</AlertTitle>
+              <AlertDescription>
+                <p>
+                  <strong>Option 1:</strong> Get a specific server: <code>"{serverName.replace(/\s+/g, "_")}"</code>
+                </p>
+                <p>
+                  <strong>Option 2:</strong> Get a group of MCPs: <code>"dev-group"</code>
+                </p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  You can also mix both: <code>"Server1,dev-group"</code>
+                </p>
+              </AlertDescription>
+            </Alert>
           )}
         </div>
       )}

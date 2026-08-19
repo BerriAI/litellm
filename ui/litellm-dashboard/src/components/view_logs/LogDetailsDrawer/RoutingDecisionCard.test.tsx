@@ -59,7 +59,9 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Heuristic, REASONING override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Heuristic, REASONING override (2 or more reasoning markers, score above the lowest tier)"),
+    ).toBeInTheDocument();
     expect(screen.getByText("0.20")).toBeInTheDocument();
     // The score did not decide this tier, so NO band explanation may render at all.
     // Asserting the absence of one specific band would pass vacuously: 0.20 sits in
@@ -188,7 +190,9 @@ describe("RoutingDecisionCard", () => {
     // `signals` is gone under redaction; the cause alone must suppress the band.
     render(<RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", signals: undefined }} />);
     expect(screen.queryByText(/SIMPLE|MEDIUM|COMPLEX|at or above/)).not.toBeInTheDocument();
-    expect(screen.getByText("Heuristic, REASONING override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Heuristic, REASONING override (2 or more reasoning markers, score above the lowest tier)"),
+    ).toBeInTheDocument();
   });
 
   it("shows the operator's tier name on the badge instead of the canonical one", () => {
@@ -212,7 +216,9 @@ describe("RoutingDecisionCard", () => {
     render(
       <RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", score: 0.2, tier_label: "Deep" }} />,
     );
-    expect(screen.getByText("Heuristic, Deep override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Heuristic, Deep override (2 or more reasoning markers, score above the lowest tier)"),
+    ).toBeInTheDocument();
   });
 
   it("falls back to the raw cause for a value this build does not know", () => {

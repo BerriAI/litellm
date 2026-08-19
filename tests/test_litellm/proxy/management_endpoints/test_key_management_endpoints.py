@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     NewUserRequest,
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
@@ -31,9 +32,12 @@ from litellm.proxy._types import (
     ResetSpendRequest,
     UpdateKeyRequest,
 )
+from litellm.proxy.auth.auth_checks import _project_cache_key
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
+    _check_project_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
     _enforce_upperbound_key_params,
@@ -16444,3 +16448,49 @@ async def test_regenerate_key_repoints_live_membership_not_the_key_row_it_read(
     assert await _authorized_models_for_key(
         access_groups, new_token_hash, ["ag-revoked-since", "ag-attached-since"]
     ) == ["attached-model"]
+
+
+async def _cache_with_project(project_id: str, project_models: list[str]) -> UserApiKeyCache:
+    user_api_key_cache = UserApiKeyCache()
+    await user_api_key_cache.async_set_cache(
+        key=_project_cache_key(project_id),
+        value=LiteLLM_ProjectTableCachedObj(project_id=project_id, team_id="team-lit-5823", models=project_models),
+        model_type=LiteLLM_ProjectTableCachedObj,
+    )
+    return user_api_key_cache
+
+
+@pytest.mark.parametrize("request_cls", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize("sentinel", ["all-team-models", "all-proxy-models"])
+@pytest.mark.asyncio
+async def test_check_project_key_limits_accepts_inherited_model_sentinels(request_cls, sentinel):
+    """LIT-5823: the sentinels inherit a parent scope, so a project allowlist must not treat them as model names."""
+    user_api_key_cache = await _cache_with_project("proj-lit-5823", ["gpt-5.4-nano"])
+
+    await _check_project_key_limits(
+        project_id="proj-lit-5823",
+        data=request_cls(key="sk-lit-5823", models=[sentinel]),
+        prisma_client=MagicMock(),
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
+@pytest.mark.parametrize("request_cls", [GenerateKeyRequest, UpdateKeyRequest])
+@pytest.mark.parametrize(
+    "key_models",
+    [["gpt-5.4-mini"], ["all-team-models", "gpt-5.4-mini"], ["gpt-5.4-nano", "all-proxy-models", "gpt-5.4-mini"]],
+)
+@pytest.mark.asyncio
+async def test_check_project_key_limits_still_rejects_real_model_outside_project(request_cls, key_models):
+    user_api_key_cache = await _cache_with_project("proj-lit-5823", ["gpt-5.4-nano"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_project_key_limits(
+            project_id="proj-lit-5823",
+            data=request_cls(key="sk-lit-5823", models=key_models),
+            prisma_client=MagicMock(),
+            user_api_key_cache=user_api_key_cache,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Model 'gpt-5.4-mini' not in project's allowed models" in exc_info.value.detail["error"]

@@ -1,5 +1,7 @@
 import React, { useEffect } from "react";
-import { Alert, Select, Tooltip, Collapse, Input, Space, Switch } from "antd";
+import { Select, Tooltip, Collapse, Input, Space, Switch } from "antd";
+import { TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
@@ -271,13 +273,15 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
           )}
 
           {showInternalDelegatePkceWarning && (
-            <Alert
-              type="warning"
-              showIcon
-              className="mb-2"
-              message="Internal server with upstream OAuth delegation"
-              description="This MCP server is configured as internal-only but delegates auth to upstream. Anonymous users will be able to reach the upstream OAuth2 /authorize flow without a LiteLLM session. Ensure your upstream provider and network enforce access controls."
-            />
+            <Alert variant="warning" className="mb-2">
+              <TriangleAlert />
+              <AlertTitle>Internal server with upstream OAuth delegation</AlertTitle>
+              <AlertDescription>
+                This MCP server is configured as internal-only but delegates auth to upstream. Anonymous users will be
+                able to reach the upstream OAuth2 /authorize flow without a LiteLLM session. Ensure your upstream
+                provider and network enforce access controls.
+              </AlertDescription>
+            </Alert>
           )}
 
           <MountedFormField

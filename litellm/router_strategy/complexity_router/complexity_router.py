@@ -1020,13 +1020,14 @@ class ComplexityRouter(CustomLogger):
         weights: Final = self.config.dimension_weights
         weighted_score: Final = sum(d.score * weights.get(d.name, 0) for d in dimensions)
 
-        # Check for reasoning override (2+ reasoning markers)
+        boundaries: Final = self._effective_tier_boundaries()
+        scored_above_simple: Final = weighted_score >= boundaries["simple_medium"]
+
         # Reuse match count from _score_keyword_match to avoid scanning twice
-        if reasoning_match_count >= 2:
+        if reasoning_match_count >= 2 and scored_above_simple:
             return ComplexityTier.REASONING, weighted_score, tuple(signals), "reasoning_override"
 
         # Map score to tier
-        boundaries: Final = self._effective_tier_boundaries()
         if weighted_score < boundaries["simple_medium"]:
             tier = ComplexityTier.SIMPLE
         elif weighted_score < boundaries["medium_complex"]:

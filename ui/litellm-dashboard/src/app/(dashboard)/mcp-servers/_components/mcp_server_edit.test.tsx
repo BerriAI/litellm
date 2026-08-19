@@ -1939,6 +1939,24 @@ describe("MCPServerEdit OAuth flow prefill display", () => {
     expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
   });
 
+  it("never flashes the warning while mounting a server that already has a flow", async () => {
+    const flashes: Node[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node.textContent?.includes("This server has no OAuth flow set")) flashes.push(node);
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    renderEdit({ oauth2_flow: "client_credentials" });
+    await screen.findByText("Machine-to-Machine (M2M)");
+    observer.disconnect();
+
+    expect(flashes).toHaveLength(0);
+  });
+
   it("does not warn for a delegate (PKCE passthrough) server even with no flow set", () => {
     renderEdit({ oauth2_flow: null, delegate_auth_to_upstream: true });
 

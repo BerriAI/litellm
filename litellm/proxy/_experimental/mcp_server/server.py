@@ -407,8 +407,6 @@ if MCP_AVAILABLE:
         StreamableHTTPSessionManager = None
     from mcp.types import (
         CallToolResult,
-        EmbeddedResource,
-        ImageContent,
         ListToolsResult,
         Prompt,
         TextContent,
@@ -2861,12 +2859,11 @@ if MCP_AVAILABLE:
             _extra_token: Final = _request_extra_headers.set(forwarded_headers)
             _resolved_token: Final = _request_resolved_auth_headers.set(resolved_auth_headers)
             try:
-                local_content = await _handle_local_mcp_tool(name, arguments)
+                response = await _handle_local_mcp_tool(name, arguments)
             finally:
                 _request_auth_header.reset(_auth_token)
                 _request_extra_headers.reset(_extra_token)
                 _request_resolved_auth_headers.reset(_resolved_token)
-            response = CallToolResult(content=local_content, isError=False)
 
         # Try managed MCP server tool (the name is bare; the prefix boundary was
         # already resolved above against this server's registered prefixes)
@@ -2940,8 +2937,7 @@ if MCP_AVAILABLE:
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
 
-            local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
-            response = CallToolResult(content=local_content, isError=False)
+            response = await _handle_local_mcp_tool(original_tool_name, arguments)
 
         return await _run_post_mcp_call_guardrails(
             result=response,
@@ -3319,11 +3315,18 @@ if MCP_AVAILABLE:
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
 
-    async def _handle_local_mcp_tool(
-        name: str, arguments: dict[str, object]
-    ) -> list[TextContent | ImageContent | EmbeddedResource]:
-        """
-        Handle tool execution for local registry tools
+    async def _handle_local_mcp_tool(name: str, arguments: dict[str, object]) -> CallToolResult:
+        """Execute a local-registry tool and report whether it succeeded.
+
+        Returns the result rather than bare content because the verdict is part of it: the content
+        alone cannot say whether the handler failed, so callers used to stamp isError=False on every
+        outcome and an upstream rejection was served as tool output.
+
+        A failure is reported as ``isError=True`` here rather than raised, because the REST surface
+        turns an unrecognized exception into a 500 and an upstream 403 or 429 is not a gateway crash.
+        ``MCPUpstreamAuthError`` is the exception: it propagates so the caller is told to
+        re-authenticate, which both renderers already know how to say.
+
         Note: Local tools don't use prefixes, so we use the original name
         """
         import inspect
@@ -3333,15 +3336,16 @@ if MCP_AVAILABLE:
             raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
 
         try:
-            # Check if handler is async or sync
             if inspect.iscoroutinefunction(tool.handler):
                 result = await tool.handler(**arguments)
             else:
                 result = tool.handler(**arguments)
-            return [TextContent(text=str(result), type="text")]
+        except MCPUpstreamAuthError:
+            raise
         except Exception as e:
             verbose_logger.exception("Error executing local tool %s: %s", name, e)
-            return [TextContent(text=f"Error: {e}", type="text")]
+            return CallToolResult(content=[TextContent(text=f"Error: {e}", type="text")], isError=True)
+        return CallToolResult(content=[TextContent(text=str(result), type="text")], isError=False)
 
     def _get_mcp_servers_in_path(path: str) -> list[str] | None:
         """
