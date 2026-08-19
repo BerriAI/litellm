@@ -159,3 +159,21 @@ def test_update_key_request_requires_key_or_key_alias():
     by_alias = UpdateKeyRequest(key_alias="my-alias")
     assert by_alias.key is None
     assert by_alias.key_alias == "my-alias"
+
+
+@pytest.mark.parametrize("request_type", ["new", "update"])
+def test_project_io_token_limits_are_stored_in_metadata(request_type):
+    from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
+
+    limits = {
+        "model_itpm_limit": {"bedrock_mantle/openai.gpt-oss-120b": 20_000_000},
+        "model_otpm_limit": {"bedrock_mantle/openai.gpt-oss-120b": 4_000_000},
+    }
+    request = (
+        NewProjectRequest(team_id="team-1", **limits)
+        if request_type == "new"
+        else UpdateProjectRequest(project_id="project-1", **limits)
+    )
+
+    assert request.metadata == limits
+    assert request.model_dump(exclude_none=True)["metadata"] == limits

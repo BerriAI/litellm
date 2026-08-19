@@ -42,6 +42,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
     _obo_retry_applies,
+    _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
     _without_authorization,
 )
@@ -4832,6 +4833,74 @@ class TestMCPServerManager:
 
         with pytest.raises(ValueError, match="Tool missing_tool not found"):
             manager._resolve_mcp_server_for_tool_call("github", "missing_tool")
+
+    @staticmethod
+    def _manager_with_deepwiki_and_huggingface() -> MCPServerManager:
+        manager = MCPServerManager()
+        deepwiki = MCPServer(server_id="deepwiki-id", name="deepwiki", server_name="deepwiki", transport=MCPTransport.http)
+        huggingface = MCPServer(
+            server_id="huggingface-id", name="huggingface", server_name="huggingface", transport=MCPTransport.http
+        )
+        manager.registry = {"deepwiki-id": deepwiki, "huggingface-id": huggingface}
+        manager.tool_name_to_mcp_server_name_mapping = {
+            "read_wiki_structure": "deepwiki",
+            "deepwiki-read_wiki_structure": "deepwiki",
+            "hub_repo_search": "huggingface",
+            "huggingface-hub_repo_search": "huggingface",
+        }
+        return manager
+
+    def test_resolve_mcp_server_for_tool_call_rejects_tool_exposed_only_by_another_server(self):
+        manager = self._manager_with_deepwiki_and_huggingface()
+
+        with pytest.raises(ValueError, match="Tool read_wiki_structure not found"):
+            manager._resolve_mcp_server_for_tool_call("huggingface", "read_wiki_structure")
+        with pytest.raises(ValueError, match="Tool hub_repo_search not found"):
+            manager._resolve_mcp_server_for_tool_call("deepwiki", "hub_repo_search")
+
+        assert manager._resolve_mcp_server_for_tool_call("deepwiki", "read_wiki_structure") is manager.registry["deepwiki-id"]
+        assert manager._resolve_mcp_server_for_tool_call("huggingface", "hub_repo_search") is manager.registry["huggingface-id"]
+
+    def test_get_mcp_server_from_tool_name_rejects_other_servers_prefix(self):
+        manager = self._manager_with_deepwiki_and_huggingface()
+
+        assert manager._get_mcp_server_from_tool_name("huggingface-read_wiki_structure") is None
+        assert manager._get_mcp_server_from_tool_name("deepwiki-hub_repo_search") is None
+        assert manager._get_mcp_server_from_tool_name("deepwiki-read_wiki_structure") is manager.registry["deepwiki-id"]
+        assert manager._get_mcp_server_from_tool_name("huggingface-hub_repo_search") is manager.registry["huggingface-id"]
+
+    def test_resolve_mcp_server_for_tool_call_shared_bare_name_resolves_via_own_prefixed_spelling(self):
+        manager = MCPServerManager()
+        zapier = MCPServer(server_id="zapier-id", name="zapier", alias="zapier-alias", transport=MCPTransport.http)
+        other = MCPServer(server_id="other-id", name="other", server_name="other", transport=MCPTransport.http)
+        manager.registry = {"zapier-id": zapier, "other-id": other}
+        manager.tool_name_to_mcp_server_name_mapping = {
+            "create_zap": "other",
+            "other-create_zap": "other",
+            "zapier-alias-create_zap": "zapier-alias",
+        }
+
+        assert manager._resolve_mcp_server_for_tool_call("zapier", "create_zap") is zapier
+        assert manager._resolve_mcp_server_for_tool_call("other", "create_zap") is other
+
+    def test_remove_server_drops_only_its_own_tool_mapping_rows(self):
+        manager = self._manager_with_deepwiki_and_huggingface()
+
+        manager.remove_server(
+            LiteLLM_MCPServerTable(
+                server_id="huggingface-id",
+                alias="huggingface",
+                url="https://huggingface.co/mcp",
+                transport=MCPTransport.http,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+
+        assert manager.tool_name_to_mcp_server_name_mapping == {
+            "read_wiki_structure": "deepwiki",
+            "deepwiki-read_wiki_structure": "deepwiki",
+        }
 
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_skipped_when_not_user_oauth(self):
@@ -10457,3 +10526,242 @@ class TestSessionResourceScopeIntersect:
         ):
             fallback = await manager.get_allowed_mcp_servers(auth)
         assert fallback == ["granted-id"]
+
+
+class TestClientForwardedDiscoveryFailureIsNotFatal:
+    """A failed OAuth metadata discovery may only brick the flows the gateway runs itself.
+
+    ``true_passthrough`` / ``oauth_delegate`` forward the caller's own bearer and mint nothing, so an
+    upstream that publishes no RFC 9728 metadata (an internal API, or any IdP unreachable from the
+    pod) must still serve sessions instead of 503-ing before the upstream is ever contacted.
+    """
+
+    @staticmethod
+    def _config(auth_type: MCPAuthType, dcr_bridge: bool | None) -> dict[str, dict[str, object]]:
+        entry: Final[dict[str, object]] = {
+            "url": "https://up.example.com/mcp",
+            "transport": MCPTransport.http,
+            "auth_type": auth_type,
+            **({"oauth2_flow": "authorization_code"} if auth_type == MCPAuth.oauth2 else {}),
+            **({"dcr_bridge": dcr_bridge} if dcr_bridge is not None else {}),
+        }
+        return {"upstream": entry}
+
+    async def _registered(self, manager: MCPServerManager, auth_type: MCPAuthType, dcr_bridge: bool | None):
+        with (
+            patch.object(manager, "_discover_oauth_metadata_for_server", new=AsyncMock(return_value=None)),
+            patch.object(manager, "initialize_tool_name_to_mcp_server_name_mapping"),
+        ):
+            await manager.load_servers_from_config(self._config(auth_type, dcr_bridge))
+        return next(iter(manager.config_mcp_servers.values()))
+
+    @pytest.mark.parametrize(
+        "auth_type, dcr_bridge, serves_without_endpoints",
+        [
+            (MCPAuth.true_passthrough, None, True),
+            (MCPAuth.true_passthrough, True, True),
+            (MCPAuth.oauth_delegate, None, True),
+            (MCPAuth.oauth_delegate, True, True),
+            (MCPAuth.oauth2, None, False),
+            (MCPAuth.oauth2_token_exchange, None, False),
+        ],
+    )
+    @pytest.mark.parametrize("failure", ["incomplete", "timed_out"])
+    @pytest.mark.asyncio
+    async def test_discovery_failure_blocks_only_gateway_run_flows(
+        self,
+        auth_type: MCPAuthType,
+        dcr_bridge: bool | None,
+        serves_without_endpoints: bool,
+        failure: str,
+    ):
+        manager = MCPServerManager()
+        server = await self._registered(manager, auth_type, dcr_bridge)
+        manager._set_oauth_discovery_deferred(server.server_id, True)
+
+        async def never_returns(_server):
+            await asyncio.Future()
+
+        discovery_patch: Final = (
+            {"new": AsyncMock(return_value=None)} if failure == "incomplete" else {"side_effect": never_returns}
+        )
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_METADATA_TIMEOUT", 0.01),
+            patch.object(manager, "_discover_oauth_metadata_for_server", **discovery_patch),
+        ):
+            if not serves_without_endpoints:
+                with pytest.raises(HTTPException) as exc:
+                    await manager.ensure_oauth_metadata_discovered(server)
+                assert exc.value.status_code == 503
+                return
+
+            resolved = await manager.ensure_oauth_metadata_discovered(server)
+
+        assert resolved is manager.config_mcp_servers[server.server_id]
+        assert resolved.authorization_url is None
+        assert resolved.token_url is None
+        assert manager._oauth_discovery_slot(server.server_id) is not None
+
+    @pytest.mark.parametrize(
+        "auth_type, serves_the_listing",
+        [(MCPAuth.true_passthrough, True), (MCPAuth.oauth_delegate, True), (MCPAuth.oauth2, False)],
+    )
+    @pytest.mark.asyncio
+    async def test_listing_leg_serves_a_forwarding_server_whose_discovery_failed(
+        self, auth_type: MCPAuthType, serves_the_listing: bool
+    ):
+        """The listing leg is where the 503 became an empty tool list, so pin the fix there too.
+
+        ``_get_tools_from_server`` is the per-server leg the aggregate absorbs: a failure here is what
+        the fan-out turns into HTTP 200 with ``tools: []``, which is why the outage carried no
+        diagnostic. A forwarding server must now reach its upstream, and a gateway-run flow must still
+        surface the fault rather than be silently listed as empty.
+        """
+        manager = MCPServerManager()
+        server = await self._registered(manager, auth_type, None)
+        manager._set_oauth_discovery_deferred(server.server_id, True)
+        manager._fetch_tools_with_timeout = AsyncMock(
+            return_value=[MCPTool(name="list_reports", description="d", inputSchema={"type": "object"})]
+        )
+
+        with patch.object(manager, "_discover_oauth_metadata_for_server", new=AsyncMock(return_value=None)):
+            if not serves_the_listing:
+                with pytest.raises(MCPServerListError):
+                    await manager._get_tools_from_server(server=server)
+                return
+            tools = await manager._get_tools_from_server(server=server)
+
+        assert [tool.name for tool in tools] == ["upstream-list_reports"]
+        manager._fetch_tools_with_timeout.assert_awaited_once()
+
+    @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+    @pytest.mark.asyncio
+    async def test_client_forwarded_servers_keep_discovering_their_front_door_endpoints(
+        self, auth_type: MCPAuthType
+    ):
+        """Exempting these modes from the FAILURE must not exempt them from discovery itself.
+
+        ``/authorize``, ``/token`` and ``/register`` read the discovered endpoints for these servers
+        (``_resolve_ephemeral_dcr_client`` mints for ``true_passthrough`` whatever ``dcr_bridge``
+        says), so an exemption written into the unresolved-endpoints predicate would disarm the slot
+        and silently drop a working front door.
+        """
+        manager = MCPServerManager()
+        metadata: Final = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url="https://idp.example.com/register",
+        )
+        with (
+            patch.object(manager, "_discover_oauth_metadata_for_server", new=AsyncMock(return_value=metadata)),
+            patch.object(manager, "initialize_tool_name_to_mcp_server_name_mapping"),
+        ):
+            await manager.load_servers_from_config(self._config(auth_type, None))
+            server = next(iter(manager.config_mcp_servers.values()))
+            resolved = await manager.ensure_oauth_metadata_discovered(server)
+
+        assert resolved.authorization_url == "https://idp.example.com/authorize"
+        assert resolved.token_url == "https://idp.example.com/token"
+        assert resolved.registration_url == "https://idp.example.com/register"
+        assert manager.config_mcp_servers[server.server_id].authorization_url == "https://idp.example.com/authorize"
+        assert manager._oauth_discovery_slot(server.server_id) is None
+
+
+class TestResolveOpenapiToolAuth:
+    """The credential matrix for a ``spec_path`` server's two OpenAPI dispatch arms.
+
+    A per-server ``x-mcp-{alias}-authorization`` is already a complete header value and is forwarded
+    verbatim; a BYOK credential is a raw secret that takes the auth-type prefix. Conflating them
+    ships ``Bearer Bearer <token>``, so every cell pins which of the two a value came from.
+    """
+
+    @staticmethod
+    def _server(auth_type: MCPAuthType = MCPAuth.oauth_delegate) -> MCPServer:
+        return MCPServer(
+            server_id="srv-openapi",
+            name="report_api",
+            server_name="report_api",
+            alias="report_api",
+            url="https://api.internal.example.com",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+            spec_path="https://api.internal.example.com/openapi.json",
+            extra_headers=["X-Tenant"],
+        )
+
+    @pytest.mark.parametrize(
+        "per_server, byok, expected_auth, expected_extra_keys, expected_credential",
+        [
+            (
+                {"report_api": "Bearer caller-token"},
+                None,
+                "Bearer caller-token",
+                {"X-Tenant"},
+                "Bearer caller-token",
+            ),
+            (
+                {"report_api": {"Authorization": "Bearer caller-token", "X-Trace": "abc"}},
+                None,
+                "Bearer caller-token",
+                {"X-Tenant", "X-Trace"},
+                {"Authorization": "Bearer caller-token", "X-Trace": "abc"},
+            ),
+            (
+                {"report_api": {"X-Api-Key": "k1"}},
+                "byok-secret",
+                "Bearer byok-secret",
+                {"X-Tenant", "X-Api-Key"},
+                "byok-secret",
+            ),
+            ({"report_api": {"X-Api-Key": "k1"}}, None, None, {"X-Tenant", "X-Api-Key"}, None),
+            (None, "byok-secret", "Bearer byok-secret", {"X-Tenant"}, "byok-secret"),
+            (None, None, None, {"X-Tenant"}, None),
+            ({"other_server": "Bearer wrong"}, None, None, {"X-Tenant"}, None),
+        ],
+    )
+    def test_credential_matrix(
+        self,
+        per_server: dict | None,
+        byok: str | None,
+        expected_auth: str | None,
+        expected_extra_keys: set,
+        expected_credential: object,
+    ):
+        auth_value, forwarded, credential = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header=byok,
+            mcp_server_auth_headers=per_server,
+            raw_headers={"x-tenant": "acme", "authorization": "Bearer admission-key"},
+            user_api_key_auth=None,
+        )
+
+        assert auth_value == expected_auth
+        assert set(forwarded or {}) == expected_extra_keys
+        assert credential == expected_credential
+
+    def test_per_server_value_is_never_re_prefixed(self):
+        """The regression that a naive wiring produces: the caller already sent ``Bearer <token>``."""
+        auth_value, _, credential = _resolve_openapi_tool_auth(
+            mcp_server=self._server(auth_type=MCPAuth.api_key),
+            mcp_auth_header="byok-secret",
+            mcp_server_auth_headers={"report_api": "Bearer caller-token"},
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+
+        assert auth_value == "Bearer caller-token"
+        assert credential == "Bearer caller-token"
+        assert not auth_value.startswith("ApiKey ")
+
+    def test_per_server_authorization_is_not_also_left_in_forwarded_headers(self):
+        """``resolve_openapi_upstream_auth`` pops Authorization out of the forwarded headers, so a
+        second copy there would give the passthrough arm two sources to reconcile."""
+        _, forwarded, _ = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"report_api": {"Authorization": "Bearer caller-token"}},
+            raw_headers={"x-tenant": "acme"},
+            user_api_key_auth=None,
+        )
+
+        assert "Authorization" not in (forwarded or {})

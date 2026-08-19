@@ -50,7 +50,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
 )
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import get_secret_str, str_to_bool
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -1016,15 +1016,21 @@ async def bedrock_proxy_route(
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
     aws_region_name: Final = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
-    if _is_bedrock_agent_runtime_route(endpoint=endpoint):  # handle bedrock agents
-        base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
-    else:
+    if not _is_bedrock_agent_runtime_route(endpoint=endpoint):
         return await bedrock_llm_proxy_route(
             endpoint=endpoint,
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
         )
+
+    if _is_bedrock_agent_runtime_passthrough_disabled():
+        raise HTTPException(
+            status_code=403,
+            detail="bedrock-agent-runtime pass-through is disabled on this proxy.",
+        )
+
+    base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -1290,6 +1296,15 @@ def _is_bedrock_agent_runtime_route(endpoint: str) -> bool:
         if _route in endpoint:
             return True
     return False
+
+
+def _is_bedrock_agent_runtime_passthrough_disabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    setting: Final = general_settings.get("disable_bedrock_agent_runtime_passthrough")
+    if isinstance(setting, str):
+        return str_to_bool(setting) is True
+    return setting is True
 
 
 @router.api_route(

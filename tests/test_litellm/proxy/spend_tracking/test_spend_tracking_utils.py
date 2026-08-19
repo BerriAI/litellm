@@ -124,6 +124,30 @@ def test_get_logging_payload_maps_openai_cache_write_tokens_to_cache_creation_in
     assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 800
 
 
+def test_get_logging_payload_maps_nested_cache_creation_input_tokens():
+    """
+    Regression (LIT-5757): DashScope nests cache_creation_input_tokens inside
+    prompt_tokens_details; SpendLogs must record it as cache_creation_input_tokens.
+    """
+    additional_usage_values: Final = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=2059,
+            completion_tokens=31,
+            total_tokens=2090,
+            prompt_tokens_details={
+                "cached_tokens": 0,
+                "text_tokens": 2059,
+                "cache_type": "ephemeral",
+                "cache_creation_input_tokens": 2048,
+                "cache_creation": {"ephemeral_5m_input_tokens": 2048},
+            },
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 2048
+    assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 2048
+
+
 def test_get_logging_payload_preserves_anthropic_cache_creation_input_tokens():
     additional_usage_values = _get_additional_usage_values_for_usage(
         litellm.Usage(

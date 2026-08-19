@@ -2147,7 +2147,7 @@ describe("CreateMCPServer dcr_bridge toggle", () => {
   });
 
   // Forcing dcr_bridge false for every non-client-forwarded auth type is covered in
-  // createServerPayload.test.ts. The two form-state cases below stay: they prove the Form.Item
+  // createServerPayload.test.ts. The two form-state cases below stay: they prove the field
   // unmounts on a switch away, and that the live value survives a client-forwarded swap.
 
   it("forces dcr_bridge: false when the auth type is switched away after toggling", async () => {
@@ -2179,7 +2179,7 @@ describe("CreateMCPServer dcr_bridge toggle", () => {
     });
     expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
 
-    // The Form.Item is mounted in both client-forwarded modes, so switching between them keeps the
+    // The field is mounted in both client-forwarded modes, so switching between them keeps the
     // live toggle value rather than forcing it back to the default or to false.
     await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
     await waitFor(() => {

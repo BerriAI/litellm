@@ -1,6 +1,6 @@
 "use client";
 
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import type { Team } from "@/components/key_team_helpers/key_list";
 import type { Organization } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -53,7 +53,7 @@ interface InheritedBudgetHintProps {
 export function InheritedBudgetHint({ gates }: InheritedBudgetHintProps) {
   if (gates.length === 0) return null;
   return (
-    <Tooltip
+    <SimpleTooltip
       content={
         <div data-testid="inherited-budget-hint" className="flex flex-col gap-1">
           <span>This key has no budget of its own, but its spend still counts toward:</span>

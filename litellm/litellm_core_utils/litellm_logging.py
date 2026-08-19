@@ -1094,10 +1094,10 @@ class Logging(LiteLLMLoggingBaseClass):
                             data=additional_args.get("complete_input_dict", {}),
                         )
 
-                        _metadata["raw_request"] = str(curl_command)
+                        _metadata["raw_request"] = _redact_string(str(curl_command))
                         # split up, so it's easier to parse in the UI
                         self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
-                            raw_request_api_base=str(additional_args.get("api_base") or ""),
+                            raw_request_api_base=self._get_masked_api_base(str(additional_args.get("api_base") or "")),
                             raw_request_body=self._get_raw_request_body(additional_args.get("complete_input_dict", {})),
                             # NOTE: setting ignore_sensitive_headers to True will cause
                             # the Authorization header to be leaked when calls to the health
@@ -1111,8 +1111,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
                         error=str(e),
                     )
-                    _metadata["raw_request"] = f"Unable to Log \
+                    _metadata["raw_request"] = _redact_string(
+                        f"Unable to Log \
                         raw request: {e}"
+                    )
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -1206,15 +1208,16 @@ class Logging(LiteLLMLoggingBaseClass):
         if _is_debugging_on() or self.litellm_request_debug:
             if json_logs:
                 masked_headers: Final = self._get_masked_headers(headers)
+                masked_api_base: Final = self._get_masked_api_base(str(api_base or ""))
                 if self.litellm_request_debug:
                     verbose_logger.warning(  # .warning ensures this shows up in all environments
                         "POST Request Sent from LiteLLM",
-                        extra={"api_base": {api_base}, **masked_headers},
+                        extra={"api_base": {masked_api_base}, **masked_headers},
                     )
                 else:
                     verbose_logger.debug(
                         "POST Request Sent from LiteLLM",
-                        extra={"api_base": {api_base}, **masked_headers},
+                        extra={"api_base": {masked_api_base}, **masked_headers},
                     )
             else:
                 headers = additional_args.get("headers", {})
@@ -1254,8 +1257,6 @@ class Logging(LiteLLMLoggingBaseClass):
             curl_command = "\nRequest Sent from LiteLLM:\n"
             request_str: Final = additional_args.get("request_str", "")
             curl_command += request_str
-        elif api_base == "":
-            curl_command = str(self.model_call_details)
         return curl_command
 
     def _get_masked_headers(self, headers: dict, ignore_sensitive_headers: bool = False) -> dict:

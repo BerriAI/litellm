@@ -123,6 +123,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
     logging_safe_mcp_headers,
+    lookup_mcp_server_auth_in_headers,
     match_known_server_prefix,
     match_known_tool_name,
     merge_mcp_headers,
@@ -871,6 +872,53 @@ def _openapi_forwarded_extra_headers(
         if value is not None:
             forwarded[header_name] = value
     return forwarded or None
+
+
+def _resolve_openapi_tool_auth(
+    mcp_server: MCPServer,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: Mapping[str, str | dict[str, str]] | None,  # mutable-ok: sink shape
+    raw_headers: dict[str, str] | None,  # mutable-ok: sink takes a concrete dict
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> tuple[str | None, dict[str, str] | None, str | dict[str, str] | None]:  # mutable-ok: sink shapes
+    """The caller's upstream credential for one ``spec_path`` server, for both OpenAPI dispatch arms.
+
+    A per-server ``x-mcp-{alias}-authorization`` wins over the deprecated global / BYOK
+    ``mcp_auth_header``, the same precedence ``_call_regular_mcp_tool`` applies, so the OpenAPI and
+    managed paths cannot disagree about which credential is authoritative. The two kinds are not
+    interchangeable: a per-server value is already a complete header value and is forwarded verbatim,
+    while a BYOK credential is a raw secret that takes the server's auth-type prefix. Formatting the
+    former would ship ``Bearer Bearer <token>``.
+
+    Returns the ``Authorization`` value to inject, the extra headers to forward, and the credential to
+    hand ``resolve_openapi_upstream_auth``, whose passthrough arm reads it via
+    ``_passthrough_token_from_mcp_auth_header``. The per-server Authorization travels only in the
+    credential, never also in the forwarded headers, because the resolver pops Authorization out of
+    those and would otherwise have two sources to reconcile.
+    """
+    forwarded: Final = _openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth)
+    per_server: Final = (
+        lookup_mcp_server_auth_in_headers(
+            mcp_server_auth_headers,
+            alias=mcp_server.alias,
+            server_name=mcp_server.server_name,
+        )
+        if mcp_server_auth_headers
+        else None
+    )
+
+    if isinstance(per_server, dict):
+        authorization: Final = next((v for k, v in per_server.items() if k.lower() == "authorization"), None)
+        merged: Final = merge_mcp_headers(extra_headers=forwarded, static_headers=_without_authorization(per_server))
+        if authorization is None:
+            byok: Final = _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
+            return byok, merged, mcp_auth_header
+        return authorization, merged, per_server
+    if isinstance(per_server, str) and per_server:
+        return per_server, forwarded, per_server
+    if mcp_auth_header:
+        return _format_byok_openapi_auth_header(mcp_server, mcp_auth_header), forwarded, mcp_auth_header
+    return None, forwarded, None
 
 
 async def _resolve_byok_mcp_auth_header(
@@ -1740,12 +1788,14 @@ class MCPServerManager:
             server: The MCP server whose OAuth metadata must be resolved.
 
         Returns:
-            The resolved server, or the registered server when no discovery is
-            pending.
+            The resolved server; the registered server when no discovery is
+            pending, or when discovery failed for a client-forwarded-token
+            server, whose session consumes no discovered endpoint.
 
         Raises:
             HTTPException: Status 503 when discovery times out or returns
-                incomplete metadata.
+                incomplete metadata for a server whose OAuth flow the gateway
+                runs itself.
         """
         acquisition: Final = self._get_or_start_oauth_discovery_task(server)
         if acquisition is None:
@@ -1764,6 +1814,8 @@ class MCPServerManager:
                 return await self.ensure_oauth_metadata_discovered(server)
             case _OAuthDiscoveryFailed(timed_out=timed_out):
                 current: Final = self._registered_server(server)
+                if current.is_client_forwarded_token:
+                    return current
                 server_ref: Final = current.alias or current.server_name or current.name or current.server_id
                 reason: Final = "timed out" if timed_out else "returned incomplete metadata"
                 raise HTTPException(
@@ -2321,22 +2373,29 @@ class MCPServerManager:
             openapi_key_prefix: Final = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
             global_mcp_tool_registry.unregister_tools_with_prefix(openapi_key_prefix)
 
-        owned_raw: Final[set[str]] = set()
-        for p in iter_known_server_prefixes(server):
-            if p:
-                owned_raw.add(p)
-        if server.name:
-            owned_raw.add(server.name)
+        owned_normalized: Final = self._owned_mapping_values(server)
 
-        owned_normalized: Final = {normalize_server_name(x) for x in owned_raw}
-
-        stale_mapping_keys: Final[list[str]] = []
-        for tool_name, mapped_server in list(self.tool_name_to_mcp_server_name_mapping.items()):
-            if mapped_server in owned_raw or normalize_server_name(str(mapped_server)) in owned_normalized:
-                stale_mapping_keys.append(tool_name)
+        stale_mapping_keys: Final = tuple(
+            tool_name
+            for tool_name, mapped_server in self.tool_name_to_mcp_server_name_mapping.items()
+            if normalize_server_name(str(mapped_server)) in owned_normalized
+        )
 
         for key in stale_mapping_keys:
             del self.tool_name_to_mcp_server_name_mapping[key]
+
+    def _owned_mapping_values(self, server: MCPServer) -> frozenset[str]:
+        return frozenset(
+            normalize_server_name(value) for value in (*iter_known_server_prefixes(server), server.name) if value
+        )
+
+    def _server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
+        owned: Final = self._owned_mapping_values(server)
+        mapped_owners: Final = (
+            self.tool_name_to_mcp_server_name_mapping.get(spelling)
+            for spelling in iter_known_tool_name_spellings(tool_name, server)
+        )
+        return any(owner is not None and normalize_server_name(owner) in owned for owner in mapped_owners)
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
@@ -3182,10 +3241,6 @@ class MCPServerManager:
             # Get server-specific auth header if available
             server_auth_header: str | dict[str, str] | None = None
             if mcp_server_auth_headers:
-                from litellm.proxy._experimental.mcp_server.utils import (
-                    lookup_mcp_server_auth_in_headers,
-                )
-
                 server_auth_header = lookup_mcp_server_auth_in_headers(
                     mcp_server_auth_headers,
                     alias=server.alias,
@@ -5210,11 +5265,6 @@ class MCPServerManager:
         # the exact case of server alias/name (e.g., '1litellmagcgateway' vs '1LiteLLMAGCGateway')
         server_auth_header: dict[str, str] | str | None = None
         if mcp_server_auth_headers:
-            # Normalize keys for case-insensitive lookup
-            from litellm.proxy._experimental.mcp_server.utils import (
-                lookup_mcp_server_auth_in_headers,
-            )
-
             server_auth_header = lookup_mcp_server_auth_in_headers(
                 mcp_server_auth_headers,
                 alias=mcp_server.alias,
@@ -5249,7 +5299,7 @@ class MCPServerManager:
                     user_api_key_auth=user_api_key_auth,
                 ):
                     extra_headers = _without_authorization(extra_headers)
-        elif mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+        elif mcp_server.is_client_forwarded_token:
             extra_headers = _client_forwarded_authorization_headers(
                 mcp_server=mcp_server,
                 oauth2_headers=oauth2_headers,
@@ -5356,7 +5406,7 @@ class MCPServerManager:
             # Scoped to the two client-forwarded token modes this stack introduced; legacy
             # oauth2 + delegate_auth_to_upstream (is_oauth_passthrough) is being removed, so it is not
             # added here even though the list path still relays for it.
-            relays_upstream_auth: Final = mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate
+            relays_upstream_auth: Final = mcp_server.is_client_forwarded_token
             server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
             async def _call_tool_via_client(client, params):
@@ -5463,13 +5513,8 @@ class MCPServerManager:
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
 
-        if resolved_by_server_name_only:
-            tool_known: Final = (
-                name in self.tool_name_to_mcp_server_name_mapping
-                or prefixed_tool_name in self.tool_name_to_mcp_server_name_mapping
-            )
-            if not tool_known:
-                raise ValueError(f"Tool {name} not found")
+        if resolved_by_server_name_only and not self._server_exposes_tool(mcp_server, name):
+            raise ValueError(f"Tool {name} not found")
 
         return mcp_server
 
@@ -5712,16 +5757,20 @@ class MCPServerManager:
                     server_name,
                 )
 
-            auth_header_value: Final = (
-                _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
+            auth_header_value, openapi_forwarded_headers, upstream_credential = _resolve_openapi_tool_auth(
+                mcp_server=mcp_server,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
             )
             resolved_auth_headers, forwarded_headers = await self.resolve_openapi_upstream_auth(
                 mcp_server=mcp_server,
                 oauth2_headers=caller_oauth2_headers,
                 raw_headers=raw_headers,
-                mcp_auth_header=mcp_auth_header,
+                mcp_auth_header=upstream_credential,
                 user_api_key_auth=user_api_key_auth,
-                forwarded_headers=_openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth),
+                forwarded_headers=openapi_forwarded_headers,
             )
 
             async def _call_openapi_via_handler():
@@ -5847,10 +5896,7 @@ class MCPServerManager:
         if matched is not None:
             matched_prefix, original_tool_name = matched
             matched_server: Final = prefix_to_server.get(matched_prefix)
-            if matched_server is not None and (
-                original_tool_name in self.tool_name_to_mcp_server_name_mapping
-                or tool_name in self.tool_name_to_mcp_server_name_mapping
-            ):
+            if matched_server is not None and self._server_exposes_tool(matched_server, original_tool_name):
                 return matched_server
 
         return None
