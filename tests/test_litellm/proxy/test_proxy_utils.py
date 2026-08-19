@@ -478,6 +478,307 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
         assert "response_cost" not in request_data
 
 
+class TestPostCallFailureHookEstimatesDispatchedInputTokens:
+    """A non-stream request that failed after dispatch (timeout, provider
+    error) consumed provider-billed input tokens but recovered no usage.
+    post_call_failure_hook must estimate the input side onto request_data so
+    the spend log's failure row records what was sent instead of zero, while
+    never charging spend for the failure (LIT-5690).
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    def _logging_obj(self, model_call_details):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = model_call_details
+        return logging_obj
+
+    @pytest.mark.asyncio
+    async def test_dispatched_failure_estimates_input_tokens_with_zero_cost(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                }
+            ),
+            "metadata": {},
+            "response_cost": 123.0,
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        assert estimated.prompt_tokens > 0
+        assert estimated.completion_tokens == 0
+        assert estimated.total_tokens == estimated.prompt_tokens
+        assert request_data["response_cost"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_failure_before_dispatch_stays_zero(self):
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "never dispatched"}],
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_proxy_only_error_never_dispatched_stays_zero(self):
+        from datetime import datetime
+
+        from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "no-such-model",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True,
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_recovered_partial_usage_wins_over_estimate(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        recovered_usage = Usage(prompt_tokens=30, completion_tokens=7, total_tokens=37)
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "mid-stream failure"}],
+                    "call_type": "acompletion",
+                    "combined_usage_object": recovered_usage,
+                    "response_cost": 3.5e-05,
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert request_data["combined_usage_object"] is recovered_usage
+        assert request_data["response_cost"] == 3.5e-05
+
+    @pytest.mark.asyncio
+    async def test_dispatched_failure_with_text_completion_prompt(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": "a plain text-completion prompt string",
+                    "call_type": "atext_completion",
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        assert estimated.prompt_tokens > 0
+        assert estimated.completion_tokens == 0
+
+    def _dispatched_request_data(self, messages, optional_params, call_type="acompletion"):
+        from datetime import datetime
+
+        return {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": messages,
+                    "optional_params": optional_params,
+                    "call_type": call_type,
+                }
+            ),
+            "metadata": {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_image_message_estimated_without_fetching_image(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this image"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "http://127.0.0.1:1/unreachable.png", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+        request_data = self._dispatched_request_data(messages, {})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", messages=messages, use_default_image_token_count=True
+        )
+        assert estimated.prompt_tokens == expected
+        assert estimated.prompt_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_embedding_string_list_input_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        embedding_input = ["first embedding text", "second embedding text"]
+        request_data = self._dispatched_request_data(embedding_input, {}, call_type="aembedding")
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", text="".join(embedding_input))
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_transcription_checksum_not_estimated(self):
+        request_data = self._dispatched_request_data("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", {}, call_type="atranscription")
+        await self._run(request_data)
+
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_anthropic_system_prompt_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        system_prompt = "You are a verbose historian who narrates every fact in exhaustive detail."
+        messages = [{"role": "user", "content": "write a short essay"}]
+        request_data = self._dispatched_request_data(messages, {"system": system_prompt, "max_tokens": 100})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", messages=messages) + litellm_module.token_counter(
+            model="gpt-3.5-turbo", text=system_prompt
+        )
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_anthropic_system_text_blocks_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        system_blocks = [
+            {"type": "text", "text": "part one of the system prompt. "},
+            {"type": "text", "text": "part two of the system prompt."},
+        ]
+        messages = [{"role": "user", "content": "write a short essay"}]
+        request_data = self._dispatched_request_data(messages, {"system": system_blocks})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", messages=messages) + litellm_module.token_counter(
+            model="gpt-3.5-turbo", text="part one of the system prompt. part two of the system prompt."
+        )
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_responses_instructions_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        instructions = "Answer every question as a meticulous archivist."
+        request_data = self._dispatched_request_data("summarize the archive", {"instructions": instructions})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", text="summarize the archive"
+        ) + litellm_module.token_counter(model="gpt-3.5-turbo", text=instructions)
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_request_body_system_counted_when_optional_params_empty(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        system_prompt = "You are a meticulous cartographer who labels every landmark."
+        messages = [{"role": "user", "content": "draw me a map"}]
+        request_data = {
+            **self._dispatched_request_data(messages, {}, call_type="aanthropic_messages"),
+            "system": system_prompt,
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", messages=messages) + litellm_module.token_counter(
+            model="gpt-3.5-turbo", text=system_prompt
+        )
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_optional_params_system_wins_over_request_body_system(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        dispatched_system = "short dispatched system prompt"
+        messages = [{"role": "user", "content": "hello"}]
+        request_data = {
+            **self._dispatched_request_data(messages, {"system": dispatched_system}),
+            "system": "a much longer request body system prompt that must not be double counted here",
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", messages=messages) + litellm_module.token_counter(
+            model="gpt-3.5-turbo", text=dispatched_system
+        )
+        assert estimated.prompt_tokens == expected
+
+
 from typing import cast
 
 import litellm
