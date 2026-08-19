@@ -69,6 +69,11 @@ def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verif
     return _is_json_object(value) and all(isinstance(item, str) for item in value.values())
 
 
+def _load_json_object(payload: str | bytes) -> dict[str, object]:
+    """Parse a JSON payload that the caller consumes as an object."""
+    return json.loads(payload)
+
+
 def _model_id_from_metadata(litellm_metadata: dict[str, object] | None) -> str | None:
     model_info: Final = litellm_metadata.get("model_info") if litellm_metadata else None
     model_id: Final = model_info.get("id") if _is_json_object(model_info) else None
@@ -1384,7 +1389,7 @@ class ResponsesWebSocketStreaming:
             event = event.decode("utf-8")
         if isinstance(event, str):
             try:
-                event_obj = json.loads(event)
+                event_obj = _load_json_object(event)
             except (json.JSONDecodeError, TypeError):
                 return
         else:
@@ -1397,7 +1402,7 @@ class ResponsesWebSocketStreaming:
         """Extract user input content from response.create for logging."""
         try:
             if isinstance(message, str):
-                msg_obj = json.loads(message)
+                msg_obj = _load_json_object(message)
             elif _is_json_object(message):
                 msg_obj = message
             else:
@@ -1467,7 +1472,7 @@ class ResponsesWebSocketStreaming:
                 # masked response.completed.
                 if self.output_guardrail_callbacks:
                     try:
-                        _evt_payload: Mapping[str, object] = json.loads(response_str)
+                        _evt_payload: Mapping[str, object] = _load_json_object(response_str)
                         _evt_type = _evt_payload.get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
@@ -1532,7 +1537,7 @@ class ResponsesWebSocketStreaming:
         Non-``response.create`` messages are returned unchanged.
         """
         try:
-            msg_obj: Final[dict[str, object]] = json.loads(message)
+            msg_obj: Final = _load_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -1661,7 +1666,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         try:
-            evt_obj: Final[dict[str, object]] = json.loads(response_str)
+            evt_obj: Final = _load_json_object(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -1717,7 +1722,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         try:
-            evt_obj: Final[Mapping[str, object]] = json.loads(response_str)
+            evt_obj: Final[Mapping[str, object]] = _load_json_object(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -1865,7 +1870,7 @@ class ManagedResponsesWebSocketHandler:
         model: str,
         logging_obj: LiteLLMLoggingObj,
         user_api_key_dict: UserAPIKeyAuth | None = None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | None = None,
@@ -1877,10 +1882,11 @@ class ManagedResponsesWebSocketHandler:
         self.model = model
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.litellm_metadata: dict[str, Any] = litellm_metadata or {}
-        self.model_group: str | None = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
+        self.litellm_metadata: Mapping[str, object] = litellm_metadata or {}
+        _model_group: Final = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
             "deployment_model_name"
         )
+        self.model_group: str | None = _model_group if isinstance(_model_group, str) else None
         self.api_key = api_key
         self.api_base = api_base
         self.timeout = timeout
@@ -2018,7 +2024,7 @@ class ManagedResponsesWebSocketHandler:
     async def _parse_message(self, raw_message: str) -> dict[str, object] | None:
         """Parse raw WS text; return the message dict or None (JSON error / ignored type)."""
         try:
-            msg_obj: Final[dict[str, object]] = json.loads(raw_message)
+            msg_obj: Final = _load_json_object(raw_message)
         except json.JSONDecodeError:
             await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
             return None
@@ -2091,7 +2097,7 @@ class ManagedResponsesWebSocketHandler:
             await self.websocket.send_text(serialized)
 
     @staticmethod
-    def _build_base_call_kwargs(msg_obj: dict[str, object]) -> dict[str, Any]:
+    def _build_base_call_kwargs(msg_obj: dict[str, object]) -> dict[str, object]:
         """
         Extract Responses API params from the event, handling both wire formats:
           Nested: {"type": "response.create", "response": {"input": [...], ...}}
@@ -2222,7 +2228,7 @@ class ManagedResponsesWebSocketHandler:
                 continue
             if chunk_type == "response.completed" and completed_event is None:
                 try:
-                    completed_event = json.loads(serialized)
+                    completed_event = _load_json_object(serialized)
                 except Exception:
                     pass
             try:
@@ -2299,12 +2305,16 @@ class ManagedResponsesWebSocketHandler:
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        requested_model: Final[str | None] = call_kwargs.pop("model", None)
+        popped_model: Final = call_kwargs.pop("model", None)
+        requested_model: Final[str | None] = popped_model if isinstance(popped_model, str) else None
         model: Final[str] = (
             self.model if requested_model is None or requested_model == self.model_group else requested_model
         )
 
-        previous_response_id: Final[str | None] = call_kwargs.pop("previous_response_id", None)
+        popped_previous_response_id: Final = call_kwargs.pop("previous_response_id", None)
+        previous_response_id: Final[str | None] = (
+            popped_previous_response_id if isinstance(popped_previous_response_id, str) else None
+        )
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history
