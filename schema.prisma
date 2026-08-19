@@ -641,6 +641,8 @@ model LiteLLM_SpendLogs {
   mcp_namespaced_tool_name String? 
   agent_id            String?
   proxy_server_request Json?     @default("{}")
+  created_at          DateTime   @default(now()) @map("created_at")
+  updated_at          DateTime   @default(now()) @updatedAt @map("updated_at")
   @@index([startTime])
   @@index([startTime, request_id])
   @@index([end_user])

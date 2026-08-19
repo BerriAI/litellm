@@ -498,6 +498,25 @@ class TestSpendLogs:
         assert log.request_id == "r1"
         assert log.spend == 0.0
         assert log.cache_hit == "False"
+        assert log.created_at is None
+        assert log.updated_at is None
+
+    def test_spend_logs_parse_database_timestamps(self):
+        created_at = datetime(2026, 8, 18, 12, 0, 0)
+        updated_at = datetime(2026, 8, 18, 12, 5, 0)
+        log = LiteLLM_SpendLogs(
+            request_id="r1",
+            api_key="sk-1",
+            call_type="completion",
+            startTime=None,
+            endTime=None,
+            messages=None,
+            response=None,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+        assert log.created_at == created_at
+        assert log.updated_at == updated_at
 
     def test_error_logs_creation(self):
         log = LiteLLM_ErrorLogs(
