@@ -507,6 +507,36 @@ async def test_recording_the_lock_outcome_never_blocks_the_job():
 
 
 @pytest.mark.asyncio
+async def test_a_swallowed_redis_outage_is_not_reported_as_losing_the_election():
+    """RedisCache catches connection errors and returns None rather than raising,
+    and None is also how redis reports SET NX losing the race. Without the
+    swallowed-failure marker every outage publishes as ordinary contention,
+    which is the distinction this metric exists to make."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.caching.redis_cache import _record_swallowed_redis_failure
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.types.integrations.prometheus import LockAttemptResult
+
+    breaker = MagicMock()
+
+    async def swallowing_set(*args, **kwargs):
+        _record_swallowed_redis_failure(breaker, ConnectionError("redis down"))
+        return None
+
+    cache = MagicMock()
+    cache.async_set_cache = swallowing_set
+    cache.async_get_cache = AsyncMock(return_value=None)
+    manager = PodLockManager(redis_cache=cache)
+    logger = MagicMock()
+
+    with patch("litellm.integrations.prometheus.PrometheusLogger.get_instance", return_value=logger):
+        assert await manager.acquire_lock(cronjob_id="db_spend_update_job") is False
+
+    logger.record_cronjob_lock_attempt.assert_called_once_with("db_spend_update_job", LockAttemptResult.ERROR)
+
+
+@pytest.mark.asyncio
 async def test_a_redis_failure_is_not_reported_as_losing_the_election():
     """not_acquired means another pod won. An attempt that errored is a
     different operational state and must not be read as healthy contention."""

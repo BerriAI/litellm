@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, swallowed_redis_failure_count
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.types.integrations.prometheus import LockAttemptResult
@@ -73,10 +73,19 @@ end
             verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")
             _record_lock_attempt(cronjob_id, LockAttemptResult.NO_REDIS)
             return None
+        swallowed_before: Final = swallowed_redis_failure_count()
         try:
             acquired: Final = await self._attempt_acquire_lock(cronjob_id, ttl=ttl, allow_reentrant=allow_reentrant)
         except Exception as e:
             verbose_proxy_logger.error("Error acquiring Redis lock for %s: %s", cronjob_id, e)
+            _record_lock_attempt(cronjob_id, LockAttemptResult.ERROR)
+            return False
+        # An outage does not always raise. RedisCache catches connection errors and
+        # returns None, which is also how redis reports SET NX losing the race, so
+        # only the swallowed-failure marker separates the two. Without it every
+        # outage is published as ordinary contention.
+        if swallowed_redis_failure_count() != swallowed_before:
+            verbose_proxy_logger.error("Redis unavailable while acquiring lock for %s", cronjob_id)
             _record_lock_attempt(cronjob_id, LockAttemptResult.ERROR)
             return False
         _record_lock_attempt(cronjob_id, LockAttemptResult.ACQUIRED if acquired else LockAttemptResult.NOT_ACQUIRED)
