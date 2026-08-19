@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -43,7 +43,7 @@ describe("ThresholdInput", () => {
     await user.clear(input);
     expect(onValueChange).toHaveBeenLastCalledWith(null);
 
-    await user.type(input, "0.55");
+    fireEvent.change(input, { target: { value: "0.55" } });
     expect(onValueChange).toHaveBeenLastCalledWith(0.55);
   });
 
@@ -54,7 +54,7 @@ describe("ThresholdInput", () => {
 
     const input = screen.getByRole("spinbutton");
     await user.clear(input);
-    await user.type(input, "5");
+    fireEvent.change(input, { target: { value: "5" } });
     await user.tab();
 
     expect(onValueChange).toHaveBeenLastCalledWith(1);

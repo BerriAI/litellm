@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -69,8 +69,8 @@ describe("UIThemeSettings", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
-    await user.type(screen.getByPlaceholderText(LOGO_PLACEHOLDER), "https://a.test/logo.png");
-    await user.type(screen.getByPlaceholderText(FAVICON_PLACEHOLDER), "https://a.test/fav.ico");
+    fireEvent.change(screen.getByPlaceholderText(LOGO_PLACEHOLDER), { target: { value: "https://a.test/logo.png" } });
+    fireEvent.change(screen.getByPlaceholderText(FAVICON_PLACEHOLDER), { target: { value: "https://a.test/fav.ico" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(patchCalls()).toHaveLength(1));
