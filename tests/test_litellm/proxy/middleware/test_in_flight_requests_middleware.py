@@ -178,3 +178,30 @@ async def test_the_proxys_own_rate_limit_error_marks_the_request():
         assert was_request_shed_by_proxy() is True
     finally:
         proxy_shed_request.reset(token)
+
+def test_the_shed_metric_documents_exactly_the_statuses_it_counts(monkeypatch):
+    """The advertised status set is what a consumer writes alerts against, so a
+    status the metric names but never counts inflates their view of shedding."""
+    import re
+
+    import litellm
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy.middleware.in_flight_requests_middleware import _SHED_STATUSES
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    from prometheus_client import REGISTRY
+
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        try:
+            REGISTRY.unregister(collector)
+        except Exception:
+            pass
+
+    documentation = PrometheusLogger().litellm_requests_shed_total._documentation
+
+    advertised = re.search(r"status is one of ([^;]+);", documentation)
+    assert advertised is not None, f"no advertised status list in: {documentation}"
+    documented = {int(value.strip()) for value in advertised.group(1).split(",")}
+
+    assert documented == set(_SHED_STATUSES)

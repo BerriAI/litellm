@@ -723,8 +723,10 @@ class PrometheusLogger(CustomLogger):
             self.litellm_requests_shed_total = self._counter_factory(
                 name="litellm_requests_shed_total",
                 documentation=(
-                    "Responses where the proxy declined to serve rather than failed to, by status. "
-                    "429 is a rate or concurrency limit, 503 is the database being unavailable"
+                    "Responses where this proxy declined to serve rather than failed to, by status. "
+                    "status is one of 429; upstream rate limits are forwarded with the same status and "
+                    "are excluded, as are the 503s raised when a budget cannot be verified, which mean "
+                    "a dependency is unreachable rather than this pod being at capacity"
                 ),
                 labelnames=("status",),
             )
