@@ -1341,7 +1341,7 @@ async def _persist_dcr_client_registration(
     ``update_mcp_server`` merges credential blobs: a re-registered public client must not
     inherit the previous client's secret or auth method.
     """
-    if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+    if mcp_server.is_client_forwarded_token:
         return "skipped"
 
     try:
@@ -2187,7 +2187,7 @@ async def _build_oauth_protected_resource_response(
             )
 
         if upstream_metadata is not None:
-            if mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+            if mcp_server.is_client_forwarded_token:
                 return upstream_metadata
             return {**upstream_metadata, "resource": resource_url}
 

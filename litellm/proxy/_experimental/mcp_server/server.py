@@ -1704,7 +1704,7 @@ if MCP_AVAILABLE:
             )
 
         extra_headers: dict[str, str] | None = None
-        is_client_forwarded_mode: Final = server.is_true_passthrough or server.is_oauth_delegate
+        is_client_forwarded_mode: Final = server.is_client_forwarded_token
         # In a multi-server listing scope the request-wide Authorization can only carry one token,
         # so it is withheld from a client-forwarded server when another server in scope also consumes
         # it (RFC 9700 cross-resource replay); such scopes must bind per-server via
