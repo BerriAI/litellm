@@ -906,3 +906,51 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+class TestOllamaReasoningEffortMapping:
+    """
+    Test reasoning_effort mapping with string and dict formats (Responses API bridge).
+    Regression: https://github.com/BerriAI/litellm/issues/37452
+    """
+
+    def test_map_openai_params_reasoning_effort_string(self):
+        config = OllamaChatConfig()
+        # "low", "medium", "high" map to True for standard models
+        assert config.map_openai_params({"reasoning_effort": "low"}, {}, "qwen3") == {"think": True}
+        assert config.map_openai_params({"reasoning_effort": "medium"}, {}, "qwen3") == {"think": True}
+        assert config.map_openai_params({"reasoning_effort": "high"}, {}, "qwen3") == {"think": True}
+        assert config.map_openai_params({"reasoning_effort": "none"}, {}, "qwen3") == {"think": False}
+
+    def test_map_openai_params_reasoning_effort_dict_with_effort(self):
+        config = OllamaChatConfig()
+        result = config.map_openai_params(
+            {"reasoning_effort": {"effort": "medium", "summary": "auto"}}, {}, "qwen3"
+        )
+        assert result == {"think": True}
+
+        result_low = config.map_openai_params(
+            {"reasoning_effort": {"effort": "low"}}, {}, "qwen3"
+        )
+        assert result_low == {"think": True}
+
+        result_none = config.map_openai_params(
+            {"reasoning_effort": {"effort": "none"}}, {}, "qwen3"
+        )
+        assert result_none == {"think": False}
+
+    def test_map_openai_params_reasoning_effort_dict_summary_only(self):
+        config = OllamaChatConfig()
+        # When only summary is present without effort, no "think" param is set
+        result = config.map_openai_params(
+            {"reasoning_effort": {"summary": "auto"}}, {}, "qwen3"
+        )
+        assert "think" not in result
+
+    def test_map_openai_params_reasoning_effort_gpt_oss(self):
+        config = OllamaChatConfig()
+        result = config.map_openai_params(
+            {"reasoning_effort": {"effort": "medium"}}, {}, "gpt-oss-123"
+        )
+        assert result == {"think": "medium"}
+

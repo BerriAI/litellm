@@ -147,7 +147,7 @@ class OllamaChatConfig(BaseConfig):
         non_default_params: dict,
         optional_params: dict,
         model: str,
-        drop_params: bool,
+        drop_params: bool = False,
     ) -> dict:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
@@ -170,10 +170,12 @@ class OllamaChatConfig(BaseConfig):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
             if param == "reasoning_effort" and value is not None:
-                if model.startswith("gpt-oss"):
-                    optional_params["think"] = value
-                else:
-                    optional_params["think"] = value in {"low", "medium", "high"}
+                effort_value = value.get("effort") if isinstance(value, dict) else value
+                if effort_value is not None:
+                    if model.startswith("gpt-oss"):
+                        optional_params["think"] = effort_value
+                    else:
+                        optional_params["think"] = effort_value in {"low", "medium", "high"}
             ### FUNCTION CALLING LOGIC ###
             # Ollama 0.4+ supports native tool calling - pass tools directly
             # and let Ollama handle model capability detection
