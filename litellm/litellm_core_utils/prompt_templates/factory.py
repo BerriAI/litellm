@@ -3712,7 +3712,13 @@ def _convert_to_bedrock_tool_call_invoke(
                         _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={tool_calls} to bedrock tool calls. Received error={e}")
+        tool_call_ids: Final = tuple(tool.get("id") for tool in tool_calls if isinstance(tool, dict))
+        raise litellm.BadRequestError(
+            message=f"Unable to convert openai tool calls with ids={tool_call_ids} to bedrock tool calls. "
+            f"Received error={e}",
+            model=model or "",
+            llm_provider="bedrock",
+        ) from e
 
 
 def _append_bedrock_tool_result_media_block(
