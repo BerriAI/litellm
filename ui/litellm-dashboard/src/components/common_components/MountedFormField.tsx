@@ -61,9 +61,8 @@ export const useMountRegistry = (): MountRegistry => {
 };
 
 /**
- * antd submits only the mounted fields; react-hook-form submits the whole store, so the mounted set is reapplied here.
- * Covers static literal names only: the registry counts by name and this emits flat keys, so a field whose name is
- * generated at runtime, a Form.List row and its per-row sub-fields, is never in the mounted set and goes missing here.
+ * Static literal names only: the registry counts by name and this emits flat keys, so a runtime-generated name, a
+ * Form.List row and its per-row sub-fields, is never in the mounted set and goes silently missing from the payload.
  */
 export const projectMountedValues = (
   registry: MountRegistry,
@@ -88,7 +87,6 @@ export type MountedFieldControlProps = {
 export interface MountedFormFieldProps {
   readonly name: string;
   readonly label?: React.ReactNode;
-  /** antd `help` is always visible and replaces the rule's message, so a helped field never shows one. */
   readonly help?: React.ReactNode;
   readonly required?: boolean;
   readonly rules?: Omit<
