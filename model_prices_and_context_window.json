@@ -14473,7 +14473,6 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_minimal_reasoning_effort": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4": {
