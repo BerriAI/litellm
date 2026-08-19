@@ -278,7 +278,21 @@ class ProxyClient:
         mode: ModelMode | None = None,
     ) -> str:
         """Register a deployment under `model_name` and return its proxy-assigned
-        model_id, once the model is actually servable on the data plane.
+        model_id, once the model is actually servable on the data plane."""
+        return self.register_model(
+            ModelNewBody(
+                model_name=model_name,
+                litellm_params=litellm_params,
+                model_info=ModelInfoBody(mode=mode),
+            )
+        )
+
+    def register_model(self, body: ModelNewBody, listed_for: str | None = None) -> str:
+        """`create_model` for deployments that carry more than a mode: access groups,
+        team scoping, a pinned id. `listed_for` is the virtual key whose /v1/models
+        view must list the deployment before it counts as servable, because a
+        team-scoped deployment is listed to its own team and to nobody else, master
+        key included; leave it unset for a proxy-wide model.
 
         /model/new is a control-plane route; the data plane (which serves /chat,
         /ocr, ...) only picks the new model up on its next DB reload, so a call
@@ -296,25 +310,22 @@ class ProxyClient:
             self.transport.post(
                 "/model/new",
                 headers=self.transport.master,
-                json=ModelNewBody(
-                    model_name=model_name,
-                    litellm_params=litellm_params,
-                    model_info=ModelInfoBody(mode=mode),
-                ),
+                json=body,
                 response_type=ModelNewResponse,
             )
         ).model_id
         written_at = time.monotonic()
-        self._await_model_servable(model_name)
+        self._await_model_servable(body.model_name, listed_for)
         settle_propagation(written_at)
         return model_id
 
-    def _await_model_servable(self, model_name: str) -> None:
+    def _await_model_servable(self, model_name: str, listed_for: str | None = None) -> None:
         """Block until the data plane lists `model_name`, or fail at model_servable_timeout."""
+        headers = self.transport.master if listed_for is None else self.transport.bearer(listed_for)
         outcome = await_servable(
             lambda poll_timeout: self.transport.get(
                 "/v1/models",
-                headers=self.transport.master,
+                headers=headers,
                 params=NoBody(),
                 response_type=ModelsListResponse,
                 timeout=poll_timeout,

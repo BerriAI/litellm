@@ -6392,3 +6392,168 @@ def test_is_user_proxy_admin_rejects_view_only_admin():
     assert _is_user_proxy_admin(user_obj=viewer) is False
     assert _is_user_proxy_admin(user_obj=admin) is True
     assert _is_user_proxy_admin(user_obj=None) is False
+
+
+def _make_wildcard_access_group_router():
+    """
+    `openai/*` tagged into an access group, plus an untagged `azure/*`, mirroring a
+    proxy that fronts a whole provider behind one wildcard deployment.
+    """
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                "model_info": {
+                    "id": "wildcard-openai",
+                    "access_groups": ["default-models"],
+                },
+            },
+            {
+                "model_name": "azure/*",
+                "litellm_params": {"model": "azure/*", "api_key": "fake"},
+                "model_info": {"id": "wildcard-azure"},
+            },
+        ]
+    )
+
+
+def test_can_object_call_model_access_group_wildcard_accepts_bare_model_name():
+    """
+    Regression: a key holding only the access group name was denied for `gpt-4o`
+    while `openai/gpt-4o` was allowed, because group membership resolved through the
+    pattern router's raw regex and skipped the `{provider}/{model}` retry that both
+    routing and the direct-wildcard grant already perform.
+    """
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_wildcard_access_group_router()
+
+    assert (
+        _can_object_call_model(
+            model="gpt-4o",
+            llm_router=router,
+            models=["default-models"],
+            object_type="key",
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_access_group_wildcard_accepts_prefixed_model_name():
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_wildcard_access_group_router()
+
+    assert (
+        _can_object_call_model(
+            model="openai/gpt-4o",
+            llm_router=router,
+            models=["default-models"],
+            object_type="key",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "totally-made-up-model-zzz",  # no provider can be inferred
+        "azure/some-deployment",  # wildcard exists but carries no access group
+    ],
+)
+def test_can_object_call_model_access_group_wildcard_does_not_over_grant(model):
+    """The bare-name retry must not turn an access group into a blanket grant."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_wildcard_access_group_router()
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model=model,
+            llm_router=router,
+            models=["default-models"],
+            object_type="key",
+        )
+
+
+def test_can_object_call_model_access_group_rejects_unconsumed_namespace():
+    """
+    `bedrockz/...` infers provider `bedrock` from a fragment of the name, so
+    re-prefixing would smuggle an unrecognized namespace through a `bedrock/*` group.
+    """
+    from litellm import Router
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {
+                    "id": "wildcard-bedrock",
+                    "access_groups": ["bedrock-models"],
+                },
+            }
+        ]
+    )
+
+    assert (
+        _can_object_call_model(
+            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            llm_router=router,
+            models=["bedrock-models"],
+            object_type="key",
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model="bedrockz/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            llm_router=router,
+            models=["bedrock-models"],
+            object_type="key",
+        )
+
+
+def test_can_object_call_model_team_scoped_wildcard_accepts_bare_model_name():
+    """
+    Same regression as the proxy-wide wildcard, but for a team-scoped deployment
+    whose public name is a wildcard: those live in a separate per-team pattern
+    index that needed the same `{provider}/{model}` retry.
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*_team-a_abc",
+                "litellm_params": {"model": "openai/*", "api_key": "fake"},
+                "model_info": {
+                    "id": "team-byok-wildcard",
+                    "team_id": "team-a",
+                    "team_public_model_name": "openai/*",
+                    "access_groups": ["team-models"],
+                },
+            }
+        ]
+    )
+
+    for model in ("gpt-4o", "openai/gpt-4o"):
+        assert (
+            _can_object_call_model(
+                model=model,
+                llm_router=router,
+                models=["team-models"],
+                object_type="team",
+                team_id="team-a",
+            )
+            is True
+        )
