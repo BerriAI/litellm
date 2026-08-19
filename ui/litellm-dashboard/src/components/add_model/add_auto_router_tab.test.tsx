@@ -285,6 +285,28 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  // The scalar floor is the one scorer knob with no group dict behind it, so its wiring into the create
+  // payload is only proven end to end. 0 is the case a truthy check would silently drop.
+  it("carries a reasoning override floor of 0 through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "override-floor-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(await screen.findByText("Advanced scoring"));
+    fireEvent.change(await screen.findByLabelText("Minimum score"), { target: { value: "0" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      reasoning_override_min_score: 0,
+    });
+  });
+
   it("carries session affinity turned on through to the create payload", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);

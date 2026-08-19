@@ -2836,6 +2836,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    reasoning_override_min_score: ReadOnly[float]
     conversation_continuing: bool
     savings_baseline_model: str
     savings_baseline_deployment_id: str
@@ -2860,6 +2861,7 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_cost",
         "escalated",
         "tier_boundaries",
+        "reasoning_override_min_score",
         "conversation_continuing",
         "savings_baseline_model",
         "savings_baseline_deployment_id",

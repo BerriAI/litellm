@@ -136,6 +136,11 @@ export interface ComplexityRouterConfigValue {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  /**
+   * Score floor the reasoning-marker override must clear. Undefined keeps the key out of the payload, so the
+   * floor tracks tier_boundaries.simple_medium; an explicit 0 is a real floor that promotes on the markers alone.
+   */
+  reasoning_override_min_score?: number;
 }
 
 interface ComplexityRouterConfigProps {

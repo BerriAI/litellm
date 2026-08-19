@@ -46,6 +46,7 @@ interface ScorerKnobInputs {
   tierBoundaries: TierBoundaries | undefined;
   tokenThresholds: TokenThresholds | undefined;
   dimensionWeights: DimensionWeights | undefined;
+  reasoningOverrideMinScore: number | undefined;
 }
 
 /**
@@ -59,6 +60,7 @@ const scorerKnobPayload = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  reasoningOverrideMinScore,
 }: ScorerKnobInputs) =>
   heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
     ? {}
@@ -66,6 +68,7 @@ const scorerKnobPayload = ({
         ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
         ...(tokenThresholds && { token_thresholds: tokenThresholds }),
         ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
       };
 
 export interface BuildComplexityRouterConfigParams {
@@ -95,6 +98,7 @@ export interface BuildComplexityRouterConfigParams {
   tierBoundaries?: TierBoundaries;
   tokenThresholds?: TokenThresholds;
   dimensionWeights?: DimensionWeights;
+  reasoningOverrideMinScore?: number;
 }
 
 export interface ComplexityRouterConfigPayload {
@@ -124,6 +128,7 @@ export interface ComplexityRouterConfigPayload {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  reasoning_override_min_score?: number;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -230,11 +235,19 @@ export const buildComplexityRouterConfig = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  reasoningOverrideMinScore,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
-  const scorerInputs = { classifierType, classifierFallback, tierBoundaries, tokenThresholds, dimensionWeights };
+  const scorerInputs = {
+    classifierType,
+    classifierFallback,
+    tierBoundaries,
+    tokenThresholds,
+    dimensionWeights,
+    reasoningOverrideMinScore,
+  };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
 
   return {

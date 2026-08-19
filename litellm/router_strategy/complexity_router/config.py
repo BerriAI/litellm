@@ -481,6 +481,15 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    reasoning_override_min_score: float | None = Field(
+        default=None,
+        description=(
+            "Minimum weighted score a request must reach before 2+ reasoning markers may promote it to the "
+            "reasoning tier. Unset tracks tier_boundaries.simple_medium, so the override never rescues a "
+            "request the scorer placed in the cheapest tier; 0 restores the unconditional override"
+        ),
+    )
+
     # Token count thresholds
     token_thresholds: dict[str, int] = Field(
         default_factory=lambda: DEFAULT_TOKEN_THRESHOLDS.copy(),
