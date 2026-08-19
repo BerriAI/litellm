@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -76,6 +76,36 @@ class _HiddenlayerChoice(TypedDict, total=False):
     message: ReadOnly[_HiddenlayerChoiceMessage]
 
 
+class _HiddenlayerV2Output(TypedDict, total=False):
+    messages: ReadOnly[Sequence[_HiddenlayerOutputMessage]]
+    choices: ReadOnly[Sequence[_HiddenlayerChoice]]
+
+
+class _LoggedCallDetails(Protocol):
+    """Logging object view that exposes its untyped call details with the shape this guardrail reads."""
+
+    @property
+    def model_call_details(self) -> Mapping[str, _LoggedCallLitellmParams]: ...
+
+
+class _TokenPayloadSource(Protocol):
+    """Response view that decodes the HiddenLayer OAuth token body as a string mapping."""
+
+    def json(self) -> Mapping[str, str]: ...
+
+
+def _logged_request_headers(logging_obj: _LoggedCallDetails) -> Mapping[str, str]:
+    return logging_obj.model_call_details.get("litellm_params", {}).get("metadata", {}).get("headers", {})
+
+
+def _token_payload(response: _TokenPayloadSource) -> Mapping[str, str]:
+    return response.json()
+
+
+def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
+    return headers.get(key, default)
+
+
 def is_saas(host: str) -> bool:
     """Checks whether the connection is to the SaaS platform"""
 
@@ -102,7 +132,7 @@ def _get_jwt(auth_url, api_id, api_key) -> str:
             f"Unable to get authentication credentials for the HiddenLayer API - invalid response: {resp.json()}"
         )
 
-    return resp.json()["access_token"]
+    return _token_payload(resp)["access_token"]
 
 
 class HiddenlayerGuardrail(CustomGuardrail):
@@ -176,10 +206,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
         # from the logger object on the response from the model.
         headers = request_data.get("proxy_server_request", {}).get("headers", {})
         if not headers and logging_obj and logging_obj.model_call_details:
-            logged_litellm_params: Final[_LoggedCallLitellmParams] = logging_obj.model_call_details.get(
-                "litellm_params", {}
-            )
-            headers = logged_litellm_params.get("metadata", {}).get("headers", {})
+            headers = _logged_request_headers(logging_obj)
 
         hl_request_metadata["requester_id"] = headers.get("hl-requester-id") or "LiteLLM"
         project_id: Final = headers.get("hl-project-id")
@@ -418,8 +445,9 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
 
         response: Final = await self._call_hiddenlayer(payload, input_type, hl_headers)
         output: Final = response.json()
+        evaluated_output: Final[_HiddenlayerV2Output] = output
 
-        if response.headers.get("hl-runtime-action", "").lower() == "block":
+        if _header_value(response.headers, "hl-runtime-action", "").lower() == "block":
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -432,7 +460,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         if input_type == "request":
             inputs["structured_messages"] = output
 
-            modified_messages: Final[Sequence[_HiddenlayerOutputMessage]] = output.get("messages", [])
+            modified_messages: Final[Sequence[_HiddenlayerOutputMessage]] = evaluated_output.get("messages", [])
             for message in modified_messages:
                 content = message.get("content", "")
                 if isinstance(content, list):
@@ -447,7 +475,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             inputs["texts"] = new_texts
 
         elif input_type == "response" and inputs.get("texts"):
-            redacted_choices: Final[Sequence[_HiddenlayerChoice]] = output.get("choices", [{}])
+            redacted_choices: Final[Sequence[_HiddenlayerChoice]] = evaluated_output.get("choices", [{}])
             inputs["texts"] = [redacted_choices[-1].get("message", {}).get("content", "")]
         elif input_type == "response" and inputs.get("tool_calls"):
             inputs["tool_calls"] = output

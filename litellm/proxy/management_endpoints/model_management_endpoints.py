@@ -114,13 +114,14 @@ class UpdatePublicModelGroupsRequest(BaseModel):
 class _ProxyModelRow(Protocol):
     model_id: str
     model_name: str
+    litellm_params: Mapping[str, object]
     model_info: Mapping[str, object] | None
 
     def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
 
 
 class _ProxyModelTable(Protocol):
-    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_ProxyModelRow | None]: ...
+    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[BaseModel | None]: ...
 
     def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_ProxyModelRow]]: ...
 
@@ -182,10 +183,7 @@ def _model_alias_table(prisma_client: PrismaClient) -> _ModelAliasTable:
 
 
 async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment | None:
-    db_model: Final = cast(
-        BaseModel | None,
-        await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id}),
-    )
+    db_model: Final = await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id})
 
     if not db_model:
         return None
@@ -1577,7 +1575,7 @@ async def delete_model(
                 },
             )
 
-        model_in_db: Final = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_info.id})
+        model_in_db: Final = await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_info.id})
         if model_in_db is None:
             raise HTTPException(
                 status_code=400,
@@ -1914,7 +1912,7 @@ async def update_model(
             )
 
         _model_id: str | None = None
-        _model_info: Final = getattr(model_params, "model_info", None)
+        _model_info: Final[ModelInfo | None] = getattr(model_params, "model_info", None)
         if _model_info is None:
             raise Exception("model_info not provided")
 

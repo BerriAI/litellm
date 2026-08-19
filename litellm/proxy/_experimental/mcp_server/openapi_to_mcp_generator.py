@@ -9,10 +9,11 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Any, Final, TypeAlias, TypedDict
+from typing import Any, Final, TypedDict
 from urllib.parse import quote
 
 import httpx
+from typing_extensions import ReadOnly, Required
 
 # Tool names emitted from OpenAPI specs must work across all major LLM providers.
 # OpenAI/Anthropic/Bedrock all enforce a character class roughly equivalent to
@@ -47,11 +48,17 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 
-_OpenAPIParameter: TypeAlias = Mapping[str, Any]
-
 
 class _OpenAPIJSONSchema(TypedDict, total=False):
     properties: Mapping[str, object]
+    type: ReadOnly[str]
+
+
+class _OpenAPIParameter(TypedDict, total=False):
+    name: Required[ReadOnly[str]]
+    description: ReadOnly[str]
+    required: ReadOnly[bool]
+    schema: ReadOnly[_OpenAPIJSONSchema]
 
 
 class _OpenAPIMediaType(TypedDict, total=False):
@@ -241,7 +248,7 @@ def resolve_operation_params(
     operation: _OpenAPIOperation,
     path_item: _OpenAPIPathItem,
     components: _OpenAPIComponents,
-) -> dict[str, Any]:
+) -> _OpenAPIOperation:
     """Return a copy of *operation* with fully-resolved, merged parameters.
 
     Handles two common patterns in real-world OpenAPI specs:
@@ -261,12 +268,11 @@ def resolve_operation_params(
     op_level: Final = _resolve_param_list(operation.get("parameters", []), component_params)
     op_keys: Final = {(p["name"], p.get("in")) for p in op_level}
     merged: Final = [p for p in path_level if (p["name"], p.get("in")) not in op_keys] + op_level
-    result: Final = dict(operation)
-    result["parameters"] = merged
+    result: Final[_OpenAPIOperation] = {**operation, "parameters": merged}
     return result
 
 
-def extract_parameters(operation: Mapping[str, Any]) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
+def extract_parameters(operation: _OpenAPIOperation) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
     """Extract parameter names from OpenAPI operation."""
     path_params: Final = []
     query_params: Final = []
@@ -292,7 +298,7 @@ def extract_parameters(operation: Mapping[str, Any]) -> tuple[Sequence[str], Seq
     return path_params, query_params, body_params
 
 
-def build_input_schema(operation: Mapping[str, Any]) -> dict[str, Any]:
+def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
     """Build MCP input schema from OpenAPI operation."""
     properties: Final = {}
     required: Final = []
@@ -389,7 +395,7 @@ def _merge_openapi_tool_request_headers(
 def create_tool_function(
     path: str,
     method: str,
-    operation: Mapping[str, Any],
+    operation: _OpenAPIOperation,
     base_url: str,
     headers: dict[str, str] | None = None,
 ):
@@ -443,7 +449,7 @@ def create_tool_function(
                 url = url.replace("{{" + param_name + "}}", safe_value)
 
         # Build query params using original parameter names
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, object]] = {}
         for param_name in query_params:
             param_value = kwargs.get(param_name, "")
             if param_value:
@@ -451,7 +457,7 @@ def create_tool_function(
                 params[param_name] = param_value
 
         # Build request body
-        json_body: dict[str, Any] | None = None
+        json_body: dict[str, object] | None = None
         if body_params:
             # Try "body" first (most common), then check all body param names
             body_value = kwargs.get("body", {})
@@ -492,7 +498,7 @@ def create_tool_function(
 
 def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
     """Register MCP tools from OpenAPI specification."""
-    paths: Final[Mapping[str, Mapping[str, Any]]] = spec.get("paths", {})
+    paths: Final[Mapping[str, Mapping[str, _OpenAPIOperation]]] = spec.get("paths", {})
     used_names: Final = set()
 
     for path, path_item in paths.items():
