@@ -8643,7 +8643,7 @@ class Router:
                 previous_deployment.model_name,
                 model_id,
             )
-        except Exception as restore_error:
+        except Exception as restore_error:  # noqa: BLE001  # best-effort restore: a second failure must not abort the reload
             verbose_router_logger.warning(
                 "Could not restore previously served deployment %s (id=%s) after the failed upsert: %s",
                 previous_deployment.model_name,
