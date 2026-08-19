@@ -1,5 +1,6 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, Collapse, Divider, Input, Space, Switch, Tooltip, Typography } from "antd";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Select as AntdSelect, Card, Collapse, Divider, Input, Space, Switch, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
@@ -249,9 +250,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         <Typography.Title level={4} style={{ margin: 0 }}>
           Complexity Tier Configuration
         </Typography.Title>
-        <Tooltip title="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
+        <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
           <InfoCircleOutlined className="text-gray-400" />
-        </Tooltip>
+        </SimpleTooltip>
       </Space>
 
       <Text type="secondary" style={{ display: "block", marginBottom: 24 }}>
@@ -279,9 +280,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <Text strong style={{ fontSize: 16 }}>
                     {label} Tier
                   </Text>
-                  <Tooltip title={tierInfo.description}>
+                  <SimpleTooltip content={tierInfo.description}>
                     <InfoCircleOutlined className="text-gray-400" />
-                  </Tooltip>
+                  </SimpleTooltip>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
                   </Text>
@@ -329,9 +330,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             <Text strong style={{ fontSize: 16 }}>
               Default Model
             </Text>
-            <Tooltip title="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
+            <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
               <InfoCircleOutlined className="text-gray-400" />
-            </Tooltip>
+            </SimpleTooltip>
           </div>
           <AntdSelect
             value={value.default_model || undefined}
