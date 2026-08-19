@@ -6227,3 +6227,4 @@ async def test_unlicensed_jwt_auth_is_forbidden_not_unauthorized():
 
     assert error.code == "403"
     assert "enterprise" in error.message.lower()
+

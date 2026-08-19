@@ -436,3 +436,4 @@ async def test_team_member_budget_check_personal_key_not_team():
         # Should pass and get_team_membership should not be called
         assert result is True
         mock_get_team_membership.assert_not_called()
+

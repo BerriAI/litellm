@@ -20,7 +20,7 @@ import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Literal, Optional, Protocol, TypeVar, cast
+from typing import Annotated, Any, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
 import yaml
@@ -51,6 +51,7 @@ from litellm.proxy._types import LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
+    get_key_object,
     get_org_object,
     get_project_object,
     get_team_object,
@@ -59,7 +60,10 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     enforce_output_token_estimates_are_admin_only,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    update_key_budget_with_temp_budget_increase,
+    user_api_key_auth,
+)
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
@@ -84,6 +88,10 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+)
+from litellm.proxy.management_endpoints.key_budget_resolver import (
+    KeyBudgetResolverDeps,
+    resolve_key_budgets,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
@@ -139,6 +147,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyResponse,
     BulkUpdateTeamKeysRequest,
     FailedKeyUpdate,
+    KeyBudgetsResponse,
     SuccessfulKeyUpdate,
 )
 from litellm.types.router import Deployment
@@ -3741,6 +3750,141 @@ async def info_key_fn(
 
         return {"key": key, "info": key_info}
     except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
+@router.get(
+    "/key/{key_id}/budgets",
+    tags=("key management",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=KeyBudgetsResponse,
+)
+@router.get(
+    "/key/budgets",
+    tags=("key management",),
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=KeyBudgetsResponse,
+)
+@management_endpoint_wrapper
+async def key_budgets_fn(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    key_id: str | None = None,
+    end_user_id: Annotated[
+        str | None,
+        fastapi.Query(
+            description="Resolve the budgets that apply to this end user as well. End-user budgets are "
+            "request-scoped, so they can only be reported for a named end user."
+        ),
+    ] = None,
+) -> KeyBudgetsResponse:
+    """
+    List every budget that can block requests made with a key, with its live spend.
+
+    A `BudgetExceededError` names one entity, but finding out which of the key, its windows, its
+    per-model caps, its team, the caller's membership in that team, the owning user, org, project,
+    the key's tags, the end user or the proxy-wide limit produced it means reading auth source.
+    This returns all of them at once, including the scopes that are left unconfigured, so a scope
+    can be ruled out without opening every object.
+
+    Parameters:
+    - key_id: str | None (path parameter) - The key to inspect. Accepts the plaintext key or its
+      hash. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
+    - end_user_id: str | None (query parameter) - Also report the budgets that would apply to this
+      end user. Omitted end users produce no `end_user` rows, because nothing binds an end user to
+      a key outside a request.
+
+    Returns:
+    - key: str - The key that was looked up, echoed back as it was passed in
+    - budgets: list - One entry per applicable budget
+        - scope: str - `proxy`, `key`, `key_window`, `key_model`, `team`, `team_window`,
+          `team_member`, `user`, `organization`, `project`, `tag`, `end_user` or `end_user_model`
+        - entity_type: str - The `Litellm_EntityType` a `BudgetExceededError` from this scope
+          carries, so a denial message maps back to a row here
+        - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
+        - enforcement: str - `hard` blocks the request, `soft` only raises an alert
+        - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
+          but places no limit on it
+        - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
+          counter, not the periodically-synced database column
+        - remaining: float | None - `max_budget - spend`, when both are known
+        - comparison: str - The operator the enforcing check uses, which differs per scope
+        - budget_duration / budget_reset_at / window_start: When spend next resets to zero
+        - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
+        - status: str - `unlimited`, `ok` or `exceeded`
+        - note: str | None - A caveat worth knowing before trusting the row
+
+    Example Curl:
+    ```
+    curl -X GET "http://0.0.0.0:4000/key/sk-test-example-key-123/budgets" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Curl - the budgets on the calling key itself
+    ```
+    curl -X GET "http://0.0.0.0:4000/key/budgets" \
+-H "Authorization: Bearer sk-test-example-key-123"
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    try:
+        if prisma_client is None:
+            raise Exception(
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        key: Final = key_id or user_api_key_dict.api_key
+        hashed_key: Final = _hash_token_if_needed(token=key) if key is not None else None
+        key_info: Final = (
+            await VerificationTokenRepository(prisma_client).find_by_id(hashed_key) if hashed_key is not None else None
+        )
+        if key_info is None:
+            raise ProxyException(
+                message="Key not found in database",
+                type=ProxyErrorTypes.not_found_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if (
+            await _can_user_query_key_info(
+                user_api_key_dict=user_api_key_dict,
+                key=key,
+                key_info=key_info,
+            )
+            is not True
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You are not allowed to access this key's info. Your role={user_api_key_dict.user_role}",
+            )
+
+        # The same object auth resolves the key to, so a stale cached limit is reported as the limit
+        # that will actually be enforced rather than the database value that will not be.
+        resolved_key: Final = await get_key_object(
+            hashed_token=hashed_key,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        budgets: Final = await resolve_key_budgets(
+            valid_token=update_key_budget_with_temp_budget_increase(resolved_key),
+            end_user_id=end_user_id,
+            deps=KeyBudgetResolverDeps(
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings=general_settings,
+            ),
+        )
+        return KeyBudgetsResponse(key=key, budgets=budgets)
+    except Exception as e:  # noqa: BLE001  # every management handler maps unexpected failures onto the proxy error contract
         raise handle_exception_on_proxy(e)
 
 

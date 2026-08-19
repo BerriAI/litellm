@@ -14,6 +14,7 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
@@ -94,6 +95,17 @@ from litellm.proxy.guardrails.tool_name_extraction import (
 )
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.spend_counter_keys import (
+    end_user_spend_counter,
+    key_spend_counter,
+    key_window_spend_counter,
+    org_spend_counter,
+    tag_spend_counter,
+    team_member_spend_counter,
+    team_spend_counter,
+    team_window_spend_counter,
+    user_spend_counter,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -684,6 +696,12 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
 )
 
 
+def user_budget_applies_to_key(team_object: LiteLLM_TeamTable | None, general_settings: Mapping[str, object]) -> bool:
+    """A team key ignores its owner's personal budget unless the operator opted in."""
+    is_team_key: Final = team_object is not None and team_object.team_id is not None
+    return not is_team_key or general_settings.get("apply_user_budget_to_team_keys") is True
+
+
 async def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
@@ -835,15 +853,14 @@ async def common_checks(
             # 4.1 personal budget
             if user_object is None or user_object.max_budget is None:
                 return
-            is_team_key: Final = team_object is not None and team_object.team_id is not None
-            if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
+            if not user_budget_applies_to_key(team_object=team_object, general_settings=general_settings):
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
 
             user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
-                counter_key=f"spend:user:{user_object.user_id}",
+                counter_key=user_spend_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
             )
@@ -1288,7 +1305,7 @@ async def _check_end_user_budget(
     from litellm.proxy.proxy_server import get_current_spend
 
     end_user_spend: Final = await get_current_spend(
-        counter_key=f"spend:end_user:{end_user_obj.user_id}",
+        counter_key=end_user_spend_counter(end_user_obj.user_id),
         fallback_spend=end_user_obj.spend or 0.0,
         max_budget=end_user_budget,
         fallback_authoritative=True,
@@ -4124,7 +4141,7 @@ async def _virtual_key_max_budget_check(
         from litellm.proxy.proxy_server import get_current_spend
 
         fallback_spend: Final = valid_token.spend or 0.0
-        counter_key: Final = f"spend:key:{valid_token.token}"
+        counter_key: Final = key_spend_counter(valid_token.token)
 
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend: Final = await get_current_spend(
@@ -4205,7 +4222,7 @@ async def _virtual_key_multi_budget_check(
 
     for window in valid_token.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
+        counter_key = key_window_spend_counter(valid_token.token, w["budget_duration"])
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
@@ -4389,6 +4406,70 @@ async def _virtual_key_max_budget_alert_check(
                 )
 
 
+@dataclass(frozen=True, slots=True)
+class TeamMemberBudget:
+    """The per-member cap enforced inside a team, plus the recorded spend it is measured against.
+
+    Resolution is shared with budget introspection, so a change to the fallback order can never
+    make the two disagree about which cap a request is judged by.
+    """
+
+    max_budget: float | None
+    recorded_spend: float
+    source: str
+
+
+async def resolve_team_member_budget(
+    team_object: LiteLLM_TeamTable,
+    user_id: str,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None = None,
+) -> TeamMemberBudget:
+    team_membership: Final = await get_team_membership(
+        user_id=user_id,
+        team_id=team_object.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    recorded_spend: Final = (team_membership.spend if team_membership is not None else 0.0) or 0.0
+
+    # Per-member override wins; otherwise fall back to the team-level
+    # default configured via team.metadata["team_member_budget_id"].
+    if (
+        team_membership is not None
+        and team_membership.litellm_budget_table is not None
+        and team_membership.litellm_budget_table.max_budget is not None
+    ):
+        return TeamMemberBudget(
+            max_budget=team_membership.litellm_budget_table.max_budget,
+            recorded_spend=recorded_spend,
+            source=f"budget_table:{team_membership.budget_id}",
+        )
+
+    metadata: Final = team_object.metadata
+    default_budget_id: Final = metadata.get("team_member_budget_id") if metadata else None
+    if not isinstance(default_budget_id, str):
+        return TeamMemberBudget(max_budget=None, recorded_spend=recorded_spend, source="team_membership.budget_id")
+
+    default_budget: Final = await get_team_member_default_budget(
+        budget_id=default_budget_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    # Treat 0 on the team default as "no cap".
+    # Per-member rows still respect 0 as an explicit admin disable.
+    if default_budget is None or default_budget.max_budget is None or default_budget.max_budget <= 0:
+        return TeamMemberBudget(max_budget=None, recorded_spend=recorded_spend, source="team_membership.budget_id")
+
+    return TeamMemberBudget(
+        max_budget=default_budget.max_budget,
+        recorded_spend=recorded_spend,
+        source=f"team.metadata.team_member_budget_id:{default_budget_id}",
+    )
+
+
 async def _check_team_member_budget(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -4398,66 +4479,36 @@ async def _check_team_member_budget(
     proxy_logging_obj: ProxyLogging,
 ):
     """Check if team member is over their max budget within the team."""
-    if (
-        team_object is not None
-        and team_object.team_id is not None
-        and valid_token is not None
-        and valid_token.user_id is not None
-    ):
-        team_membership: Final = await get_team_membership(
-            user_id=valid_token.user_id,
-            team_id=team_object.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
+    if team_object is None or team_object.team_id is None or valid_token is None or valid_token.user_id is None:
+        return
+
+    member_budget: Final = await resolve_team_member_budget(
+        team_object=team_object,
+        user_id=valid_token.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if member_budget.max_budget is None:
+        return
+
+    # Read from cross-pod counter (Redis-first) if available
+    from litellm.proxy.proxy_server import get_current_spend
+
+    team_member_spend: Final = await get_current_spend(
+        counter_key=team_member_spend_counter(valid_token.user_id, team_object.team_id),
+        fallback_spend=member_budget.recorded_spend,
+        max_budget=member_budget.max_budget,
+    )
+
+    if math.isfinite(member_budget.max_budget) and team_member_spend >= member_budget.max_budget:
+        raise litellm.BudgetExceededError(
+            current_cost=team_member_spend,
+            max_budget=member_budget.max_budget,
+            message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {member_budget.max_budget}",
+            entity_type=Litellm_EntityType.TEAM_MEMBER.value,
+            entity_id=f"{valid_token.user_id}:{team_object.team_id}",
         )
-
-        # Per-member override wins; otherwise fall back to the team-level
-        # default configured via team.metadata["team_member_budget_id"].
-        team_member_budget: float | None = None
-        if (
-            team_membership is not None
-            and team_membership.litellm_budget_table is not None
-            and team_membership.litellm_budget_table.max_budget is not None
-        ):
-            team_member_budget = team_membership.litellm_budget_table.max_budget
-        else:
-            default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
-            if isinstance(default_budget_id, str):
-                default_budget: Final = await get_team_member_default_budget(
-                    budget_id=default_budget_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
-                # Treat 0 on the team default as "no cap".
-                # Per-member rows still respect 0 as an explicit admin disable.
-                if (
-                    default_budget is not None
-                    and default_budget.max_budget is not None
-                    and default_budget.max_budget > 0
-                ):
-                    team_member_budget = default_budget.max_budget
-
-        if team_member_budget is not None:
-            team_member_spend = (team_membership.spend if team_membership is not None else 0.0) or 0.0
-
-            # Read from cross-pod counter (Redis-first) if available
-            from litellm.proxy.proxy_server import get_current_spend
-
-            team_member_spend = await get_current_spend(
-                counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
-                fallback_spend=team_member_spend,
-                max_budget=team_member_budget,
-            )
-
-            if math.isfinite(team_member_budget) and team_member_spend >= team_member_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=team_member_spend,
-                    max_budget=team_member_budget,
-                    message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
-                    entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                    entity_id=f"{valid_token.user_id}:{team_object.team_id}",
-                )
 
 
 async def _check_team_member_model_access(
@@ -4528,7 +4579,7 @@ async def _team_max_budget_check(
 
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend: Final = await get_current_spend(
-            counter_key=f"spend:team:{team_object.team_id}",
+            counter_key=team_spend_counter(team_object.team_id),
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
         )
@@ -4578,7 +4629,7 @@ async def _team_multi_budget_check(
 
     for window in team_object.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
+        counter_key = team_window_spend_counter(team_object.team_id, w["budget_duration"])
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
@@ -4835,6 +4886,15 @@ async def delete_cached_project_object(
     )
 
 
+def resolve_budget_org_id(valid_token: UserAPIKeyAuth | None, team_object: LiteLLM_TeamTable | None) -> str | None:
+    """The org whose budget gates this key: the key's own org, else the org its team belongs to."""
+    if valid_token is not None and valid_token.org_id is not None:
+        return valid_token.org_id
+    if team_object is not None:
+        return team_object.organization_id
+    return None
+
+
 async def _organization_max_budget_check(
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
@@ -4859,14 +4919,7 @@ async def _organization_max_budget_check(
     if valid_token is None or prisma_client is None:
         return
 
-    # Determine organization_id: first try from token, then fallback to team
-    org_id: str | None = None
-    if valid_token.org_id is not None:
-        org_id = valid_token.org_id
-    elif team_object is not None and team_object.organization_id is not None:
-        org_id = team_object.organization_id
-
-    # If no organization_id found, skip the check
+    org_id: Final = resolve_budget_org_id(valid_token=valid_token, team_object=team_object)
     if org_id is None:
         return
 
@@ -4899,7 +4952,7 @@ async def _organization_max_budget_check(
     from litellm.proxy.proxy_server import get_current_spend
 
     org_spend: Final = await get_current_spend(
-        counter_key=f"spend:org:{org_id}",
+        counter_key=org_spend_counter(org_id),
         fallback_spend=org_table.spend or 0.0,
         max_budget=org_max_budget,
     )
@@ -4976,7 +5029,7 @@ async def _tag_max_budget_check(
             from litellm.proxy.proxy_server import get_current_spend
 
             tag_spend = await get_current_spend(
-                counter_key=f"spend:tag:{tag_name}",
+                counter_key=tag_spend_counter(tag_name),
                 fallback_spend=tag_object.spend or 0.0,
                 max_budget=tag_object.litellm_budget_table.max_budget,
                 fallback_authoritative=True,

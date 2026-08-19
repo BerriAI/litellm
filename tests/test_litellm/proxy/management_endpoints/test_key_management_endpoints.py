@@ -16444,3 +16444,520 @@ async def test_regenerate_key_repoints_live_membership_not_the_key_row_it_read(
     assert await _authorized_models_for_key(
         access_groups, new_token_hash, ["ag-revoked-since", "ag-attached-since"]
     ) == ["attached-model"]
+
+
+# ---------------------------------------------------------------------------
+# GET /key/{key_id}/budgets
+# ---------------------------------------------------------------------------
+
+import contextlib as _budgets_contextlib  # noqa: E402
+from datetime import datetime as _budgets_datetime, timezone as _budgets_timezone  # noqa: E402
+
+from litellm.models.budget import LiteLLM_BudgetTableFull  # noqa: E402
+from litellm.models.end_user import LiteLLM_EndUserTable  # noqa: E402
+from litellm.models.organization import LiteLLM_OrganizationTable as _BudgetsOrgTable  # noqa: E402
+from litellm.models.tag import LiteLLM_TagTable  # noqa: E402
+from litellm.models.team import LiteLLM_TeamTable  # noqa: E402
+from litellm.proxy._types import LiteLLM_ProjectTableCachedObj  # noqa: E402
+from litellm.proxy.auth.auth_checks import TeamMemberBudget  # noqa: E402
+from litellm.proxy.management_endpoints.key_budget_resolver import (  # noqa: E402
+    KeyBudgetResolverDeps,
+    resolve_key_budgets,
+)
+from litellm.types.proxy.management_endpoints.key_management_endpoints import (  # noqa: E402
+    KeyBudgetEntry,
+)
+
+_BUDGETS_RESOLVER = "litellm.proxy.management_endpoints.key_budget_resolver"
+_BUDGETS_KEY_HASH = "hash-of-the-budgets-key"
+_BUDGETS_RESET_AT = _budgets_datetime(2026, 9, 1, tzinfo=_budgets_timezone.utc)
+
+
+class _RecordingSpendReader:
+    """Stands in for get_current_spend so a test can prove which counter each row was read from."""
+
+    def __init__(self, spend_by_counter_key):
+        self.spend_by_counter_key = spend_by_counter_key
+        self.calls = []
+
+    async def __call__(
+        self,
+        *,
+        counter_key,
+        fallback_spend,
+        max_budget,
+        window_entity_type,
+        window_entity_id,
+        window_start,
+        fallback_authoritative,
+    ):
+        self.calls.append(
+            {
+                "counter_key": counter_key,
+                "fallback_spend": fallback_spend,
+                "max_budget": max_budget,
+                "window_entity_type": window_entity_type,
+                "window_entity_id": window_entity_id,
+                "window_start": window_start,
+                "fallback_authoritative": fallback_authoritative,
+            }
+        )
+        return self.spend_by_counter_key.get(counter_key, 0.0)
+
+
+async def _model_spend_reader(*, entity_id, model, budget_config):
+    return {"gpt-5": 6.0, "claude-sonnet-4-5": 2.0}.get(model)
+
+
+def _budgets_deps(read_spend=None):
+    return KeyBudgetResolverDeps(
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        general_settings={},
+        read_spend=read_spend or _RecordingSpendReader({}),
+        read_key_model_spend=_model_spend_reader,
+        read_end_user_model_spend=_model_spend_reader,
+    )
+
+
+def _budgets_token(**overrides):
+    defaults = dict(
+        token=_BUDGETS_KEY_HASH,
+        key_alias="reporting-key",
+        user_id="user-budgets",
+        team_id="team-budgets",
+        project_id="project-budgets",
+        max_budget=100.0,
+        spend=1.0,
+        budget_duration="30d",
+        budget_reset_at=_BUDGETS_RESET_AT,
+        metadata={"tags": ["prod"]},
+        budget_limits=[
+            {"max_budget": 20.0, "budget_duration": "1d", "reset_at": _BUDGETS_RESET_AT}
+        ],
+        model_max_budget={"gpt-5": {"max_budget": 5.0, "budget_duration": "1d"}},
+    )
+    defaults.update(overrides)
+    return UserAPIKeyAuth(**defaults)
+
+
+@_budgets_contextlib.contextmanager
+def _budgets_world(
+    *,
+    proxy_row=None,
+    team=None,
+    user=None,
+    project=None,
+    organization=None,
+    tags=None,
+    end_user=None,
+    default_end_user_budget=None,
+    team_member=None,
+    budget_rows=(),
+):
+    user_repository = MagicMock()
+    user_repository.return_value.find_by_id = AsyncMock(return_value=proxy_row)
+    budget_repository = MagicMock()
+    budget_repository.return_value.find_full_by_ids = AsyncMock(return_value=tuple(budget_rows))
+    with (
+        patch(f"{_BUDGETS_RESOLVER}.UserRepository", user_repository),
+        patch(f"{_BUDGETS_RESOLVER}.BudgetRepository", budget_repository),
+        patch(f"{_BUDGETS_RESOLVER}.get_team_object", AsyncMock(return_value=team)),
+        patch(f"{_BUDGETS_RESOLVER}.get_user_object", AsyncMock(return_value=user)),
+        patch(f"{_BUDGETS_RESOLVER}.get_project_object", AsyncMock(return_value=project)),
+        patch(f"{_BUDGETS_RESOLVER}.get_org_object", AsyncMock(return_value=organization)),
+        patch(f"{_BUDGETS_RESOLVER}.get_tag_objects_batch", AsyncMock(return_value=tags or {})),
+        patch(f"{_BUDGETS_RESOLVER}.get_end_user_object", AsyncMock(return_value=end_user)),
+        patch(
+            f"{_BUDGETS_RESOLVER}.get_default_end_user_budget",
+            AsyncMock(return_value=default_end_user_budget),
+        ),
+        patch(
+            f"{_BUDGETS_RESOLVER}.resolve_team_member_budget",
+            AsyncMock(return_value=team_member),
+        ),
+    ):
+        yield
+
+
+def _fully_populated_world(**overrides):
+    world = dict(
+        proxy_row=LiteLLM_UserTable(
+            user_id="litellm-proxy-budget", spend=9.0, budget_duration="1mo", budget_reset_at=_BUDGETS_RESET_AT
+        ),
+        team=LiteLLM_TeamTable(
+            team_id="team-budgets",
+            team_alias="Reporting Team",
+            organization_id="org-budgets",
+            spend=2.0,
+            max_budget=300.0,
+            soft_budget=250.0,
+            budget_limits=[{"max_budget": 30.0, "budget_duration": "7d", "reset_at": _BUDGETS_RESET_AT}],
+        ),
+        user=LiteLLM_UserTable(user_id="user-budgets", user_email="owner@example.com", spend=3.0, max_budget=400.0),
+        project=LiteLLM_ProjectTableCachedObj(
+            project_id="project-budgets",
+            project_alias="Reporting Project",
+            budget_id="budget-project",
+            spend=4.0,
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-project", max_budget=500.0, soft_budget=450.0),
+        ),
+        organization=_BudgetsOrgTable(
+            organization_id="org-budgets",
+            organization_alias="Reporting Org",
+            budget_id="budget-org",
+            spend=5.0,
+            created_by="admin",
+            updated_by="admin",
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-org", max_budget=600.0),
+        ),
+        tags={
+            "prod": LiteLLM_TagTable(
+                tag_name="prod",
+                spend=6.0,
+                budget_id="budget-tag",
+                litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-tag", max_budget=700.0),
+            )
+        },
+        end_user=LiteLLM_EndUserTable(
+            user_id="end-user-budgets",
+            blocked=False,
+            alias="End User",
+            spend=7.0,
+            budget_id="budget-end-user",
+            litellm_budget_table=LiteLLM_BudgetTable(
+                budget_id="budget-end-user",
+                max_budget=800.0,
+                model_max_budget={"claude-sonnet-4-5": {"max_budget": 8.0, "budget_duration": "1d"}},
+            ),
+        ),
+        team_member=TeamMemberBudget(max_budget=50.0, recorded_spend=8.0, source="budget_table:budget-member"),
+        budget_rows=(
+            LiteLLM_BudgetTableFull(
+                budget_id="budget-member",
+                max_budget=50.0,
+                budget_duration="7d",
+                budget_reset_at=_BUDGETS_RESET_AT,
+                created_at=_BUDGETS_RESET_AT,
+            ),
+        ),
+    )
+    world.update(overrides)
+    return world
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_reports_every_scope_that_applies():
+    """Every scope that can gate the key gets a row, so no scope has to be ruled out by hand."""
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id="end-user-budgets",
+            deps=_budgets_deps(),
+        )
+
+    assert {entry.scope for entry in budgets} == {
+        "proxy",
+        "key",
+        "key_window",
+        "key_model",
+        "team",
+        "team_window",
+        "team_member",
+        "user",
+        "organization",
+        "project",
+        "tag",
+        "end_user",
+        "end_user_model",
+    }
+    by_scope = {(entry.scope, entry.enforcement): entry for entry in budgets}
+    assert by_scope[("team_member", "hard")].entity_id == "user-budgets:team-budgets"
+    assert by_scope[("team_member", "hard")].max_budget == 50.0
+    assert by_scope[("team_member", "hard")].budget_reset_at == _BUDGETS_RESET_AT
+    assert by_scope[("organization", "hard")].entity_label == "Reporting Org"
+    assert by_scope[("end_user_model", "hard")].entity_id == "claude-sonnet-4-5"
+    assert by_scope[("project", "hard")].note is not None and "never incremented" in by_scope[("project", "hard")].note
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_read_live_counter_spend_not_the_database_column():
+    """The database column is only a fallback; reporting it would not match the 429 the caller just got."""
+    reader = _RecordingSpendReader(
+        {
+            "spend:key:" + _BUDGETS_KEY_HASH: 91.0,
+            "spend:team:team-budgets": 92.0,
+            "spend:team_member:user-budgets:team-budgets": 93.0,
+            "spend:user:user-budgets": 94.0,
+            "spend:org:org-budgets": 95.0,
+            "spend:tag:prod": 96.0,
+            "spend:end_user:end-user-budgets": 97.0,
+            "spend:key:" + _BUDGETS_KEY_HASH + ":window:1d": 98.0,
+            "spend:team:team-budgets:window:7d": 99.0,
+        }
+    )
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id="end-user-budgets",
+            deps=_budgets_deps(read_spend=reader),
+        )
+
+    hard = {entry.scope: entry for entry in budgets if entry.enforcement == "hard"}
+    assert hard["key"].spend == 91.0
+    assert hard["team"].spend == 92.0
+    assert hard["team_member"].spend == 93.0
+    assert hard["user"].spend == 94.0
+    assert hard["organization"].spend == 95.0
+    assert hard["tag"].spend == 96.0
+    assert hard["end_user"].spend == 97.0
+    assert hard["key_window"].spend == 98.0
+    assert hard["team_window"].spend == 99.0
+
+    fallbacks = {call["counter_key"]: call["fallback_spend"] for call in reader.calls}
+    assert fallbacks["spend:key:" + _BUDGETS_KEY_HASH] == 1.0
+    assert fallbacks["spend:team:team-budgets"] == 2.0
+    assert fallbacks["spend:user:user-budgets"] == 3.0
+    assert fallbacks["spend:org:org-budgets"] == 5.0
+    assert fallbacks["spend:tag:prod"] == 6.0
+    assert fallbacks["spend:end_user:end-user-budgets"] == 7.0
+    assert fallbacks["spend:team_member:user-budgets:team-budgets"] == 8.0
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_emit_unlimited_rows_for_configured_but_uncapped_scopes():
+    """A scope that applies but caps nothing still gets a row; that is what lets a caller rule it out."""
+    world = _fully_populated_world(
+        team=LiteLLM_TeamTable(
+            team_id="team-budgets", team_alias="Reporting Team", organization_id="org-budgets", spend=2.0
+        ),
+        user=LiteLLM_UserTable(user_id="user-budgets", spend=3.0),
+        organization=_BudgetsOrgTable(
+            organization_id="org-budgets",
+            budget_id="budget-org",
+            spend=5.0,
+            created_by="admin",
+            updated_by="admin",
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-org"),
+        ),
+        team_member=TeamMemberBudget(max_budget=None, recorded_spend=8.0, source="team_membership.budget_id"),
+    )
+    with _budgets_world(**world):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(max_budget=None),
+            end_user_id=None,
+            deps=_budgets_deps(),
+        )
+
+    hard = {entry.scope: entry for entry in budgets if entry.enforcement == "hard"}
+    for scope in ("key", "team", "team_member", "user", "organization"):
+        assert hard[scope].max_budget is None, scope
+        assert hard[scope].status == "unlimited", scope
+        assert hard[scope].remaining is None, scope
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_status_follows_the_operator_the_enforcing_check_uses():
+    """The key check blocks at `>=` and the team check at `>`, so equal spend must not read the same."""
+    reader = _RecordingSpendReader(
+        {
+            "spend:key:" + _BUDGETS_KEY_HASH: 100.0,
+            "spend:team:team-budgets": 300.0,
+        }
+    )
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id=None,
+            deps=_budgets_deps(read_spend=reader),
+        )
+
+    hard = {entry.scope: entry for entry in budgets if entry.enforcement == "hard"}
+    assert hard["key"].comparison == ">="
+    assert hard["key"].status == "exceeded"
+    assert hard["team"].comparison == ">"
+    assert hard["team"].status == "ok"
+    assert hard["team"].remaining == 0.0
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_never_leak_the_token_hash_or_plaintext_key():
+    """The row identifiers are aliases and entity ids; the credential itself must not ride along."""
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id="end-user-budgets",
+            deps=_budgets_deps(),
+        )
+
+    rendered = json.dumps([entry.model_dump(mode="json") for entry in budgets])
+    assert _BUDGETS_KEY_HASH not in rendered
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_report_the_personal_budget_as_inapplicable_on_a_team_key():
+    """A team key ignores its owner's personal budget, so reporting the number would be a false lead."""
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id=None,
+            deps=_budgets_deps(),
+        )
+
+    user_entry = next(entry for entry in budgets if entry.scope == "user")
+    assert user_entry.max_budget is None
+    assert user_entry.note is not None and "apply_user_budget_to_team_keys" in user_entry.note
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_skip_scopes_that_do_not_exist_for_the_key():
+    """No team, no project, no tags and no named end user means those scopes cannot gate the key at all."""
+    with _budgets_world(user=LiteLLM_UserTable(user_id="user-budgets", spend=3.0, max_budget=400.0)):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(
+                team_id=None,
+                project_id=None,
+                metadata={},
+                budget_limits=None,
+                model_max_budget={},
+            ),
+            end_user_id=None,
+            deps=_budgets_deps(),
+        )
+
+    scopes = {entry.scope for entry in budgets}
+    assert scopes == {"proxy", "key", "user"}
+    user_entry = next(entry for entry in budgets if entry.scope == "user")
+    assert user_entry.max_budget == 400.0
+    assert user_entry.note is None
+
+
+@_budgets_contextlib.contextmanager
+def _budgets_route_world(*, key_row, budgets=(), caller):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth as _user_api_key_auth
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_row.model_dump() if key_row is not None else None
+    )
+    app.dependency_overrides[_user_api_key_auth] = lambda: caller
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.get_key_object",
+                new_callable=AsyncMock,
+                return_value=_budgets_token(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.key_management_endpoints.resolve_key_budgets",
+                new_callable=AsyncMock,
+                return_value=tuple(budgets),
+            ) as resolver,
+        ):
+            yield resolver
+    finally:
+        app.dependency_overrides.pop(_user_api_key_auth, None)
+
+
+def _budgets_key_row(user_id="user-budgets", team_id="team-budgets"):
+    return LiteLLM_VerificationToken(token=_BUDGETS_KEY_HASH, user_id=user_id, team_id=team_id)
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_route_returns_the_resolved_budgets():
+    entry = KeyBudgetEntry(
+        scope="key",
+        entity_type="key",
+        entity_id="reporting-key",
+        entity_label="reporting-key",
+        enforcement="hard",
+        max_budget=100.0,
+        spend=91.0,
+        remaining=9.0,
+        comparison=">=",
+        source="key.max_budget",
+        status="ok",
+    )
+    caller = UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value)
+    with _budgets_route_world(key_row=_budgets_key_row(), budgets=(entry,), caller=caller):
+        response = client.get(f"/key/{_BUDGETS_KEY_HASH}/budgets?end_user_id=end-user-budgets")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["key"] == _BUDGETS_KEY_HASH
+    assert body["budgets"] == [
+        {
+            "scope": "key",
+            "entity_type": "key",
+            "entity_id": "reporting-key",
+            "entity_label": "reporting-key",
+            "enforcement": "hard",
+            "max_budget": 100.0,
+            "spend": 91.0,
+            "remaining": 9.0,
+            "comparison": ">=",
+            "budget_duration": None,
+            "budget_reset_at": None,
+            "window_start": None,
+            "source": "key.max_budget",
+            "status": "ok",
+            "note": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_route_passes_the_named_end_user_to_the_resolver():
+    caller = UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value)
+    with _budgets_route_world(key_row=_budgets_key_row(), caller=caller) as resolver:
+        response = client.get(f"/key/{_BUDGETS_KEY_HASH}/budgets?end_user_id=end-user-budgets")
+
+    assert response.status_code == 200
+    assert resolver.await_args.kwargs["end_user_id"] == "end-user-budgets"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_route_defaults_to_the_calling_key():
+    caller = UserAPIKeyAuth(api_key=_BUDGETS_KEY_HASH, user_id="user-budgets")
+    with _budgets_route_world(key_row=_budgets_key_row(), caller=caller):
+        response = client.get("/key/budgets")
+
+    assert response.status_code == 200
+    assert response.json()["key"] == _BUDGETS_KEY_HASH
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_route_rejects_a_caller_who_may_not_read_the_key():
+    """Budget rows expose team, org and user limits, so the same gate as /key/info has to hold."""
+    caller = UserAPIKeyAuth(
+        api_key="sk-stranger",
+        user_id="someone-else",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.user_belongs_to_keys_team",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        _budgets_route_world(key_row=_budgets_key_row(), caller=caller),
+    ):
+        response = client.get(f"/key/{_BUDGETS_KEY_HASH}/budgets")
+
+    assert response.status_code == 403
+    assert "not allowed to access this key's info" in json.dumps(response.json())
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_route_returns_404_for_an_unknown_key():
+    caller = UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value)
+    with _budgets_route_world(key_row=None, caller=caller):
+        response = client.get("/key/hash-that-does-not-exist/budgets")
+
+    assert response.status_code == 404
+    assert "Key not found in database" in json.dumps(response.json())

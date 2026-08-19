@@ -62,7 +62,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         # check if current model is within budget
         if _current_model_budget_info.max_budget and _current_model_budget_info.max_budget > 0:
-            _current_spend: Final = await self._get_virtual_key_spend_for_model(
+            _current_spend: Final = await self.get_virtual_key_spend_for_model(
                 user_api_key_hash=user_api_key_dict.token,
                 model=model,
                 key_budget_config=_current_model_budget_info,
@@ -128,7 +128,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         # check if current model is within budget
         if _current_model_budget_info.max_budget and _current_model_budget_info.max_budget > 0:
-            _current_spend: Final = await self._get_end_user_spend_for_model(
+            _current_spend: Final = await self.get_end_user_spend_for_model(
                 end_user_id=end_user_id,
                 model=model,
                 key_budget_config=_current_model_budget_info,
@@ -148,7 +148,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         return True
 
-    async def _get_end_user_spend_for_model(
+    async def get_end_user_spend_for_model(
         self,
         end_user_id: str,
         model: str,
@@ -170,7 +170,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
         return _current_spend
 
-    async def _get_virtual_key_spend_for_model(
+    async def get_virtual_key_spend_for_model(
         self,
         user_api_key_hash: str | None,
         model: str,

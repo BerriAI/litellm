@@ -1762,7 +1762,7 @@ async def _user_api_key_auth_builder(
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
 
         if valid_token is not None:
-            valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
+            valid_token = update_key_budget_with_temp_budget_increase(valid_token)
 
         user_obj: LiteLLM_UserTable | None = None
         valid_token_dict: dict = {}
@@ -2813,7 +2813,7 @@ def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
     return None
 
 
-def _update_key_budget_with_temp_budget_increase(
+def update_key_budget_with_temp_budget_increase(
     valid_token: UserAPIKeyAuth,
 ) -> UserAPIKeyAuth:
     if valid_token.max_budget is None:

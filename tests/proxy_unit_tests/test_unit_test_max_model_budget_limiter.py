@@ -73,7 +73,7 @@ async def test_is_key_within_model_budget(budget_limiter):
 
     # Test when model is within budget
     with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=50.0
+        budget_limiter, "get_virtual_key_spend_for_model", return_value=50.0
     ):
         assert (
             await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
@@ -82,7 +82,7 @@ async def test_is_key_within_model_budget(budget_limiter):
 
     # Test when model exceeds budget
     with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0
+        budget_limiter, "get_virtual_key_spend_for_model", return_value=150.0
     ):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
@@ -94,20 +94,20 @@ async def test_is_key_within_model_budget(budget_limiter):
     )
 
 
-# Test _get_virtual_key_spend_for_model
+# Test get_virtual_key_spend_for_model
 @pytest.mark.asyncio
-async def test_get_virtual_key_spend_for_model(budget_limiter):
+async def testget_virtual_key_spend_for_model(budget_limiter):
     budget_config = GenericBudgetInfo(budget_limit=100.0, time_period="1d")
 
     # Mock cache get
     with patch.object(budget_limiter.dual_cache, "async_get_cache", return_value=50.0):
-        spend = await budget_limiter._get_virtual_key_spend_for_model(
+        spend = await budget_limiter.get_virtual_key_spend_for_model(
             user_api_key_hash="test-key", model="gpt-4", key_budget_config=budget_config
         )
         assert spend == 50.0
 
         # Test with provider prefix
-        spend = await budget_limiter._get_virtual_key_spend_for_model(
+        spend = await budget_limiter.get_virtual_key_spend_for_model(
             user_api_key_hash="test-key",
             model="openai/gpt-4",
             key_budget_config=budget_config,
@@ -165,7 +165,7 @@ async def test_async_log_success_event_uses_per_model_budget_duration(budget_lim
 async def test_is_end_user_within_model_budget(budget_limiter):
     # Test when model is within budget
     with patch.object(
-        budget_limiter, "_get_end_user_spend_for_model", return_value=50.0
+        budget_limiter, "get_end_user_spend_for_model", return_value=50.0
     ):
         assert (
             await budget_limiter.is_end_user_within_model_budget(
@@ -178,7 +178,7 @@ async def test_is_end_user_within_model_budget(budget_limiter):
 
     # Test when model exceeds budget
     with patch.object(
-        budget_limiter, "_get_end_user_spend_for_model", return_value=150.0
+        budget_limiter, "get_end_user_spend_for_model", return_value=150.0
     ):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_end_user_within_model_budget(
@@ -198,20 +198,20 @@ async def test_is_end_user_within_model_budget(budget_limiter):
     )
 
 
-# Test _get_end_user_spend_for_model
+# Test get_end_user_spend_for_model
 @pytest.mark.asyncio
-async def test_get_end_user_spend_for_model(budget_limiter):
+async def testget_end_user_spend_for_model(budget_limiter):
     budget_config = GenericBudgetInfo(budget_limit=100.0, time_period="1d")
 
     # Mock cache get
     with patch.object(budget_limiter.dual_cache, "async_get_cache", return_value=50.0):
-        spend = await budget_limiter._get_end_user_spend_for_model(
+        spend = await budget_limiter.get_end_user_spend_for_model(
             end_user_id="test-user", model="gpt-4", key_budget_config=budget_config
         )
         assert spend == 50.0
 
         # Test with provider prefix
-        spend = await budget_limiter._get_end_user_spend_for_model(
+        spend = await budget_limiter.get_end_user_spend_for_model(
             end_user_id="test-user",
             model="openai/gpt-4",
             key_budget_config=budget_config,
@@ -473,7 +473,7 @@ async def test_get_fallback_model_within_budget_returns_first_within_budget(
         budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
     )
     with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=1.0
+        budget_limiter, "get_virtual_key_spend_for_model", return_value=1.0
     ):
         result = await budget_limiter.get_fallback_model_within_budget(
             user_api_key, "gpt-4"
@@ -499,7 +499,7 @@ async def test_get_fallback_model_within_budget_skips_exhausted_fallback(
 
     with patch.object(
         budget_limiter,
-        "_get_virtual_key_spend_for_model",
+        "get_virtual_key_spend_for_model",
         side_effect=_spend_for_model,
     ):
         result = await budget_limiter.get_fallback_model_within_budget(
@@ -521,7 +521,7 @@ async def test_get_fallback_model_within_budget_returns_none_when_chain_exhauste
         budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
     )
     with patch.object(
-        budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0
+        budget_limiter, "get_virtual_key_spend_for_model", return_value=150.0
     ):
         result = await budget_limiter.get_fallback_model_within_budget(
             user_api_key, "gpt-4"

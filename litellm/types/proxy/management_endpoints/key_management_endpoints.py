@@ -106,3 +106,53 @@ class BulkUpdateTeamKeysRequest(BaseModel):
         if not has_key_ids and not self.all_keys_in_team:
             raise ValueError("Must provide either `key_ids` (non-empty) or `all_keys_in_team=True`.")
         return self
+
+
+BudgetScope = Literal[
+    "proxy",
+    "key",
+    "key_window",
+    "key_model",
+    "team",
+    "team_window",
+    "team_member",
+    "user",
+    "organization",
+    "project",
+    "tag",
+    "end_user",
+    "end_user_model",
+]
+
+BudgetEnforcement = Literal["hard", "soft"]
+
+BudgetComparison = Literal[">=", ">"]
+
+BudgetStatus = Literal["unlimited", "ok", "exceeded"]
+
+
+class KeyBudgetEntry(BaseModel):
+    """One budget that can gate requests made with a key, with its live spend."""
+
+    scope: BudgetScope
+    entity_type: str
+    entity_id: str | None = None
+    entity_label: str | None = None
+    enforcement: BudgetEnforcement
+    max_budget: float | None = None
+    spend: float | None = None
+    remaining: float | None = None
+    comparison: BudgetComparison
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+    window_start: datetime | None = None
+    source: str
+    status: BudgetStatus
+    note: str | None = None
+
+
+class KeyBudgetsResponse(BaseModel):
+    """Every budget that applies to one key, including the ones left unconfigured."""
+
+    key: str | None = None
+    budgets: tuple[KeyBudgetEntry, ...]
