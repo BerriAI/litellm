@@ -4,6 +4,7 @@
 #                   https://www.akamai.com/products/firewall-for-ai
 #
 # +-------------------------------------------------------------+
+import asyncio
 import json
 import os
 import uuid
@@ -48,6 +49,8 @@ if TYPE_CHECKING:
 
 DEFAULT_API_BASE = "https://aisec.akamai.com"
 BLOCKING_ACTIONS = frozenset({"deny", "block"})
+DEFAULT_MAX_DETECT_CHARS = 20_000
+DEFAULT_CHUNK_OVERLAP_CHARS = 500
 ANTHROPIC_MESSAGES_CALL_TYPES = frozenset({"anthropic_messages", "aanthropic_messages"})
 
 
@@ -264,6 +267,47 @@ class AkamaiDetectResponse(TypedDict, total=False):
     userApplicationId: str
 
 
+def _chunk_text(text: str, limit: int, overlap: int) -> tuple[str, ...]:
+    """Split ``text`` into overlapping chunks of at most ``limit`` characters.
+
+    Akamai answers a detect call whose ``llmInput`` / ``llmOutput`` exceeds
+    20,000 characters with an opaque HTTP 500, which the guardrail surfaces as
+    a failed request; a GitHub Copilot prompt (large system prompt plus dozens
+    of tool schemas) clears that cap on nearly every call. Truncating would
+    silently stop inspecting the tail of such a prompt, so the text is chunked
+    and every chunk is scanned. Consecutive chunks repeat ``overlap``
+    characters so a pattern straddling a boundary is still contained whole in
+    one chunk.
+    """
+    if len(text) <= limit:
+        return (text,)
+    stride = max(1, limit - overlap)
+    chunk_count = 1 + (len(text) - limit + stride - 1) // stride
+    return tuple(text[index * stride : index * stride + limit] for index in range(chunk_count))
+
+
+def _rule_identity(rule: AkamaiRuleTriggered) -> tuple[Any, ...]:
+    return (rule.get("ruleId"), rule.get("selector"), rule.get("action"), rule.get("message"))
+
+
+def _merge_detection_results(results: tuple[AkamaiDetectResponse, ...]) -> AkamaiDetectResponse:
+    """Fold per-chunk detect responses into the verdict for the whole scan.
+
+    A chunked scan must behave like a single scan: a rule triggered on any one
+    chunk applies to the request, so the rule lists are unioned (de-duplicated
+    on the fields the block payload reports) and the risk score is the highest
+    any chunk saw.
+    """
+    rules = {_rule_identity(rule): rule for result in results for rule in result.get("rulesTriggered") or []}
+    scores = tuple(
+        int(score) for result in results if isinstance(score := result.get("overallRiskScore"), (int, float))
+    )
+    return AkamaiDetectResponse(
+        overallRiskScore=max(scores, default=0),
+        rulesTriggered=list(rules.values()),
+    )
+
+
 class AkamaiFirewallForAIMissingSecrets(Exception):
     pass
 
@@ -283,6 +327,7 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
         api_base: str | None = None,
         fai_configuration_id: str | None = None,
         user_application_id: str | None = None,
+        max_detect_chars: int | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -310,7 +355,33 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
             )
 
         self.api_base = (api_base or os.environ.get("AKAMAI_FIREWALL_API_BASE") or DEFAULT_API_BASE).rstrip("/")
+        self.max_detect_chars = self._resolve_max_detect_chars(max_detect_chars)
+        self.chunk_overlap_chars = min(DEFAULT_CHUNK_OVERLAP_CHARS, self.max_detect_chars // 10)
         super().__init__(**kwargs)
+
+    @staticmethod
+    def _resolve_max_detect_chars(max_detect_chars: int | None) -> int:
+        """Resolve the per-field character cap, falling back to the 20,000 the detect API accepts."""
+        raw = max_detect_chars if max_detect_chars is not None else os.environ.get("AKAMAI_FIREWALL_MAX_DETECT_CHARS")
+        if raw is None:
+            return DEFAULT_MAX_DETECT_CHARS
+        try:
+            resolved = int(raw)
+        except ValueError:
+            verbose_proxy_logger.warning(
+                "Akamai Firewall for AI: ignoring non-numeric max_detect_chars=%r; using %s",
+                raw,
+                DEFAULT_MAX_DETECT_CHARS,
+            )
+            return DEFAULT_MAX_DETECT_CHARS
+        if resolved <= 0:
+            verbose_proxy_logger.warning(
+                "Akamai Firewall for AI: ignoring non-positive max_detect_chars=%s; using %s",
+                raw,
+                DEFAULT_MAX_DETECT_CHARS,
+            )
+            return DEFAULT_MAX_DETECT_CHARS
+        return resolved
 
     @property
     def detect_url(self) -> str:
@@ -345,24 +416,47 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
             return "\n".join(_iter_anthropic_output_text(response.get("content")))
         return ""
 
-    async def _detect(
+    def _detect_payloads(
         self,
         client_request_id: str,
-        llm_input: str | None = None,
-        llm_output: str | None = None,
-    ) -> None:
-        payload: dict[str, str] = {
-            "clientRequestId": client_request_id,
-            "userApplicationId": self.user_application_id or "",
-        }
-        if llm_input:
-            payload["llmInput"] = llm_input
-        if llm_output:
-            payload["llmOutput"] = llm_output
+        llm_input: str | None,
+        llm_output: str | None,
+    ) -> tuple[dict[str, str], ...]:
+        """Build the detect request bodies for this scan, one per text chunk.
 
-        if "llmInput" not in payload and "llmOutput" not in payload:
-            return
+        Text that fits inside ``max_detect_chars`` produces the single payload
+        the guardrail has always sent. Oversized text is split across several
+        payloads, each tagged with an indexed ``clientRequestId`` so the chunks
+        stay traceable on the Akamai side.
+        """
+        fields = tuple((field, text) for field, text in (("llmInput", llm_input), ("llmOutput", llm_output)) if text)
+        if not fields:
+            return ()
 
+        chunked = tuple(
+            (field, chunk)
+            for field, text in fields
+            for chunk in _chunk_text(text, self.max_detect_chars, self.chunk_overlap_chars)
+        )
+        if len(chunked) > len(fields):
+            verbose_proxy_logger.info(
+                "Akamai Firewall for AI: scanning %s chunks (max %s chars each) for request %s",
+                len(chunked),
+                self.max_detect_chars,
+                client_request_id,
+            )
+
+        single = len(chunked) == 1
+        return tuple(
+            {
+                "clientRequestId": client_request_id if single else f"{client_request_id}-{index}",
+                "userApplicationId": self.user_application_id or "",
+                field: chunk,
+            }
+            for index, (field, chunk) in enumerate(chunked, start=1)
+        )
+
+    async def _post_detect(self, payload: dict[str, str]) -> AkamaiDetectResponse:
         response = await self.async_handler.post(
             self.detect_url,
             headers={
@@ -373,7 +467,24 @@ class AkamaiFirewallForAIGuardrail(CustomGuardrail):
             json=payload,
         )
         response.raise_for_status()
-        self._handle_detection(response.json())
+        return cast(AkamaiDetectResponse, response.json())  # cast-ok: untyped json() body of the detect API
+
+    async def _detect(
+        self,
+        client_request_id: str,
+        llm_input: str | None = None,
+        llm_output: str | None = None,
+    ) -> None:
+        payloads = self._detect_payloads(client_request_id, llm_input, llm_output)
+        if not payloads:
+            return
+
+        if len(payloads) == 1:
+            self._handle_detection(await self._post_detect(payloads[0]))
+            return
+
+        results = await asyncio.gather(*(self._post_detect(payload) for payload in payloads))
+        self._handle_detection(_merge_detection_results(tuple(results)))
 
     def _handle_detection(self, result: AkamaiDetectResponse) -> None:
         rules_triggered = result.get("rulesTriggered") or []

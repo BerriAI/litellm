@@ -16,6 +16,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         api_base=litellm_params.api_base,
         fai_configuration_id=litellm_params.get("fai_configuration_id"),
         user_application_id=litellm_params.get("user_application_id"),
+        max_detect_chars=litellm_params.get("max_detect_chars"),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
