@@ -601,6 +601,27 @@ describe("buildComplexityRouterConfig scorer knobs", () => {
   it("drops them when the classifier falls back to the default model and nothing is scored", () => {
     expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
   });
+
+  it("omits the reasoning override floor while untouched, so it keeps tracking simple_medium", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("reasoning_override_min_score");
+  });
+
+  it("emits the reasoning override floor that was set", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, reasoningOverrideMinScore: 0.4 });
+    expect(config.reasoning_override_min_score).toBe(0.4);
+  });
+
+  // 0 is an unconditional override, not an absent knob, so a falsy check here would silently discard it.
+  it("emits an explicit 0 reasoning override floor", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, reasoningOverrideMinScore: 0 });
+    expect(config.reasoning_override_min_score).toBe(0);
+  });
+
+  it("drops the reasoning override floor when nothing is scored", () => {
+    expect(buildComplexityRouterConfig({ ...llmWithDefaultFallback, reasoningOverrideMinScore: 0 })).not.toHaveProperty(
+      "reasoning_override_min_score",
+    );
+  });
 });
 
 describe("plan-mode minimum tier", () => {
