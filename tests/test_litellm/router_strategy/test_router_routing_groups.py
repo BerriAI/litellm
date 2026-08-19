@@ -1112,3 +1112,42 @@ async def test_group_call_reports_member_cooldown_time_when_every_member_is_cool
         await router.async_get_available_deployment(model="quality", request_kwargs={})
 
     assert exc_info.value.cooldown_time == deployment_cooldown_time
+
+
+def test_get_model_ids_for_a_group_does_not_reach_team_scoped_deployments():
+    """
+    Group resolution goes through the `model_name` index, and a team deployment is
+    indexed under its own internal `model_name` (its `team_public_model_name` lives
+    in a separate index), so resolving a group cannot pull in another team's
+    deployment ids. Unchanged from a plain `model_name` lookup.
+    """
+    shared_deployment = {
+        "model_name": "shared-model",
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test-1", "api_base": "https://example.invalid"},
+        "model_info": {"id": "shared-1"},
+    }
+    team_deployments = [
+        {
+            "model_name": f"shared-model_{team_id}_uuid",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": f"sk-test-{team_id}",
+                "api_base": "https://example.invalid",
+            },
+            "model_info": {
+                "id": f"{team_id}-1",
+                "team_id": team_id,
+                "team_public_model_name": "shared-model",
+            },
+        }
+        for team_id in ("team-a", "team-b")
+    ]
+    router = Router(
+        model_list=[shared_deployment, *team_deployments],
+        routing_groups=[{"group_name": "quality", "models": ["shared-model"], "routing_strategy": "simple-shuffle"}],
+    )
+
+    assert router.get_model_ids(model_name="quality") == ["shared-1"]
+    assert router.get_model_ids(model_name="shared-model") == ["shared-1"]
+    # the team deployments are still routable under their own names
+    assert router.get_model_ids(model_name="shared-model_team-a_uuid") == ["team-a-1"]

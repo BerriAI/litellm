@@ -1169,11 +1169,16 @@ class Router:
 
     def _resolve_to_deployment_model_names(self, model: str) -> tuple[str, ...]:
         """
-        The deployment `model_name`s behind a requested name: a
-        `model_group_alias` resolves to its target and a callable routing group
-        to its members, so lookups keyed by model group name reach the same
-        deployments the router would route the request to. Names that are
-        neither resolve to themselves.
+        The deployment `model_name`s behind a requested name, so lookups keyed
+        by a served name reach the deployments the router would route to:
+
+        - a `model_group_alias` resolves to its target
+        - a callable routing group resolves to its member `model_name`s
+        - any other name resolves to itself
+
+        Team-scoped deployments keep their own internal `model_name`, so they
+        are reached only when that name is requested, as is already the case
+        for a plain `model_name` lookup.
         """
         resolved: Final = self._get_model_from_alias(model=model) or model
         group: Final = self.get_routing_group(resolved)
