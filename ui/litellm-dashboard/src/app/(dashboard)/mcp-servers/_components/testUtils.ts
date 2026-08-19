@@ -4,6 +4,7 @@ import { expect } from "vitest";
 export async function selectAntOption(labelText: string, optionText: string) {
   const label = screen.getByText(labelText);
   const select =
+    label.closest('[data-slot="field"]')?.querySelector(".ant-select") ??
     label.closest(".ant-form-item")?.querySelector(".ant-select") ??
     label.closest(".ant-collapse-item")?.querySelector(".ant-select") ??
     label.closest("div")?.querySelector(".ant-select") ??

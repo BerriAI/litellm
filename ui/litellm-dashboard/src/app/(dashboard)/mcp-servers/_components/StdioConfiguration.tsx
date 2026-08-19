@@ -1,6 +1,7 @@
 import React from "react";
-import { Form, Input, Tooltip } from "antd";
+import { Input, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import { MountedFormField, bindControl } from "@/components/common_components/MountedFormField";
 
 interface StdioConfigurationProps {
   isVisible: boolean;
@@ -15,7 +16,7 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
   if (!isVisible) return null;
 
   return (
-    <Form.Item
+    <MountedFormField
       label={
         <span className="text-sm font-medium text-gray-700 flex items-center">
           Stdio Configuration (JSON)
@@ -25,23 +26,23 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
         </span>
       }
       name="stdio_config"
-      rules={[
-        ...(required ? [{ required: true, message: "Please enter stdio configuration" }] : []),
-        {
-          validator: (_, value) => {
-            if (!value) return Promise.resolve();
-            try {
-              JSON.parse(value);
-              return Promise.resolve();
-            } catch {
-              return Promise.reject("Please enter valid JSON");
-            }
-          },
+      required={required}
+      rules={{
+        validate: (value) => {
+          if (!value) return required ? "Please enter stdio configuration" : true;
+          try {
+            JSON.parse(String(value));
+            return true;
+          } catch {
+            return "Please enter valid JSON";
+          }
         },
-      ]}
+      }}
     >
-      <Input.TextArea
-        placeholder={`{
+      {(field) => (
+        <Input.TextArea
+          {...bindControl<string | undefined>(field)}
+          placeholder={`{
   "mcpServers": {
     "circleci-mcp-server": {
       "command": "npx",
@@ -53,10 +54,11 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
     }
   }
 }`}
-        rows={12}
-        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
-      />
-    </Form.Item>
+          rows={12}
+          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
+        />
+      )}
+    </MountedFormField>
   );
 };
 

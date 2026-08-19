@@ -1,6 +1,8 @@
 import React from "react";
-import { Form, Input, Select, Tooltip } from "antd";
+import { Input, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import { useWatch } from "react-hook-form";
+import { MountedFormField, bindControl, useMountedFormContext } from "@/components/common_components/MountedFormField";
 
 interface TokenExchangeFormFieldsProps {
   isEditing?: boolean;
@@ -19,10 +21,12 @@ const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, toolt
 
 const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEditing = false }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
+  const { control } = useMountedFormContext();
+  const isEntraObo = useWatch({ control, name: "token_exchange_profile" }) === "entra_obo";
 
   return (
     <>
-      <Form.Item
+      <MountedFormField
         label={
           <FieldLabel
             label="Profile"
@@ -30,18 +34,20 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
           />
         }
         name="token_exchange_profile"
-        {...(isEditing ? {} : { initialValue: "rfc8693" })}
+        {...(isEditing ? {} : { defaultValue: "rfc8693" })}
       >
-        <Select className="rounded-lg" size="large">
-          <Select.Option value="rfc8693">
-            <span className="font-medium">RFC 8693 (standard)</span>
-          </Select.Option>
-          <Select.Option value="entra_obo">
-            <span className="font-medium">Microsoft Entra OBO</span>
-          </Select.Option>
-        </Select>
-      </Form.Item>
-      <Form.Item
+        {(field) => (
+          <Select {...bindControl<string | undefined>(field)} className="rounded-lg" size="large">
+            <Select.Option value="rfc8693">
+              <span className="font-medium">RFC 8693 (standard)</span>
+            </Select.Option>
+            <Select.Option value="entra_obo">
+              <span className="font-medium">Microsoft Entra OBO</span>
+            </Select.Option>
+          </Select>
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Token Exchange Endpoint (optional)"
@@ -50,98 +56,116 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
         }
         name="token_exchange_endpoint"
       >
-        <Input placeholder="https://idp.example.com/oauth2/token" className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(field) => (
+          <Input
+            {...bindControl<string | undefined>(field)}
+            placeholder="https://idp.example.com/oauth2/token"
+            className={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Client ID"
             tooltip="OAuth2 client ID used to authenticate to the token exchange endpoint."
           />
         }
-        name={["credentials", "client_id"]}
-        rules={[{ required: !isEditing, message: "Client ID is required for token exchange" }]}
+        name="credentials.client_id"
+        required={!isEditing}
+        rules={isEditing ? {} : { required: "Client ID is required for token exchange" }}
       >
-        <Input.Password placeholder={`Enter OAuth client ID${placeholderSuffix}`} className={fieldClassName} />
-      </Form.Item>
-      <Form.Item
+        {(field) => (
+          <Input.Password
+            {...bindControl<string | undefined>(field)}
+            placeholder={`Enter OAuth client ID${placeholderSuffix}`}
+            className={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={
           <FieldLabel
             label="Client Secret"
             tooltip="OAuth2 client secret used to authenticate to the token exchange endpoint."
           />
         }
-        name={["credentials", "client_secret"]}
-        rules={[{ required: !isEditing, message: "Client Secret is required for token exchange" }]}
+        name="credentials.client_secret"
+        required={!isEditing}
+        rules={isEditing ? {} : { required: "Client Secret is required for token exchange" }}
       >
-        <Input.Password placeholder={`Enter OAuth client secret${placeholderSuffix}`} className={fieldClassName} />
-      </Form.Item>
-      <Form.Item noStyle shouldUpdate={(prev, cur) => prev.token_exchange_profile !== cur.token_exchange_profile}>
-        {({ getFieldValue }) => {
-          const isEntraObo = getFieldValue("token_exchange_profile") === "entra_obo";
-          return (
-            <>
-              {!isEntraObo && (
-                <>
-                  <Form.Item
-                    label={
-                      <FieldLabel
-                        label="Audience (optional)"
-                        tooltip="Target audience for the exchanged token (RFC 8693 audience). Identifies the upstream MCP server the token is for."
-                      />
-                    }
-                    name="audience"
-                  >
-                    <Input placeholder="https://upstream.example.com" className={fieldClassName} />
-                  </Form.Item>
-                  <Form.Item
-                    label={
-                      <FieldLabel
-                        label="Subject Token Type (optional)"
-                        tooltip="Type of the user's incoming token (RFC 8693 subject_token_type). Defaults to urn:ietf:params:oauth:token-type:access_token."
-                      />
-                    }
-                    name="subject_token_type"
-                  >
-                    <Input placeholder="urn:ietf:params:oauth:token-type:access_token" className={fieldClassName} />
-                  </Form.Item>
-                </>
-              )}
-              <Form.Item
-                label={
-                  <FieldLabel
-                    label={isEntraObo ? "Scopes" : "Scopes (optional)"}
-                    tooltip={
-                      isEntraObo
-                        ? "Microsoft Entra OBO carries the target resource in the scope, so at least one is required (e.g. api://<app-id>/.default)."
-                        : "Optional scopes to request during the token exchange."
-                    }
-                  />
-                }
-                name={["credentials", "scopes"]}
-                rules={
-                  isEntraObo
-                    ? [
-                        {
-                          required: true,
-                          message: "Microsoft Entra OBO requires a scope, e.g. api://<app-id>/.default",
-                        },
-                      ]
-                    : []
-                }
-              >
-                <Select
-                  mode="tags"
-                  tokenSeparators={[","]}
-                  placeholder={isEntraObo ? "api://<app-id>/.default" : "Add scopes"}
-                  className="rounded-lg"
-                  size="large"
-                />
-              </Form.Item>
-            </>
-          );
-        }}
-      </Form.Item>
+        {(field) => (
+          <Input.Password
+            {...bindControl<string | undefined>(field)}
+            placeholder={`Enter OAuth client secret${placeholderSuffix}`}
+            className={fieldClassName}
+          />
+        )}
+      </MountedFormField>
+      {!isEntraObo && (
+        <>
+          <MountedFormField
+            label={
+              <FieldLabel
+                label="Audience (optional)"
+                tooltip="Target audience for the exchanged token (RFC 8693 audience). Identifies the upstream MCP server the token is for."
+              />
+            }
+            name="audience"
+          >
+            {(field) => (
+              <Input
+                {...bindControl<string | undefined>(field)}
+                placeholder="https://upstream.example.com"
+                className={fieldClassName}
+              />
+            )}
+          </MountedFormField>
+          <MountedFormField
+            label={
+              <FieldLabel
+                label="Subject Token Type (optional)"
+                tooltip="Type of the user's incoming token (RFC 8693 subject_token_type). Defaults to urn:ietf:params:oauth:token-type:access_token."
+              />
+            }
+            name="subject_token_type"
+          >
+            {(field) => (
+              <Input
+                {...bindControl<string | undefined>(field)}
+                placeholder="urn:ietf:params:oauth:token-type:access_token"
+                className={fieldClassName}
+              />
+            )}
+          </MountedFormField>
+        </>
+      )}
+      <MountedFormField
+        label={
+          <FieldLabel
+            label={isEntraObo ? "Scopes" : "Scopes (optional)"}
+            tooltip={
+              isEntraObo
+                ? "Microsoft Entra OBO carries the target resource in the scope, so at least one is required (e.g. api://<app-id>/.default)."
+                : "Optional scopes to request during the token exchange."
+            }
+          />
+        }
+        name="credentials.scopes"
+        required={isEntraObo}
+        rules={isEntraObo ? { required: "Microsoft Entra OBO requires a scope, e.g. api://<app-id>/.default" } : {}}
+      >
+        {(field) => (
+          <Select
+            {...bindControl<string[] | undefined>(field)}
+            mode="tags"
+            tokenSeparators={[","]}
+            placeholder={isEntraObo ? "api://<app-id>/.default" : "Add scopes"}
+            className="rounded-lg"
+            size="large"
+          />
+        )}
+      </MountedFormField>
     </>
   );
 };

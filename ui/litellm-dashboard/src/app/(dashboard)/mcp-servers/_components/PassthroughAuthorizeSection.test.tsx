@@ -1,12 +1,22 @@
 import React from "react";
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { Form } from "antd";
+import { FormProvider, useForm } from "react-hook-form";
+import {
+  MountedFormProvider,
+  useMountRegistry,
+  type MountedFormValues,
+} from "@/components/common_components/MountedFormField";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 
 const WithForm: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [form] = Form.useForm();
-  return <Form form={form}>{children}</Form>;
+  const form = useForm<MountedFormValues>({ defaultValues: {} });
+  const registry = useMountRegistry();
+  return (
+    <FormProvider {...form}>
+      <MountedFormProvider value={{ control: form.control, registry }}>{children}</MountedFormProvider>
+    </FormProvider>
+  );
 };
 
 const noopFlow = { startOAuthFlow: () => {}, status: "idle", error: null, tokenResponse: null };

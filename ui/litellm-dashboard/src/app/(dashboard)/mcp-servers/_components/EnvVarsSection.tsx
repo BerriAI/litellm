@@ -1,6 +1,13 @@
 import React from "react";
-import { Form, Input, Select, Button, Tooltip, Typography } from "antd";
+import { Input, Select, Button, Tooltip, Typography } from "antd";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+  MountedFormField,
+  bindControl,
+  useMountedFieldArray,
+  useMountedFormContext,
+  useMountedWatch,
+} from "@/components/common_components/MountedFormField";
 
 const { Text } = Typography;
 
@@ -20,6 +27,9 @@ const SCOPE_OPTIONS = [
  * The parent form reads the ``env_vars`` field from the form values.
  */
 const EnvVarsSection: React.FC = () => {
+  const { control } = useMountedFormContext();
+  const { fields, append, remove } = useMountedFieldArray(control, "env_vars");
+
   return (
     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
       <div className="flex items-center gap-2 mb-1">
@@ -48,60 +58,59 @@ const EnvVarsSection: React.FC = () => {
         </code>
       </Text>
 
-      <Form.List name="env_vars">
-        {(fields, { add, remove }) => (
-          <div className="space-y-2">
-            {fields.length > 0 && (
-              <div className="flex gap-3 px-1 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                <div style={{ flex: 1 }}>Variable Name</div>
-                <div style={{ flex: 1 }}>Value / Description</div>
-                <div style={{ width: 160 }}>Scope</div>
-                <div style={{ width: 24 }} />
-              </div>
-            )}
-            {fields.map(({ key, name, ...restField }) => (
-              <div key={key} className="flex gap-3 items-start">
-                <Form.Item
-                  {...restField}
-                  name={[name, "name"]}
-                  className="mb-0"
-                  style={{ flex: 1 }}
-                  rules={[
-                    { required: true, message: "Variable name is required" },
-                    {
-                      pattern: /^[A-Za-z_][A-Za-z0-9_]*$/,
-                      message: "Use letters, digits, underscores; cannot start with a digit.",
-                    },
-                  ]}
-                >
-                  <Input placeholder="e.g. DB_PROTOCOL" className="rounded-md font-mono" />
-                </Form.Item>
-                <div style={{ flex: 1 }}>
-                  <ScopedValueOrDescription name={name} restField={restField} />
-                </div>
-                <Form.Item
-                  {...restField}
-                  name={[name, "scope"]}
-                  className="mb-0"
-                  initialValue="global"
-                  style={{ width: 160 }}
-                >
-                  <Select options={SCOPE_OPTIONS} />
-                </Form.Item>
-                <div style={{ width: 24, height: 32 }} className="flex items-center justify-center">
-                  <MinusCircleOutlined
-                    onClick={() => remove(name)}
-                    className="text-gray-500 hover:text-red-500 cursor-pointer"
-                  />
-                </div>
-              </div>
-            ))}
-            <Button type="dashed" onClick={() => add({ scope: "global" })} icon={<PlusOutlined />} block>
-              Add Variable
-            </Button>
+      <div className="space-y-2">
+        {fields.length > 0 && (
+          <div className="flex gap-3 px-1 text-xs font-medium text-gray-500 uppercase tracking-wide">
+            <div style={{ flex: 1 }}>Variable Name</div>
+            <div style={{ flex: 1 }}>Value / Description</div>
+            <div style={{ width: 160 }}>Scope</div>
+            <div style={{ width: 24 }} />
           </div>
         )}
-      </Form.List>
+        {fields.map((row, index) => (
+          <div key={row.id} className="flex gap-3 items-start">
+            <div style={{ flex: 1 }}>
+              <MountedFormField
+                name={`env_vars.${index}.name`}
+                className="mb-0"
+                required
+                rules={{
+                  required: "Variable name is required",
+                  pattern: {
+                    value: /^[A-Za-z_][A-Za-z0-9_]*$/,
+                    message: "Use letters, digits, underscores; cannot start with a digit.",
+                  },
+                }}
+              >
+                {(field) => (
+                  <Input
+                    {...bindControl<string | undefined>(field)}
+                    placeholder="e.g. DB_PROTOCOL"
+                    className="rounded-md font-mono"
+                  />
+                )}
+              </MountedFormField>
+            </div>
+            <div style={{ flex: 1 }}>
+              <ScopedValueOrDescription index={index} />
+            </div>
+            <div style={{ width: 160 }}>
+              <MountedFormField name={`env_vars.${index}.scope`} className="mb-0" defaultValue="global">
+                {(field) => <Select {...bindControl<string | undefined>(field)} options={SCOPE_OPTIONS} />}
+              </MountedFormField>
+            </div>
+            <div style={{ width: 24, height: 32 }} className="flex items-center justify-center">
+              <MinusCircleOutlined
+                onClick={() => remove(index)}
+                className="text-gray-500 hover:text-red-500 cursor-pointer"
+              />
+            </div>
+          </div>
+        ))}
+        <Button type="dashed" onClick={() => append({ scope: "global" })} icon={<PlusOutlined />} block>
+          Add Variable
+        </Button>
+      </div>
     </div>
   );
 };
@@ -109,33 +118,39 @@ const EnvVarsSection: React.FC = () => {
 // For instance-scoped vars this column holds the admin value. For per-user
 // vars the value comes from each user later, so the column instead captures an
 // optional description that the per-user fill-in modal shows as a hint.
-const ScopedValueOrDescription: React.FC<{
-  name: number;
-  restField: object;
-}> = ({ name, restField }) => {
-  const isPerUser = Form.useWatch(["env_vars", name, "scope"]) === "user";
+const ScopedValueOrDescription: React.FC<{ index: number }> = ({ index }) => {
+  const isPerUser = useMountedWatch(`env_vars.${index}.scope`) === "user";
   if (isPerUser) {
     return (
-      <Form.Item {...restField} name={[name, "description"]} className="mb-0">
-        <Input
-          addonBefore={
-            <Tooltip title="Per-user variables have no shared value. This text is only a hint shown to each user when they fill in their own value.">
-              <span className="text-xs text-gray-500 cursor-help whitespace-nowrap">
-                <InfoCircleOutlined className="mr-1" />
-                Hint
-              </span>
-            </Tooltip>
-          }
-          placeholder="e.g. Your DB username"
-          styles={{ input: { color: "#9ca3af" } }}
-        />
-      </Form.Item>
+      <MountedFormField name={`env_vars.${index}.description`} className="mb-0">
+        {(field) => (
+          <Input
+            {...bindControl<string | undefined>(field)}
+            addonBefore={
+              <Tooltip title="Per-user variables have no shared value. This text is only a hint shown to each user when they fill in their own value.">
+                <span className="text-xs text-gray-500 cursor-help whitespace-nowrap">
+                  <InfoCircleOutlined className="mr-1" />
+                  Hint
+                </span>
+              </Tooltip>
+            }
+            placeholder="e.g. Your DB username"
+            styles={{ input: { color: "#9ca3af" } }}
+          />
+        )}
+      </MountedFormField>
     );
   }
   return (
-    <Form.Item {...restField} name={[name, "value"]} className="mb-0">
-      <Input placeholder="e.g. postgresql" className="rounded-md font-mono" />
-    </Form.Item>
+    <MountedFormField name={`env_vars.${index}.value`} className="mb-0">
+      {(field) => (
+        <Input
+          {...bindControl<string | undefined>(field)}
+          placeholder="e.g. postgresql"
+          className="rounded-md font-mono"
+        />
+      )}
+    </MountedFormField>
   );
 };
 

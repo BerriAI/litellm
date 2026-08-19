@@ -54,6 +54,18 @@ export const validateMCPServerName = (value: string) => {
     : Promise.resolve();
 };
 
+export const antdValidator = async (
+  validate: (value: string) => Promise<unknown>,
+  value: unknown,
+): Promise<true | string> => {
+  try {
+    await validate(value as string);
+    return true;
+  } catch (reason) {
+    return reason instanceof Error ? reason.message : String(reason);
+  }
+};
+
 export const TOOL_DISPLAY_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 export const validateToolDisplayName = (value: string) => {

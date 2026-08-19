@@ -1,12 +1,20 @@
 import React, { useState } from "react";
-import { Form, Input, Tooltip } from "antd";
+import { Input, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { FormInstance } from "antd/es/form";
+import { UseFormReturn } from "react-hook-form";
 import { AUTH_TYPE, OAUTH_FLOW } from "@/components/mcp_tools/types";
+import {
+  MountedFormField,
+  applyFieldValues,
+  bindControl,
+  resetFieldsToDefaults,
+  type MountedFormValues,
+} from "@/components/common_components/MountedFormField";
 import OpenAPIQuickPicker, { OpenAPIRegistryEntry, OpenAPIKeyTool } from "./OpenAPIQuickPicker";
 
 interface OpenAPIFormSectionProps {
-  form: FormInstance;
+  form: UseFormReturn<MountedFormValues>;
+  defaultValues: MountedFormValues;
   accessToken: string | null;
   /** Called when a preset is selected so the parent can sync its formValues state. */
   onValuesChange: (updates: Record<string, any>) => void;
@@ -25,6 +33,7 @@ interface OpenAPIFormSectionProps {
  */
 const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
   form,
+  defaultValues,
   accessToken,
   onValuesChange,
   onKeyToolsChange,
@@ -47,13 +56,11 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
       updates.oauth_flow_type = OAUTH_FLOW.INTERACTIVE;
       updates.authorization_url = entry.oauth.authorization_url;
       updates.token_url = entry.oauth.token_url;
-      form.setFieldsValue(updates);
+      applyFieldValues(form, updates);
       onOAuthDocsUrlChange?.(entry.oauth.docs_url ?? null);
     } else {
-      // resetFields is required to visually clear Ant Design form fields —
-      // setFieldsValue with undefined silently skips undefined keys.
-      form.resetFields(["auth_type", "authorization_url", "token_url"]);
-      form.setFieldsValue(updates);
+      resetFieldsToDefaults(form, defaultValues, ["auth_type", "authorization_url", "token_url"]);
+      applyFieldValues(form, updates);
       onOAuthDocsUrlChange?.(null);
     }
     onValuesChange(updates);
@@ -63,7 +70,7 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
     <>
       <OpenAPIQuickPicker accessToken={accessToken} selectedName={selectedPreset} onSelect={handlePresetSelect} />
 
-      <Form.Item
+      <MountedFormField
         label={
           <span className="text-sm font-medium text-gray-700 flex items-center">
             OpenAPI Spec URL
@@ -73,20 +80,25 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
           </span>
         }
         name="spec_path"
-        rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
+        required
+        rules={{ required: "Please enter an OpenAPI spec URL" }}
       >
-        <Input
-          placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
-          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-          onChange={() => {
-            // Clear the preset selection when the user manually edits the spec URL
-            // so stale suggested tools from a previous preset don't persist.
-            setSelectedPreset(null);
-            onKeyToolsChange?.([]);
-            onOAuthDocsUrlChange?.(null);
-          }}
-        />
-      </Form.Item>
+        {(field) => (
+          <Input
+            {...bindControl<string | undefined>(field)}
+            placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+            onChange={(event) => {
+              // Clear the preset selection when the user manually edits the spec URL
+              // so stale suggested tools from a previous preset don't persist.
+              setSelectedPreset(null);
+              onKeyToolsChange?.([]);
+              onOAuthDocsUrlChange?.(null);
+              field.onChange(event);
+            }}
+          />
+        )}
+      </MountedFormField>
     </>
   );
 };

@@ -1,6 +1,18 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Form, Select, Input as AntdInput, InputNumber, Collapse } from "antd";
+import { Modal, Tooltip, Select, Input as AntdInput, InputNumber, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import { FormProvider, useForm } from "react-hook-form";
+import {
+  MountedFormField,
+  MountedFormProvider,
+  applyFieldValues,
+  bindControl,
+  changedValuesFor,
+  projectMountedValues,
+  resetFieldsToDefaults,
+  useMountRegistry,
+  type MountedFormValues,
+} from "@/components/common_components/MountedFormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -45,7 +57,7 @@ import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { antdValidator, validateMCPServerUrl, validateMCPServerName } from "./utils";
 import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -76,6 +88,16 @@ const payloadErrorMessage = (result: Exclude<BuildCreatePayloadResult, { kind: "
   }
 };
 
+const CREATE_DEFAULTS: MountedFormValues = {
+  dcr_bridge: true,
+  token_exchange_profile: "rfc8693",
+  oauth_flow_type: OAUTH_FLOW.INTERACTIVE,
+  allow_all_keys: false,
+  available_on_public_internet: true,
+  delegate_auth_to_upstream: false,
+  oauth_passthrough: false,
+};
+
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userID,
   userRole,
@@ -87,7 +109,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   prefillData,
   onBackToDiscovery,
 }) => {
-  const [form] = Form.useForm();
+  const form = useForm<MountedFormValues>({ defaultValues: CREATE_DEFAULTS });
+  const registry = useMountRegistry();
   const [isLoading, setIsLoading] = useState(false);
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [formValues, setFormValues] = useState<Record<string, any>>({});
@@ -147,7 +170,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const persistCreateUiState = () => {
     writeCreateUiSnapshot({
       modalVisible: isModalVisible,
-      formValues: form.getFieldsValue(true),
+      formValues: form.getValues() as Record<string, any>,
       transportType,
       costConfig,
       allowedTools,
@@ -170,11 +193,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     // Merge the ref-held DCR client so a re-authorize reuses the registered client instead of
     // re-registering; the form store itself never holds the DCR client (see onTokenReceived).
     getCredentials: () => ({
-      ...((form.getFieldValue("credentials") as Record<string, unknown> | undefined) ?? {}),
+      ...((form.getValues("credentials") as Record<string, unknown> | undefined) ?? {}),
       ...(dcrClientRef.current ?? {}),
     }),
     getTemporaryPayload: () => {
-      const values = form.getFieldsValue(true);
+      const values: Record<string, any> = form.getValues();
       const transport = values.transport || transportType;
       // For OpenAPI transport the form has spec_path instead of url.
       // We pass the spec_path as url so the temp-session endpoint has something
@@ -218,12 +241,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         return;
       }
 
-      if (isClientForwardedTokenMode(form.getFieldValue("auth_type"))) {
+      if (isClientForwardedTokenMode(form.getValues("auth_type") as string | undefined)) {
         // Browser-only modes: the token is held in local state (oauthAccessToken) for tool preview
         // and committed to sessionStorage on submit; it must never be written into form.credentials,
         // which would persist it as server-level credentials on the created server row. Mirrors the
         // edit form's onTokenReceived early return.
-        setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
+        setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getValues()));
         toast.success(
           "Token held for this browser session. Tools can now be previewed and configured; the token is not saved to LiteLLM.",
         );
@@ -240,7 +263,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           }
         : null;
 
-      const current = (form.getFieldValue("credentials") as Record<string, unknown> | undefined) ?? {};
+      const current = (form.getValues("credentials") as Record<string, unknown> | undefined) ?? {};
       const nextCredentials = {
         ...(preservedAdminCredentials(current) ?? {}),
         ...(current.scopes !== undefined && { scopes: current.scopes }),
@@ -252,10 +275,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // Path-replace (not deep-merge) so a re-authorize with fewer token fields does not leave stale
       // siblings from the previous token behind; the admin-typed client keys and scopes are carried
       // explicitly above.
-      form.setFieldValue("credentials", nextCredentials);
+      form.setValue("credentials", nextCredentials);
       // Capture the identity AFTER writing the token so the held token is not spuriously invalidated by
       // its own credential write.
-      setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getFieldsValue(true)));
+      setAuthorizedIdentity(getOAuthAuthorizationIdentity(form.getValues()));
 
       toast.success("OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.");
     },
@@ -277,10 +300,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     // Capture the admin-typed app before resetFields destroys it, then re-apply it: the app is
     // upstream-scoped config, not minted material, so it survives every invalidation (the token is
     // what gets discarded). Token-shaped keys are excluded by the helper's key filter.
-    const keptAdminCredentials = preservedAdminCredentials(form.getFieldValue("credentials"));
-    form.resetFields([...CLEARED_ON_INVALIDATION]);
+    const keptAdminCredentials = preservedAdminCredentials(
+      form.getValues("credentials") as Record<string, unknown> | undefined,
+    );
+    resetFieldsToDefaults(form, CREATE_DEFAULTS, CLEARED_ON_INVALIDATION);
     if (keptAdminCredentials) {
-      form.setFieldsValue({ credentials: keptAdminCredentials });
+      applyFieldValues(form, { credentials: keptAdminCredentials });
     }
     // Re-apply the in-flight edit last; rc-field-form deep-merges nested objects, so a changed
     // credentials sub-field composes with the preserved sibling instead of replacing the object.
@@ -288,7 +313,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       CLEARED_ON_INVALIDATION.filter((key) => key in changedValues).map((key) => [key, changedValues[key]]),
     );
     if (Object.keys(preserved).length > 0) {
-      form.setFieldsValue(preserved);
+      applyFieldValues(form, preserved);
     }
   };
 
@@ -337,7 +362,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // wait until transportType state catches up so the URL field is mounted
       return;
     }
-    form.setFieldsValue(pendingRestoredValues.values);
+    applyFieldValues(form, pendingRestoredValues.values);
     setFormValues(pendingRestoredValues.values);
     setPendingRestoredValues(null);
   }, [pendingRestoredValues, form, transportType]);
@@ -381,7 +406,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       prefillValues.url = prefillData.url;
     }
 
-    form.setFieldsValue(prefillValues);
+    applyFieldValues(form, prefillValues);
     setFormValues(prefillValues);
     setAliasManuallyEdited(false);
   }, [isModalVisible, prefillData, form]);
@@ -446,7 +471,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             description: "Once an admin approves it, the server will appear in your MCP Servers list.",
           });
         }
-        form.resetFields();
+        form.reset(CREATE_DEFAULTS);
         setCostConfig({});
         clearTools();
         setAllowedTools([]);
@@ -466,7 +491,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   // state
   const handleCancel = () => {
-    form.resetFields();
+    form.reset(CREATE_DEFAULTS);
     setCostConfig({});
     clearTools();
     setAllowedTools([]);
@@ -489,11 +514,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ? { url: undefined, command: undefined, args: undefined, env: undefined }
           : { spec_path: undefined, command: undefined, args: undefined, env: undefined };
 
-    form.setFieldsValue(transportValues);
-    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentity)) {
+    applyFieldValues(form, transportValues);
+    if (isHeldOAuthTokenStale(form.getValues(), authorizedIdentity)) {
       clearHeldOAuthToken();
     }
-    setFormValues(form.getFieldsValue(true));
+    setFormValues(form.getValues() as Record<string, any>);
   };
 
   // Generate options with existing groups and potential new group
@@ -532,7 +557,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   React.useEffect(() => {
     if (!aliasManuallyEdited && formValues.server_name) {
       const normalized = formValues.server_name.replace(/\s+/g, "_");
-      form.setFieldsValue({ alias: normalized });
+      applyFieldValues(form, { alias: normalized });
       setFormValues((prev) => ({ ...prev, alias: normalized }));
     }
   }, [formValues.server_name]);
@@ -549,7 +574,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     const wasVisible = wasModalVisibleRef.current;
     wasModalVisibleRef.current = isModalVisible;
     if (!isModalVisible && wasVisible) {
-      form.resetFields();
+      form.reset(CREATE_DEFAULTS);
       setFormValues({});
       setOauthAccessToken(null);
       clearTools();
@@ -582,18 +607,37 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       const upstreamChanged = ["url", "spec_path", "issuer", "authorization_url", "token_url", "registration_url"].some(
         (key) => key in changedValues,
       );
-      const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;
+      const hasDeclaredApp =
+        preservedDeclaredAppCredentials(form.getValues("credentials") as Record<string, unknown> | undefined) !==
+        undefined;
       if (upstreamChanged && hasDeclaredApp) {
         setAppMayNotMatchUpstream(true);
       }
     }
-    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentity)) {
+    if (isHeldOAuthTokenStale(form.getValues(), authorizedIdentity)) {
       clearHeldOAuthToken(changedValues);
-      setFormValues(form.getFieldsValue(true));
+      setFormValues(form.getValues() as Record<string, any>);
       return;
     }
     setFormValues(allValues);
   };
+
+  const valuesChangeRef = React.useRef(handleFormValuesChange);
+  React.useEffect(() => {
+    valuesChangeRef.current = handleFormValuesChange;
+  });
+  React.useEffect(() => {
+    const subscription = form.watch((values, { name, type }) => {
+      if (type !== "change" || !name) {
+        return;
+      }
+      valuesChangeRef.current(
+        changedValuesFor(name, values as MountedFormValues),
+        projectMountedValues(registry, values as MountedFormValues),
+      );
+    });
+    return () => subscription.unsubscribe();
+  }, [form, registry]);
 
   // rendering
   return (
@@ -636,334 +680,371 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }}
     >
       <div className="mt-6">
-        <Form
-          form={form}
-          onFinish={handleCreate}
-          onValuesChange={handleFormValuesChange}
-          layout="vertical"
-          className="space-y-6"
-        >
-          {!isAdmin && (
-            <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-              Your submission will be sent for admin review. Once approved, the server will appear in your MCP Servers
-              list. The request must be made with a team-scoped API key.
-            </div>
-          )}
-          <div className="grid grid-cols-1 gap-6">
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  MCP Server Name
-                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                  </Tooltip>
-                </span>
-              }
-              name="server_name"
-              rules={[
-                { required: false, message: "Please enter a server name" },
-                { validator: (_, value) => validateMCPServerName(value) },
-              ]}
+        <FormProvider {...form}>
+          <MountedFormProvider value={{ control: form.control, registry }}>
+            <form
+              onSubmit={form.handleSubmit((store) => handleCreate(projectMountedValues(registry, store)))}
+              className="space-y-6"
             >
-              <Input
-                placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
-                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-              />
-            </Form.Item>
+              {!isAdmin && (
+                <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+                  Your submission will be sent for admin review. Once approved, the server will appear in your MCP
+                  Servers list. The request must be made with a team-scoped API key.
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-6">
+                <MountedFormField
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      MCP Server Name
+                      <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="server_name"
+                  rules={{ validate: (value) => antdValidator(validateMCPServerName, value) }}
+                >
+                  {(field) => (
+                    <Input
+                      {...bindControl<string | undefined>(field)}
+                      placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
+                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  )}
+                </MountedFormField>
 
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  Alias
-                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                  </Tooltip>
-                </span>
-              }
-              name="alias"
-              rules={[{ required: false }, { validator: (_, value) => validateMCPServerName(value) }]}
-            >
-              <Input
-                placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
-                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                onChange={() => setAliasManuallyEdited(true)}
-              />
-            </Form.Item>
+                <MountedFormField
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Alias
+                      <Tooltip title="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="alias"
+                  rules={{ validate: (value) => antdValidator(validateMCPServerName, value) }}
+                >
+                  {(field) => (
+                    <Input
+                      {...bindControl<string | undefined>(field)}
+                      placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
+                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                      onChange={(event) => {
+                        setAliasManuallyEdited(true);
+                        field.onChange(event);
+                      }}
+                    />
+                  )}
+                </MountedFormField>
 
-            <Form.Item
-              label={<span className="text-sm font-medium text-gray-700">Description</span>}
-              name="description"
-              rules={[
-                {
-                  required: false,
-                  message: "Please enter a server description",
-                },
-              ]}
-            >
-              <Input
-                placeholder="Brief description of what this server does"
-                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-              />
-            </Form.Item>
+                <MountedFormField
+                  label={<span className="text-sm font-medium text-gray-700">Description</span>}
+                  name="description"
+                >
+                  {(field) => (
+                    <Input
+                      {...bindControl<string | undefined>(field)}
+                      placeholder="Brief description of what this server does"
+                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  )}
+                </MountedFormField>
 
-            <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
+                <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
 
-            <Form.Item
-              label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
-              name="source_url"
-            >
-              <Input
-                placeholder="https://github.com/org/mcp-server"
-                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-              />
-            </Form.Item>
+                <MountedFormField
+                  label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
+                  name="source_url"
+                >
+                  {(field) => (
+                    <Input
+                      {...bindControl<string | undefined>(field)}
+                      placeholder="https://github.com/org/mcp-server"
+                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  )}
+                </MountedFormField>
 
-            <Form.Item
-              label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
-              name="transport"
-              rules={[{ required: true, message: "Please select a transport type" }]}
-            >
-              <Select
-                placeholder="Select transport"
-                className="rounded-lg"
-                size="large"
-                onChange={handleTransportChange}
-                value={transportType}
-              >
-                <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
-                <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
-                <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
-                <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
-              </Select>
-            </Form.Item>
+                <MountedFormField
+                  label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
+                  name="transport"
+                  required
+                  rules={{ required: "Please select a transport type" }}
+                >
+                  {(field) => (
+                    <Select
+                      {...bindControl<string | undefined>(field)}
+                      placeholder="Select transport"
+                      className="rounded-lg"
+                      size="large"
+                      onChange={(value, option) => {
+                        field.onChange(value);
+                        handleTransportChange(value);
+                      }}
+                      value={transportType}
+                    >
+                      <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
+                      <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
+                      <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
+                      <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
+                    </Select>
+                  )}
+                </MountedFormField>
 
-            {/* URL field - only show for HTTP and SSE */}
-            {(transportType === "http" || transportType === "sse") && (
-              <Form.Item
-                label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
-                name="url"
-                rules={[
-                  { required: true, message: "Please enter a server URL" },
-                  { validator: (_, value) => validateMCPServerUrl(value) },
-                ]}
-              >
-                <AntdInput
-                  placeholder="https://your-mcp-server.com"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
-            )}
+                {/* URL field - only show for HTTP and SSE */}
+                {(transportType === "http" || transportType === "sse") && (
+                  <MountedFormField
+                    label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
+                    name="url"
+                    required
+                    rules={{
+                      required: "Please enter a server URL",
+                      validate: (value) => antdValidator(validateMCPServerUrl, value),
+                    }}
+                  >
+                    {(field) => (
+                      <AntdInput
+                        {...bindControl<string | undefined>(field)}
+                        placeholder="https://your-mcp-server.com"
+                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    )}
+                  </MountedFormField>
+                )}
 
-            {/* OpenAPI: logo picker + spec URL input */}
-            {transportType === TRANSPORT.OPENAPI && (
-              <OpenAPIFormSection
-                form={form}
-                accessToken={isModalVisible ? accessToken : null}
-                onValuesChange={(updates) =>
-                  handleFormValuesChange(updates, { ...form.getFieldsValue(true), ...updates })
-                }
-                onKeyToolsChange={setKeyTools}
-                onLogoUrlChange={setLogoUrl}
-                onOAuthDocsUrlChange={setOauthDocsUrl}
-              />
-            )}
+                {/* OpenAPI: logo picker + spec URL input */}
+                {transportType === TRANSPORT.OPENAPI && (
+                  <OpenAPIFormSection
+                    form={form}
+                    defaultValues={CREATE_DEFAULTS}
+                    accessToken={isModalVisible ? accessToken : null}
+                    onValuesChange={(updates) => handleFormValuesChange(updates, { ...form.getValues(), ...updates })}
+                    onKeyToolsChange={setKeyTools}
+                    onLogoUrlChange={setLogoUrl}
+                    onOAuthDocsUrlChange={setOauthDocsUrl}
+                  />
+                )}
 
-            {/* BYOK toggle - only for OpenAPI */}
-            {transportType === TRANSPORT.OPENAPI && <OpenApiByokFields />}
+                {/* BYOK toggle - only for OpenAPI */}
+                {transportType === TRANSPORT.OPENAPI && <OpenApiByokFields />}
 
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  Max Concurrent Requests (optional)
-                  <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                  </Tooltip>
-                </span>
-              }
-              name="max_concurrent_requests"
-            >
-              <InputNumber
-                min={1}
-                precision={0}
-                placeholder="e.g. 10"
-                style={{ width: "100%" }}
-                className="rounded-lg"
-              />
-            </Form.Item>
+                <MountedFormField
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Max Concurrent Requests (optional)
+                      <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="max_concurrent_requests"
+                >
+                  {(field) => (
+                    <InputNumber
+                      {...bindControl<number | null>(field)}
+                      min={1}
+                      precision={0}
+                      placeholder="e.g. 10"
+                      style={{ width: "100%" }}
+                      className="rounded-lg"
+                    />
+                  )}
+                </MountedFormField>
 
-            {/* Authentication - show for HTTP, SSE, and OpenAPI */}
-            {transportType !== "stdio" && transportType !== "" && (
-              <Collapse
-                defaultActiveKey={["auth"]}
-                className="mb-4"
-                items={[
-                  {
-                    key: "auth",
-                    label: <span className="text-sm font-semibold text-gray-700">Authentication</span>,
-                    children: (
-                      <>
-                        <Form.Item name="auth_type" rules={[{ required: true, message: "Please select an auth type" }]}>
-                          <Select placeholder="Select auth type" className="rounded-lg" size="large" virtual={false}>
-                            <Select.Option value="none">None</Select.Option>
-                            <Select.Option value="api_key">API Key</Select.Option>
-                            <Select.Option value="bearer_token">Bearer Token</Select.Option>
-                            <Select.Option value="token">Token</Select.Option>
-                            <Select.Option value="basic">Basic Auth</Select.Option>
-                            <Select.Option value="oauth2">OAuth</Select.Option>
-                            <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
-                            <Select.Option value="oauth2_id_jag">ID-JAG (Okta Cross App Access)</Select.Option>
-                            <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
-                            <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
-                            <Select.Option value="oauth_delegate">
-                              OAuth Delegate (client-supplied upstream token)
-                            </Select.Option>
-                          </Select>
-                        </Form.Item>
+                {/* Authentication - show for HTTP, SSE, and OpenAPI */}
+                {transportType !== "stdio" && transportType !== "" && (
+                  <Collapse
+                    defaultActiveKey={["auth"]}
+                    className="mb-4"
+                    items={[
+                      {
+                        key: "auth",
+                        label: <span className="text-sm font-semibold text-gray-700">Authentication</span>,
+                        children: (
+                          <>
+                            <MountedFormField
+                              name="auth_type"
+                              required
+                              rules={{ required: "Please select an auth type" }}
+                            >
+                              {(field) => (
+                                <Select
+                                  {...bindControl<string | undefined>(field)}
+                                  placeholder="Select auth type"
+                                  className="rounded-lg"
+                                  size="large"
+                                  virtual={false}
+                                >
+                                  <Select.Option value="none">None</Select.Option>
+                                  <Select.Option value="api_key">API Key</Select.Option>
+                                  <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                                  <Select.Option value="token">Token</Select.Option>
+                                  <Select.Option value="basic">Basic Auth</Select.Option>
+                                  <Select.Option value="oauth2">OAuth</Select.Option>
+                                  <Select.Option value="oauth2_token_exchange">
+                                    OAuth Token Exchange (OBO)
+                                  </Select.Option>
+                                  <Select.Option value="oauth2_id_jag">ID-JAG (Okta Cross App Access)</Select.Option>
+                                  <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
+                                  <Select.Option value="true_passthrough">
+                                    True Passthrough (no LiteLLM auth)
+                                  </Select.Option>
+                                  <Select.Option value="oauth_delegate">
+                                    OAuth Delegate (client-supplied upstream token)
+                                  </Select.Option>
+                                </Select>
+                              )}
+                            </MountedFormField>
 
-                        <TruePassthroughWarning authType={authType} />
+                            <TruePassthroughWarning authType={authType} />
 
-                        <PassthroughAuthorizeSection
-                          authType={authType}
-                          dcrBridgeInitialChecked
-                          oauthFlow={{
-                            startOAuthFlow,
-                            status: oauthStatus,
-                            error: oauthError,
-                            tokenResponse: oauthTokenResponse,
-                          }}
-                          appMayNotMatchUpstream={appMayNotMatchUpstream}
-                        />
-
-                        {shouldShowAuthValueField && (
-                          <Form.Item
-                            label={
-                              <span className="text-sm font-medium text-gray-700 flex items-center">
-                                Authentication Value
-                                <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
-                                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                                </Tooltip>
-                              </span>
-                            }
-                            name={["credentials", "auth_value"]}
-                            rules={[
-                              {
-                                validator: (_, value) =>
-                                  value && typeof value === "string" && value.trim() === ""
-                                    ? Promise.reject(new Error("Authentication value cannot be empty whitespace"))
-                                    : Promise.resolve(),
-                              },
-                            ]}
-                          >
-                            <AntdInput.Password
-                              placeholder="Enter token or secret"
-                              className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                            <PassthroughAuthorizeSection
+                              authType={authType}
+                              dcrBridgeInitialChecked
+                              oauthFlow={{
+                                startOAuthFlow,
+                                status: oauthStatus,
+                                error: oauthError,
+                                tokenResponse: oauthTokenResponse,
+                              }}
+                              appMayNotMatchUpstream={appMayNotMatchUpstream}
                             />
-                          </Form.Item>
-                        )}
 
-                        {isOAuthAuthType && (
-                          <OAuthFormFields
-                            isM2M={isM2MFlow}
-                            initialFlowType={OAUTH_FLOW.INTERACTIVE}
-                            docsUrl={oauthDocsUrl}
-                            oauthFlow={{
-                              startOAuthFlow,
-                              status: oauthStatus,
-                              error: oauthError,
-                              tokenResponse: oauthTokenResponse,
-                            }}
-                          />
-                        )}
+                            {shouldShowAuthValueField && (
+                              <MountedFormField
+                                label={
+                                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                                    Authentication Value
+                                    <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
+                                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                                    </Tooltip>
+                                  </span>
+                                }
+                                name="credentials.auth_value"
+                                rules={{
+                                  validate: (value) =>
+                                    value && typeof value === "string" && value.trim() === ""
+                                      ? "Authentication value cannot be empty whitespace"
+                                      : true,
+                                }}
+                              >
+                                {(field) => (
+                                  <AntdInput.Password
+                                    {...bindControl<string | undefined>(field)}
+                                    placeholder="Enter token or secret"
+                                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                                  />
+                                )}
+                              </MountedFormField>
+                            )}
 
-                        {isTokenExchangeAuthType && <TokenExchangeFormFields />}
+                            {isOAuthAuthType && (
+                              <OAuthFormFields
+                                isM2M={isM2MFlow}
+                                initialFlowType={OAUTH_FLOW.INTERACTIVE}
+                                docsUrl={oauthDocsUrl}
+                                oauthFlow={{
+                                  startOAuthFlow,
+                                  status: oauthStatus,
+                                  error: oauthError,
+                                  tokenResponse: oauthTokenResponse,
+                                }}
+                              />
+                            )}
 
-                        {isIdJagAuthType && <IdJagFormFields />}
-                      </>
-                    ),
-                  },
-                ]}
-              />
-            )}
+                            {isTokenExchangeAuthType && <TokenExchangeFormFields />}
 
-            {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
+                            {isIdJagAuthType && <IdJagFormFields />}
+                          </>
+                        ),
+                      },
+                    ]}
+                  />
+                )}
 
-            {/* Stdio Configuration - only show for stdio transport */}
-            <StdioConfiguration isVisible={transportType === "stdio"} />
-          </div>
+                {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
 
-          {/* Environment Variables Section */}
-          <div className="mt-8">
-            <EnvVarsSection />
-          </div>
+                {/* Stdio Configuration - only show for stdio transport */}
+                <StdioConfiguration isVisible={transportType === "stdio"} />
+              </div>
 
-          {/* Permission Management / Access Control Section */}
-          <div className="mt-8">
-            <MCPPermissionManagement
-              availableAccessGroups={availableAccessGroups}
-              mcpServer={null}
-              searchValue={searchValue}
-              setSearchValue={setSearchValue}
-              getAccessGroupOptions={getAccessGroupOptions}
-            />
-          </div>
+              {/* Environment Variables Section */}
+              <div className="mt-8">
+                <EnvVarsSection />
+              </div>
 
-          {/* Connection Status Section */}
-          <div className="mt-8 pt-6 border-t border-gray-200">
-            <MCPConnectionStatus
-              formValues={formValues}
-              tools={tools}
-              isLoadingTools={isLoadingTools}
-              toolsError={toolsError}
-              toolsErrorStatus={toolsErrorStatus}
-              toolsErrorStackTrace={toolsErrorStackTrace}
-              canFetchTools={canFetchTools}
-              fetchTools={fetchTools}
-            />
-          </div>
+              {/* Permission Management / Access Control Section */}
+              <div className="mt-8">
+                <MCPPermissionManagement
+                  availableAccessGroups={availableAccessGroups}
+                  mcpServer={null}
+                  searchValue={searchValue}
+                  setSearchValue={setSearchValue}
+                  getAccessGroupOptions={getAccessGroupOptions}
+                />
+              </div>
 
-          {/* Tool Configuration Section */}
-          <div className="mt-6">
-            <MCPToolConfiguration
-              accessToken={accessToken}
-              formValues={formValues}
-              allowedTools={allowedTools}
-              existingAllowedTools={null}
-              onAllowedToolsChange={setAllowedTools}
-              hasToolAllowlistInteraction={hasToolAllowlistInteraction}
-              onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
-              toolNameToDisplayName={toolNameToDisplayName}
-              toolNameToDescription={toolNameToDescription}
-              onToolNameToDisplayNameChange={setToolNameToDisplayName}
-              onToolNameToDescriptionChange={setToolNameToDescription}
-              keyTools={keyTools}
-              externalTools={tools}
-              externalIsLoading={isLoadingTools}
-              externalError={toolsError}
-              externalErrorStatus={toolsErrorStatus}
-              externalCanFetch={canFetchTools}
-            />
-          </div>
+              {/* Connection Status Section */}
+              <div className="mt-8 pt-6 border-t border-gray-200">
+                <MCPConnectionStatus
+                  formValues={formValues}
+                  tools={tools}
+                  isLoadingTools={isLoadingTools}
+                  toolsError={toolsError}
+                  toolsErrorStatus={toolsErrorStatus}
+                  toolsErrorStackTrace={toolsErrorStackTrace}
+                  canFetchTools={canFetchTools}
+                  fetchTools={fetchTools}
+                />
+              </div>
 
-          {/* Cost Configuration Section */}
-          <div className="mt-6">
-            <MCPServerCostConfig
-              value={costConfig}
-              onChange={setCostConfig}
-              tools={tools.filter((tool) => allowedTools.includes(tool.name))}
-              disabled={false}
-            />
-          </div>
+              {/* Tool Configuration Section */}
+              <div className="mt-6">
+                <MCPToolConfiguration
+                  accessToken={accessToken}
+                  formValues={formValues}
+                  allowedTools={allowedTools}
+                  existingAllowedTools={null}
+                  onAllowedToolsChange={setAllowedTools}
+                  hasToolAllowlistInteraction={hasToolAllowlistInteraction}
+                  onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
+                  toolNameToDisplayName={toolNameToDisplayName}
+                  toolNameToDescription={toolNameToDescription}
+                  onToolNameToDisplayNameChange={setToolNameToDisplayName}
+                  onToolNameToDescriptionChange={setToolNameToDescription}
+                  keyTools={keyTools}
+                  externalTools={tools}
+                  externalIsLoading={isLoadingTools}
+                  externalError={toolsError}
+                  externalErrorStatus={toolsErrorStatus}
+                  externalCanFetch={canFetchTools}
+                />
+              </div>
 
-          <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
-            <Button variant="secondary" onClick={handleCancel}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isLoading} aria-busy={isLoading}>
-              {isLoading && <UiLoadingSpinner className="size-4" />}
-              {isLoading ? "Creating..." : "Add MCP Server"}
-            </Button>
-          </div>
-        </Form>
+              {/* Cost Configuration Section */}
+              <div className="mt-6">
+                <MCPServerCostConfig
+                  value={costConfig}
+                  onChange={setCostConfig}
+                  tools={tools.filter((tool) => allowedTools.includes(tool.name))}
+                  disabled={false}
+                />
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
+                <Button variant="secondary" onClick={handleCancel}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isLoading} aria-busy={isLoading}>
+                  {isLoading && <UiLoadingSpinner className="size-4" />}
+                  {isLoading ? "Creating..." : "Add MCP Server"}
+                </Button>
+              </div>
+            </form>
+          </MountedFormProvider>
+        </FormProvider>
       </div>
     </Modal>
   );

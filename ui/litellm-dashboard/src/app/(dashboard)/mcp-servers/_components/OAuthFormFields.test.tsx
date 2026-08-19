@@ -1,22 +1,32 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
-import { Form } from "antd";
+import { FormProvider, useForm } from "react-hook-form";
+import {
+  MountedFormProvider,
+  projectMountedValues,
+  useMountRegistry,
+  type MountedFormValues,
+} from "@/components/common_components/MountedFormField";
 import OAuthFormFields from "./OAuthFormFields";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/** Minimal Ant Form wrapper so Form.Item registers correctly. */
 const WithForm: React.FC<{ children: React.ReactNode; onFinish?: (values: any) => void }> = ({
   children,
   onFinish,
 }) => {
-  const [form] = Form.useForm();
+  const form = useForm<MountedFormValues>({ defaultValues: {} });
+  const registry = useMountRegistry();
   return (
-    <Form form={form} onFinish={onFinish}>
-      {children}
-      <button type="submit">Submit</button>
-    </Form>
+    <FormProvider {...form}>
+      <MountedFormProvider value={{ control: form.control, registry }}>
+        <form onSubmit={form.handleSubmit((store) => onFinish?.(projectMountedValues(registry, store)))}>
+          {children}
+          <button type="submit">Submit</button>
+        </form>
+      </MountedFormProvider>
+    </FormProvider>
   );
 };
 

@@ -2,9 +2,36 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
-import { Form } from "antd";
+import { FormProvider, useForm } from "react-hook-form";
 
+import {
+  MountedFormField,
+  MountedFormProvider,
+  useMountRegistry,
+  type MountedFormValues,
+} from "@/components/common_components/MountedFormField";
 import MCPPermissionManagement from "./MCPPermissionManagement";
+
+const Wrapper: React.FC<{ children: React.ReactNode; defaultValues: MountedFormValues; withAuthType?: boolean }> = ({
+  children,
+  defaultValues,
+  withAuthType = false,
+}) => {
+  const form = useForm<MountedFormValues>({ defaultValues });
+  const registry = useMountRegistry();
+  return (
+    <FormProvider {...form}>
+      <MountedFormProvider value={{ control: form.control, registry }}>
+        {withAuthType && (
+          <MountedFormField name="auth_type" bare>
+            {(field) => <input type="hidden" value={String(field.value ?? "")} onChange={field.onChange} />}
+          </MountedFormField>
+        )}
+        {children}
+      </MountedFormProvider>
+    </FormProvider>
+  );
+};
 
 const defaultProps = {
   availableAccessGroups: [],
@@ -24,22 +51,12 @@ describe("MCPPermissionManagement", () => {
     return user;
   };
 
-  const renderWithForm = (props = {}) => {
-    const Wrapper: React.FC = ({ children }) => {
-      const [form] = Form.useForm();
-      return (
-        <Form form={form} initialValues={{ allow_all_keys: false }}>
-          {children}
-        </Form>
-      );
-    };
-
-    return render(
-      <Wrapper>
+  const renderWithForm = (props = {}) =>
+    render(
+      <Wrapper defaultValues={{ allow_all_keys: false }}>
         <MCPPermissionManagement {...defaultProps} {...props} />
       </Wrapper>,
     );
-  };
 
   it("should default allow_all_keys switch to unchecked for new servers", async () => {
     renderWithForm();
@@ -51,27 +68,12 @@ describe("MCPPermissionManagement", () => {
     expect(toggle).not.toBeChecked();
   });
 
-  const renderWithInitialValues = (initialValues: Record<string, unknown>, props = {}) => {
-    const Wrapper: React.FC = ({ children }) => {
-      const [form] = Form.useForm();
-      return (
-        <Form form={form} initialValues={initialValues}>
-          {/* In the real app auth_type is registered by the parent form; the
-              component only watches it. Register a hidden field here so
-              Form.useWatch("auth_type") resolves the initial value. */}
-          <Form.Item name="auth_type" hidden>
-            <input />
-          </Form.Item>
-          {children}
-        </Form>
-      );
-    };
-    return render(
-      <Wrapper>
+  const renderWithInitialValues = (initialValues: Record<string, unknown>, props = {}) =>
+    render(
+      <Wrapper defaultValues={initialValues} withAuthType>
         <MCPPermissionManagement {...defaultProps} {...props} />
       </Wrapper>,
     );
-  };
 
   it("shows only the oauth2 PKCE-delegation toggle for oauth2 servers", async () => {
     renderWithInitialValues({ allow_all_keys: false, auth_type: "oauth2" });

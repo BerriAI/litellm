@@ -558,9 +558,6 @@
     },
     "no-restricted-imports": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/DcrBridgeToggle.tsx": {
@@ -581,11 +578,6 @@
   "src/app/(dashboard)/mcp-servers/_components/MCPNetworkSettings.tsx": {
     "react-hooks/immutability": {
       "count": 2
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/MCPPermissionManagement.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/MCPPermissionManagement.tsx": {
@@ -609,11 +601,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/mcp-servers/_components/OAuthFormFields.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -627,7 +614,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/OpenAPIQuickPicker.tsx": {
@@ -636,11 +623,6 @@
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/OpenApiByokFields.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/mcp-servers/_components/PassthroughAuthorizeSection.test.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -732,12 +714,6 @@
     },
     "no-restricted-imports": {
       "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 5
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_server_view.tsx": {
