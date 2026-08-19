@@ -47,6 +47,24 @@ class TestOptionallyHandleAnthropicOAuth:
         assert updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
         assert "x-api-key" not in updated_headers
 
+    def test_oauth_token_in_capitalized_authorization_header(self):
+        """OAuth detection should treat HTTP header names as case-insensitive."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {"Authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            headers, None
+        )
+
+        assert extracted_api_key == FAKE_OAUTH_TOKEN
+        assert updated_headers["anthropic-beta"] == "oauth-2025-04-20"
+        assert (
+            updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
+        )
+        assert "x-api-key" not in updated_headers
+
     def test_oauth_token_in_api_key_directly(self):
         """OAuth token passed as api_key should set Authorization: Bearer header."""
         from litellm.llms.anthropic.common_utils import (
