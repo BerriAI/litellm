@@ -10,10 +10,13 @@ _GET_SECRET_ARGS = r"""\(\s*['"]([^'"]+)['"]\s*(?:,\s*[^)]*|,\s*default_value=[^
 
 ENV_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"os\.getenv" + _GETENV_ARGS),
-    re.compile(r"litellm\.get_secret" + _GET_SECRET_ARGS),
-    re.compile(r"litellm\.get_secret_str" + _GET_SECRET_ARGS),
-    re.compile(r"(?<![\w.])(?:litellm\.)?get_secret_bool" + _GET_SECRET_ARGS),
+    re.compile(r"(?<![\w.])(?:litellm\.(?:utils\.)?)?get_secret(?:_str|_bool)?" + _GET_SECRET_ARGS),
 )
+
+DOCS_BASE = "./docs/my-website/docs"
+REFERENCE_TABLE_PATH = f"{DOCS_BASE}/proxy/config_settings.md"
+DOCS_SUFFIXES = (".md", ".mdx")
+DOCUMENTED_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]*\b")
 
 # Terminal/environment detection variables that should not be documented
 # These are internal variables used for terminal detection, not user-configurable settings
@@ -72,14 +75,16 @@ def extract_env_keys(source: str) -> frozenset[str]:
 
 def collect_env_keys(base_dir: str) -> frozenset[str]:
     """Return every documentable env var name read anywhere under ``base_dir``."""
-    return frozenset(key for file_path in _python_files(base_dir) for key in extract_env_keys(_read_text(file_path)))
+    return frozenset(
+        key for file_path in _files_with_suffix(base_dir, (".py",)) for key in extract_env_keys(_read_text(file_path))
+    )
 
 
-def _python_files(base_dir: str) -> Iterator[str]:
+def _files_with_suffix(base_dir: str, suffixes: tuple[str, ...]) -> Iterator[str]:
     for root, dirs, files in os.walk(base_dir):
         # Skip dependency/venv directories - prevents picking up env vars from installed packages
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        yield from (os.path.join(root, name) for name in files if name.endswith(".py"))
+        yield from (os.path.join(root, name) for name in files if name.endswith(suffixes))
 
 
 def _read_text(file_path: str) -> str:
@@ -88,42 +93,37 @@ def _read_text(file_path: str) -> str:
 
 
 def extract_documented_keys(docs_content: str) -> frozenset[str]:
-    """Return the key names listed in the 'environment variables - Reference' table."""
-    section = re.search(
-        r"### environment variables - Reference(.*?)(?=\n###|\Z)",
-        docs_content,
-        re.DOTALL | re.MULTILINE,
-    )
-    if section is None:
-        return frozenset()
-    # Match | KEY_NAME | description | - capture first column only
+    """Return every env-var-shaped name mentioned anywhere in a documentation page."""
+    return frozenset(DOCUMENTED_KEY_PATTERN.findall(docs_content))
+
+
+def collect_documented_keys(docs_dir: str) -> frozenset[str]:
+    """Return every env-var-shaped name mentioned on any page under ``docs_dir``."""
     return frozenset(
-        match.group(1).strip()
-        for match in (re.match(r"^\|\s*([A-Z_][A-Z0-9_]*)\s*\|", line) for line in section.group(1).split("\n"))
-        if match is not None
+        key
+        for file_path in _files_with_suffix(docs_dir, DOCS_SUFFIXES)
+        for key in extract_documented_keys(_read_text(file_path))
     )
+
+
+def undocumented_env_keys(base_dir: str, docs_dir: str) -> frozenset[str]:
+    """Return the env vars read under ``base_dir`` that no page under ``docs_dir`` mentions."""
+    return collect_env_keys(base_dir) - collect_documented_keys(docs_dir)
 
 
 def main() -> None:
-    env_keys = collect_env_keys(repo_base)
-    print(env_keys)
+    if not os.path.isdir(DOCS_BASE):
+        raise Exception(f"No documentation found at {DOCS_BASE}; check out BerriAI/litellm-docs into docs/my-website")
 
-    docs_path = "./docs/my-website/docs/proxy/config_settings.md"  # Path to the documentation
-    try:
-        documented_keys = extract_documented_keys(_read_text(docs_path))
-    except Exception as e:
-        raise Exception(f"Error reading documentation: {e}, \n repo base - {os.listdir('./')}")
-
-    print(f"documented_keys: {documented_keys}")
-    undocumented_keys = env_keys - documented_keys
-
-    print("Keys expected in 'environment settings' (found in code):")
-    for key in sorted(env_keys):
-        print(key)
-
+    undocumented_keys = undocumented_env_keys(repo_base, DOCS_BASE)
     if undocumented_keys:
-        raise Exception(f"\nKeys not documented in 'environment settings - Reference': {sorted(undocumented_keys)}")
-    print(f"\nAll keys are documented in 'environment settings - Reference'. - {env_keys}")
+        raise Exception(
+            f"Environment variables read under {repo_base} but mentioned nowhere in the docs: "
+            f"{sorted(undocumented_keys)}"
+            f"\nDocument each one, either on the relevant provider page or as a row in the "
+            f"'environment variables - Reference' table in {REFERENCE_TABLE_PATH}"
+        )
+    print(f"Every environment variable read under {repo_base} is documented")
 
 
 if __name__ == "__main__":

@@ -171,6 +171,27 @@ If 2+ reasoning markers are detected in the user message, the request is automat
 
 Reasoning markers in the system prompt do **not** trigger the reasoning override. This prevents system prompts like "Think step by step before answering" from forcing all requests to the reasoning tier.
 
+### Harness Reminder Blocks
+
+Agent harnesses inject their own context into the conversation as ordinary message text. That text is plumbing, not something a human asked for, so the router strips complete reminder blocks before classifying and picking a tier. A turn that is nothing but a reminder block strips to empty and is skipped, and the router falls back to the last real ask instead
+
+By default a block is anything between `<system-reminder>` and `</system-reminder>`. `reminder_markers` replaces that with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        reminder_markers:
+          - open: "<<<BEGIN_CONTEXT>>>"
+            close: "<<<END_CONTEXT>>>"
+          - open: "[[SUBAGENT_CONTEXT_BEGIN]]"
+            close: "[[SUBAGENT_CONTEXT_END]]"
+```
+
+Setting `reminder_markers` replaces the built-in `<system-reminder>` pair rather than adding to it, so list that pair too if your harness also emits it. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
+
 ### Code Detection
 
 Technical code keywords are detected case-insensitively and include:

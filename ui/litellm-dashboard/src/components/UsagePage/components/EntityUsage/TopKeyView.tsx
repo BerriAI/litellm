@@ -1,14 +1,15 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { BarChart } from "@/components/shared/charts";
+import { DataTable } from "@/components/shared/DataTable";
 import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
-import { Segmented, Tooltip } from "antd";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Segmented } from "antd";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
 import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
-import { DataTable } from "../../../view_logs/table";
 import { TagUsage } from "../../types";
 
 interface TopKeyViewProps {
@@ -20,7 +21,7 @@ interface TopKeyViewProps {
 }
 
 const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false, topKeysLimit, setTopKeysLimit }) => {
-  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+  const { accessToken } = useAuthorized();
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
@@ -113,9 +114,9 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         <div className="overflow-hidden">
           <div className="flex flex-wrap items-center gap-1">
             {displayTags.map((tag, index) => (
-              <Tooltip
+              <SimpleTooltip
                 key={index}
-                title={
+                content={
                   <div>
                     <div>
                       <span className="text-gray-300">Tag Name:</span> {tag.tag}
@@ -128,7 +129,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
                 }
               >
                 <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">{tag.tag.slice(0, 7)}...</span>
-              </Tooltip>
+              </SimpleTooltip>
             ))}
             {hasMoreTags && (
               <button
@@ -232,9 +233,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
           />
         </div>
       ) : (
-        <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
-          <DataTable columns={columns} data={topKeys} isLoading={false} />
-        </div>
+        <DataTable columns={columns} data={topKeys} isLoading={false} maxBodyHeight={600} size="compact" />
       )}
 
       {isModalOpen && selectedKey && keyData && (

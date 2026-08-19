@@ -133,6 +133,40 @@ class TestExceptionCheckers:
         result = ExceptionCheckers.is_error_str_rate_limit(error_str)
         assert result is True
 
+    def test_bare_429_in_body_is_ignored_when_status_code_says_otherwise(self):
+        """A 429 echoed back inside a 400's body is not a rate limit.
+
+        Word boundaries don't help: 429 is an ordinary token id (" that" in several
+        tokenisers), so an echoed prompt_token_ids array reads as a standalone 429.
+        """
+        error_str = (
+            '{"error":{"message":"`tools` must not be an empty array",'
+            '"type":"invalid_request_error"},'
+            '"prompt_token_ids":[9906,429,1234]}'
+        )
+        assert ExceptionCheckers.is_error_str_rate_limit(error_str, status_code=400) is False
+
+    def test_bare_429_still_detected_without_a_status_code(self):
+        """With no status available, a standalone 429 still counts (unchanged behaviour)."""
+
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests") is True
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests", status_code=None) is True
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests", status_code=429) is True
+
+    def test_non_integer_status_code_does_not_suppress_bare_429(self):
+        """A non-integer status counts as unknown, not as a contradiction."""
+
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests", status_code="not-an-int") is True
+
+    def test_rate_limit_phrase_is_honoured_under_a_non_429_status(self):
+        """Phrase matching stays ungated: some providers report a real rate limit in
+        the text under a non-429 status (#11455)."""
+
+        assert (
+            ExceptionCheckers.is_error_str_rate_limit("FireworksException - rate limit exceeded", status_code=400)
+            is True
+        )
+
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
 
@@ -298,6 +332,54 @@ def test_lemonade_context_window_error_mapping():
     assert excinfo.value.status_code == 400
     assert excinfo.value.llm_provider == "lemonade"
     assert excinfo.value.model == model
+
+
+def test_openai_compatible_400_with_bare_429_in_body_maps_to_bad_request():
+    """A provider 400 whose echoed body contains a 429 must stay a 400.
+
+    ``is_error_str_rate_limit`` runs before the status-code branch for
+    openai-compatible providers, so a validation error echoing the request back came
+    out as RateLimitError, which tells the caller to retry a request that cannot
+    succeed and books the failure against provider throttling.
+    """
+    error_message = (
+        '{"error":{"message":"`tools` must not be an empty array",'
+        '"type":"invalid_request_error","code":400},'
+        '"prompt_token_ids":[9906,429,1234]}'
+    )
+    original_exception = OpenAIError(
+        status_code=400,
+        message=error_message,
+        headers={},
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="deepseek-ai/DeepSeek-V3",
+            original_exception=original_exception,
+            custom_llm_provider="deepinfra",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == "deepinfra"
+
+
+def test_openai_compatible_429_still_maps_to_rate_limit():
+    """A real 429 still maps to RateLimitError."""
+    original_exception = OpenAIError(
+        status_code=429,
+        message='{"error":{"message":"Too Many Requests","type":"rate_limit_error"}}',
+        headers={},
+    )
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="deepseek-ai/DeepSeek-V3",
+            original_exception=original_exception,
+            custom_llm_provider="deepinfra",
+        )
+
+    assert excinfo.value.status_code == 429
 
 
 @pytest.mark.parametrize(

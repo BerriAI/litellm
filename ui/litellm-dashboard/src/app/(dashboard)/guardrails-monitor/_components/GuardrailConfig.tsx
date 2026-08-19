@@ -5,7 +5,8 @@ import {
   RollbackOutlined,
   SaveOutlined,
 } from "@ant-design/icons";
-import { Button, Input, Select, Switch } from "antd";
+import { Input, Select, Switch } from "antd";
+import { Button } from "@/components/ui/button";
 import React, { useState } from "react";
 
 interface GuardrailConfigProps {
@@ -56,13 +57,17 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
               options={versions.map((v) => ({ value: v.id, label: v.label }))}
               style={{ width: 140 }}
             />
-            <Button type="link" size="small" onClick={() => setShowVersionHistory(!showVersionHistory)}>
+            <Button variant="link" size="sm" onClick={() => setShowVersionHistory(!showVersionHistory)}>
               {showVersionHistory ? "Hide history" : "View history"}
             </Button>
           </div>
           <div className="flex items-center gap-2">
-            <Button icon={<RollbackOutlined />}>Revert</Button>
-            <Button type="primary" icon={<SaveOutlined />}>
+            <Button variant="outline">
+              <RollbackOutlined />
+              Revert
+            </Button>
+            <Button>
+              <SaveOutlined />
               Save as v{parseInt(version.replace("v", ""), 10) + 1}
             </Button>
           </div>
@@ -194,12 +199,8 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
         </p>
 
         <div className="flex items-center gap-3">
-          <Button
-            type="primary"
-            icon={rerunStatus === "running" ? undefined : <PlayCircleOutlined />}
-            loading={rerunStatus === "running"}
-            onClick={handleRerun}
-          >
+          <Button disabled={rerunStatus === "running"} aria-busy={rerunStatus === "running"} onClick={handleRerun}>
+            {rerunStatus === "running" ? null : <PlayCircleOutlined />}
             {rerunStatus === "running" ? "Running on 10 samples..." : "Re-run on failing logs"}
           </Button>
 

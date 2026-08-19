@@ -1,14 +1,14 @@
 /* eslint-disable react/no-unescaped-entities */
 
 import React, { useState } from "react";
-import { Card, Typography, Space, Alert, Button, Switch, Form, Collapse } from "antd";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, Title as TremorTitle, Text as TremorText } from "@tremor/react";
+import { Card, Typography, Space, Alert, Switch } from "antd";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyIcon, Code, Terminal, Globe, CheckIcon, ExternalLinkIcon, KeyIcon, ServerIcon, Zap } from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 
 const { Title, Text } = Typography;
-const { Panel } = Collapse;
 
 interface CodeBlockProps {
   code: string;
@@ -50,18 +50,18 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
   };
 
   return (
-    <Card className="border border-gray-200">
+    <Card className="border border-border">
       <div className="flex items-center gap-3 mb-3">
-        <span className="p-2 rounded-lg bg-gray-50">{icon}</span>
+        <span className="p-2 rounded-lg bg-muted">{icon}</span>
         <div>
           <Title level={5} className="mb-0">
             {title}
           </Title>
-          <Text className="text-gray-600">{description}</Text>
+          <Text className="text-muted-foreground">{description}</Text>
         </div>
       </div>
       {serverName && (title === "Implementation Example" || title === "Configuration") && (
-        <Form.Item className="mb-4">
+        <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
             <Switch size="small" checked={useServerHeader} onChange={setUseServerHeader} />
             <Text className="text-sm">
@@ -82,14 +82,14 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
                   <p>
                     <strong>Option 2:</strong> Get a group of MCPs: <code>"dev-group"</code>
                   </p>
-                  <p className="mt-2 text-sm text-gray-600">
+                  <p className="mt-2 text-sm text-muted-foreground">
                     You can also mix both: <code>"Server1,dev-group"</code>
                   </p>
                 </div>
               }
             />
           )}
-        </Form.Item>
+        </div>
       )}
       {React.Children.map(children, (child) => {
         if (
@@ -117,12 +117,6 @@ interface MCPConnectProps {
 const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
   const proxyBaseUrl = getProxyBaseUrl();
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [serverHeaders, setServerHeaders] = useState<Record<string, string[]>>({
-    openai: [],
-    litellm: [],
-    cursor: [],
-    http: [],
-  });
   const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
 
   const copyToClipboard = async (text: string, key: string) => {
@@ -135,22 +129,6 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     }
   };
 
-  const getHeadersConfig = (type: string) => {
-    const headers: Record<string, any> = {
-      "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-    };
-
-    if (serverHeaders[type]?.length > 0) {
-      // Format server names (replace spaces with underscores)
-      const formattedServers = serverHeaders[type].map((s) => s.replace(/\s+/g, "_"));
-
-      // Use comma-separated string (can include both servers and access groups)
-      headers["x-mcp-servers"] = formattedServers.join(",");
-    }
-
-    return headers;
-  };
-
   const CodeBlock: React.FC<{
     code: string;
     copyKey: string;
@@ -160,25 +138,26 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     <div className="relative group">
       {title && (
         <div className="flex items-center gap-2 mb-2">
-          <Code size={16} className="text-blue-600" />
-          <Text strong className="text-gray-700">
+          <Code size={16} className="text-blue-600 dark:text-blue-400" />
+          <Text strong className="text-foreground">
             {title}
           </Text>
         </div>
       )}
-      <Card className={`bg-gray-50 border border-gray-200 relative ${className}`}>
+      <Card className={`bg-muted border border-border relative ${className}`}>
         <Button
-          type="text"
-          size="small"
-          icon={copiedStates[copyKey] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+          variant="ghost"
+          size="icon-xs"
           onClick={() => copyToClipboard(code, copyKey)}
           className={`absolute top-2 right-2 z-10 transition-all duration-200 ${
             copiedStates[copyKey]
-              ? "text-green-600 bg-green-50 border-green-200"
-              : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              ? "text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950 dark:border-green-800"
+              : "text-muted-foreground hover:text-foreground hover:bg-accent"
           }`}
-        />
-        <pre className="text-sm overflow-x-auto pr-10 text-gray-800 font-mono leading-relaxed">{code}</pre>
+        >
+          {copiedStates[copyKey] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+        </Button>
+        <pre className="text-sm overflow-x-auto pr-10 text-foreground font-mono leading-relaxed">{code}</pre>
       </Card>
     </div>
   );
@@ -190,12 +169,12 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
   }> = ({ step, title, children }) => (
     <div className="flex gap-4">
       <div className="shrink-0">
-        <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-semibold">
+        <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-semibold dark:bg-blue-500">
           {step}
         </div>
       </div>
       <div className="flex-1">
-        <Text strong className="text-gray-800 block mb-2">
+        <Text strong className="text-foreground block mb-2">
           {title}
         </Text>
         {children}
@@ -277,21 +256,21 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
   const OpenAITab = () => (
     <Space direction="vertical" size="large" className="w-full">
-      <div className="bg-linear-to-r from-blue-50 to-indigo-50 p-6 rounded-lg border border-blue-100">
+      <div className="bg-linear-to-r from-blue-50 to-indigo-50 p-6 rounded-lg border border-blue-100 dark:from-blue-950 dark:to-indigo-950 dark:border-blue-900">
         <div className="flex items-center gap-3 mb-3">
-          <Code className="text-blue-600" size={24} />
-          <Title level={4} className="mb-0 text-blue-900">
+          <Code className="text-blue-600 dark:text-blue-400" size={24} />
+          <Title level={4} className="mb-0 text-blue-900 dark:text-blue-100">
             OpenAI Responses API Integration
           </Title>
         </div>
-        <Text className="text-blue-700">
+        <Text className="text-blue-700 dark:text-blue-300">
           Connect OpenAI Responses API to your LiteLLM MCP server for seamless tool integration
         </Text>
       </div>
 
       <Space direction="vertical" size="large" className="w-full">
         <FeatureCard
-          icon={<KeyIcon className="text-blue-600" size={16} />}
+          icon={<KeyIcon className="text-blue-600 dark:text-blue-400" size={16} />}
           title="API Key Setup"
           description="Configure your OpenAI API key for authentication"
         >
@@ -304,7 +283,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
                   href="https://platform.openai.com/api-keys"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-700 inline-flex items-center gap-1"
+                  className="text-blue-600 hover:text-blue-700 inline-flex items-center gap-1 dark:text-blue-400 dark:hover:text-blue-300"
                 >
                   OpenAI platform <ExternalLinkIcon size={12} />
                 </a>
@@ -315,7 +294,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         </FeatureCard>
 
         <FeatureCard
-          icon={<ServerIcon className="text-blue-600" size={16} />}
+          icon={<ServerIcon className="text-blue-600 dark:text-blue-400" size={16} />}
           title="MCP Server Information"
           description="Connection details for your LiteLLM MCP server"
         >
@@ -323,7 +302,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         </FeatureCard>
 
         <FeatureCard
-          icon={<Code className="text-blue-600" size={16} />}
+          icon={<Code className="text-blue-600 dark:text-blue-400" size={16} />}
           title="Implementation Example"
           description="Complete cURL example for using the Responses API"
           serverName="Zapier Gmail"
@@ -373,27 +352,27 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         </Text>
       </div>
 
-      <Card className="border border-gray-200">
-        <Title level={5} className="mb-4 text-gray-800">
+      <Card className="border border-border">
+        <Title level={5} className="mb-4 text-foreground">
           Setup Instructions
         </Title>
         <Space direction="vertical" size="large" className="w-full">
           <StepCard step={1} title="Open Cursor Settings">
-            <Text className="text-gray-600">
-              Use the keyboard shortcut <code className="bg-gray-100 px-2 py-1 rounded-sm">⇧+⌘+J</code> (Mac) or{" "}
-              <code className="bg-gray-100 px-2 py-1 rounded-sm">Ctrl+Shift+J</code> (Windows/Linux)
+            <Text className="text-muted-foreground">
+              Use the keyboard shortcut <code className="bg-muted px-2 py-1 rounded-sm">⇧+⌘+J</code> (Mac) or{" "}
+              <code className="bg-muted px-2 py-1 rounded-sm">Ctrl+Shift+J</code> (Windows/Linux)
             </Text>
           </StepCard>
 
           <StepCard step={2} title="Navigate to MCP Tools">
-            <Text className="text-gray-600">Go to the "MCP Tools" tab and click "New MCP Server"</Text>
+            <Text className="text-muted-foreground">Go to the "MCP Tools" tab and click "New MCP Server"</Text>
           </StepCard>
 
           <StepCard step={3} title="Add Configuration">
-            <Text className="text-gray-600 mb-3">
+            <Text className="text-muted-foreground mb-3">
               Copy the JSON configuration below and paste it into Cursor, then save with{" "}
-              <code className="bg-gray-100 px-2 py-1 rounded-sm">Cmd+S</code> or{" "}
-              <code className="bg-gray-100 px-2 py-1 rounded-sm">Ctrl+S</code>
+              <code className="bg-muted px-2 py-1 rounded-sm">Cmd+S</code> or{" "}
+              <code className="bg-muted px-2 py-1 rounded-sm">Ctrl+S</code>
             </Text>
             <FeatureCard
               icon={<Code className="text-purple-600" size={16} />}
@@ -428,18 +407,18 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     <Space direction="vertical" size="large" className="w-full">
       <div className="bg-linear-to-r from-green-50 to-teal-50 p-6 rounded-lg border border-green-100">
         <div className="flex items-center gap-3 mb-3">
-          <Globe className="text-green-600" size={24} />
-          <Title level={4} className="mb-0 text-green-900">
+          <Globe className="text-green-600 dark:text-green-400" size={24} />
+          <Title level={4} className="mb-0 text-green-900 dark:text-green-100">
             Streamable HTTP Transport
           </Title>
         </div>
-        <Text className="text-green-700">
+        <Text className="text-green-700 dark:text-green-300">
           Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that supports HTTP streaming.
         </Text>
       </div>
 
       <FeatureCard
-        icon={<Globe className="text-green-600" size={16} />}
+        icon={<Globe className="text-green-600 dark:text-green-400" size={16} />}
         title="Universal MCP Connection"
         description="Use this URL with any MCP client that supports HTTP transport"
       >
@@ -464,11 +443,18 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           />
           <div className="mt-4">
             <Button
-              type="link"
-              className="p-0 h-auto text-blue-600 hover:text-blue-700"
-              href="https://modelcontextprotocol.io/docs/concepts/transports"
-              icon={<ExternalLinkIcon size={14} />}
+              variant="link"
+              className="p-0 h-auto text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+              nativeButton={false}
+              render={
+                <a
+                  href="https://modelcontextprotocol.io/docs/concepts/transports"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                />
+              }
             >
+              <ExternalLinkIcon size={14} />
               Learn more about MCP transports
             </Button>
           </div>
@@ -481,57 +467,55 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     <div>
       <Space direction="vertical" size="large" className="w-full">
         <div>
-          <TremorTitle className="text-3xl font-bold text-gray-900 mb-3">Connect to your MCP client</TremorTitle>
-          <TremorText className="text-lg text-gray-600">
+          <h2 className="text-3xl font-bold text-foreground mb-3">Connect to your MCP client</h2>
+          <p className="text-lg text-muted-foreground">
             Use tools directly from any MCP client with LiteLLM MCP. Enable your AI assistant to perform real-world
             tasks through a simple, secure connection.
-          </TremorText>
+          </p>
         </div>
 
-        <TabGroup className="w-full">
-          <TabList className="flex justify-start mt-8 mb-6">
-            <div className="flex bg-gray-100 p-1 rounded-lg">
-              <Tab className="px-6 py-3 rounded-md transition-all duration-200">
+        <Tabs defaultValue="openai" className="w-full">
+          <TabsList variant="line" className="mt-8 mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+            <div className="flex rounded-lg bg-muted p-1">
+              <TabsTrigger value="openai" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Code size={18} />
                   OpenAI API
                 </span>
-              </Tab>
-              <Tab className="px-6 py-3 rounded-md transition-all duration-200">
+              </TabsTrigger>
+              <TabsTrigger value="litellm" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Zap size={18} />
                   LiteLLM Proxy
                 </span>
-              </Tab>
-              <Tab className="px-6 py-3 rounded-md transition-all duration-200">
+              </TabsTrigger>
+              <TabsTrigger value="cursor" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Terminal size={18} />
                   Cursor
                 </span>
-              </Tab>
-              <Tab className="px-6 py-3 rounded-md transition-all duration-200">
+              </TabsTrigger>
+              <TabsTrigger value="http" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Globe size={18} />
                   Streamable HTTP
                 </span>
-              </Tab>
+              </TabsTrigger>
             </div>
-          </TabList>
-          <TabPanels>
-            <TabPanel className="mt-6">
-              <OpenAITab />
-            </TabPanel>
-            <TabPanel className="mt-6">
-              <LiteLLMProxyTab />
-            </TabPanel>
-            <TabPanel className="mt-6">
-              <CursorTab />
-            </TabPanel>
-            <TabPanel className="mt-6">
-              <StreamableHTTPTab />
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+          </TabsList>
+          <TabsContent value="openai" keepMounted className="mt-6">
+            <OpenAITab />
+          </TabsContent>
+          <TabsContent value="litellm" keepMounted className="mt-6">
+            <LiteLLMProxyTab />
+          </TabsContent>
+          <TabsContent value="cursor" keepMounted className="mt-6">
+            <CursorTab />
+          </TabsContent>
+          <TabsContent value="http" keepMounted className="mt-6">
+            <StreamableHTTPTab />
+          </TabsContent>
+        </Tabs>
       </Space>
     </div>
   );

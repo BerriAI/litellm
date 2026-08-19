@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { deletePassThroughEndpointsCall, getPassThroughEndpointsCall } from "../networking";
 import AddPassThroughEndpoint from "../add_pass_through";
 import PassThroughInfoView from "../pass_through_info";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { PassThroughEndpointsTable } from "./PassThroughEndpointsTable";
 
 interface PassThroughSettingsProps {
@@ -74,10 +74,10 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
       const updatedSettings = generalSettings.filter((setting) => setting.id !== endpointToDelete);
       setGeneralSettings(updatedSettings);
 
-      NotificationsManager.success("Endpoint deleted successfully.");
+      toast.success("Endpoint deleted successfully.");
     } catch (error) {
       console.error("Error deleting the endpoint:", error);
-      NotificationsManager.fromBackend("Error deleting the endpoint: " + error);
+      toast.fromError("Error deleting the endpoint: " + error);
     }
 
     setIsDeleteModalOpen(false);

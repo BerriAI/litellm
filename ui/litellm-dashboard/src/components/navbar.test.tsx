@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import React, { useState } from "react";
+import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
@@ -96,7 +96,7 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
 let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
-let mockUseAuthorizedImpl = () => ({
+const mockUseAuthorizedImpl = () => ({
   userId: "test-user",
   userEmail: "test@example.com",
   userRole: "Admin",

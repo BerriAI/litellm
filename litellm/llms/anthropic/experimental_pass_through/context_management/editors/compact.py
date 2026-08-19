@@ -13,8 +13,10 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 """
 
 import re
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, Optional, TypedDict, Union, cast
+
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,9 +31,8 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
     from litellm.types.llms.anthropic import (
+        AllAnthropicPassThroughMessageValues,
         AllAnthropicToolsValues,
-        AnthopicMessagesAssistantMessageParam,
-        AnthropicMessagesUserMessageParam,
     )
     from litellm.types.llms.openai import ChatCompletionToolParam
     from litellm.types.utils import ModelResponse
@@ -534,7 +535,7 @@ def _augment_system_with_summary(
     return [{"type": "text", "text": prefix.rstrip()}, *system]
 
 
-def _resolve_trigger_tokens(edit_spec: dict[str, object]) -> tuple[int, list[str]]:
+def _resolve_trigger_tokens(edit_spec: Mapping[str, object]) -> tuple[int, list[str]]:
     """Validate and resolve ``trigger.value``.
 
     Raises ``AnthropicContextManagementError`` if the explicitly-supplied value
@@ -568,7 +569,7 @@ def _resolve_trigger_tokens(edit_spec: dict[str, object]) -> tuple[int, list[str
     return value, warnings
 
 
-def _build_summary_prompt(edit_spec: dict[str, object], tools: list[dict[str, object]] | None) -> str:
+def _build_summary_prompt(edit_spec: Mapping[str, object], tools: Sequence[Mapping[str, object]] | None) -> str:
     custom: Final = edit_spec.get("instructions")
     if isinstance(custom, str) and custom.strip():
         return custom
@@ -623,7 +624,7 @@ def _count_effective_tokens(
     try:
         openai_shape = adapter.translate_anthropic_messages_to_openai(
             messages=cast(
-                "list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]",
+                "list[AllAnthropicPassThroughMessageValues]",
                 messages_without_compaction,
             )
         )
@@ -736,7 +737,7 @@ def _extract_summary_text(raw: str | None) -> str | None:
 
 def _system_to_openai_message(
     system: str | list[dict[str, Any]] | None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     """Translate Anthropic-shaped ``system`` to an OpenAI system message.
 
     Accepts a bare string or a list of Anthropic content blocks; returns
@@ -773,7 +774,7 @@ def _build_summary_messages(
     try:
         openai_messages = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
             messages=cast(
-                "list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]",
+                "list[AllAnthropicPassThroughMessageValues]",
                 stripped,
             )
         )
@@ -809,7 +810,7 @@ def _is_user_message(msg: object) -> bool:
     return isinstance(msg, dict) and msg.get("role") == "user"
 
 
-def _append_text_to_content(content: Any, extra_text: str) -> Any:
+def _append_text_to_content(content: object, extra_text: str) -> object:
     """Append ``extra_text`` to an OpenAI-shape message ``content`` field.
 
     Handles the two common shapes: ``str`` and ``list`` of content parts.
@@ -820,8 +821,27 @@ def _append_text_to_content(content: Any, extra_text: str) -> Any:
     if isinstance(content, str):
         return f"{content}\n\n{extra_text}"
     if isinstance(content, list):
-        return [*content, {"type": "text", "text": extra_text}]
+        appended: Final[list[object]] = [*content, {"type": "text", "text": extra_text}]
+        return appended
     return [content, {"type": "text", "text": extra_text}]
+
+
+class _SummaryCallUserKwarg(TypedDict, total=False):
+    user: ReadOnly[object]
+
+
+class _SummaryCallRegionKwarg(TypedDict, total=False):
+    allowed_model_region: ReadOnly[str]
+
+
+class _SummaryCallKwargs(TypedDict):
+    model: ReadOnly[str]
+    messages: ReadOnly[list[dict[str, object]]]
+    max_tokens: ReadOnly[int]
+    timeout: ReadOnly[float]
+    litellm_metadata: ReadOnly[Mapping[str, object]]
+    user: NotRequired[ReadOnly[object]]
+    allowed_model_region: NotRequired[ReadOnly[str]]
 
 
 async def _call_summary_model(
@@ -860,22 +880,24 @@ async def _call_summary_model(
     # the parent ``/v1/messages`` request. On timeout the caller catches the
     # exception and surfaces ``applied_edits[0].error = "summary_call_failed"``,
     # forwarding the request without compaction rather than hanging.
-    call_kwargs: Final[dict[str, Any]] = {
-        "model": summary_model,
-        "messages": summary_messages,
-        "max_tokens": max_tokens,
-        "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
-        "litellm_metadata": metadata,
-    }
     # The end-user id must also travel as the top-level ``user`` kwarg: legacy
     # limiter hooks and prometheus end-user tracking read it from there rather
     # than from ``litellm_metadata``, so without it the summary tokens would not
     # debit the caller's end-user counters.
     end_user_id: Final = metadata.get("user_api_key_end_user_id")
-    if end_user_id:
-        call_kwargs["user"] = end_user_id
-    if allowed_model_region is not None:
-        call_kwargs["allowed_model_region"] = allowed_model_region
+    call_kwargs: Final[_SummaryCallKwargs] = {
+        "model": summary_model,
+        "messages": summary_messages,
+        "max_tokens": max_tokens,
+        "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
+        "litellm_metadata": metadata,
+        **(_SummaryCallUserKwarg(user=end_user_id) if end_user_id else _SummaryCallUserKwarg()),
+        **(
+            _SummaryCallRegionKwarg(allowed_model_region=allowed_model_region)
+            if allowed_model_region is not None
+            else _SummaryCallRegionKwarg()
+        ),
+    }
     if llm_router is not None and hasattr(llm_router, "acompletion"):
         return await llm_router.acompletion(**call_kwargs)
     return await litellm.acompletion(**call_kwargs)

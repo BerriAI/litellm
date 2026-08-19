@@ -20,7 +20,7 @@ import {
 } from "@/components/networking";
 import { MCPServer, MCPSubmissionsSummary } from "@/components/mcp_tools/types";
 import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 type MCPStatus = "active" | "pending_review" | "rejected";
 
@@ -496,9 +496,9 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     setIsSavingRules(true);
     try {
       await updateConfigFieldSetting(accessToken, SETTINGS_KEY, requiredFields);
-      NotificationsManager.success("Submission rules saved");
+      toast.success("Submission rules saved");
     } catch {
-      NotificationsManager.fromBackend("Failed to save submission rules");
+      toast.fromError("Failed to save submission rules");
     } finally {
       setIsSavingRules(false);
     }
@@ -520,9 +520,9 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     try {
       await approveMCPServer(accessToken, serverId);
       await fetchData();
-      NotificationsManager.success(`MCP server "${serverName}" approved`);
+      toast.success(`MCP server "${serverName}" approved`);
     } catch {
-      NotificationsManager.fromBackend("Failed to approve MCP server");
+      toast.fromError("Failed to approve MCP server");
     } finally {
       setConfirmAction(null);
     }
@@ -533,9 +533,9 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     try {
       await rejectMCPServer(accessToken, serverId, reviewNotes);
       await fetchData();
-      NotificationsManager.success(`MCP server "${serverName}" rejected`);
+      toast.success(`MCP server "${serverName}" rejected`);
     } catch {
-      NotificationsManager.fromBackend("Failed to reject MCP server");
+      toast.fromError("Failed to reject MCP server");
     } finally {
       setConfirmAction(null);
     }

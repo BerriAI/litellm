@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
+from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -185,6 +186,77 @@ def test_resolve_complexity_router_plugins_rejects_synchronous_run_method(tmp_pa
             complexity_router_config=config,
             config_file_path=str(tmp_path / "config.yaml"),
         )
+
+
+def test_resolve_complexity_router_plugins_resolves_classifier_plugin_dotted_path(tmp_path):
+    plugin_file = tmp_path / "my_classifier.py"
+    plugin_file.write_text(
+        "class _Classifier:\n"
+        "    async def classify(self, context):\n"
+        "        return 'SIMPLE'\n"
+        "\n"
+        "my_classifier_instance = _Classifier()\n"
+    )
+    config: dict[str, Any] = {
+        "classifier_type": "custom",
+        "classifier_plugin": "my_classifier.my_classifier_instance",
+    }
+
+    resolve_complexity_router_plugins(
+        model_name="smart-router",
+        complexity_router_config=config,
+        config_file_path=str(tmp_path / "config.yaml"),
+    )
+
+    assert hasattr(config["classifier_plugin"], "classify")
+    assert type(config["classifier_plugin"]).__name__ == "_Classifier"
+
+
+def test_resolve_complexity_router_plugins_rejects_non_classifier_object(tmp_path):
+    plugin_file = tmp_path / "bad_classifier.py"
+    plugin_file.write_text("not_a_classifier = object()\n")
+    config: dict[str, Any] = {"classifier_plugin": "bad_classifier.not_a_classifier"}
+
+    with pytest.raises(ValueError, match="does not implement the ClassifierPlugin interface"):
+        resolve_complexity_router_plugins(
+            model_name="smart-router",
+            complexity_router_config=config,
+            config_file_path=str(tmp_path / "config.yaml"),
+        )
+
+
+def test_resolve_complexity_router_plugins_rejects_synchronous_classify_method(tmp_path):
+    """A synchronous `classify` passes the runtime_checkable isinstance and would only fail on
+    the first classified request, so reject it at config load like the sync-run case above."""
+    plugin_file = tmp_path / "sync_classifier.py"
+    plugin_file.write_text(
+        "class _SyncClassifier:\n"
+        "    def classify(self, context):\n"
+        "        return 'SIMPLE'\n"
+        "\n"
+        "sync_classifier_instance = _SyncClassifier()\n"
+    )
+    config: dict[str, Any] = {"classifier_plugin": "sync_classifier.sync_classifier_instance"}
+
+    with pytest.raises(ValueError, match="does not implement the ClassifierPlugin interface"):
+        resolve_complexity_router_plugins(
+            model_name="smart-router",
+            complexity_router_config=config,
+            config_file_path=str(tmp_path / "config.yaml"),
+        )
+
+
+def test_resolve_complexity_router_plugins_leaves_live_classifier_instance_alone():
+    class _Classifier:
+        async def classify(self, context):
+            return "SIMPLE"
+
+    instance = _Classifier()
+    config: dict[str, Any] = {"classifier_plugin": instance}
+    resolve_complexity_router_plugins(
+        model_name="smart-router", complexity_router_config=config, config_file_path=None
+    )
+    assert config["classifier_plugin"] is instance
 
 
 # ---------------------------------------------------------------------------
@@ -1209,13 +1281,61 @@ async def test_ProxyConfig__init_non_llm_configs_empty_config():
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__init_non_llm_configs_invalid_worker_registry_raises():
+async def test_ProxyConfig__init_non_llm_configs_premium_invalid_worker_registry_raises(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     pc = ProxyConfig()
     with pytest.raises(Exception):
         await pc._init_non_llm_configs(
             config={"worker_registry": [{"totally": "invalid"}]},
             config_file_path=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_non_llm_configs_worker_registry_requires_premium(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    pc = ProxyConfig()
+    with pytest.raises(ValueError) as exc_info:
+        await pc._init_non_llm_configs(
+            config={
+                "worker_registry": [
+                    {"worker_id": "worker-a", "name": "Worker A", "url": "http://localhost:4001"}
+                ]
+            },
+            config_file_path=None,
+        )
+    message = str(exc_info.value)
+    assert "worker_registry" in message
+    assert CommonProxyErrors.not_premium_user.value in message
+    assert pc.worker_registry == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_non_llm_configs_worker_registry_loads_for_premium(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    pc = ProxyConfig()
+    await pc._init_non_llm_configs(
+        config={
+            "worker_registry": [
+                {"worker_id": "worker-a", "name": "Worker A", "url": "http://localhost:4001"},
+                {"worker_id": "worker-b", "name": "Worker B", "url": "https://worker-b.example.com"},
+            ]
+        },
+        config_file_path=None,
+    )
+    assert [(w.worker_id, w.name, w.url) for w in pc.worker_registry] == [
+        ("worker-a", "Worker A", "http://localhost:4001"),
+        ("worker-b", "Worker B", "https://worker-b.example.com"),
+    ]
+
+
+@pytest.mark.parametrize("premium", [True, False])
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_non_llm_configs_no_worker_registry_is_never_gated(monkeypatch, premium):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium)
+    pc = ProxyConfig()
+    await pc._init_non_llm_configs(config={}, config_file_path=None)
+    assert pc.worker_registry == []
 
 
 # ---------------------------------------------------------------------------
@@ -2638,4 +2758,68 @@ async def test_ProxyConfig__init_non_llm_configs_empty_agents_key_clears_remembe
 
     assert clean_agent_registry.config_agents == ()
     clean_agent_registry.load_agents_from_db_and_config(db_agents=None)
-    assert clean_agent_registry.get_agent_list() == []
+    assert clean_agent_registry.get_agent_list() == ()
+
+
+# ---------------------------------------------------------------------------
+# _init_guardrails_in_db
+# ---------------------------------------------------------------------------
+
+
+def _db_guardrail_row(guardrail_id: str, guardrail_type: str) -> dict[str, object]:
+    return {
+        "guardrail_id": guardrail_id,
+        "guardrail_name": f"name-{guardrail_id}",
+        "litellm_params": {"guardrail": guardrail_type, "mode": "pre_call"},
+        "guardrail_info": None,
+        "team_id": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__init_guardrails_in_db_skips_only_the_unloadable_row(monkeypatch):
+    """
+    A single DB row that fails to initialize used to abort the whole loop, so one
+    typo'd guardrail type left the proxy running with zero guardrails loaded.
+
+    The failing row's id must still reach reconcile_db_guardrails so that eviction
+    pass cannot treat a row that is alive in the DB as one that was deleted.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+    from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
+
+    class _RecordingHandler(registry_module.InMemoryGuardrailHandler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reconciled_with: list[set[str]] = []
+
+        def reconcile_db_guardrails(self, db_guardrail_ids: set[str]) -> list[str]:
+            self.reconciled_with.append(set(db_guardrail_ids))
+            return super().reconcile_db_guardrails(db_guardrail_ids)
+
+    handler = _RecordingHandler()
+    monkeypatch.setattr(registry_module, "IN_MEMORY_GUARDRAIL_HANDLER", handler)
+
+    def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=False,
+        )
+
+    monkeypatch.setitem(registry_module.guardrail_initializer_registry, "lit5367_ok", _initializer)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[
+            _db_guardrail_row("first", "lit5367_ok"),
+            _db_guardrail_row("broken", "litellm_tool_permission"),
+            _db_guardrail_row("last", "lit5367_ok"),
+        ]
+    )
+
+    await ProxyConfig()._init_guardrails_in_db(prisma_client=prisma_client)
+
+    assert sorted(handler.IN_MEMORY_GUARDRAILS) == ["first", "last"]
+    assert handler.reconciled_with == [{"first", "broken", "last"}]

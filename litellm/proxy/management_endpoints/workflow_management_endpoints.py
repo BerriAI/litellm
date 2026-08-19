@@ -14,7 +14,8 @@ GET    /v1/workflows/runs/{run_id}/messages     - Fetch conversation history
 """
 
 import json
-from typing import Any, Final, Literal
+from collections.abc import Mapping, Sequence
+from typing import Final, Literal, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -43,7 +44,7 @@ router: Final = APIRouter()
 _MAX_SEQUENCE_RETRIES: Final = 5
 
 
-def _json(value: Any) -> str:
+def _json(value: object) -> str:
     """Serialize a Python value for prisma-client-py Json fields (must be a string)."""
     return json.dumps(value)
 
@@ -62,7 +63,7 @@ def _caller_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
 
 
 # Status transitions driven by event_type
-_EVENT_STATUS_MAP: Final[dict[str, str]] = {
+_EVENT_STATUS_MAP: Final[Mapping[str, str]] = {
     "step.started": "running",
     "step.failed": "failed",
     "hook.waiting": "paused",
@@ -77,8 +78,8 @@ _EVENT_STATUS_MAP: Final[dict[str, str]] = {
 
 class WorkflowRunCreateRequest(BaseModel):
     workflow_type: str
-    input: dict[str, Any] | None = None
-    metadata: dict[str, Any] | None = None
+    input: Mapping[str, object] | None = None
+    metadata: Mapping[str, object] | None = None
 
 
 WorkflowRunStatus = Literal["pending", "running", "paused", "completed", "failed"]
@@ -86,14 +87,14 @@ WorkflowRunStatus = Literal["pending", "running", "paused", "completed", "failed
 
 class WorkflowRunUpdateRequest(BaseModel):
     status: WorkflowRunStatus | None = None
-    output: dict[str, Any] | None = None
-    metadata: dict[str, Any] | None = None
+    output: Mapping[str, object] | None = None
+    metadata: Mapping[str, object] | None = None
 
 
 class WorkflowEventCreateRequest(BaseModel):
     event_type: str
     step_name: str
-    data: dict[str, Any] | None = None
+    data: Mapping[str, object] | None = None
 
 
 class WorkflowMessageCreateRequest(BaseModel):
@@ -102,15 +103,60 @@ class WorkflowMessageCreateRequest(BaseModel):
     session_id: str | None = None
 
 
+class _RunRow(Protocol):
+    @property
+    def created_by(self) -> str | None: ...
+
+
+class _SeqRow(Protocol):
+    @property
+    def sequence_number(self) -> int: ...
+
+
+class _RunCreateData(TypedDict, total=False):
+    workflow_type: str
+    created_by: str | None
+    input: str
+    metadata: str
+
+
+class _RunWhere(TypedDict, total=False):
+    workflow_type: str
+    status: str | Mapping[str, Sequence[str]]
+    created_by: str
+
+
+class _RunUpdateData(TypedDict, total=False):
+    status: WorkflowRunStatus
+    output: str
+    metadata: str
+
+
+class _EventCreateData(TypedDict, total=False):
+    run_id: str
+    event_type: str
+    step_name: str
+    sequence_number: int
+    data: str
+
+
+class _MessageCreateData(TypedDict, total=False):
+    run_id: str
+    role: str
+    content: str
+    sequence_number: int
+    session_id: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-async def _get_next_sequence_number(prisma_client: Any, run_id: str, table: str) -> int:
+async def _get_next_sequence_number(prisma_client: object, run_id: str, table: str) -> int:
     """Return MAX(sequence_number) + 1 for the given run, for either events or messages."""
     if table == "events":
-        rows = await WorkflowEventRepository(prisma_client).table.find_many(
+        rows: Sequence[_SeqRow] = await WorkflowEventRepository(prisma_client).table.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "desc"},
             take=1,
@@ -125,12 +171,12 @@ async def _get_next_sequence_number(prisma_client: Any, run_id: str, table: str)
 
 
 async def _require_run(
-    prisma_client: Any,
+    prisma_client: object,
     run_id: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> Any:
+) -> _RunRow:
     """Return the run or raise 404. For non-admin callers, also enforce key ownership."""
-    run: Final = await WorkflowRunRepository(prisma_client).table.find_unique(where={"run_id": run_id})
+    run: Final[_RunRow | None] = await WorkflowRunRepository(prisma_client).table.find_unique(where={"run_id": run_id})
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
     if user_api_key_dict is not None and not _is_admin(user_api_key_dict):
@@ -165,7 +211,7 @@ async def create_workflow_run(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        create_data: Final[dict[str, Any]] = {
+        create_data: Final[_RunCreateData] = {
             "workflow_type": data.workflow_type,
             "created_by": _caller_key(user_api_key_dict),
         }
@@ -173,7 +219,7 @@ async def create_workflow_run(
             create_data["input"] = _json(data.input)
         if data.metadata is not None:
             create_data["metadata"] = _json(data.metadata)
-        run: Final = await WorkflowRunRepository(prisma_client).table.create(data=create_data)
+        run: Final[_RunRow] = await WorkflowRunRepository(prisma_client).table.create(data=create_data)
         return run
     except Exception as e:
         verbose_proxy_logger.exception("Error creating workflow run: %s", e)
@@ -200,7 +246,7 @@ async def list_workflow_runs(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    where: Final[dict[str, Any]] = {}
+    where: Final[_RunWhere] = {}
     if workflow_type:
         where["workflow_type"] = workflow_type
     if status:
@@ -214,7 +260,7 @@ async def list_workflow_runs(
             where["created_by"] = caller
 
     try:
-        runs: Final = await WorkflowRunRepository(prisma_client).table.find_many(
+        runs: Final[Sequence[object]] = await WorkflowRunRepository(prisma_client).table.find_many(
             where=where,
             order={"created_at": "desc"},
             take=limit,
@@ -241,7 +287,7 @@ async def get_workflow_run(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        run: Final = await WorkflowRunRepository(prisma_client).table.find_unique(
+        run: Final[_RunRow | None] = await WorkflowRunRepository(prisma_client).table.find_unique(
             where={"run_id": run_id},
             include={"events": {"order_by": {"sequence_number": "desc"}, "take": 1}},
         )
@@ -275,7 +321,7 @@ async def update_workflow_run(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    update: Final[dict[str, Any]] = {}
+    update: Final[_RunUpdateData] = {}
     if data.status is not None:
         update["status"] = data.status
     if data.output is not None:
@@ -290,7 +336,7 @@ async def update_workflow_run(
     await _require_run(prisma_client, run_id, user_api_key_dict)
 
     try:
-        run: Final = await WorkflowRunRepository(prisma_client).table.update(
+        run: Final[_RunRow | None] = await WorkflowRunRepository(prisma_client).table.update(
             where={"run_id": run_id},
             data=update,
         )
@@ -332,7 +378,7 @@ async def append_workflow_event(
     for attempt in range(_MAX_SEQUENCE_RETRIES):
         try:
             seq = await _get_next_sequence_number(prisma_client, run_id, "events")
-            event_data: dict[str, Any] = {
+            event_data: _EventCreateData = {
                 "run_id": run_id,
                 "event_type": data.event_type,
                 "step_name": data.step_name,
@@ -342,7 +388,7 @@ async def append_workflow_event(
                 event_data["data"] = _json(data.data)
 
             async with prisma_client.db.tx() as tx:
-                event = await tx.litellm_workflowevent.create(data=event_data)
+                event: object = await tx.litellm_workflowevent.create(data=event_data)
                 if new_status:
                     await tx.litellm_workflowrun.update(
                         where={"run_id": run_id},
@@ -389,7 +435,7 @@ async def list_workflow_events(
     await _require_run(prisma_client, run_id, _read_scope_caller(user_api_key_dict))
 
     try:
-        events: Final = await WorkflowEventRepository(prisma_client).table.find_many(
+        events: Final[Sequence[object]] = await WorkflowEventRepository(prisma_client).table.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
             take=limit,
@@ -424,7 +470,7 @@ async def append_workflow_message(
     for attempt in range(_MAX_SEQUENCE_RETRIES):
         try:
             seq = await _get_next_sequence_number(prisma_client, run_id, "messages")
-            msg_data: dict[str, Any] = {
+            msg_data: _MessageCreateData = {
                 "run_id": run_id,
                 "role": data.role,
                 "content": data.content,
@@ -432,7 +478,7 @@ async def append_workflow_message(
             }
             if data.session_id is not None:
                 msg_data["session_id"] = data.session_id
-            msg = await WorkflowMessageRepository(prisma_client).table.create(data=msg_data)
+            msg: object = await WorkflowMessageRepository(prisma_client).table.create(data=msg_data)
             return msg
 
         except Exception as e:
@@ -473,7 +519,7 @@ async def list_workflow_messages(
     await _require_run(prisma_client, run_id, _read_scope_caller(user_api_key_dict))
 
     try:
-        messages: Final = await WorkflowMessageRepository(prisma_client).table.find_many(
+        messages: Final[Sequence[object]] = await WorkflowMessageRepository(prisma_client).table.find_many(
             where={"run_id": run_id},
             order={"sequence_number": "asc"},
             take=limit,

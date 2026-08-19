@@ -30,7 +30,7 @@ def test_transform_usage():
         }
     )
     config = AmazonConverseConfig()
-    openai_usage = config._transform_usage(usage)
+    openai_usage = config.transform_usage(usage)
     assert (
         openai_usage.prompt_tokens
         == usage["inputTokens"]
@@ -62,7 +62,7 @@ def test_transform_usage_with_reasoning_content():
     )
     config = AmazonConverseConfig()
     reasoning_text = "Let me think about this step by step."
-    openai_usage = config._transform_usage(usage, reasoning_content=reasoning_text)
+    openai_usage = config.transform_usage(usage, reasoning_content=reasoning_text)
     assert openai_usage.completion_tokens_details is not None
     assert openai_usage.completion_tokens_details.reasoning_tokens > 0
     assert openai_usage.completion_tokens_details.text_tokens == (
@@ -368,6 +368,73 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
 
     additional = result.get("additionalModelRequestFields", {})
     assert additional.get("output_config") == {"effort": "high"}
+
+
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "xhigh", "max"),
+    ],
+)
+def test_explicit_output_config_effort_mapped_for_adaptive_thinking_converse(model, effort, expected_effort):
+    """Regression: Claude Code drives adaptive thinking as ``thinking: {"type":
+    "adaptive"}`` plus ``output_config: {"effort": ...}``. ``output_config`` must
+    be a supported openai param and survive ``map_openai_params`` (clamped to the
+    model's Bedrock effort ceiling), otherwise the Converse request carries
+    adaptive thinking without an effort tier and Bedrock streams zero
+    ``reasoningContent`` blocks."""
+    config = AmazonConverseConfig()
+
+    assert "output_config" in config.get_supported_openai_params(model)
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": effort},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "adaptive"}
+    assert optional_params["output_config"] == {"effort": expected_effort}
+
+
+def test_output_config_supported_param_for_arn_models_converse():
+    """ARN model ids hide the underlying Claude model, so ``output_config`` must
+    be in the blanket ARN supported-params list too."""
+    config = AmazonConverseConfig()
+    arn_model = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+    assert "output_config" in config.get_supported_openai_params(arn_model)
+
+
+def test_output_config_effort_forwarded_for_application_inference_profile_arn():
+    """Regression: opaque application inference profile ARNs cannot resolve a
+    base model, so the anthropic-only serialization gate dropped ``output_config``
+    while still sending ``thinking``: adaptive thinking with no effort tier, and
+    Bedrock streams zero ``reasoningContent`` blocks. The effort must be forwarded
+    verbatim (ceilings and capability gates are unknowable behind the alias) for
+    Bedrock to enforce."""
+    config = AmazonConverseConfig()
+    arn_model = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456"
+
+    result = config._transform_request(
+        model=arn_model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "max"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("thinking") == {"type": "adaptive"}
+    assert additional.get("output_config") == {"effort": "max"}
 
 
 def test_output_config_format_translated_to_native_output_config_converse():
@@ -3562,6 +3629,8 @@ def test_supports_native_structured_outputs():
         assert config._supports_native_structured_outputs("nvidia.nemotron-nano-3-30b")
         # DeepSeek: old substring "deepseek-v3.1" didn't match real ID
         assert config._supports_native_structured_outputs("deepseek.v3-v1:0")
+        assert config._supports_native_structured_outputs("deepseek.v3.2")
+        assert config._supports_native_structured_outputs("zai.glm-5")
 
         # Unsupported models -- should fall back to tool-call approach
         assert not config._supports_native_structured_outputs(
@@ -5939,7 +6008,7 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
 def test_converse_usage_reports_unknown_split_for_signature_only_thinking():
     config = AmazonConverseConfig()
 
-    usage = config._transform_usage(
+    usage = config.transform_usage(
         ConverseTokenUsageBlock(inputTokens=32, outputTokens=581, totalTokens=613),
         reasoning_content="",
         thinking_ran=True,
@@ -5954,7 +6023,7 @@ def test_converse_usage_reports_unknown_split_for_signature_only_thinking():
 def test_converse_usage_estimates_split_for_visible_thinking():
     config = AmazonConverseConfig()
 
-    usage = config._transform_usage(
+    usage = config.transform_usage(
         ConverseTokenUsageBlock(inputTokens=32, outputTokens=581, totalTokens=613),
         reasoning_content="Let me think about how many primes there are under thirty.",
         thinking_ran=True,
@@ -5971,7 +6040,7 @@ def test_converse_usage_estimates_split_for_visible_thinking():
 def test_converse_usage_without_thinking_reports_all_output_as_text():
     config = AmazonConverseConfig()
 
-    usage = config._transform_usage(ConverseTokenUsageBlock(inputTokens=32, outputTokens=171, totalTokens=203))
+    usage = config.transform_usage(ConverseTokenUsageBlock(inputTokens=32, outputTokens=171, totalTokens=203))
 
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 0
@@ -6015,3 +6084,52 @@ def test_converse_transform_response_signature_only_thinking_reports_unknown_spl
 
     assert response.usage.completion_tokens_details.reasoning_tokens is None
     assert response.usage.completion_tokens_details.text_tokens is None
+
+
+def test_is_converse_usage_shape_distinguishes_camel_case_from_anthropic():
+    config = AmazonConverseConfig()
+    assert config.is_converse_usage_shape({"inputTokens": 1, "outputTokens": 2}) is True
+    assert config.is_converse_usage_shape({"outputTokens": 2}) is True
+    assert config.is_converse_usage_shape({"input_tokens": 1, "output_tokens": 2}) is False
+    assert config.is_converse_usage_shape({}) is False
+
+
+def test_usage_from_batch_output_completes_an_incomplete_block():
+    """Batch output omits totalTokens and the cache counts the live API always sends."""
+    usage = AmazonConverseConfig().usage_from_batch_output({"inputTokens": 2202, "outputTokens": 540})
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (2202, 540, 2742)
+
+
+def test_usage_from_batch_output_inflates_input_by_cache_counts():
+    usage = AmazonConverseConfig().usage_from_batch_output(
+        {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "totalTokens": 120,
+            "cacheReadInputTokens": 800,
+            "cacheWriteInputTokens": 200,
+        }
+    )
+    assert usage.prompt_tokens == 1100
+    assert usage.prompt_tokens_details.cached_tokens == 800
+    assert usage.prompt_tokens_details.cache_creation_tokens == 200
+
+
+def test_streaming_usage_chunk_is_transformed():
+    """The streaming decoder's usage event feeds the same public transform."""
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    decoder = AWSEventStreamDecoder(model="us.amazon.nova-lite-v1:0")
+    chunk = decoder.converse_chunk_parser({"usage": {"inputTokens": 11, "outputTokens": 4, "totalTokens": 15}})
+    assert chunk.usage.prompt_tokens == 11
+    assert chunk.usage.completion_tokens == 4
+    assert chunk.usage.total_tokens == 15
+
+
+def test_update_optional_params_with_thinking_tokens_bool_thinking_does_not_crash():
+    config = AmazonConverseConfig()
+    optional_params = {"thinking": True}
+    config.update_optional_params_with_thinking_tokens(
+        non_default_params={"thinking": True}, optional_params=optional_params
+    )
+    assert "maxTokens" not in optional_params

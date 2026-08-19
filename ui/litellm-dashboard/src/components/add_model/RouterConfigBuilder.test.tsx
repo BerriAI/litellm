@@ -159,7 +159,7 @@ describe("RouterConfigBuilder", () => {
     });
 
     const descriptionInput = screen.getByPlaceholderText("Describe when this route should be used...");
-    await user.type(descriptionInput, "For code generation");
+    fireEvent.change(descriptionInput, { target: { value: "For code generation" } });
 
     await waitFor(() => {
       const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1];
@@ -194,6 +194,41 @@ describe("RouterConfigBuilder", () => {
     });
   });
 
+  it("should preserve commas inside a single utterance", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const value = {
+      routes: [{ name: "gpt-4", utterances: [], description: "", score_threshold: 0.5 }],
+    };
+    render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} value={value} onChange={onChange} />);
+
+    const utteranceInput = await screen.findByRole("textbox", { name: "Example Utterances" });
+    await user.type(utteranceInput, "Compare Paris, France{Enter}");
+
+    await waitFor(() => {
+      const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1];
+      expect(lastCall[0].routes[0].utterances).toEqual(["Compare Paris, France"]);
+    });
+  });
+
+  it("should deduplicate utterances within a multiline paste", async () => {
+    const onChange = vi.fn();
+    const value = {
+      routes: [{ name: "gpt-4", utterances: ["hello"], description: "", score_threshold: 0.5 }],
+    };
+    render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} value={value} onChange={onChange} />);
+
+    const utteranceInput = await screen.findByRole("textbox", { name: "Example Utterances" });
+    fireEvent.paste(utteranceInput, {
+      clipboardData: { getData: () => "hello\nworld\nworld" },
+    });
+
+    await waitFor(() => {
+      const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1];
+      expect(lastCall[0].routes[0].utterances).toEqual(["hello", "world"]);
+    });
+  });
+
   it("should add multiple routes", async () => {
     const user = userEvent.setup();
     render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} />);
@@ -207,26 +242,26 @@ describe("RouterConfigBuilder", () => {
 
   it("should toggle JSON preview visibility", async () => {
     const user = userEvent.setup();
-    const { container } = render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} />);
+    render(<RouterConfigBuilder modelInfo={MOCK_MODEL_INFO} />);
 
     expect(screen.getByText("JSON Preview")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show" })).toBeInTheDocument();
-    expect(container.querySelector("pre")).not.toBeInTheDocument();
+    expect(screen.queryByText(/"routes":/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Show" }));
 
     expect(screen.getByRole("button", { name: "Hide" })).toBeInTheDocument();
-    expect(container.querySelector("pre")).toBeInTheDocument();
+    expect(screen.getByText(/"routes":/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Hide" }));
 
     expect(screen.getByRole("button", { name: "Show" })).toBeInTheDocument();
-    expect(container.querySelector("pre")).not.toBeInTheDocument();
+    expect(screen.queryByText(/"routes":/)).not.toBeInTheDocument();
   });
 
   it("should display JSON preview with route data when routes exist", async () => {
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <RouterConfigBuilder
         modelInfo={MOCK_MODEL_INFO}
         value={{
@@ -241,11 +276,9 @@ describe("RouterConfigBuilder", () => {
 
     await user.click(screen.getByRole("button", { name: "Show" }));
 
-    const preElement = container.querySelector("pre");
-    expect(preElement).toBeInTheDocument();
-    expect(preElement?.textContent).toContain("gpt-4");
-    expect(preElement?.textContent).toContain("hello");
-    expect(preElement?.textContent).toContain("0.8");
+    const preview = screen.getByText(/"name": "gpt-4"/);
+    expect(preview).toHaveTextContent('"utterances": [ "hello" ]');
+    expect(preview).toHaveTextContent('"score_threshold": 0.8');
   });
 
   it("should display model selector with options from modelInfo", async () => {

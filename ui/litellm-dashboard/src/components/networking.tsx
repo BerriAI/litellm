@@ -22,13 +22,15 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   accessToken: string,
   contextWindowSize: number,
   tierLabels?: Record<string, string>,
+  classificationRubric?: string,
 ): Promise<string> => {
   /**
    * Get the built-in system prompt an auto-router's LLM classifier uses when none is configured,
    * so the prompt editor prefills what the proxy actually sends rather than a frontend copy.
    *
    * tierLabels names the rubric's tier bullets, so a router that renamed its tiers prefills the
-   * rubric it sends rather than one using the canonical names.
+   * rubric it sends rather than one using the canonical names. rubric selects which calibration
+   * examples it carries, for the same reason.
    */
   try {
     const response = await apiClient.get<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
@@ -36,6 +38,7 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
       query: {
         context_window_size: contextWindowSize,
         ...(tierLabels && Object.keys(tierLabels).length > 0 ? { tier_labels: JSON.stringify(tierLabels) } : {}),
+        ...(classificationRubric ? { classification_rubric: classificationRubric } : {}),
       },
     });
     return response.system_prompt;
@@ -48,7 +51,7 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
 /**
  * Helper file for calls being made to proxy
  */
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
@@ -57,7 +60,6 @@ import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./e
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ObjectPermission } from "./object_permission_types";
 import { jsonFields } from "./common_components/check_openapi_schema";
-import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import type {
   CoordinationRedisSettings,
@@ -66,6 +68,7 @@ import type {
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
+import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
 import {
   createApiClient,
@@ -336,7 +339,7 @@ export const handleError = async (errorData: string | any) => {
     // Convert errorData to string if it isn't already
     const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
     if (errorString.includes("Authentication Error - Expired Key")) {
-      NotificationsManager.info("UI Session Expired. Logging out.");
+      toast.info("UI Session Expired. Logging out.");
       lastErrorTime = currentTime;
       clearTokenCookies();
       const browserLocation = getWindowLocation();
@@ -368,6 +371,21 @@ export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]>
   return jsonData;
 };
 
+export interface ComplexityScorerDefaults {
+  tier_boundaries: Record<string, number>;
+  token_thresholds: Record<string, number>;
+  dimension_weights: Record<string, number>;
+}
+
+export const getComplexityScorerDefaults = async (): Promise<ComplexityScorerDefaults> => {
+  /**
+   * Fetch the complexity router's shipped heuristic scorer defaults from the proxy's public endpoint.
+   * The Advanced scoring controls prefill from these rather than from a copy in the dashboard, so a
+   * recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+   */
+  return await apiClient.get(`/public/complexity_router/scorer_defaults`);
+};
+
 export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
   /**
    * Fetch agent type metadata from the proxy's public endpoint.
@@ -390,7 +408,6 @@ export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
 
 // Global variable for the header name
 let globalLitellmHeaderName: string = "Authorization";
-const MCP_AUTH_HEADER: string = "x-mcp-auth";
 
 // Function to set the global header name
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
@@ -591,10 +608,10 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
     });
 
     // Close any existing messages before showing new ones
-    MessageManager.destroy();
+    toast.dismiss();
 
     // Sequential success messages
-    NotificationsManager.success(`Model ${formValues.model_name} created successfully`);
+    toast.success(`Model ${formValues.model_name} created successfully`);
 
     return data;
   } catch (error) {
@@ -1389,6 +1406,7 @@ export const userDailyActivityCall = async (
   endTime: Date,
   page: number = 1,
   userId: string | null = null,
+  includeCurrentUtcDay: boolean = false,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1401,6 +1419,7 @@ export const userDailyActivityCall = async (
     page,
     extraQueryParams: {
       user_id: userId,
+      include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
     },
   });
 };
@@ -1448,6 +1467,32 @@ export const teamDailyActivityCall = async (
       exclude_team_ids: "litellm-dashboard",
     },
   });
+};
+
+export const teamDailyActivityAggregatedCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  teamIds: string[] | null = null,
+) => {
+  /**
+   * Get aggregated daily team activity with per-team breakdown (no pagination)
+   */
+  try {
+    return await apiClient.get(`/team/daily/activity/aggregated`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
+        exclude_team_ids: "litellm-dashboard",
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch aggregated team daily activity:", error);
+    throw error;
+  }
 };
 
 export const organizationDailyActivityCall = async (
@@ -1638,7 +1683,6 @@ export const modelInfoCall = async (
       url += `?${params.toString()}`;
     }
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1654,7 +1698,7 @@ export const modelInfoCall = async (
         if (errorData.includes("No model list passed")) {
           errorData = "No Models Exist. Click Add Model to get started.";
         }
-        NotificationsManager.info(errorData);
+        toast.info(errorData);
         ModelListerrorShown = true;
 
         if (errorTimer) clearTimeout(errorTimer);
@@ -1667,7 +1711,6 @@ export const modelInfoCall = async (
     }
 
     const data = await response.json();
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -1770,9 +1813,7 @@ export const modelHubCall = async (accessToken: string) => {
    * Get all models on proxy
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(`/model_group/info`, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -2036,9 +2077,7 @@ export const uiSpendLogsCall = async ({
 
 export const adminSpendLogsCall = async (accessToken: string) => {
   try {
-    //NotificationsManager.info("Making spend logs request");
     const data = await apiClient.get(`/global/spend/logs`, { accessToken });
-    //NotificationsManager.success("Spend Logs received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2050,7 +2089,6 @@ export const adminTopKeysCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/keys?limit=5` : `/global/spend/keys?limit=5`;
 
-    //NotificationsManager.info("Making spend keys request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2066,7 +2104,6 @@ export const adminTopKeysCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    //NotificationsManager.success("Spend Logs received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2085,9 +2122,7 @@ export const adminTopEndUsersCall = async (
       ? { api_key: keyToken, startTime: startTime, endTime: endTime }
       : { startTime: startTime, endTime: endTime };
 
-    //NotificationsManager.info("Making top end users request");
     const data = await apiClient.post(`/global/spend/end_users`, { accessToken, body });
-    //NotificationsManager.success("Top End users received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2097,7 +2132,6 @@ export const adminTopEndUsersCall = async (
 
 export const adminspendByProvider = async (
   accessToken: string,
-  keyToken: string | null,
   startTime: string | undefined,
   endTime: string | undefined,
 ) => {
@@ -2106,7 +2140,6 @@ export const adminspendByProvider = async (
       accessToken,
       query: {
         ...(startTime && endTime ? { start_date: startTime, end_date: endTime } : {}),
-        ...(keyToken ? { api_key: keyToken } : {}),
       },
     });
     return data;
@@ -2173,7 +2206,6 @@ export const adminTopModelsCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/models?limit=5` : `/global/spend/models?limit=5`;
 
-    //NotificationsManager.info("Making top models request");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2189,7 +2221,6 @@ export const adminTopModelsCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    //NotificationsManager.success("Top Models received");
     return data;
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2376,7 +2407,7 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      NotificationsManager.fromBackend("Failed to fetch key info - " + errorData);
+      toast.fromError("Failed to fetch key info - " + errorData);
     }
 
     const data = await response.json();
@@ -2735,7 +2766,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      NotificationsManager.fromBackend("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
+      toast.fromError("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
@@ -3077,7 +3108,6 @@ export const userUpdateUserCall = async (
       user_id: string;
       data: UserInfo;
     };
-    //NotificationsManager.success("User role updated");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3129,7 +3159,6 @@ export const userBulkUpdateUserCall = async (
       successful_updates: number;
       failed_updates: number;
     };
-    //NotificationsManager.success("User role updated");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3173,9 +3202,7 @@ export const getBudgetList = async (accessToken: string) => {
    * Get all configurable params for setting a budget
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(`/budget/list`, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3188,9 +3215,7 @@ export const getCallbacksCall = async (accessToken: string, userID: string, user
    * Get all the models user has access to
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(`/get/config/callbacks`, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3205,7 +3230,6 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
       ? `${proxyBaseUrl}/config/list?config_type=general_settings`
       : `/config/list?config_type=general_settings`;
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -3222,7 +3246,6 @@ export const getGeneralSettingsCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3330,9 +3353,7 @@ export const getPassThroughEndpointsCall = async (accessToken: string, teamId?: 
       path += `/team/${teamId}`;
     }
 
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(path, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3347,7 +3368,6 @@ export const getConfigFieldSetting = async (accessToken: string, fieldName: stri
       ? `${proxyBaseUrl}/config/field/info?field_name=${fieldName}`
       : `/config/field/info?field_name=${fieldName}`;
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -3377,14 +3397,12 @@ export const createPassThroughEndpoint = async (accessToken: string, formValues:
    * Set callbacks on proxy
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/pass_through_endpoint`, {
       accessToken,
       body: {
         ...formValues, // Include formValues in the request body
       },
     });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3400,10 +3418,8 @@ export const updateConfigFieldSetting = async (accessToken: string, fieldName: s
       field_value: fieldValue,
       config_type: "general_settings",
     };
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/field/update`, { accessToken, body: formData });
-    //NotificationsManager.info("Received model data");
-    NotificationsManager.success("Successfully updated value!");
+    toast.success("Successfully updated value!");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3418,9 +3434,8 @@ export const deleteConfigFieldSetting = async (accessToken: string, fieldName: s
       field_name: fieldName,
       config_type: "general_settings",
     };
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/field/delete`, { accessToken, body: formData });
-    NotificationsManager.success("Field reset on proxy");
+    toast.success("Field reset on proxy");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3435,7 +3450,6 @@ export const deletePassThroughEndpointsCall = async (accessToken: string, endpoi
       ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${endpointId}`
       : `/config/pass_through_endpoint?endpoint_id=${endpointId}`;
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "DELETE",
       headers: {
@@ -3452,7 +3466,6 @@ export const deletePassThroughEndpointsCall = async (accessToken: string, endpoi
     }
 
     const data = await response.json();
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3466,14 +3479,12 @@ export const setCallbacksCall = async (accessToken: string, formValues: Record<s
    * Set callbacks on proxy
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/update`, {
       accessToken,
       body: {
         ...formValues, // Include formValues in the request body
       },
     });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3521,7 +3532,6 @@ export const cachingHealthCheckCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/ping` : `/cache/ping`;
 
-    //NotificationsManager.info("Requesting model data");
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -3537,7 +3547,6 @@ export const cachingHealthCheckCall = async (accessToken: string) => {
     }
 
     const data = await response.json();
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3580,9 +3589,7 @@ export const getProxyUISettings = async (accessToken: string) => {
    * Get all the models user has access to
    */
   try {
-    //NotificationsManager.info("Requesting model data");
     const data = await apiClient.get(`/sso/get/ui_settings`, { accessToken });
-    //NotificationsManager.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -5621,6 +5628,20 @@ export const vectorStoreListCall = async (
   }
 };
 
+export interface IndexesListResponse {
+  object: string;
+  data: VectorStoreIndex[];
+}
+
+export const indexesListCall = async (accessToken: string): Promise<IndexesListResponse> => {
+  try {
+    return await apiClient.get<IndexesListResponse>(`/v1/indexes`, { accessToken });
+  } catch (error) {
+    console.error("Error listing indexes:", error);
+    throw error;
+  }
+};
+
 export const vectorStoreDeleteCall = async (accessToken: string, vectorStoreId: string): Promise<void> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/vector_store/delete` : `/vector_store/delete`;
@@ -6607,7 +6628,7 @@ export const updatePassThroughEndpoint = async (
     }
 
     const data = await response.json();
-    NotificationsManager.success("Pass through endpoint updated successfully");
+    toast.success("Pass through endpoint updated successfully");
     return data;
   } catch (error) {
     console.error("Failed to update pass through endpoint:", error);

@@ -7,9 +7,13 @@ import contextvars
 import json
 import os
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Any, Final
+from typing import Any, Final, TypedDict
 from urllib.parse import quote
+
+import httpx
+from typing_extensions import ReadOnly, Required
 
 # Tool names emitted from OpenAPI specs must work across all major LLM providers.
 # OpenAI/Anthropic/Bedrock all enforce a character class roughly equivalent to
@@ -44,6 +48,47 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 
+
+class _OpenAPIJSONSchema(TypedDict, total=False):
+    properties: Mapping[str, object]
+    type: ReadOnly[str]
+
+
+class _OpenAPIParameter(TypedDict, total=False):
+    name: Required[ReadOnly[str]]
+    description: ReadOnly[str]
+    required: ReadOnly[bool]
+    schema: ReadOnly[_OpenAPIJSONSchema]
+
+
+class _OpenAPIMediaType(TypedDict, total=False):
+    schema: _OpenAPIJSONSchema
+
+
+class _OpenAPIRequestBody(TypedDict, total=False):
+    description: str
+    required: bool
+    content: Mapping[str, _OpenAPIMediaType]
+
+
+class _OpenAPIOperation(TypedDict, total=False):
+    operationId: str
+    summary: str
+    description: str
+    parameters: Sequence[_OpenAPIParameter]
+    requestBody: _OpenAPIRequestBody
+
+
+class _OpenAPIPathItem(TypedDict, total=False):
+    summary: str
+    description: str
+    parameters: Sequence[_OpenAPIParameter]
+
+
+class _OpenAPIComponents(TypedDict, total=False):
+    parameters: Mapping[str, _OpenAPIParameter]
+
+
 # Store the base URL and headers globally
 BASE_URL: Final = ""
 HEADERS: Final[dict[str, str]] = {}
@@ -69,7 +114,7 @@ _request_resolved_auth_headers: Final[contextvars.ContextVar[dict[str, str] | No
 )
 
 
-def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
+def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
     if param_value is None:
         return ""
@@ -109,7 +154,7 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
 async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        r: Final = await async_safe_get(client, filepath)
+        r: Final[httpx.Response] = await async_safe_get(client, filepath)
         r.raise_for_status()
         return r.json()
 
@@ -121,11 +166,11 @@ async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
         return json.load(f)
 
 
-def get_base_url(spec: dict[str, Any], spec_path: str | None = None) -> str:
+def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
-        server_url: Final = spec["servers"][0]["url"]
+        server_url: Final[str] = spec["servers"][0]["url"]
 
         # If the server URL is relative (starts with /), derive base from spec_path
         if server_url.startswith("/") and spec_path:
@@ -147,8 +192,8 @@ def get_base_url(spec: dict[str, Any], spec_path: str | None = None) -> str:
         return server_url
     # OpenAPI 2.x (Swagger)
     elif "host" in spec:
-        scheme: Final = spec.get("schemes", ["https"])[0]
-        base_path: Final = spec.get("basePath", "")
+        scheme: Final[str] = spec.get("schemes", ["https"])[0]
+        base_path: Final[str] = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
 
     # Fallback: derive base URL from spec_path if it's a URL
@@ -172,20 +217,24 @@ def get_base_url(spec: dict[str, Any], spec_path: str | None = None) -> str:
     return ""
 
 
-def _resolve_ref(param: dict[str, Any], component_params: dict[str, Any]) -> dict[str, Any] | None:
+def _resolve_ref(
+    param: _OpenAPIParameter, component_params: Mapping[str, _OpenAPIParameter]
+) -> _OpenAPIParameter | None:
     """Resolve a single parameter, following a $ref if present.
 
     Returns the resolved param dict, or None if the $ref target is absent from
     components (so callers can skip/filter it rather than propagating a stub
     with name=None that would corrupt deduplication).
     """
-    ref: Final = param.get("$ref", "")
+    ref: Final[str] = param.get("$ref", "")
     if not ref.startswith("#/components/parameters/"):
         return param
     return component_params.get(ref.split("/")[-1])
 
 
-def _resolve_param_list(raw: list[dict[str, Any]], component_params: dict[str, Any]) -> list[dict[str, Any]]:
+def _resolve_param_list(
+    raw: Sequence[_OpenAPIParameter], component_params: Mapping[str, _OpenAPIParameter]
+) -> list[_OpenAPIParameter]:
     """Resolve $refs in a parameter list, dropping any unresolvable entries."""
     result: Final = []
     for p in raw:
@@ -196,10 +245,10 @@ def _resolve_param_list(raw: list[dict[str, Any]], component_params: dict[str, A
 
 
 def resolve_operation_params(
-    operation: dict[str, Any],
-    path_item: dict[str, Any],
-    components: dict[str, Any],
-) -> dict[str, Any]:
+    operation: _OpenAPIOperation,
+    path_item: _OpenAPIPathItem,
+    components: _OpenAPIComponents,
+) -> _OpenAPIOperation:
     """Return a copy of *operation* with fully-resolved, merged parameters.
 
     Handles two common patterns in real-world OpenAPI specs:
@@ -214,17 +263,16 @@ def resolve_operation_params(
        merged with the operation-level params; operation-level wins when the
        same ``name`` + ``in`` combination appears in both.
     """
-    component_params: Final = components.get("parameters", {})
+    component_params: Final[Mapping[str, _OpenAPIParameter]] = components.get("parameters", {})
     path_level: Final = _resolve_param_list(path_item.get("parameters", []), component_params)
     op_level: Final = _resolve_param_list(operation.get("parameters", []), component_params)
     op_keys: Final = {(p["name"], p.get("in")) for p in op_level}
     merged: Final = [p for p in path_level if (p["name"], p.get("in")) not in op_keys] + op_level
-    result: Final = dict(operation)
-    result["parameters"] = merged
+    result: Final[_OpenAPIOperation] = {**operation, "parameters": merged}
     return result
 
 
-def extract_parameters(operation: dict[str, Any]) -> tuple:
+def extract_parameters(operation: _OpenAPIOperation) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
     """Extract parameter names from OpenAPI operation."""
     path_params: Final = []
     query_params: Final = []
@@ -250,7 +298,7 @@ def extract_parameters(operation: dict[str, Any]) -> tuple:
     return path_params, query_params, body_params
 
 
-def build_input_schema(operation: dict[str, Any]) -> dict[str, Any]:
+def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
     """Build MCP input schema from OpenAPI operation."""
     properties: Final = {}
     required: Final = []
@@ -274,12 +322,12 @@ def build_input_schema(operation: dict[str, Any]) -> dict[str, Any]:
 
     # Process requestBody (OpenAPI 3.x)
     if "requestBody" in operation:
-        request_body: Final = operation["requestBody"]
-        content: Final = request_body.get("content", {})
+        request_body: Final[_OpenAPIRequestBody] = operation["requestBody"]
+        content: Final[Mapping[str, _OpenAPIMediaType]] = request_body.get("content", {})
 
         # Try to get JSON schema
         if "application/json" in content:
-            schema: Final = content["application/json"].get("schema", {})
+            schema: Final[_OpenAPIJSONSchema] = content["application/json"].get("schema", {})
             properties["body"] = {
                 "type": "object",
                 "description": request_body.get("description", "Request body"),
@@ -347,7 +395,7 @@ def _merge_openapi_tool_request_headers(
 def create_tool_function(
     path: str,
     method: str,
-    operation: dict[str, Any],
+    operation: _OpenAPIOperation,
     base_url: str,
     headers: dict[str, str] | None = None,
 ):
@@ -373,7 +421,7 @@ def create_tool_function(
     path_params, query_params, body_params = extract_parameters(operation)
     original_method: Final = method.lower()
 
-    async def tool_function(**kwargs: Any) -> str:
+    async def tool_function(**kwargs: object) -> str:
         """
         Dynamically generated tool function.
 
@@ -401,7 +449,7 @@ def create_tool_function(
                 url = url.replace("{{" + param_name + "}}", safe_value)
 
         # Build query params using original parameter names
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, object]] = {}
         for param_name in query_params:
             param_value = kwargs.get(param_name, "")
             if param_value:
@@ -409,7 +457,7 @@ def create_tool_function(
                 params[param_name] = param_value
 
         # Build request body
-        json_body: dict[str, Any] | None = None
+        json_body: dict[str, object] | None = None
         if body_params:
             # Try "body" first (most common), then check all body param names
             body_value = kwargs.get("body", {})
@@ -448,10 +496,10 @@ def create_tool_function(
     return tool_function
 
 
-def register_tools_from_openapi(spec: dict[str, Any], base_url: str):
+def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
     """Register MCP tools from OpenAPI specification."""
-    paths: Final = spec.get("paths", {})
-    used_names: Final[set] = set()
+    paths: Final[Mapping[str, Mapping[str, _OpenAPIOperation]]] = spec.get("paths", {})
+    used_names: Final = set()
 
     for path, path_item in paths.items():
         for method in ["get", "post", "put", "delete", "patch"]:

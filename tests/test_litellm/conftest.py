@@ -19,6 +19,8 @@ sys.path.insert(
 import asyncio
 
 import litellm
+from litellm import router as litellm_router_module
+from litellm import utils as litellm_utils_module
 from litellm._logging import ALL_LOGGERS
 from litellm.litellm_core_utils.prompt_templates import (
     image_handling as image_handling_module,
@@ -96,6 +98,12 @@ def isolate_host_aws_config(monkeypatch, isolated_aws_credentials_dir):
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.delenv("AWS_REGION_NAME", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def isolate_host_proxy_base_url(monkeypatch):
+    """Prevent a host PROXY_BASE_URL from outranking request-derived URLs during unit tests."""
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
 
 
 def _run_coroutine_if_needed(result):
@@ -238,6 +246,13 @@ def isolate_litellm_state():
         if hasattr(litellm, _attr):
             original_state[_attr] = getattr(litellm, _attr)
 
+    original_runtime_registered_model_cost = {
+        model_key: dict(model_value)
+        for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
+    }
+
+    original_live_routers = set(litellm_router_module._live_routers)
+
     # Store LiteLLM logger state. Some tests reconfigure handlers/propagation for
     # JSON logging and do not restore them, which breaks later caplog-based tests.
     logger_state = {}
@@ -303,6 +318,14 @@ def isolate_litellm_state():
     for attr_name, original_value in original_state.items():
         if hasattr(litellm, attr_name):
             setattr(litellm, attr_name, original_value)
+
+    litellm_utils_module._runtime_registered_model_cost.clear()
+    litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+
+    for _router in tuple(litellm_router_module._live_routers):
+        litellm_router_module._live_routers.discard(_router)
+    for _router in original_live_routers:
+        litellm_router_module._live_routers.add(_router)
 
     # Restore logger configuration mutated by logging-focused tests.
     for logger in ALL_LOGGERS:
