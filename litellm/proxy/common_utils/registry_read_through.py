@@ -95,17 +95,19 @@ class RegistryReadThrough:
             return found
 
 
-def _db_backed_registries_enabled() -> bool:
+def _db_backed_registries_enabled(object_type: str) -> bool:
     from litellm.proxy import proxy_server
 
-    return proxy_server.prisma_client is not None and proxy_server.store_model_in_db is True
+    if proxy_server.prisma_client is None or proxy_server.store_model_in_db is not True:
+        return False
+    return proxy_server.should_load_db_object(object_type=object_type)
 
 
 async def _resync_model_deployments(model_name: str) -> bool:
     from litellm.proxy import proxy_server
     from litellm.repositories.model_repository import ModelRepository
 
-    if not _db_backed_registries_enabled():
+    if not _db_backed_registries_enabled("models"):
         return False
     prisma_client: Final = proxy_server.prisma_client
     assert prisma_client is not None
@@ -115,13 +117,15 @@ async def _resync_model_deployments(model_name: str) -> bool:
     rows: Final = await table.find_many(where=name_filter) or await table.find_many(where=id_filter)
     if not rows:
         return False
-    if proxy_server.llm_router is None:
+    router: Final = proxy_server.llm_router
+    if router is None:
         await proxy_server.proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
         )
         return proxy_server.llm_router is not None
-    proxy_server.proxy_config._add_deployment(db_models=rows)
-    proxy_server.llm_model_list = proxy_server.llm_router.get_model_list()
+    async with proxy_server.MODEL_RECONCILE_LOCK:
+        proxy_server.proxy_config._add_deployment(db_models=rows)
+        proxy_server.llm_model_list = router.get_model_list()
     return True
 
 
@@ -132,7 +136,7 @@ async def _resync_guardrails(guardrail_name: str) -> bool:
         GuardrailRegistry,
     )
 
-    if not _db_backed_registries_enabled():
+    if not _db_backed_registries_enabled("guardrails"):
         return False
     prisma_client: Final = proxy_server.prisma_client
     assert prisma_client is not None
@@ -148,12 +152,13 @@ async def _resync_guardrails(guardrail_name: str) -> bool:
 async def _resync_agents(agent_id_or_name: str) -> bool:
     from litellm.proxy import proxy_server
     from litellm.proxy.agent_endpoints.agent_registry import (
+        AGENT_RECONCILE_LOCK,
         agents_table,
         global_agent_registry,
     )
     from litellm.types.agents import AgentResponse
 
-    if not _db_backed_registries_enabled():
+    if not _db_backed_registries_enabled("agents"):
         return False
     if _agent_from_registry(agent_id_or_name) is not None:
         return True
@@ -163,13 +168,16 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
     id_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id_or_name}
     name_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_name": agent_id_or_name}
     include_permission: Final[LiteLLM_AgentsTableInclude] = {"object_permission": True}
-    row: Final = await table.find_unique(where=id_filter, include=include_permission) or await table.find_unique(
-        where=name_filter, include=include_permission
-    )
-    if row is None:
-        return False
-    global_agent_registry.register_agent(agent_config=AgentResponse.model_validate(row.model_dump()))
-    return True
+    async with AGENT_RECONCILE_LOCK:
+        if _agent_from_registry(agent_id_or_name) is not None:
+            return True
+        row: Final = await table.find_unique(where=id_filter, include=include_permission) or await table.find_unique(
+            where=name_filter, include=include_permission
+        )
+        if row is None:
+            return False
+        global_agent_registry.register_agent(agent_config=AgentResponse.model_validate(row.model_dump()))
+        return True
 
 
 model_registry_read_through: Final = RegistryReadThrough(resync=_resync_model_deployments)

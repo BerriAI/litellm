@@ -146,7 +146,8 @@ ROUTE_ENDPOINT_MAPPING: Final = {
 
 
 class ProxyModelNotFoundError(HTTPException):
-    def __init__(self, route: str, model_name: str):
+    def __init__(self, route: str, model_name: str, retryable_with_model_read_through: bool = True):
+        self.retryable_with_model_read_through: Final = retryable_with_model_read_through
         detail: Final = {
             "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
         }
@@ -437,9 +438,9 @@ async def route_request(
             route_type=route_type,
             user_api_key_dict=user_api_key_dict,
         )
-    except ProxyModelNotFoundError:
+    except ProxyModelNotFoundError as e:
         requested_model: Final = data.get("model", "")
-        if not isinstance(requested_model, str) or not requested_model:
+        if not e.retryable_with_model_read_through or not isinstance(requested_model, str) or not requested_model:
             raise
         from litellm.proxy import proxy_server
         from litellm.proxy.common_utils.registry_read_through import (

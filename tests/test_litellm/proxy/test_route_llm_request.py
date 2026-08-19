@@ -1261,3 +1261,39 @@ async def test_route_request_routing_group_name_passes_model_gate():
 
     assert response == "group_response"
     spy.assert_called_once_with(**data)
+
+
+@pytest.mark.asyncio
+async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_name = "a2a/agent-nobody-created"
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+            }
+        ]
+    )
+    fake_prisma, model_table = _fake_prisma_client_with_models([])
+    agents_find_unique = AsyncMock(return_value=None)
+    fake_prisma.db.litellm_agentstable = SimpleNamespace(find_unique=agents_find_unique)
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            data={"model": model_name, "messages": [{"role": "user", "content": "hi"}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+
+    assert agents_find_unique.await_count == 2
+    assert model_table.find_many_wheres == []
