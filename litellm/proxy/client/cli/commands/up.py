@@ -2,12 +2,10 @@ import atexit
 import contextlib
 import json
 import os
-import shlex
-import shutil
 import signal
 import sys
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
@@ -20,17 +18,17 @@ from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
 from .auth import load_token, login
+from .claude_settings import (
+    BACKUP_PATH,
+    CLAUDE_SETTINGS_PATH,
+    ClaudeSettingsError,
+    load_json_or_empty,
+    merge_claude_settings,
+    resolve_api_key_helper,
+)
 
-ENV_KEY: Final = "env"
-API_KEY_HELPER_KEY: Final = "apiKeyHelper"
-ANTHROPIC_BASE_URL_KEY: Final = "ANTHROPIC_BASE_URL"
-ANTHROPIC_API_KEY_KEY: Final = "ANTHROPIC_API_KEY"
 
-CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
-BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
-
-
-class UpError(Exception):
+class UpError(ClaudeSettingsError):
     """Raised for any user-actionable failure while starting/stopping interception."""
 
 
@@ -42,38 +40,7 @@ class BackupRecord:
     content: dict[str, JsonValue] | None
 
 
-_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
 _BACKUP_RECORD_ADAPTER: Final = TypeAdapter(BackupRecord)
-
-
-def load_json_or_empty(path: Path) -> dict[str, JsonValue]:
-    if not path.exists():
-        return {}
-    with open(path, "r") as f:
-        content: Final = f.read()
-    if not content.strip():
-        return {}
-    try:
-        return _SETTINGS_ADAPTER.validate_json(content)
-    except ValidationError:
-        raise UpError(f"{path} contains invalid JSON (or its root is not an object); cannot proceed safely.")
-
-
-def merge_claude_settings(
-    settings: Mapping[str, JsonValue], base_url: str, api_key_helper: str
-) -> dict[str, JsonValue]:
-    """Return a new settings dict wired to route Claude Code through the proxy.
-
-    Only env.ANTHROPIC_BASE_URL and the top-level apiKeyHelper are overridden; a
-    stray env.ANTHROPIC_API_KEY is dropped so it cannot outrank the helper-issued
-    token (same reasoning as build_agent_env in agents.py). Every other key is
-    preserved untouched.
-    """
-    raw_env: Final = settings.get(ENV_KEY, {})
-    base_env: Final = raw_env if isinstance(raw_env, dict) else {}
-    env: Final = {**base_env, ANTHROPIC_BASE_URL_KEY: base_url.rstrip("/")}
-    env.pop(ANTHROPIC_API_KEY_KEY, None)
-    return {**settings, ENV_KEY: env, API_KEY_HELPER_KEY: api_key_helper}
 
 
 @contextlib.contextmanager
@@ -134,26 +101,6 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
         resolved_settings_path.unlink()
     resolved_backup_path.unlink()
     return record
-
-
-def resolve_api_key_helper(base_url: str) -> str:
-    """Build the shell command Claude Code should run for its apiKeyHelper.
-
-    Resolves `lite` to an absolute path so the helper works regardless of the
-    PATH visible to whatever subprocess Claude Code spawns it from. Passing
-    --base-url explicitly (rather than relying on the bare invocation Claude
-    Code would otherwise use) makes `print-token` enforce that the cached
-    token was actually issued for this proxy -- without it, a token minted
-    for a different, previously-logged-into proxy would be handed to
-    whichever server `up` currently points at.
-    """
-    lite_path: Final = shutil.which("lite")
-    if lite_path is None:
-        raise UpError(
-            "Could not find `lite` on your PATH. Claude Code's apiKeyHelper needs "
-            "an absolute path to it, so `lite up` cannot continue."
-        )
-    return f"{shlex.quote(lite_path)} auth print-token --base-url {shlex.quote(base_url)}"
 
 
 def _ensure_fresh_login(ctx: click.Context) -> None:
@@ -224,7 +171,7 @@ def up(ctx: click.Context) -> None:
         merged: Final = merge_claude_settings(original_settings, base_url, api_key_helper)
         with open(CLAUDE_SETTINGS_PATH, "w") as f:
             json.dump(merged, f, indent=2)
-    except (AgentRunError, UpError) as e:
+    except (AgentRunError, ClaudeSettingsError) as e:
         raise click.ClickException(str(e))
 
     click.echo(f"litellm: routing Claude Code through proxy at {base_url.rstrip('/')}")
@@ -241,7 +188,7 @@ def up(ctx: click.Context) -> None:
             return
         try:
             _restore_and_report()
-        except UpError as e:
+        except ClaudeSettingsError as e:
             # Runs from atexit/a signal handler, outside Click's own exception
             # handling -- raising here would only produce an unhandled-exception
             # warning on stderr, not a clean message.
@@ -264,7 +211,7 @@ def down() -> None:
     """
     try:
         _restore_and_report()
-    except UpError as e:
+    except ClaudeSettingsError as e:
         raise click.ClickException(str(e))
 
 
@@ -272,6 +219,7 @@ __all__ = [
     "BACKUP_PATH",
     "CLAUDE_SETTINGS_PATH",
     "BackupRecord",
+    "ClaudeSettingsError",
     "UpError",
     "down",
     "load_json_or_empty",
