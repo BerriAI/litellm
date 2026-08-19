@@ -19,6 +19,7 @@ import logging
 import os
 import sys
 from types import MappingProxyType
+from typing import Final
 
 import httpx
 import pytest
@@ -874,9 +875,25 @@ async def test_output_file_content_vertex_foreign_bucket_rejected_by_real_valida
 async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monkeypatch):
     import litellm.files.main as files_main
 
+    model: Final = "batch-priced-test-model"
+    litellm.register_model(
+        {
+            f"vertex_ai/{model}": {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_token": 2e-06,
+                "output_cost_per_token": 8e-06,
+                "input_cost_per_token_batches": 3e-07,
+                "output_cost_per_token_batches": 5e-07,
+                "cache_read_input_token_cost": 0.0,
+                "cache_creation_input_token_cost": 0.0,
+            }
+        }
+    )
+
     rows = [
-        _vertex_openai_row("request-1", "gemini-3.6-flash", 10, 5),
-        _vertex_openai_row("request-2", "gemini-3.6-flash", 20, 10),
+        _vertex_openai_row("request-1", model, 10, 5),
+        _vertex_openai_row("request-2", model, 20, 10),
     ]
 
     async def fake_afile_content(**kw):
@@ -891,9 +908,9 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
     )
 
     assert cost > 0
-    assert cost == pytest.approx(30 * 7.5e-07 + 15 * 3.75e-06)
+    assert cost == pytest.approx(30 * 3e-07 + 15 * 5e-07)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
-    assert models == ["gemini-3.6-flash", "gemini-3.6-flash"]
+    assert models == [model, model]
 
 
 @pytest.mark.asyncio
