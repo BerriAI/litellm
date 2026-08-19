@@ -9,6 +9,7 @@ interface TooltipProps {
   children?: React.ReactNode;
   width?: string;
   className?: string;
+  side?: React.ComponentProps<typeof TooltipContent>["side"];
 }
 
 const widthClassNames: Record<string, string> = {
@@ -17,24 +18,26 @@ const widthClassNames: Record<string, string> = {
   auto: "max-w-xs",
 };
 
-export const Tooltip: React.FC<TooltipProps> = ({ content, children, width = "auto", className }) => (
-  <TooltipProvider>
-    <ShadcnTooltip>
-      <TooltipTrigger
-        render={
-          <span
-            className={cn(
-              "inline-flex cursor-help items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              className,
-            )}
-          />
-        }
-      >
-        {children ?? <CircleHelp aria-label="question-circle" className="ml-1 size-4 text-muted-foreground" />}
-      </TooltipTrigger>
-      <TooltipContent className={cn("whitespace-normal", widthClassNames[width] ?? "max-w-xs")}>
-        {content}
-      </TooltipContent>
-    </ShadcnTooltip>
-  </TooltipProvider>
-);
+const triggerClassName = (className?: string): string =>
+  cn(
+    "inline-flex cursor-help items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    className,
+  );
+
+const defaultTrigger = <CircleHelp aria-label="question-circle" className="ml-1 size-4 text-muted-foreground" />;
+
+export const Tooltip: React.FC<TooltipProps> = ({ content, children, width = "auto", className, side }) =>
+  content === undefined || content === null || content === "" ? (
+    <span className={triggerClassName(className)}>{children ?? defaultTrigger}</span>
+  ) : (
+    <TooltipProvider>
+      <ShadcnTooltip>
+        <TooltipTrigger render={<span className={triggerClassName(className)} />}>
+          {children ?? defaultTrigger}
+        </TooltipTrigger>
+        <TooltipContent side={side} className={cn("whitespace-normal", widthClassNames[width] ?? "max-w-xs")}>
+          {content}
+        </TooltipContent>
+      </ShadcnTooltip>
+    </TooltipProvider>
+  );

@@ -1,4 +1,5 @@
-import { Button, Select, Tooltip } from "antd";
+import { Tooltip } from "@/components/atoms/Tooltip";
+import { Button, Select } from "antd";
 import { ArrowDown, Plus, X } from "lucide-react";
 import React, { useState } from "react";
 
@@ -128,10 +129,7 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
                 getPopupContainer={(trigger) => trigger.parentElement || document.body}
                 maxTagCount="responsive"
                 maxTagPlaceholder={(omittedValues) => (
-                  <Tooltip
-                    styles={{ root: { pointerEvents: "none" } }}
-                    title={omittedValues.map(({ value: v }) => v).join(", ")}
-                  >
+                  <Tooltip content={omittedValues.map(({ value: v }) => v).join(", ")}>
                     <span>+{omittedValues.length} more</span>
                   </Tooltip>
                 )}

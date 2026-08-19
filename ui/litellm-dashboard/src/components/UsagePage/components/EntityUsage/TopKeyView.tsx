@@ -3,7 +3,8 @@ import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
-import { Segmented, Tooltip } from "antd";
+import { Tooltip } from "@/components/atoms/Tooltip";
+import { Segmented } from "antd";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
@@ -115,7 +116,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             {displayTags.map((tag, index) => (
               <Tooltip
                 key={index}
-                title={
+                content={
                   <div>
                     <div>
                       <span className="text-gray-300">Tag Name:</span> {tag.tag}

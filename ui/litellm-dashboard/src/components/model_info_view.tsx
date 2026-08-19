@@ -7,7 +7,8 @@ import { KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Button as AntdButton, Modal, Tooltip } from "antd";
+import { Tooltip } from "@/components/atoms/Tooltip";
+import { Button as AntdButton, Modal } from "antd";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
 import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
@@ -685,7 +686,7 @@ export default function ModelInfoView({
               <Card className="block p-6">
                 <p className="text-sm">LiteLLM Model</p>
                 <div className="mt-2 overflow-hidden">
-                  <Tooltip title={modelData.litellm_model_name || "Not Set"}>
+                  <Tooltip content={modelData.litellm_model_name || "Not Set"} className="w-full min-w-0">
                     <div className="break-all text-sm font-medium leading-relaxed cursor-pointer">
                       {modelData.litellm_model_name || "Not Set"}
                     </div>
@@ -751,7 +752,7 @@ export default function ModelInfoView({
                       </Button>
                     )
                   ) : (
-                    <Tooltip title="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
+                    <Tooltip content="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
                       <InfoCircleOutlined />
                     </Tooltip>
                   )}

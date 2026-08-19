@@ -1,5 +1,6 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Tooltip, Typography } from "antd";
+import { Tooltip } from "@/components/atoms/Tooltip";
+import { Select as AntdSelect, Typography } from "antd";
 import React from "react";
 
 const { Text } = Typography;
@@ -18,7 +19,7 @@ const EscalationKeywords: React.FC<EscalationKeywordsProps> = ({ keywords, onCha
         <Typography.Title level={4} style={{ margin: 0 }}>
           Escalation Keywords
         </Typography.Title>
-        <Tooltip title="Case-sensitive phrases a user can include in their message to force a bump to the next-higher complexity tier when they aren't happy with results. They can force a stronger model, but not choose which one.">
+        <Tooltip content="Case-sensitive phrases a user can include in their message to force a bump to the next-higher complexity tier when they aren't happy with results. They can force a stronger model, but not choose which one.">
           <InfoCircleOutlined className="text-gray-400" />
         </Tooltip>
       </div>

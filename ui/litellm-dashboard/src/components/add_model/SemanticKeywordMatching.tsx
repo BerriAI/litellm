@@ -1,5 +1,6 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { InputNumber, Select as AntdSelect, Switch, Tooltip, Typography } from "antd";
+import { Tooltip } from "@/components/atoms/Tooltip";
+import { InputNumber, Select as AntdSelect, Switch, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 
@@ -41,7 +42,7 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <Text className="font-medium">Semantic keyword matching</Text>
-            <Tooltip title="Recognize related phrasing beyond exact keyword matches by comparing embeddings instead of plain text. Overrides direct keyword matching">
+            <Tooltip content="Recognize related phrasing beyond exact keyword matches by comparing embeddings instead of plain text. Overrides direct keyword matching">
               <InfoCircleOutlined className="text-gray-400" />
             </Tooltip>
           </div>

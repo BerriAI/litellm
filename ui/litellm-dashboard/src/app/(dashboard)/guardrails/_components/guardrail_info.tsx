@@ -6,7 +6,8 @@ import {
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CodeOutlined, EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
-import { Button as AntdButton, Tooltip } from "antd";
+import { Tooltip } from "@/components/atoms/Tooltip";
+import { Button as AntdButton } from "antd";
 import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -663,7 +664,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-medium">Guardrail Settings</h3>
                   {isConfigGuardrail && (
-                    <Tooltip title="Guardrail is defined in the config file and cannot be edited.">
+                    <Tooltip content="Guardrail is defined in the config file and cannot be edited.">
                       <InfoCircleOutlined />
                     </Tooltip>
                   )}

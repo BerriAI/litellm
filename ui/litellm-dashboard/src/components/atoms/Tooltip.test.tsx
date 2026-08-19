@@ -43,4 +43,28 @@ describe("Tooltip", () => {
     render(<Tooltip content="Help text" />);
     expect(screen.queryByText("Help text")).not.toBeInTheDocument();
   });
+
+  it("should keep rendering children when there is no content to show", async () => {
+    const user = userEvent.setup();
+    render(
+      <Tooltip content={undefined}>
+        <button>Pick a rubric</button>
+      </Tooltip>,
+    );
+
+    const trigger = screen.getByRole("button", { name: /pick a rubric/i });
+    await user.hover(trigger);
+
+    expect(trigger).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="tooltip-content"]')).toBeNull();
+  });
+
+  it("should place the tooltip on the requested side", async () => {
+    const user = userEvent.setup();
+    render(<Tooltip content="Help text" side="right" />);
+
+    await user.hover(screen.getByLabelText("question-circle"));
+
+    expect(await screen.findByText("Help text")).toHaveAttribute("data-side", "right");
+  });
 });

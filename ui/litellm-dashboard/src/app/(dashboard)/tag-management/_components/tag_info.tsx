@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Tooltip, Button as AntdButton } from "antd";
+import { Tooltip } from "@/components/atoms/Tooltip";
+import { Button as AntdButton } from "antd";
 import { z } from "zod/v4";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
@@ -280,7 +281,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                     ) : (
                       tagDetails.models.map((modelId) => (
                         <Badge key={modelId} variant="secondary">
-                          <Tooltip title={`ID: ${modelId}`}>{tagDetails.model_info?.[modelId] || modelId}</Tooltip>
+                          <Tooltip content={`ID: ${modelId}`}>{tagDetails.model_info?.[modelId] || modelId}</Tooltip>
                         </Badge>
                       ))
                     )}
