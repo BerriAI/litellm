@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CreateUserButton } from "./CreateUserButton";
 import * as networking from "./networking";
 import { toast } from "@/lib/toast";
+import { chooseSelectOption } from "../../tests/test-utils";
 
 vi.mock("./networking", () => ({
   userCreateCall: vi.fn(),
@@ -102,8 +103,8 @@ describe("CreateUserButton", () => {
       };
       renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={possibleUIRoles} isEmbedded />);
       await userEvent.click(screen.getByRole("combobox", { name: /user role/i }));
-      expect(screen.getByText("Admin")).toBeInTheDocument();
-      expect(screen.getByText("User")).toBeInTheDocument();
+      expect(await screen.findByRole("option", { name: /^Admin/ })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /^User/ })).toBeInTheDocument();
     });
 
     it("should close modal when cancel is clicked in standalone mode", async () => {
@@ -141,8 +142,7 @@ describe("CreateUserButton", () => {
       );
 
       await user.type(screen.getByLabelText(/user email/i), "test@example.com");
-      await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: /user role/i }), "User");
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -172,8 +172,7 @@ describe("CreateUserButton", () => {
       );
 
       await user.type(screen.getByLabelText(/user email/i), "embedded@example.com");
-      await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: /user role/i }), "User");
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -194,8 +193,7 @@ describe("CreateUserButton", () => {
       );
 
       await user.type(screen.getByLabelText(/user email/i), "duplicate@example.com");
-      await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: /user role/i }), "User");
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -221,8 +219,7 @@ describe("CreateUserButton", () => {
       );
 
       await user.type(screen.getByLabelText(/user email/i), "info@example.com");
-      await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: /user role/i }), "User");
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -252,8 +249,7 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "standalone@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "User");
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
@@ -281,8 +277,7 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "sso@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "User");
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
@@ -321,13 +316,10 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "org@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "User");
 
-      // Select org from the dropdown
       const orgSelect = within(dialog).getByRole("combobox", { name: /organization/i });
-      await user.click(orgSelect);
-      await user.click(screen.getByText("My Org (org-1)"));
+      await chooseSelectOption(user, orgSelect, "My Org (org-1)");
 
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
@@ -368,8 +360,7 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "nomemberadd@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "User");
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
@@ -393,8 +384,7 @@ describe("CreateUserButton", () => {
       );
 
       await user.type(screen.getByLabelText(/user email/i), "default@example.com");
-      await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: /user role/i }), "User");
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -421,8 +411,7 @@ describe("CreateUserButton", () => {
       );
 
       await user.type(screen.getByLabelText(/user email/i), "off@example.com");
-      await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: /user role/i }), "User");
       await user.click(screen.getByRole("checkbox", { name: /send invitation email/i }));
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
@@ -457,8 +446,7 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "standalone-default@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "User");
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
@@ -492,8 +480,7 @@ describe("CreateUserButton", () => {
 
       const dialog = screen.getByRole("dialog", { name: /invite user/i });
       await user.type(within(dialog).getByLabelText(/user email/i), "standalone-off@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "User");
       await user.click(within(dialog).getByRole("checkbox", { name: /send invitation email/i }));
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
@@ -547,8 +534,7 @@ describe("CreateUserButton", () => {
       const dialog = await openStandaloneModal(user);
 
       await user.type(within(dialog).getByLabelText(/user email/i), "parity@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "User");
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
@@ -581,8 +567,7 @@ describe("CreateUserButton", () => {
       renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} isEmbedded />);
 
       await user.type(screen.getByLabelText(/user email/i), "embedded-parity@example.com");
-      await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: /user role/i }), "User");
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -613,8 +598,7 @@ describe("CreateUserButton", () => {
       renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} isEmbedded />);
 
       await user.type(screen.getByLabelText(/user email/i), "admin-parity@example.com");
-      await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("Admin"));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: /user role/i }), "Admin");
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
       await waitFor(() => {
@@ -645,10 +629,8 @@ describe("CreateUserButton", () => {
       const dialog = await openStandaloneModal(user);
 
       await user.type(within(dialog).getByLabelText(/user email/i), "org-parity@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
-      await user.click(within(dialog).getByRole("combobox", { name: /organization/i }));
-      await user.click(screen.getByText("My Org (org-1)"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "User");
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /organization/i }), "My Org (org-1)");
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
@@ -674,8 +656,7 @@ describe("CreateUserButton", () => {
       renderWithProviders(<CreateUserButton {...defaultProps} possibleUIRoles={ROLES} isEmbedded />);
 
       await user.type(screen.getByLabelText(/user email/i), "meta-parity@example.com");
-      await user.click(screen.getByRole("combobox", { name: /user role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: /user role/i }), "User");
       await user.type(screen.getByLabelText(/metadata/i), '{{"a":1}');
       await user.click(screen.getByRole("button", { name: /create user/i }));
 
@@ -693,8 +674,7 @@ describe("CreateUserButton", () => {
       const dialog = await openStandaloneModal(user);
 
       await user.type(within(dialog).getByLabelText(/user email/i), "standalone-admin@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("Admin"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "Admin");
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
 
       await waitFor(() => {
@@ -711,9 +691,7 @@ describe("CreateUserButton", () => {
     });
 
     it("should discard models picked in the personal key section once it is collapsed again", async () => {
-      // antd paints its Select placeholder with pointer-events: none, so the
-      // default check would reject the very click a real user makes on it.
-      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const user = userEvent.setup();
       mockUserCreateCall.mockResolvedValue({ data: { u: "u7" } });
       mockInvitationCreateCall.mockResolvedValue({ id: "i7", user_id: "u7", has_user_setup_sso: false } as any);
 
@@ -721,17 +699,11 @@ describe("CreateUserButton", () => {
       const dialog = await openStandaloneModal(user);
 
       await user.type(within(dialog).getByLabelText(/user email/i), "collapsed@example.com");
-      await user.click(within(dialog).getByRole("combobox", { name: /global proxy role/i }));
-      await user.click(screen.getByText("User"));
+      await chooseSelectOption(user, within(dialog).getByRole("combobox", { name: /global proxy role/i }), "User");
 
       await user.click(within(dialog).getByText("Personal Key Creation"));
-      // antd Select exposes no accessible name here, the migrated combobox does,
-      // so the same test has to reach the control either way.
-      const modelsSelect =
-        within(dialog).queryByRole("combobox", { name: /select models/i }) ??
-        (await within(dialog).findByText("Select models"));
-      await user.click(modelsSelect);
-      await user.click(await screen.findByText("All Proxy Models"));
+      await user.click(within(dialog).getByRole("combobox", { name: /select models/i }));
+      await user.click(await screen.findByRole("option", { name: "All Proxy Models" }));
       await user.click(within(dialog).getByText("Personal Key Creation"));
 
       await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
