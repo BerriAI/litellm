@@ -1,5 +1,6 @@
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Button, Select } from "antd";
+import { Select } from "antd";
+import { Button } from "@/components/ui/button";
 import { ArrowDown, Plus, X } from "lucide-react";
 import React, { useState } from "react";
 
@@ -62,7 +63,8 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
         <div className="text-xs text-gray-500 mb-2">
           When a model exceeds its per-model budget, requests automatically reroute to fallback models
         </div>
-        <Button size="small" onClick={addEntry} icon={<Plus className="w-3 h-3" />}>
+        <Button variant="outline" size="sm" onClick={addEntry}>
+          <Plus className="w-3 h-3" />
           Add Budget Fallback
         </Button>
       </div>
@@ -143,7 +145,8 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
           </div>
         );
       })}
-      <Button size="small" onClick={addEntry} icon={<Plus className="w-3 h-3" />}>
+      <Button variant="outline" size="sm" onClick={addEntry}>
+        <Plus className="w-3 h-3" />
         Add Budget Fallback
       </Button>
     </div>

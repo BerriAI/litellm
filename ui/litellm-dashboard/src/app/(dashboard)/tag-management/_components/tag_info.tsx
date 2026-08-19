@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Button as AntdButton } from "antd";
 import { z } from "zod/v4";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
@@ -230,17 +229,18 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
             <span className="font-mono px-2 py-1 bg-muted rounded-sm text-sm border border-border">
               {tagDetails.name}
             </span>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["tag-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={() => copyToClipboard(tagDetails.name, "tag-name")}
               className={`transition-all duration-200 ${
                 copiedStates["tag-name"]
                   ? "text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950 dark:border-green-800"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
-            />
+            >
+              {copiedStates["tag-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            </Button>
           </div>
           <p className="text-sm text-muted-foreground">{tagDetails.description || "No description"}</p>
         </div>
