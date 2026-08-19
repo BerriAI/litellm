@@ -8,13 +8,14 @@ const INDEX_HINT = "(Optional) If set litellm will mark the message at this inde
 
 const ONE_POINT: CacheControlInjectionPoint[] = [{ location: "message" }];
 
-const hintTrigger = (fieldLabel: string): Element => {
-  const label = screen.getByText(fieldLabel);
-  const trigger = label.parentElement?.querySelector('[aria-label="question-circle"]');
-  if (!(trigger instanceof Element)) {
-    throw new Error(`no hint trigger beside the ${fieldLabel} label`);
+const tabTo = async (user: ReturnType<typeof userEvent.setup>, name: string): Promise<void> => {
+  for (let step = 0; step < 8; step++) {
+    await user.tab();
+    if (document.activeElement === screen.getByRole("button", { name })) {
+      return;
+    }
   }
-  return trigger;
+  throw new Error(`${name} is not reachable by keyboard`);
 };
 
 describe("CacheControlInjectionPoints field hints", () => {
@@ -22,7 +23,7 @@ describe("CacheControlInjectionPoints field hints", () => {
     const user = userEvent.setup();
     render(<CacheControlInjectionPoints value={ONE_POINT} onChange={vi.fn()} />);
 
-    await user.hover(hintTrigger("Role"));
+    await user.hover(screen.getByRole("button", { name: "Role help" }));
 
     expect(await screen.findByText(ROLE_HINT)).toBeInTheDocument();
   });
@@ -31,12 +32,30 @@ describe("CacheControlInjectionPoints field hints", () => {
     const user = userEvent.setup();
     render(<CacheControlInjectionPoints value={ONE_POINT} onChange={vi.fn()} />);
 
-    await user.hover(hintTrigger("Index"));
+    await user.hover(screen.getByRole("button", { name: "Index help" }));
 
     expect(await screen.findByText(INDEX_HINT)).toBeInTheDocument();
   });
 
-  it("keeps both hints behind a hover rather than rendering them inline", () => {
+  it("reveals the Role hint on keyboard focus, so it is reachable without a pointer", async () => {
+    const user = userEvent.setup();
+    render(<CacheControlInjectionPoints value={ONE_POINT} onChange={vi.fn()} />);
+
+    await tabTo(user, "Role help");
+
+    expect(await screen.findByText(ROLE_HINT)).toBeInTheDocument();
+  });
+
+  it("reveals the Index hint on keyboard focus, so it is reachable without a pointer", async () => {
+    const user = userEvent.setup();
+    render(<CacheControlInjectionPoints value={ONE_POINT} onChange={vi.fn()} />);
+
+    await tabTo(user, "Index help");
+
+    expect(await screen.findByText(INDEX_HINT)).toBeInTheDocument();
+  });
+
+  it("keeps both hints behind a hover or a focus rather than rendering them inline", () => {
     render(<CacheControlInjectionPoints value={ONE_POINT} onChange={vi.fn()} />);
 
     expect(screen.queryByText(ROLE_HINT)).not.toBeInTheDocument();
@@ -48,9 +67,8 @@ describe("CacheControlInjectionPoints field hints", () => {
       <CacheControlInjectionPoints value={[{ location: "message" }, { location: "message" }]} onChange={vi.fn()} />,
     );
 
-    expect(screen.getAllByText("Role")).toHaveLength(2);
-    expect(screen.getAllByText("Index")).toHaveLength(2);
-    expect(screen.getAllByLabelText("question-circle")).toHaveLength(4);
+    expect(screen.getAllByRole("button", { name: "Role help" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Index help" })).toHaveLength(2);
   });
 
   it("still reports a typed index as a string through onChange", async () => {
