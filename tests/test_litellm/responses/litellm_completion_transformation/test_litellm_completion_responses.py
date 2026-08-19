@@ -2537,24 +2537,24 @@ class TestUsageTransformation:
         assert response_usage.output_tokens_details.text_tokens == 50
         assert response_usage.output_tokens_details.image_tokens == 100
 
-    def test_reasoning_tokens_not_forced_to_zero_when_absent(self):
-        # Regression: previously the else branch wrote reasoning_tokens=0 even when
-        # completion_tokens_details had no reasoning (reasoning_tokens=None). That caused
-        # the proxy to always report reasoning_tokens=0 for non-thinking responses.
+    def test_reasoning_tokens_defaults_to_zero_when_absent_but_other_details_present(self):
+        # Regression for #37264: when output_tokens_details is populated (e.g. text_tokens is
+        # present) but reasoning_tokens is absent, OpenAI Responses schema requires reasoning_tokens
+        # to be 0. Codex aborts with "missing field reasoning_tokens" otherwise.
         usage = Usage(
             prompt_tokens=10,
             completion_tokens=50,
             total_tokens=60,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 text_tokens=50,
-                # reasoning_tokens intentionally absent -> None
+                # reasoning_tokens intentionally absent -> None (Gemini no-thinking case)
             ),
         )
 
         chat_completion_response = ModelResponse(
             id="test-response-id",
             created=1234567890,
-            model="claude-haiku-4-5",
+            model="gemini-3.7-flash",
             object="chat.completion",
             usage=usage,
             choices=[
@@ -2571,7 +2571,8 @@ class TestUsageTransformation:
         )
 
         assert response_usage.output_tokens_details is not None
-        assert response_usage.output_tokens_details.reasoning_tokens is None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
+        assert response_usage.output_tokens_details.text_tokens == 50
 
     def test_reasoning_tokens_preserved_when_thinking_occurred(self):
         # Regression: reasoning_tokens must survive the chat->responses translation
