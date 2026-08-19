@@ -3047,6 +3047,8 @@ class ProxyBaseLLMRequestProcessing:
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         _log_llm_api_exception(e)
+        # Capture before post_call_failure_hook pops it from the request data
+        _litellm_logging_obj: Final[LiteLLMLoggingObj | None] = self.data.get("litellm_logging_obj", None)
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -3066,7 +3068,6 @@ class ProxyBaseLLMRequestProcessing:
         timeout: Final = getattr(
             e, "timeout", None
         )  # returns the timeout set by the wrapper. Used for testing if model-specific timeout are set correctly
-        _litellm_logging_obj: Final[LiteLLMLoggingObj | None] = self.data.get("litellm_logging_obj", None)
 
         # Attempt to get model_id from logging object
         #
@@ -3627,10 +3628,12 @@ class ProxyBaseLLMRequestProcessing:
                         model_info = metadata.get("model_info") or {}
                         model_id = model_info.get("id", None)
 
-        # 3. Final fallback to self.data["litellm_metadata"] (for routes like /v1/responses that populate data before error)
+        # 3. Final fallback to request metadata (the router stamps the selected
+        # deployment's model_info there; "litellm_metadata" covers routes like /v1/responses)
         if not model_id:
-            litellm_metadata: Final = self.data.get("litellm_metadata", {}) or {}
-            model_info = litellm_metadata.get("model_info", {}) or {}
-            model_id = model_info.get("id", None)
+            fallback_model_infos: Final = (
+                (self.data.get(key) or {}).get("model_info") or {} for key in ("metadata", "litellm_metadata")
+            )
+            model_id = next((info.get("id") for info in fallback_model_infos if info.get("id")), None)
 
         return model_id

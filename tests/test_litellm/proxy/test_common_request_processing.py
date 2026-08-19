@@ -2737,6 +2737,42 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "500"
 
+    async def test_error_headers_keep_model_id_after_failure_hook_pops_logging_obj(self):
+        """post_call_failure_hook pops litellm_logging_obj from the request data;
+        the exception handler must capture it first so error responses (e.g. 429s
+        on /v1/embeddings) still carry x-litellm-model-id. Regression for the
+        embeddings deployment-id report (2026-08-19)."""
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-abc"
+        logging_obj.litellm_params = {"model_info": {"id": "my-embed-deployment-id"}}
+        data = {"litellm_logging_obj": logging_obj}
+        processor = ProxyBaseLLMRequestProcessing(data=data)
+
+        async def popping_hook(user_api_key_dict, original_exception, request_data):
+            request_data.pop("litellm_logging_obj", None)
+            return None
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=popping_hook)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        with pytest.raises(ProxyException) as exc_info:
+            await processor._handle_llm_api_exception(
+                e=ValueError("provider 429"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        assert exc_info.value.headers["x-litellm-model-id"] == "my-embed-deployment-id"
+        assert exc_info.value.headers["x-litellm-call-id"] == "call-abc"
+
+    async def test_maybe_get_model_id_falls_back_to_request_metadata(self):
+        """The router stamps the selected deployment's model_info into the request
+        metadata; without a logging object that is the last place the id survives."""
+        processor = ProxyBaseLLMRequestProcessing(data={"metadata": {"model_info": {"id": "dep-from-metadata"}}})
+        assert processor.maybe_get_model_id(None) == "dep-from-metadata"
+
     async def test_already_normalized_proxy_exception_is_honored(self):
         """A ProxyException raised mid-request (e.g. a guardrail block) is already
         the OpenAI wire format. The funnel must re-raise it untouched instead of
