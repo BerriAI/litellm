@@ -12,6 +12,12 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class DashScopeChatConfig(OpenAIGPTConfig):
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a list
+        return [  # mutable-ok: base class contract returns a list
+            *super().get_supported_openai_params(model=model),
+            "reasoning_effort",
+        ]
+
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,

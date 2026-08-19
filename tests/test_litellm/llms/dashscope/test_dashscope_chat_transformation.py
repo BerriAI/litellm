@@ -169,6 +169,21 @@ class TestDashScopeConfig:
 
         assert transformed_messages[0].get("cache_control") == {"type": "ephemeral"}
 
+    @pytest.mark.parametrize("reasoning_effort", ["none", "minimal", "low", "high"])
+    def test_dashscope_forwards_reasoning_effort(self, reasoning_effort: str):
+        """DashScope supports reasoning_effort, so it must reach the provider instead of being dropped."""
+        assert "reasoning_effort" in DashScopeChatConfig().get_supported_openai_params(
+            model="qwen3.7-plus"
+        )
+
+        optional_params = litellm.get_optional_params(
+            model="qwen3.7-plus",
+            custom_llm_provider="dashscope",
+            reasoning_effort=reasoning_effort,
+        )
+
+        assert optional_params["reasoning_effort"] == reasoning_effort
+
     def test_dashscope_preserves_cache_control_in_tools(self):
         """DashScope should NOT strip cache_control from tools."""
         config = DashScopeChatConfig()
