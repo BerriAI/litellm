@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
-import { Card, Select as AntdSelect, Modal } from "antd";
+import { Card, Select as AntdSelect } from "antd";
 import { ChevronDown, ChevronRight, CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
 import { FieldGroup } from "@/components/shared/form/field";
@@ -57,6 +57,7 @@ import {
   PresetPrefill,
   AutoRouterPreset,
 } from "@/lib/autorouter_presets";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -670,62 +671,69 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         </form>
       </Card>
 
-      <Modal
-        title="Test Routing"
-        open={isRoutingTestVisible}
-        destroyOnHidden
-        onCancel={() => setIsRoutingTestVisible(false)}
-        footer={[
-          <Button key="close" variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
-            Close
-          </Button>,
-        ]}
-        width={760}
-      >
-        {isRoutingTestVisible && (
-          <AutoRouterRoutingTest
-            accessToken={accessToken}
-            config={buildComplexityRouterConfig(complexityRouterConfigParams)}
-            defaultModel={resolveComplexityDefaultModel(
-              complexityRouterConfig.tiers,
-              complexityRouterConfig.default_model,
-            )}
-            routerName={watchedName}
-            teamId={requiresTeamScope ? watchedTeamId : undefined}
-          />
-        )}
-      </Modal>
+      <Dialog open={isRoutingTestVisible} onOpenChange={(open) => !open && setIsRoutingTestVisible(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[760px]">
+          <DialogHeader>
+            <DialogTitle>Test Routing</DialogTitle>
+          </DialogHeader>
+          {isRoutingTestVisible && (
+            <AutoRouterRoutingTest
+              accessToken={accessToken}
+              config={buildComplexityRouterConfig(complexityRouterConfigParams)}
+              defaultModel={resolveComplexityDefaultModel(
+                complexityRouterConfig.tiers,
+                complexityRouterConfig.default_model,
+              )}
+              routerName={watchedName}
+              teamId={requiresTeamScope ? watchedTeamId : undefined}
+            />
+          )}
+          <DialogFooter>
+            {" "}
+            <Button variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
+              Close
+            </Button>
+            , ]
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <Modal
-        title="Connection Test Results"
+      <Dialog
         open={isTestModalVisible}
-        onCancel={() => {
-          setIsTestModalVisible(false);
-          setIsTestingConnection(false);
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsTestModalVisible(false);
+            setIsTestingConnection(false);
+          }
         }}
-        footer={[
-          <Button
-            key="close"
-            variant="outline"
-            onClick={() => {
-              setIsTestModalVisible(false);
-              setIsTestingConnection(false);
-            }}
-          >
-            Close
-          </Button>,
-        ]}
-        width={700}
       >
-        {isTestModalVisible && (
-          <AutoRouterConnectionTest
-            key={connectionTestId}
-            accessToken={accessToken}
-            targets={testTargets}
-            onTestComplete={() => setIsTestingConnection(false)}
-          />
-        )}
-      </Modal>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+          <DialogHeader>
+            <DialogTitle>Connection Test Results</DialogTitle>
+          </DialogHeader>
+          {isTestModalVisible && (
+            <AutoRouterConnectionTest
+              key={connectionTestId}
+              accessToken={accessToken}
+              targets={testTargets}
+              onTestComplete={() => setIsTestingConnection(false)}
+            />
+          )}
+          <DialogFooter>
+            {" "}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsTestModalVisible(false);
+                setIsTestingConnection(false);
+              }}
+            >
+              Close
+            </Button>
+            , ]
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </TooltipProvider>
   );
 };
