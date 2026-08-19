@@ -7,6 +7,7 @@ durations. During-call (moderation) guardrails run concurrently with the LLM
 call and are excluded so they don't inflate the overhead.
 """
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -158,6 +159,25 @@ def test_get_guardrail_overhead_seconds_counts_single_pre_call_dict():
         guardrail_information={"guardrail_mode": "pre_call", "duration": 0.3},
     )
     assert abs(PrometheusLogger._get_guardrail_overhead_seconds(payload) - 0.3) < 1e-6
+
+
+@pytest.mark.parametrize(
+    ("start_time", "end_time"),
+    (
+        (
+            datetime(2026, 8, 14, 12, 0, 0, tzinfo=timezone.utc).replace(tzinfo=None),
+            datetime(2026, 8, 14, 12, 0, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2026, 8, 14, 14, 0, 0, tzinfo=timezone(timedelta(hours=2))),
+            datetime(2026, 8, 14, 12, 0, 1, tzinfo=timezone.utc).replace(tzinfo=None),
+        ),
+    ),
+)
+def test_safe_duration_seconds_normalizes_mixed_timezone_awareness(start_time, end_time):
+    logger = PrometheusLogger()
+
+    assert logger._safe_duration_seconds(start_time, end_time) == 1.0
 
 
 def _patch_label_factory(monkeypatch):

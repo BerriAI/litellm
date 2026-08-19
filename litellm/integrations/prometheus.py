@@ -8,7 +8,7 @@ import math
 import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import litellm
@@ -3990,7 +3990,11 @@ class PrometheusLogger(CustomLogger):
         otherwise returns None.
         """
         if isinstance(start_time, datetime) and isinstance(end_time, datetime):
-            return (end_time - start_time).total_seconds()
+            normalized_start: Final = (
+                start_time if start_time.tzinfo is not None else start_time.replace(tzinfo=timezone.utc)
+            )
+            normalized_end: Final = end_time if end_time.tzinfo is not None else end_time.replace(tzinfo=timezone.utc)
+            return (normalized_end - normalized_start).total_seconds()
         return None
 
     @staticmethod
