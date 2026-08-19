@@ -164,7 +164,7 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="summary" className="p-4">
+        <TabsContent value="summary" className="p-4" keepMounted>
           <div>
             <div className="mb-6 flex items-center">
               {response?.status === "healthy" ? (
@@ -228,7 +228,7 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
           </div>
         </TabsContent>
 
-        <TabsContent value="raw" className="p-4">
+        <TabsContent value="raw" className="p-4" keepMounted>
           <div className="rounded-md bg-muted p-4 font-mono text-sm">
             <pre className="whitespace-pre-wrap wrap-break-word overflow-auto max-h-[500px]">
               {(() => {
