@@ -66,13 +66,16 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                   step={0.01}
                   min={0}
                   value={window.max_budget ?? ""}
-                  onChange={(event) =>
-                    updateWindow(
-                      idx,
-                      "max_budget",
-                      event.target.value === "" ? null : Number(event.target.valueAsNumber.toFixed(2)),
-                    )
-                  }
+                  onChange={(event) => {
+                    const typed = event.target.valueAsNumber;
+                    updateWindow(idx, "max_budget", Number.isNaN(typed) ? null : typed);
+                  }}
+                  onBlur={(event) => {
+                    const typed = event.target.valueAsNumber;
+                    if (!Number.isNaN(typed)) {
+                      updateWindow(idx, "max_budget", Number(typed.toFixed(2)));
+                    }
+                  }}
                   placeholder="Max spend ($)"
                 />
               </InputGroup>
