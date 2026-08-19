@@ -403,6 +403,66 @@ class TestAgentCoreSearch:
         finally:
             os.environ.pop("AGENTCORE_GATEWAY_URL", None)
 
+    @pytest.mark.parametrize(
+        "plaintext_api_base",
+        [
+            "http://gw.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+            "http://internal-gateway.corp/mcp",
+        ],
+    )
+    def test_sign_request_refuses_server_token_over_plaintext_http(self, plaintext_api_base):
+        """A trusted hostname over plain http would expose the bearer token to
+        network observers, so credentials only ride https (or localhost)."""
+        config = AgentCoreSearchConfig()
+        os.environ["AGENTCORE_GATEWAY_TOKEN"] = "env-jwt-token"
+        os.environ["AGENTCORE_GATEWAY_URL"] = plaintext_api_base
+        try:
+            with pytest.raises(ValueError, match="plaintext"):
+                config.sign_request(
+                    headers={},
+                    optional_params={},
+                    request_data={"jsonrpc": "2.0"},
+                    api_base=plaintext_api_base,
+                )
+        finally:
+            os.environ.pop("AGENTCORE_GATEWAY_TOKEN", None)
+            os.environ.pop("AGENTCORE_GATEWAY_URL", None)
+
+    def test_sign_request_refuses_sigv4_over_plaintext_http(self):
+        """Same for SigV4: a signature over plain http is replayable by observers."""
+        config = AgentCoreSearchConfig()
+        os.environ.pop("AGENTCORE_GATEWAY_TOKEN", None)
+        with patch.object(
+            AgentCoreSearchConfig.__mro__[2],  # BaseAWSLLM
+            "_sign_request",
+            return_value=({}, b"{}"),
+        ) as mock_base_sign:
+            with pytest.raises(ValueError, match="plaintext"):
+                config.sign_request(
+                    headers={},
+                    optional_params={"aws_region_name": "us-east-1"},
+                    request_data={"jsonrpc": "2.0"},
+                    api_base="http://gw.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+                )
+            mock_base_sign.assert_not_called()
+
+    def test_sign_request_allows_plain_http_for_localhost(self):
+        """Local development against an MCP stub on 127.0.0.1 keeps working."""
+        config = AgentCoreSearchConfig()
+        os.environ["AGENTCORE_GATEWAY_TOKEN"] = "env-jwt-token"
+        os.environ["AGENTCORE_GATEWAY_URL"] = "http://127.0.0.1:8931/mcp"
+        try:
+            headers, _ = config.sign_request(
+                headers={},
+                optional_params={},
+                request_data={"jsonrpc": "2.0"},
+                api_base="http://127.0.0.1:8931/mcp",
+            )
+            assert headers["Authorization"] == "Bearer env-jwt-token"
+        finally:
+            os.environ.pop("AGENTCORE_GATEWAY_TOKEN", None)
+            os.environ.pop("AGENTCORE_GATEWAY_URL", None)
+
     def test_sign_request_does_not_leak_bedrock_bearer_token(self):
         """AWS_BEARER_TOKEN_BEDROCK is a Bedrock Runtime credential — it must not
         replace SigV4 on requests to an AgentCore gateway."""

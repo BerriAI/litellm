@@ -87,6 +87,14 @@ def _gateway_host_match(api_base: str) -> re.Match[str] | None:
     return _GATEWAY_HOST_PATTERN.fullmatch(httpx.URL(api_base).host)
 
 
+_LOOPBACK_HOSTS: Final = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _credential_safe_transport(api_base: str) -> bool:
+    url: Final = httpx.URL(api_base)
+    return url.scheme == "https" or url.host in _LOOPBACK_HOSTS
+
+
 def _string_field(item: Mapping[str, object], *keys: str) -> str | None:
     return next(
         (value for key in keys if isinstance(value := item.get(key), str) and value),
@@ -258,6 +266,13 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         """
         if not isinstance(request_data, dict):
             raise TypeError("AgentCore search expects a single dict request body")
+
+        if not _credential_safe_transport(api_base):
+            raise ValueError(
+                f"Refusing to send AgentCore credentials over plaintext HTTP to '{api_base}': a bearer "
+                "token or SigV4 signature would be readable in transit. Use an https gateway URL "
+                "(plain http is allowed only for localhost)."
+            )
 
         # Server-managed credentials only go to a trusted host, otherwise an
         # authenticated caller could point api_base at their own server (e.g. via
