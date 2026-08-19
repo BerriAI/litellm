@@ -7,23 +7,30 @@ HTTP, no proxy, no provider spend. Because both fulfil ``Transport``, no test
 or client changes shape; ``build_proxy_client`` picks the transport from
 ``E2E_FIXTURE_MODE`` (live | record | replay, default live).
 
-Replay matches each call by test node id and call order, verifying transport
-verb + path and failing hard on any drift (``ReplayMiss``). Canonical
-content-based match keys are LIT-5741; streaming chunk fidelity is LIT-5742;
-scoping record/replay to provider-bound traffic is LIT-5745.
+Replay matches each call by test node id and canonical content key
+(fixture_canonical.py, LIT-5741): volatile headers, credential fields, unique
+markers, generated ids, and timestamps are canonicalized out before hashing, so
+matching is order-independent across distinct keys, FIFO within a key, and a
+miss fails hard (``ReplayMiss``) printing the computed key and the closest
+recorded key without ever falling through to a live call. Streaming chunk
+fidelity is LIT-5742; scoping record/replay to provider-bound traffic is
+LIT-5745.
 """
 
 from __future__ import annotations
 
+import difflib
 import functools
 import hashlib
 import os
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import islice
 from pathlib import Path
 from typing import Final, Literal, assert_never
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 from e2e_http import AuthHeaders, BinaryStream, ProbeResult, Result, StreamingResponse
 from fixture_bundle import (
@@ -43,12 +50,14 @@ from fixture_bundle import (
     check_freshness,
     format_age,
     from_result,
+    interaction_filename,
     load_bundle,
     prepare_bundle,
     slug_for_test,
     to_json_value,
     to_result,
 )
+from fixture_canonical import CanonicalRequest, canonicalize, is_secret_field
 from transport import Transport
 
 type FixtureMode = Literal["live", "record", "replay"]
@@ -118,6 +127,27 @@ def _redact(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
+def _redact_secret_fields(value: JsonValue) -> JsonValue:
+    match value:
+        case dict():
+            return {
+                key: REDACTED_VALUE
+                if is_secret_field(key) and item is not None
+                else _redact_secret_fields(item)
+                for key, item in value.items()
+            }
+        case list():
+            return [_redact_secret_fields(item) for item in value]
+        case _:
+            return value
+
+
+def _redact_flat(fields: dict[str, str]) -> dict[str, str]:
+    return {
+        key: REDACTED_VALUE if is_secret_field(key) else value for key, value in fields.items()
+    }
+
+
 def recorded_request(
     method: str,
     path: str,
@@ -133,9 +163,9 @@ def recorded_request(
         method=method,
         path=path,
         headers=_redact(_dump_flat(headers)),
-        params=_dump_flat(params),
-        body=None if body is None else to_json_value(body),
-        form=None if form is None else _dump_flat(form),
+        params=_redact_flat(_dump_flat(params)),
+        body=None if body is None else _redact_secret_fields(to_json_value(body)),
+        form=None if form is None else _redact_flat(_dump_flat(form)),
         file_name=file_name,
         file_sha256=None if file_content is None else hashlib.sha256(file_content).hexdigest(),
         file_bytes=None if file_content is None else len(file_content),
@@ -304,46 +334,106 @@ class RecordingTransport:
         return response
 
 
+def _build_pool(recorded: tuple[Interaction, ...]) -> dict[str, deque[Interaction]]:
+    keys: Final = tuple(canonicalize(interaction.request).key for interaction in recorded)
+    return {
+        key: deque(
+            interaction
+            for candidate_key, interaction in zip(keys, recorded, strict=True)
+            if candidate_key == key
+        )
+        for key in dict.fromkeys(keys)
+    }
+
+
+def _closest_recorded(
+    canonical: CanonicalRequest, recorded: tuple[Interaction, ...]
+) -> tuple[CanonicalRequest, str]:
+    candidates: Final = tuple(canonicalize(interaction.request) for interaction in recorded)
+    ratios: Final = tuple(
+        difflib.SequenceMatcher(
+            None, f"{canonical.method} {canonical.path}\n{canonical.content}",
+            f"{candidate.method} {candidate.path}\n{candidate.content}",
+        ).ratio()
+        for candidate in candidates
+    )
+    best: Final = max(range(len(candidates)), key=lambda index: ratios[index])
+    return candidates[best], interaction_filename(best, recorded[best].request)
+
+
+def _miss_message(test_key: str, slug: str, canonical: CanonicalRequest, bundle: LoadedBundle) -> str:
+    recorded: Final = bundle.interactions.get(slug, ())
+    if not recorded:
+        return (
+            f"replay miss for {test_key}: computed key {canonical.key} but nothing is recorded "
+            f"under {slug}; re-record with E2E_FIXTURE_MODE=record"
+        )
+    closest, closest_file = _closest_recorded(canonical, recorded)
+    diff: Final = "\n".join(
+        islice(
+            difflib.unified_diff(
+                closest.pretty_content().splitlines(),
+                canonical.pretty_content().splitlines(),
+                fromfile=f"closest recorded ({closest_file})",
+                tofile="test made",
+                lineterm="",
+            ),
+            60,
+        )
+    )
+    return (
+        f"replay miss for {test_key}: no recorded interaction matches key {canonical.key}; "
+        f"closest recorded key is {closest.key} ({closest_file})\n{diff}\n"
+        "re-record with E2E_FIXTURE_MODE=record"
+    )
+
+
 @dataclass(slots=True)
 class ReplaySource:
-    """One shared cursor set over a loaded bundle, so every client built in the
-    session consumes the same recorded sequence per test."""
+    """One shared pool per test over a loaded bundle, so every client built in
+    the session consumes the same recorded interactions. Calls match by
+    canonical content key: order-independent across distinct keys (concurrent
+    tests interleave calls nondeterministically), FIFO within one key (a poll
+    loop replays its recorded responses in recorded order)."""
 
     bundle: LoadedBundle
-    _cursors: dict[str, int] = field(default_factory=dict)
+    _pools: dict[str, dict[str, deque[Interaction]]] = field(default_factory=dict)
 
-    def next_interaction(self, method: str, path: str) -> Interaction:
-        test_key = current_test_key()
-        slug = slug_for_test(test_key)
-        recorded = self.bundle.interactions.get(slug, ())
-        index = self._cursors.get(slug, 0)
-        if index >= len(recorded):
+    def _pool(self, slug: str) -> dict[str, deque[Interaction]]:
+        if slug not in self._pools:
+            self._pools[slug] = _build_pool(self.bundle.interactions.get(slug, ()))
+        return self._pools[slug]
+
+    def next_interaction(self, request: RecordedRequest) -> Interaction:
+        test_key: Final = current_test_key()
+        slug: Final = slug_for_test(test_key)
+        pool: Final = self._pool(slug)
+        canonical: Final = canonicalize(request)
+        queue: Final = pool.get(canonical.key)
+        if queue is None:
+            raise ReplayMiss(_miss_message(test_key, slug, canonical, self.bundle))
+        if not queue:
             raise ReplayMiss(
-                f"replay exhausted for {test_key}: call #{index + 1} ({method} {path}) has no recorded "
-                f"interaction ({len(recorded)} recorded under {slug}); re-record with E2E_FIXTURE_MODE=record"
+                f"replay exhausted for {test_key}: every recorded interaction for key "
+                f"{canonical.key} is already consumed; re-record with E2E_FIXTURE_MODE=record"
             )
-        interaction = recorded[index]
-        if interaction.request.method != method or interaction.request.path != path:
-            raise ReplayMiss(
-                f"replay mismatch for {test_key} at call #{index + 1}: recorded "
-                f"{interaction.request.method} {interaction.request.path}, test made {method} {path}; "
-                "re-record with E2E_FIXTURE_MODE=record"
-            )
-        self._cursors[slug] = index + 1
-        return interaction
+        return queue.popleft()
 
     def leftover_error(self, test_key: str) -> str | None:
         """Non-None when the test consumed fewer interactions than were recorded,
         meaning a passing replay proved less than the bundle claims."""
-        slug = slug_for_test(test_key)
-        recorded = self.bundle.interactions.get(slug, ())
-        consumed = self._cursors.get(slug, 0)
-        if consumed >= len(recorded):
+        slug: Final = slug_for_test(test_key)
+        recorded: Final = self.bundle.interactions.get(slug, ())
+        if not recorded:
             return None
-        pending = recorded[consumed]
+        leftover: Final = tuple(
+            interaction for queue in self._pool(slug).values() for interaction in queue
+        )
+        if not leftover:
+            return None
         return (
-            f"replay incomplete for {test_key}: {len(recorded) - consumed} of {len(recorded)} recorded "
-            f"interactions never consumed, next is {pending.request.method} {pending.request.path}; "
+            f"replay incomplete for {test_key}: {len(leftover)} of {len(recorded)} recorded "
+            f"interactions never consumed, e.g. {canonicalize(leftover[0].request).key}; "
             "re-record with E2E_FIXTURE_MODE=record"
         )
 
@@ -386,7 +476,12 @@ class ReplayTransport:
     def post[R: BaseModel](
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]:
-        return to_result(_expect_result(self.source.next_interaction("post", path)), response_type)
+        return to_result(
+            _expect_result(
+                self.source.next_interaction(recorded_request("post", path, headers=headers, body=json))
+            ),
+            response_type,
+        )
 
     def get[R: BaseModel](
         self,
@@ -397,7 +492,12 @@ class ReplayTransport:
         response_type: type[R],
         timeout: float | None = None,
     ) -> Result[R]:
-        return to_result(_expect_result(self.source.next_interaction("get", path)), response_type)
+        return to_result(
+            _expect_result(
+                self.source.next_interaction(recorded_request("get", path, headers=headers, params=params))
+            ),
+            response_type,
+        )
 
     def delete[R: BaseModel](
         self,
@@ -408,25 +508,46 @@ class ReplayTransport:
         response_type: type[R],
         params: BaseModel | None = None,
     ) -> Result[R]:
-        return to_result(_expect_result(self.source.next_interaction("delete", path)), response_type)
+        return to_result(
+            _expect_result(
+                self.source.next_interaction(
+                    recorded_request("delete", path, headers=headers, body=json, params=params)
+                )
+            ),
+            response_type,
+        )
 
     def patch[R: BaseModel](
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]:
-        return to_result(_expect_result(self.source.next_interaction("patch", path)), response_type)
+        return to_result(
+            _expect_result(
+                self.source.next_interaction(recorded_request("patch", path, headers=headers, body=json))
+            ),
+            response_type,
+        )
 
     def put[R: BaseModel](
         self, path: str, *, headers: BaseModel, json: BaseModel, response_type: type[R]
     ) -> Result[R]:
-        return to_result(_expect_result(self.source.next_interaction("put", path)), response_type)
+        return to_result(
+            _expect_result(
+                self.source.next_interaction(recorded_request("put", path, headers=headers, body=json))
+            ),
+            response_type,
+        )
 
     def stream(self, path: str, *, headers: BaseModel, json: BaseModel) -> StreamingResponse:
-        return _expect_streaming(self.source.next_interaction("stream", path))
+        return _expect_streaming(
+            self.source.next_interaction(recorded_request("stream", path, headers=headers, body=json))
+        )
 
     def stream_binary(
         self, path: str, *, headers: BaseModel, json: BaseModel, chunk_size: int = 8192
     ) -> BinaryStream:
-        interaction = self.source.next_interaction("stream_binary", path)
+        interaction = self.source.next_interaction(
+            recorded_request("stream_binary", path, headers=headers, body=json)
+        )
         match interaction.response:
             case RecordedBinary(payload=payload):
                 return payload
@@ -444,10 +565,16 @@ class ReplayTransport:
         params: BaseModel | None = None,
         stream: bool = False,
     ) -> StreamingResponse:
-        return _expect_streaming(self.source.next_interaction("send", path))
+        return _expect_streaming(
+            self.source.next_interaction(
+                recorded_request("send", path, headers=headers, body=json, params=params)
+            )
+        )
 
     def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
-        interaction = self.source.next_interaction("probe", path)
+        interaction = self.source.next_interaction(
+            recorded_request("probe", path, headers=self.master, params=params)
+        )
         match interaction.response:
             case RecordedProbe(payload=payload):
                 return payload
@@ -467,10 +594,27 @@ class ReplayTransport:
         params: BaseModel | None = None,
         response_type: type[R],
     ) -> Result[R]:
-        return to_result(_expect_result(self.source.next_interaction("upload", path)), response_type)
+        return to_result(
+            _expect_result(
+                self.source.next_interaction(
+                    recorded_request(
+                        "upload",
+                        path,
+                        headers=headers,
+                        params=params,
+                        form=form,
+                        file_name=filename,
+                        file_content=content,
+                    )
+                )
+            ),
+            response_type,
+        )
 
     def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:
-        return _expect_streaming(self.source.next_interaction("download", path))
+        return _expect_streaming(
+            self.source.next_interaction(recorded_request("download", path, headers=headers))
+        )
 
 
 @functools.lru_cache(maxsize=8)
