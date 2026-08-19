@@ -42,6 +42,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
     _obo_retry_applies,
+    _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
     _without_authorization,
 )
@@ -10664,3 +10665,103 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
         assert resolved.registration_url == "https://idp.example.com/register"
         assert manager.config_mcp_servers[server.server_id].authorization_url == "https://idp.example.com/authorize"
         assert manager._oauth_discovery_slot(server.server_id) is None
+
+
+class TestResolveOpenapiToolAuth:
+    """The credential matrix for a ``spec_path`` server's two OpenAPI dispatch arms.
+
+    A per-server ``x-mcp-{alias}-authorization`` is already a complete header value and is forwarded
+    verbatim; a BYOK credential is a raw secret that takes the auth-type prefix. Conflating them
+    ships ``Bearer Bearer <token>``, so every cell pins which of the two a value came from.
+    """
+
+    @staticmethod
+    def _server(auth_type: MCPAuthType = MCPAuth.oauth_delegate) -> MCPServer:
+        return MCPServer(
+            server_id="srv-openapi",
+            name="report_api",
+            server_name="report_api",
+            alias="report_api",
+            url="https://api.internal.example.com",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+            spec_path="https://api.internal.example.com/openapi.json",
+            extra_headers=["X-Tenant"],
+        )
+
+    @pytest.mark.parametrize(
+        "per_server, byok, expected_auth, expected_extra_keys, expected_credential",
+        [
+            (
+                {"report_api": "Bearer caller-token"},
+                None,
+                "Bearer caller-token",
+                {"X-Tenant"},
+                "Bearer caller-token",
+            ),
+            (
+                {"report_api": {"Authorization": "Bearer caller-token", "X-Trace": "abc"}},
+                None,
+                "Bearer caller-token",
+                {"X-Tenant", "X-Trace"},
+                {"Authorization": "Bearer caller-token", "X-Trace": "abc"},
+            ),
+            (
+                {"report_api": {"X-Api-Key": "k1"}},
+                "byok-secret",
+                "Bearer byok-secret",
+                {"X-Tenant", "X-Api-Key"},
+                "byok-secret",
+            ),
+            ({"report_api": {"X-Api-Key": "k1"}}, None, None, {"X-Tenant", "X-Api-Key"}, None),
+            (None, "byok-secret", "Bearer byok-secret", {"X-Tenant"}, "byok-secret"),
+            (None, None, None, {"X-Tenant"}, None),
+            ({"other_server": "Bearer wrong"}, None, None, {"X-Tenant"}, None),
+        ],
+    )
+    def test_credential_matrix(
+        self,
+        per_server: dict | None,
+        byok: str | None,
+        expected_auth: str | None,
+        expected_extra_keys: set,
+        expected_credential: object,
+    ):
+        auth_value, forwarded, credential = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header=byok,
+            mcp_server_auth_headers=per_server,
+            raw_headers={"x-tenant": "acme", "authorization": "Bearer admission-key"},
+            user_api_key_auth=None,
+        )
+
+        assert auth_value == expected_auth
+        assert set(forwarded or {}) == expected_extra_keys
+        assert credential == expected_credential
+
+    def test_per_server_value_is_never_re_prefixed(self):
+        """The regression that a naive wiring produces: the caller already sent ``Bearer <token>``."""
+        auth_value, _, credential = _resolve_openapi_tool_auth(
+            mcp_server=self._server(auth_type=MCPAuth.api_key),
+            mcp_auth_header="byok-secret",
+            mcp_server_auth_headers={"report_api": "Bearer caller-token"},
+            raw_headers=None,
+            user_api_key_auth=None,
+        )
+
+        assert auth_value == "Bearer caller-token"
+        assert credential == "Bearer caller-token"
+        assert not auth_value.startswith("ApiKey ")
+
+    def test_per_server_authorization_is_not_also_left_in_forwarded_headers(self):
+        """``resolve_openapi_upstream_auth`` pops Authorization out of the forwarded headers, so a
+        second copy there would give the passthrough arm two sources to reconcile."""
+        _, forwarded, _ = _resolve_openapi_tool_auth(
+            mcp_server=self._server(),
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"report_api": {"Authorization": "Bearer caller-token"}},
+            raw_headers={"x-tenant": "acme"},
+            user_api_key_auth=None,
+        )
+
+        assert "Authorization" not in (forwarded or {})
