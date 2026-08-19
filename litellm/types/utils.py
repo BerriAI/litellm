@@ -1631,8 +1631,20 @@ class PromptTokensDetailsWrapper(
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        extra_fields: Final = self.model_extra
+        nested_cache_creation_input_tokens: Final = (
+            extra_fields.get("cache_creation_input_tokens") if extra_fields is not None else None
+        )
         self.cache_write_tokens = (
-            self.cache_write_tokens if self.cache_write_tokens is not None else self.cache_creation_tokens
+            self.cache_write_tokens
+            if self.cache_write_tokens is not None
+            else (
+                self.cache_creation_tokens
+                if self.cache_creation_tokens is not None
+                else (
+                    nested_cache_creation_input_tokens if isinstance(nested_cache_creation_input_tokens, int) else None
+                )
+            )
         )
         if self.character_count is None:
             del self.character_count

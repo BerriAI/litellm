@@ -4918,3 +4918,51 @@ def test_payload_without_guardrail_cost_is_unchanged(logging_obj):
     assert payload is not None
     assert payload["response_cost"] == pytest.approx(0.0000429)
     assert payload["cost_breakdown"] is None
+
+
+_AWS_SECRET = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"
+_GEMINI_KEY = "AIzaSyC0000000000000000000000000000000"
+
+
+def test_empty_api_base_does_not_dump_call_state(logging_obj):
+    """Direct (non-HTTP) providers pass api_base='', which used to echo model_call_details."""
+    logging_obj.model_call_details["litellm_params"] = {
+        "api_key": "sk-proj-hunter2hunter2hunter2hunter2",
+        "aws_secret_access_key": _AWS_SECRET,
+    }
+
+    curl_command = logging_obj._get_request_curl_command(
+        api_base="",
+        headers={},
+        additional_args={},
+        data={"model": "some-model"},
+    )
+
+    assert "litellm_call_id" not in curl_command
+    assert _AWS_SECRET not in curl_command
+    assert "hunter2" not in curl_command
+
+
+def test_pre_call_redacts_and_masks_raw_request(logging_obj):
+    """log_raw_request_response echoes the request body and api_base back to loggers/UI."""
+    metadata = {"user_api_key_alias": "qa-key"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+    logging_obj.log_raw_request_response = True
+
+    logging_obj.pre_call(
+        input="hi",
+        api_key="",
+        additional_args={
+            "api_base": f"https://generativelanguage.googleapis.com/v1beta/models/x:generateContent?key={_GEMINI_KEY}",
+            "headers": {},
+            "complete_input_dict": {"aws_secret_access_key": _AWS_SECRET},
+        },
+    )
+
+    raw_request = metadata["raw_request"]
+    assert _AWS_SECRET not in raw_request
+    assert "REDACTED" in raw_request
+
+    raw_api_base = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_api_base"]
+    assert _GEMINI_KEY not in raw_api_base
+    assert "key=*****" in raw_api_base

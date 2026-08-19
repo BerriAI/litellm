@@ -1,6 +1,8 @@
 import React from "react";
-import { Button, Checkbox, Form, Input } from "antd";
+import { Button, Checkbox, Input } from "antd";
 import DcrBridgeToggle from "./DcrBridgeToggle";
+import { MountedFormField } from "@/components/common_components/MountedFormField";
+import { textControl } from "./mcpFieldRules";
 import { credentialAuthClass, isClientForwardedTokenMode } from "@/components/mcp_tools/types";
 
 interface PassthroughOAuthFlow {
@@ -81,27 +83,33 @@ export default function PassthroughAuthorizeSection({
           and may not be valid. Update the client ID, or clear it to use dynamic client registration.
         </p>
       )}
-      <Form.Item
+      <MountedFormField
         label={<span className="text-sm font-medium text-gray-700">OAuth Client ID (optional)</span>}
         name={["credentials", "client_id"]}
-        extra={clientIdExtra}
+        help={clientIdExtra}
       >
-        <Input.Password
-          placeholder={clientIdPlaceholder}
-          disabled={removeStoredApp}
-          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-        />
-      </Form.Item>
-      <Form.Item
+        {(control) => (
+          <Input.Password
+            {...textControl(control)}
+            placeholder={clientIdPlaceholder}
+            disabled={removeStoredApp}
+            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+          />
+        )}
+      </MountedFormField>
+      <MountedFormField
         label={<span className="text-sm font-medium text-gray-700">OAuth Client Secret (optional)</span>}
         name={["credentials", "client_secret"]}
       >
-        <Input.Password
-          placeholder={clientSecretPlaceholder}
-          disabled={removeStoredApp}
-          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-        />
-      </Form.Item>
+        {(control) => (
+          <Input.Password
+            {...textControl(control)}
+            placeholder={clientSecretPlaceholder}
+            disabled={removeStoredApp}
+            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+          />
+        )}
+      </MountedFormField>
       <DcrBridgeToggle authType={authType} initialChecked={dcrBridgeInitialChecked} />
       {isEditing && onRemoveStoredAppChange && (
         <Checkbox checked={removeStoredApp} onChange={(e) => onRemoveStoredAppChange(e.target.checked)}>
