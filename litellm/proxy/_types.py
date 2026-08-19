@@ -2347,7 +2347,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_interval: int = Field(
         300,
         gt=0,
-        description="background health check interval in seconds",
+        description="background health check interval in seconds (must be a positive integer)",
     )
     health_check_concurrency: int | None = Field(
         None,

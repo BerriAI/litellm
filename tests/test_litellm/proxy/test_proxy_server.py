@@ -9251,14 +9251,42 @@ def test_health_check_interval_rejects_non_positive_values():
     """A dashboard user must not be able to set health_check_interval to zero or a
     negative value, since the background health loop skips non-positive intervals
     and models would silently stop being checked."""
+    from pydantic import ValidationError
+
     from litellm.proxy._types import ConfigGeneralSettings
 
     assert ConfigGeneralSettings(health_check_interval=60).health_check_interval == 60
     assert ConfigGeneralSettings().health_check_interval == 300
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ConfigGeneralSettings(health_check_interval=0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         ConfigGeneralSettings(health_check_interval=-5)
+
+
+@pytest.mark.asyncio
+async def test_config_field_update_rejects_non_positive_health_check_interval():
+    """The dashboard write path (/config/field/update) must refuse non-positive
+    health_check_interval values: the background health loop skips non-positive
+    intervals, so accepting one would silently stop health-checking models."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test")
+
+    with patch.object(proxy_server_module, "prisma_client", MagicMock()):
+        for bad_value in (0, -1):
+            with pytest.raises(HTTPException) as exc_info:
+                await update_config_general_settings(
+                    data=ConfigFieldUpdate(
+                        field_name="health_check_interval",
+                        field_value=bad_value,
+                        config_type="general_settings",
+                    ),
+                    user_api_key_dict=admin,
+                )
+            assert exc_info.value.status_code == 400
 
 
 def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
