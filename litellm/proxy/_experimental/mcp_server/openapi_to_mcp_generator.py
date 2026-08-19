@@ -14,6 +14,12 @@ from urllib.parse import quote
 
 import httpx
 
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPOpenApiUpstreamError,
+    MCPUpstreamAuthError,
+)
+
 # Tool names emitted from OpenAPI specs must work across all major LLM providers.
 # OpenAI/Anthropic/Bedrock all enforce a character class roughly equivalent to
 # ^[a-zA-Z0-9_-]+$ on tool names. Many specs (notably GitHub's REST API) use
@@ -386,12 +392,40 @@ def _merge_openapi_tool_request_headers(
     return effective_headers
 
 
+def _raise_for_upstream_failure(
+    response: httpx.Response,
+    upstream: str,
+    relays_upstream_auth: bool,
+) -> None:
+    """Turn a non-2xx upstream response into the right typed failure, or return for a 2xx.
+
+    Both call sites feed this: ``get`` hands back the response for a 4xx, while post/put/patch/delete
+    raise ``MaskedHTTPStatusError`` from inside the HTTP handler, so without one classifier the
+    non-GET tools would keep serving an error body as tool output.
+
+    Only the client-forwarded modes carry the caller's own upstream token, so only they can act on a
+    401 by re-authenticating; ``_call_regular_mcp_tool`` gates its re-auth signal the same way. Every
+    other status carries the code alone, never the upstream's body, which crosses a trust boundary.
+    """
+    if response.status_code < 400:
+        return
+    if response.status_code == 401 and relays_upstream_auth:
+        raise MCPUpstreamAuthError(
+            status_code=response.status_code,
+            www_authenticate=response.headers.get("www-authenticate"),
+            server_name=upstream,
+        )
+    raise MCPOpenApiUpstreamError(response.status_code, upstream)
+
+
 def create_tool_function(
     path: str,
     method: str,
     operation: Mapping[str, Any],
     base_url: str,
     headers: dict[str, str] | None = None,
+    server_label: str | None = None,
+    relays_upstream_auth: bool = False,
 ):
     """Create a tool function for an OpenAPI operation.
 
@@ -471,20 +505,26 @@ def create_tool_function(
                     json_body = {"data": body_value}
 
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        upstream: Final = server_label or f"{original_method.upper()} {path}"
 
-        if original_method == "get":
-            response = await client.get(url, params=params, headers=effective_headers)
-        elif original_method == "post":
-            response = await client.post(url, params=params, json=json_body, headers=effective_headers)
-        elif original_method == "put":
-            response = await client.put(url, params=params, json=json_body, headers=effective_headers)
-        elif original_method == "delete":
-            response = await client.delete(url, params=params, headers=effective_headers)
-        elif original_method == "patch":
-            response = await client.patch(url, params=params, json=json_body, headers=effective_headers)
-        else:
-            return f"Unsupported HTTP method: {original_method}"
+        try:
+            if original_method == "get":
+                response = await client.get(url, params=params, headers=effective_headers)
+            elif original_method == "post":
+                response = await client.post(url, params=params, json=json_body, headers=effective_headers)
+            elif original_method == "put":
+                response = await client.put(url, params=params, json=json_body, headers=effective_headers)
+            elif original_method == "delete":
+                response = await client.delete(url, params=params, headers=effective_headers)
+            elif original_method == "patch":
+                response = await client.patch(url, params=params, json=json_body, headers=effective_headers)
+            else:
+                return f"Unsupported HTTP method: {original_method}"
+        except MaskedHTTPStatusError as e:
+            _raise_for_upstream_failure(e.response, upstream, relays_upstream_auth)
+            raise
 
+        _raise_for_upstream_failure(response, upstream, relays_upstream_auth)
         return response.text
 
     return tool_function
