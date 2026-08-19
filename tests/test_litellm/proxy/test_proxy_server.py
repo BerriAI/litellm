@@ -6794,6 +6794,7 @@ async def test_update_general_settings_propagates_health_check_settings(monkeypa
     monkeypatch.setattr(ps, "health_check_concurrency", None)
     monkeypatch.setattr(ps, "health_check_details", True)
     monkeypatch.setattr(ps, "llm_router", None)
+    monkeypatch.setattr(ps, "_reconcile_background_health_check_task", AsyncMock())
 
     await proxy_config._update_general_settings(
         db_general_settings={
@@ -6813,6 +6814,27 @@ async def test_update_general_settings_propagates_health_check_settings(monkeypa
     assert ps.health_check_details is False
     assert ps.general_settings["enable_health_check_routing"] is True
 
+
+@pytest.mark.asyncio
+async def test_update_general_settings_updates_health_state_cache_threshold(monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    fake_router = types.SimpleNamespace(
+        health_state_cache=types.SimpleNamespace(staleness_threshold=600.0),
+        enable_health_check_routing=False,
+        health_check_ignore_transient_errors=False,
+    )
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(ps, "llm_router", fake_router)
+    monkeypatch.setattr(ps, "_reconcile_background_health_check_task", AsyncMock())
+
+    await proxy_config._update_general_settings(
+        db_general_settings={"health_check_staleness_threshold": 900}
+    )
+
+    assert fake_router.health_state_cache.staleness_threshold == 900.0
 # store_model_in_db DB Config Override Tests
 # ============================================================================
 

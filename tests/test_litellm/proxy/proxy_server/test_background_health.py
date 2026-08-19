@@ -24,6 +24,7 @@ from litellm.proxy.proxy_server import (
     _adaptive_router_flusher_loop,
     _get_endpoint_exception_status,
     _get_process_rss_mb,
+    _reconcile_background_health_check_task,
     _run_background_health_check,
     _run_direct_health_check_with_instrumentation,
     _rss_mb_for_log,
@@ -430,6 +431,38 @@ async def test_adaptive_router_flusher_loop_times_out_when_sleep_real(monkeypatc
 # ---------------------------------------------------------------------------
 # _run_background_health_check
 # ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reconcile_background_health_check_task_starts_enabled_loop(monkeypatch):
+    fake_task = MagicMock()
+
+    def _create_task(coroutine):
+        coroutine.close()
+        return fake_task
+
+    monkeypatch.setattr(proxy_server, "use_background_health_checks", True)
+    monkeypatch.setattr(proxy_server, "background_health_check_task", None)
+    monkeypatch.setattr(proxy_server.asyncio, "create_task", _create_task)
+
+    await _reconcile_background_health_check_task()
+
+    assert proxy_server.background_health_check_task is fake_task
+
+
+@pytest.mark.asyncio
+async def test_reconcile_background_health_check_task_stops_disabled_loop(monkeypatch):
+    fake_task = AsyncMock()
+
+    monkeypatch.setattr(proxy_server, "use_background_health_checks", False)
+    monkeypatch.setattr(proxy_server, "background_health_check_task", fake_task)
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", True)
+
+    await _reconcile_background_health_check_task()
+
+    fake_task.cancel.assert_called_once_with()
+    fake_task.assert_awaited_once_with()
+    assert proxy_server.background_health_check_task is None
+    assert proxy_server.background_health_check_loop_active is False
 
 
 @pytest.mark.asyncio

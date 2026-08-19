@@ -1226,8 +1226,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         await ProxyStartupEvent._sync_ui_settings_to_general_settings()
 
     # Start background health checks AFTER models are loaded and index is built
-    if use_background_health_checks:
-        asyncio.create_task(_run_background_health_check())  # start the background health check coroutine.
+    await _reconcile_background_health_check_task()
 
     # Start adaptive-router queue flusher unconditionally — adaptive routers
     # may be added later via `/config/reload`, and the flusher is a no-op when
@@ -2243,6 +2242,7 @@ health_check_concurrency = None
 health_check_details = None
 health_check_results: dict[str, int | list[dict[str, Any]]] = {}
 background_health_check_loop_active = False
+background_health_check_task: asyncio.Task[None] | None = None
 background_health_check_cycle_seq = 0
 queue: Final[list] = []
 litellm_proxy_budget_name: Final = LITELLM_PROXY_BUDGET_NAME
@@ -3707,6 +3707,27 @@ async def _run_background_health_check():
         _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id)
 
         await asyncio.sleep(health_check_interval)
+
+
+async def _reconcile_background_health_check_task() -> None:
+    global background_health_check_task, background_health_check_loop_active
+
+    if use_background_health_checks:
+        if background_health_check_task is None or background_health_check_task.done():
+            background_health_check_task = asyncio.create_task(_run_background_health_check())
+        return
+
+    if background_health_check_task is not None:
+        if not background_health_check_task.done():
+            background_health_check_task.cancel()
+            try:
+                await background_health_check_task
+            except asyncio.CancelledError:
+                pass
+        elif not background_health_check_task.cancelled():
+            background_health_check_task.exception()
+        background_health_check_task = None
+    background_health_check_loop_active = False
 
 
 class StreamingCallbackError(Exception):
@@ -6362,7 +6383,9 @@ class ProxyConfig:
                 "health_check_staleness_threshold" in _general_settings
                 and "health_check_staleness_threshold" not in self._yaml_general_settings_keys
             ):
-                llm_router.health_check_staleness_threshold = _general_settings["health_check_staleness_threshold"]
+                llm_router.health_state_cache.staleness_threshold = float(
+                    _general_settings["health_check_staleness_threshold"]
+                )
             if (
                 "health_check_ignore_transient_errors" in _general_settings
                 and "health_check_ignore_transient_errors" not in self._yaml_general_settings_keys
@@ -6370,6 +6393,8 @@ class ProxyConfig:
                 llm_router.health_check_ignore_transient_errors = _general_settings[
                     "health_check_ignore_transient_errors"
                 ]
+
+        await _reconcile_background_health_check_task()
 
         ## MAX PARALLEL REQUESTS ##
         if "max_parallel_requests" in _general_settings:
