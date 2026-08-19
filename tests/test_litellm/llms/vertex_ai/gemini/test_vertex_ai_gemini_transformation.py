@@ -1,5 +1,7 @@
 import base64
 
+import pytest
+
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
@@ -1050,6 +1052,40 @@ def test_parallel_tool_call_history_replayed_through_full_message_conversion():
     assert model_parts[0]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
     assert "thoughtSignature" not in model_parts[1]
     assert "thoughtSignature" not in model_parts[2]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "vertex_ai/gemini-3.7-flash",
+        "gemini/gemini-3.7-flash",
+    ],
+)
+def test_placeholder_scoped_to_first_call_across_gemini_3_variants(model):
+    """Every gemini-3 family member, bare or provider-prefixed, gets one placeholder at most."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _get_dummy_thought_signature,
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(None, None, None),
+        },
+        model=model,
+    )
+
+    assert len(gemini_parts) == 3
+    assert gemini_parts[0]["thoughtSignature"] == _get_dummy_thought_signature()
+    assert "thoughtSignature" not in gemini_parts[1]
+    assert "thoughtSignature" not in gemini_parts[2]
 
 
 def test_signed_text_part_survives_alongside_unsigned_parallel_tool_calls():
