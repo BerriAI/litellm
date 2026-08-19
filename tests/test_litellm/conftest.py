@@ -102,13 +102,7 @@ def isolate_host_aws_config(monkeypatch, isolated_aws_credentials_dir):
 
 @pytest.fixture(scope="function", autouse=True)
 def isolate_host_proxy_base_url(monkeypatch):
-    """Prevent a host PROXY_BASE_URL from outranking request-derived URLs during unit tests.
-
-    It is the first thing the proxy consults when it resolves its own public origin, so a value
-    left in the developer's shell or .env silently replaces the base_url every OAuth discovery,
-    redirect_uri, and registration assertion is written against. Tests that exercise a configured
-    public origin set it within their own body, which still wins over this.
-    """
+    """Prevent a host PROXY_BASE_URL from outranking request-derived URLs during unit tests."""
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
 
 

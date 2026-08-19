@@ -18,12 +18,6 @@ COVERAGE_SUBPROCESS_VARS: Final = frozenset(
 
 
 def test_host_proxy_base_url_cannot_reach_request_derived_url_tests():
-    """A PROXY_BASE_URL in the host environment must not reach tests that assert on request-derived URLs.
-
-    The proxy resolves its public origin from that variable before anything else, so a developer
-    who has one set for their own deployment used to watch dozens of OAuth discovery, redirect_uri,
-    and client registration cases fail on an origin no test ever asked for.
-    """
     child_env: Final = {
         key: value for key, value in os.environ.items() if key not in COVERAGE_SUBPROCESS_VARS
     } | {"PROXY_BASE_URL": "https://leaked-host-origin.example.com"}
