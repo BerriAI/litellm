@@ -7,7 +7,11 @@ import { Row, Col, Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
-import CacheControlSettings from "./cache_control_settings";
+import CacheControlInjectionPoints, {
+  CACHE_CONTROL_LABEL,
+  CACHE_CONTROL_TOOLTIP,
+  NEW_CACHE_CONTROL_POINT,
+} from "./cache_control_settings";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { Tag } from "../tag_management/types";
 import { formItemValidateJSON } from "../../utils/textUtils";
@@ -332,11 +336,21 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               <Switch onChange={handlePassThroughChange} className="bg-gray-600" />
             </Form.Item>
 
-            <CacheControlSettings
-              form={form}
-              showCacheControl={showCacheControl}
-              onCacheControlChange={handleCacheControlChange}
-            />
+            <Form.Item
+              label={CACHE_CONTROL_LABEL}
+              name="cache_control"
+              valuePropName="checked"
+              className="mb-4"
+              tooltip={CACHE_CONTROL_TOOLTIP}
+            >
+              <Switch onChange={handleCacheControlChange} className="bg-gray-600" />
+            </Form.Item>
+
+            {showCacheControl && (
+              <Form.Item name="cache_control_injection_points" initialValue={[NEW_CACHE_CONTROL_POINT]} noStyle>
+                <CacheControlInjectionPoints />
+              </Form.Item>
+            )}
             <Form.Item
               label="LiteLLM Params"
               name="litellm_extra_params"
