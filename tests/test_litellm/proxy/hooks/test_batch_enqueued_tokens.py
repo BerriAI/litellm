@@ -9,7 +9,9 @@ response-shape helpers the v3 limiter's post-call hooks rely on.
 import base64
 import socket
 import uuid
-from types import SimpleNamespace
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType, SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -121,6 +123,62 @@ async def test_zero_token_reserve_charges_nothing():
     assert empty == BatchEnqueuedTokenReservation(tokens=0, scopes=(scope,))
     full = await store.reserve(tokens=100, scopes=(scope,))
     assert isinstance(full, BatchEnqueuedTokenReservation)
+
+
+class _SingleKeyRedisFake:
+    """Emulates the Redis script path one single-key call at a time, recording every call."""
+
+    def __init__(self) -> None:
+        self.script_calls: tuple[tuple[str, tuple[str, ...]], ...] = ()
+        self.counters: Mapping[str, int] = MappingProxyType({})
+
+    def async_register_script(self, script: str):
+        kind: Final = "reserve" if "INCRBY" in script else "refund" if "DECRBY" in script else "record"
+
+        async def run(keys: Sequence[str], args: Sequence[str | bytes | int | float]) -> object:
+            self.script_calls = (*self.script_calls, (kind, tuple(keys)))
+            return self._run(kind, tuple(keys), tuple(args))
+
+        return run
+
+    def _run(self, kind: str, keys: tuple[str, ...], args: tuple[str | bytes | int | float, ...]) -> object:
+        if kind == "reserve":
+            amount, limit = int(args[0]), int(args[2])
+            current: Final = self.counters.get(keys[0], 0)
+            if current + amount > limit:
+                return (0, current)
+            self.counters = MappingProxyType({**self.counters, keys[0]: current + amount})
+            return (1, current + amount)
+        if kind == "refund":
+            remaining: Final = self.counters.get(keys[0], 0) - int(args[0])
+            self.counters = MappingProxyType(
+                {key: value for key, value in self.counters.items() if key != keys[0]}
+                if remaining <= 0
+                else {**self.counters, keys[0]: remaining}
+            )
+            return 1
+        raise AssertionError(f"unexpected {kind} script call for keys {keys}")
+
+
+@pytest.mark.asyncio
+async def test_redis_reserve_issues_single_key_calls_and_rolls_back_on_over_limit():
+    fake = _SingleKeyRedisFake()
+    store = BatchEnqueuedTokenStore(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=fake, default_in_memory_ttl=60))
+    )
+    key_scope = _scope(limit=100, key="api_key")
+    team_scope = _scope(limit=50, key="team")
+
+    over = await store.reserve(tokens=60, scopes=(key_scope, team_scope))
+    assert over == BatchEnqueuedTokenOverLimit(scope=team_scope, enqueued=0)
+    assert tuple(kind for kind, _ in fake.script_calls) == ("reserve", "reserve", "refund")
+    assert not fake.counters
+
+    fits = await store.reserve(tokens=50, scopes=(key_scope, team_scope))
+    assert isinstance(fits, BatchEnqueuedTokenReservation)
+    await store.refund(fits)
+    assert not fake.counters
+    assert all(len(keys) == 1 for _, keys in fake.script_calls)
 
 
 def test_canonical_provider_batch_id_passes_raw_ids_through():
