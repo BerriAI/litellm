@@ -2303,18 +2303,19 @@ class LiteLLMCompletionResponsesConfig:
         # Translate completion_tokens_details to output_tokens_details
         if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details is not None:
             completion_details: Final = usage.completion_tokens_details
-            output_details_dict: Final[dict[str, int]] = {}
-            if hasattr(completion_details, "reasoning_tokens") and completion_details.reasoning_tokens is not None:
-                output_details_dict["reasoning_tokens"] = completion_details.reasoning_tokens
-
-            if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None:
-                output_details_dict["text_tokens"] = completion_details.text_tokens
-
-            if hasattr(completion_details, "image_tokens") and completion_details.image_tokens is not None:
-                output_details_dict["image_tokens"] = completion_details.image_tokens
-
-            if output_details_dict:
-                response_usage.output_tokens_details = OutputTokensDetails(**output_details_dict)
+            reasoning_token_count: Final = getattr(completion_details, "reasoning_tokens", None)
+            optional_output_details: Final[dict[str, int]] = {
+                field: value
+                for field, value in (
+                    ("text_tokens", getattr(completion_details, "text_tokens", None)),
+                    ("image_tokens", getattr(completion_details, "image_tokens", None)),
+                )
+                if value is not None
+            }
+            response_usage.output_tokens_details = OutputTokensDetails(
+                reasoning_tokens=reasoning_token_count if reasoning_token_count is not None else 0,
+                **optional_output_details,
+            )
 
         return response_usage
 
