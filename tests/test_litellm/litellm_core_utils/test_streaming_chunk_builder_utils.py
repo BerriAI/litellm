@@ -1262,3 +1262,43 @@ def test_get_combined_tool_content_joins_many_custom_tool_input_fragments_in_ord
     assert isinstance(combined[1], ChatCompletionMessageCustomToolCall)
     assert combined[1].custom.name == "run_script"
     assert combined[1].custom.input == "".join(object_fragments)
+
+
+def test_stream_chunk_builder_preserves_details_from_openai_sdk_usage():
+    from openai.types.completion_usage import CompletionUsage
+
+    chunk = {
+        **ModelResponseStream(
+            id="chatcmpl-1",
+            created=1745513206,
+            model="openai/deepseek-v4-flash",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content="Hi"),
+                )
+            ],
+        ).model_dump(),
+        "usage": CompletionUsage(
+            prompt_tokens=1714,
+            completion_tokens=14,
+            total_tokens=1728,
+            prompt_tokens_details={"cached_tokens": 1664},
+            completion_tokens_details={"reasoning_tokens": 12},
+        ),
+    }
+
+    processor = ChunkProcessor(chunks=[chunk])
+    usage = processor.calculate_usage(
+        chunks=[chunk],
+        model="openai/deepseek-v4-flash",
+        completion_output="Hi",
+    )
+
+    assert usage.prompt_tokens == 1714
+    assert usage.completion_tokens == 14
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 1664
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 12

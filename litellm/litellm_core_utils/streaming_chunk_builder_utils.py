@@ -748,6 +748,8 @@ class ChunkProcessor:
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
+        if hasattr(usage_chunk, "model_dump"):
+            return Usage(**usage_chunk.model_dump())
         return usage_chunk
 
     def _calculate_usage_per_chunk(
