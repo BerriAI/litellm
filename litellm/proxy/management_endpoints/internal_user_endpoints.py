@@ -1188,6 +1188,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
                 {},
             )
             and k not in LiteLLM_ManagementEndpoint_MetadataFields
+            and k not in LiteLLM_ManagementEndpoint_MetadataFields_Premium
         ):  # models default to [], spend defaults to 0, we should not reset these values
             non_default_values[k] = v
 

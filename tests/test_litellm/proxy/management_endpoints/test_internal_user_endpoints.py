@@ -716,6 +716,61 @@ def test_update_internal_user_params_email():
     assert "budget_duration" not in non_default_values  # Should not add default values
 
 
+def test_update_internal_user_params_keeps_premium_metadata_out_of_columns(monkeypatch):
+    """
+    guardrails / prompts / policies are metadata fields, not columns on LiteLLM_UserTable.
+
+    /key/update and /team/update both strip them; /user/update filtered against only
+    LiteLLM_ManagementEndpoint_MetadataFields, so the premium list survived into the
+    prisma payload as top-level keys and the write failed.
+    """
+    import litellm.proxy.utils as proxy_utils
+    from litellm.proxy._types import (
+        LiteLLM_ManagementEndpoint_MetadataFields,
+        LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+        UpdateUserRequest,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_metadata_fields,
+    )
+
+    monkeypatch.setattr(proxy_utils, "_premium_user_check", lambda field: None)
+
+    data = UpdateUserRequest(
+        user_id="test_user_id",
+        guardrails=["my-guardrail"],
+        prompts=["my-prompt"],
+        policies=["my-policy"],
+        model_rpm_limit={"gpt-4": 5},
+    )
+    data_json = data.model_dump(exclude_unset=True)
+
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    # No management-metadata field, premium or not, may reach the user table as a column.
+    for field in (
+        LiteLLM_ManagementEndpoint_MetadataFields + LiteLLM_ManagementEndpoint_MetadataFields_Premium
+    ):
+        assert field not in non_default_values, f"{field} must not be sent as a user column"
+    assert non_default_values == {"user_id": "test_user_id"}
+
+    # Nothing is lost: the values still land in metadata, which is where the request
+    # path reads guardrails / policies from.
+    non_default_values = prepare_metadata_fields(
+        data=data,
+        non_default_values=non_default_values,
+        existing_metadata={},
+    )
+    metadata = non_default_values["metadata"]
+    assert metadata["guardrails"] == ["my-guardrail"]
+    assert metadata["prompts"] == ["my-prompt"]
+    assert metadata["policies"] == ["my-policy"]
+    assert metadata["model_rpm_limit"] == {"gpt-4": 5}
+
+
 def test_update_internal_user_params_reset_spend_and_max_budget():
     """
     Relevant Issue: https://github.com/BerriAI/litellm/issues/10495
