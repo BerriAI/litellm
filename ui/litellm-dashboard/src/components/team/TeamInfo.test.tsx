@@ -122,7 +122,9 @@ vi.mock("@/components/common_components/ModelAliasManager", () => ({
     <div>
       <div data-testid="alias-editor-initial">{JSON.stringify(initialModelAliases)}</div>
       <button onClick={() => onAliasUpdate({ "gpt-4o": "gpt-4" })}>Set Alias</button>
-      <button onClick={() => onAliasUpdate({})}>Clear Aliases</button>
+      <button type="button" onClick={() => onAliasUpdate({})}>
+        Clear Aliases
+      </button>
     </div>
   )),
 }));
@@ -658,7 +660,7 @@ describe("TeamInfoView", () => {
   });
 
   describe("settings and editing", () => {
-    const policiesFormFieldLabel = () => screen.queryByText("Policies", { selector: "span" });
+    const policiesFormFieldLabel = () => screen.queryByText("Policies", { selector: "label" });
 
     it("should offer the policies field and load it for a caller with the viewPolicies capability", async () => {
       const user = userEvent.setup({ delay: null });
@@ -1462,8 +1464,7 @@ describe("TeamInfoView", () => {
       await user.click(screen.getByLabelText(/^Guardrails/));
 
       const listbox = await screen.findByRole("listbox", {}, { timeout: 5000 });
-      // eslint-disable-next-line local/no-antd-class-selectors -- antd renders group headers outside the listbox and its popup container exposes no role or accessible name
-      return listbox.closest(".ant-select-dropdown") as HTMLElement;
+      return listbox.closest('[data-slot="combobox-content"]') as HTMLElement;
     };
 
     beforeEach(() => {

@@ -44,6 +44,15 @@ export const estimateTooltips = (canEdit: boolean, entity: "key" | "team" = "key
     : ADMIN_ONLY_TOOLTIP,
 });
 
+export const ESTIMATE_POSITIVE_MESSAGE = "Enter a positive integer";
+export const ESTIMATE_PER_MODEL_MESSAGE = INVALID_PER_MODEL_MESSAGE;
+
+export const isValidEstimate = (value: unknown): boolean =>
+  value === "" || value === null || value === undefined || isPositiveInteger(Number(value));
+
+export const isValidPerModelEstimates = (value: unknown): boolean =>
+  typeof value !== "string" || value.trim() === "" || parsePerModelEstimates(value) !== null;
+
 export const estimateRules = {
   perModel: {
     validator: (_: unknown, value: unknown) => {
