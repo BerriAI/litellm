@@ -293,6 +293,25 @@ class CheckBatchCost:
         if prom_logger is not None:
             prom_logger.record_check_batch_cost_error(error_type)
 
+    async def _mark_batch_processed(self, job: "LiteLLM_ManagedObjectTable") -> None:
+        """Retire a job that cannot make progress without changing its result status."""
+        if not self._has_batch_processed_column:
+            return
+        await self.prisma_client.db.litellm_managedobjecttable.update(
+            where={"id": job.id}, data={"batch_processed": True}
+        )
+
+    @staticmethod
+    def _is_permanent_routing_failure(job: "LiteLLM_ManagedObjectTable") -> bool:
+        """A decoded unified id without a model id can never become routable."""
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            _is_base64_encoded_unified_file_id,
+            get_model_id_from_unified_batch_id,
+        )
+
+        decoded = _is_base64_encoded_unified_file_id(job.unified_object_id)
+        return bool(decoded and get_model_id_from_unified_batch_id(decoded) is None)
+
     def _resolve_job_routing(
         self,
         job: "LiteLLM_ManagedObjectTable",
@@ -768,6 +787,13 @@ class CheckBatchCost:
             if routing is None:
                 if self._has_unified_id_without_model(job):
                     await self._retire_job(job, "unified object id has no model id")
+                elif self._is_permanent_routing_failure(job):
+                    try:
+                        await self._mark_batch_processed(job)
+                    except Exception as db_err:
+                        verbose_proxy_logger.warning(
+                            f"CheckBatchCost: failed to retire unroutable job {job.id}: {db_err}"
+                        )
                 continue
             model_id, batch_id = routing
 
@@ -792,6 +818,13 @@ class CheckBatchCost:
                     prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 if self._is_batch_gone_at_provider(e, batch_id) and self._batch_deployment_exists(model_id):
                     await self._retire_job(job, f"batch {batch_id} no longer exists at the provider")
+                elif "404" in str(e).lower() or "not_found" in str(e).lower() or "not found" in str(e).lower():
+                    try:
+                        await self._mark_batch_processed(job)
+                    except Exception as db_err:
+                        verbose_proxy_logger.warning(
+                            f"CheckBatchCost: failed to retire missing provider job {job.id}: {db_err}"
+                        )
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE

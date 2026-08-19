@@ -2067,6 +2067,31 @@ class TestBatchCostAttribution:
         assert metadata["user_api_key_user_id"] == "alice"
         assert metadata["user_api_key_team_id"] == "team-alpha"
         assert metadata["user_api_key_alias"] == "prod-key"
+
+
+class TestPermanentBatchFailures:
+    def test_decoded_unified_id_without_model_id_is_permanent(self):
+        import base64
+        from types import SimpleNamespace
+
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+        job = SimpleNamespace(
+            unified_object_id=base64.urlsafe_b64encode(
+                b"litellm_proxy;llm_batch_id:batch_orphan_no_model"
+            ).decode()
+        )
+
+        assert CheckBatchCost._is_permanent_routing_failure(job) is True
+
+    def test_unmanaged_id_is_not_marked_permanent(self):
+        from types import SimpleNamespace
+
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+        assert CheckBatchCost._is_permanent_routing_failure(
+            SimpleNamespace(unified_object_id="batch_123")
+        ) is False
         assert metadata["user_api_key_team_alias"] == "Team Alpha"
         assert metadata["tags"] == ["env:prod"]
 
