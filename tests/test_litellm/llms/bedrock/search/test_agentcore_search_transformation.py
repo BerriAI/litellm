@@ -261,6 +261,37 @@ class TestAgentCoreSearch:
         with pytest.raises(Exception, match="AccessDeniedException"):
             config.transform_search_response(raw_response=mock_response, logging_obj=MagicMock())
 
+    def test_transform_search_response_reads_structured_content(self):
+        """Connector 1.1.0+ puts the machine-readable results in structuredContent and may
+        leave the text block as prose, which must not come back as an empty result list."""
+        config = AgentCoreSearchConfig()
+        mock_response = _make_mock_response(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "content": [{"type": "text", "text": "Here is a prose summary of what I found."}],
+                    "structuredContent": {"id": "824f89d0", "results": MCP_RESULTS},
+                },
+            }
+        )
+
+        response = config.transform_search_response(raw_response=mock_response, logging_obj=MagicMock())
+        assert [result.title for result in response.results] == ["Test Result 1", "Test Result 2"]
+        assert response.results[0].url == "https://example.com/1"
+        assert response.results[0].snippet == "Snippet for result 1"
+        assert response.results[0].date == "2026-06-16"
+
+    def test_transform_search_response_does_not_duplicate_structured_content(self):
+        """1.1.0+ repeats the same results in both places, so parsing both would double them."""
+        config = AgentCoreSearchConfig()
+        body = _mcp_response_body()
+        body["result"]["structuredContent"] = {"results": MCP_RESULTS}
+        mock_response = _make_mock_response(body)
+
+        response = config.transform_search_response(raw_response=mock_response, logging_obj=MagicMock())
+        assert len(response.results) == 2
+
     def test_transform_search_response_parses_crlf_framed_sse(self):
         """SSE streams may be CRLF framed; events must still split into separate events."""
         config = AgentCoreSearchConfig()

@@ -104,6 +104,13 @@ def _to_search_result(item: Mapping[str, object]) -> SearchResult:
     )
 
 
+def _result_items(parsed: object) -> tuple[Mapping[str, object], ...]:
+    items: Final = parsed.get("results", ()) if isinstance(parsed, Mapping) else parsed
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        return ()
+    return tuple(item for item in items if isinstance(item, Mapping))
+
+
 def _parse_result_items(raw_text: object) -> tuple[Mapping[str, object], ...]:
     """
     Parse one MCP text block into the search result objects it carries.
@@ -117,10 +124,7 @@ def _parse_result_items(raw_text: object) -> tuple[Mapping[str, object], ...]:
         parsed: Final = json.loads(raw_text)
     except json.JSONDecodeError:
         return ()
-    items: Final = parsed.get("results", ()) if isinstance(parsed, dict) else parsed
-    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
-        return ()
-    return tuple(item for item in items if isinstance(item, dict))
+    return _result_items(parsed)
 
 
 def _iter_sse_events(text: str) -> Iterator[Mapping[str, object]]:
@@ -350,7 +354,9 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
         The gateway returns JSON-RPC (as plain JSON or a single-message SSE
         stream) whose result.content[] text blocks contain a JSON list of
-        {title, url, date/publishedDate, text} entries.
+        {title, url, date/publishedDate, text} entries. Web-search connector
+        1.1.0 and later repeat that list in result.structuredContent, which is
+        the only machine-readable copy when the text block holds prose instead.
         """
         response_json: Final = self._parse_mcp_body(raw_response)
 
@@ -370,14 +376,15 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
                 message=f"AgentCore web search tool error: {self._tool_error_message(response_json)}",
             )
 
-        return SearchResponse(
-            results=[  # mutable-ok: SearchResponse.results is a pydantic list field
-                _to_search_result(item)
-                for block in self._text_blocks(response_json)
-                for item in _parse_result_items(block.get("text"))
-            ],
-            object="search",
+        text_items: Final = tuple(
+            item for block in self._text_blocks(response_json) for item in _parse_result_items(block.get("text"))
         )
+        structured: Final = result.get("structuredContent") if isinstance(result, Mapping) else None
+        items: Final = text_items or _result_items(structured)
+
+        results: Final = [_to_search_result(item) for item in items]  # mutable-ok: pydantic list field
+
+        return SearchResponse(results=results, object="search")
 
     def _tool_error_message(self, response_json: Mapping[str, object]) -> str:
         texts: Final = tuple(
