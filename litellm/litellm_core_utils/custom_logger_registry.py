@@ -47,6 +47,7 @@ from litellm.integrations.posthog import PostHogLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
+from litellm.integrations.telemetry_dev.telemetry_dev import TelemetryDevLogger
 from litellm.integrations.vantage.vantage_logger import VantageLogger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     VectorStorePreCallHook,
@@ -85,7 +86,7 @@ class CustomLoggerRegistry:
         "langfuse_otel": OpenTelemetry,
         "arize_phoenix": OpenTelemetry,
         "langtrace": OpenTelemetry,
-        "telemetry_dev": OpenTelemetry,
+        "telemetry_dev": TelemetryDevLogger,
         "weave_otel": OpenTelemetry,
         "levo": OpenTelemetry,
         "mlflow": MlflowLogger,

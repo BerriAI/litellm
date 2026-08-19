@@ -4119,15 +4119,10 @@ def _init_custom_logger_compatible_class(
             )
 
             for callback in _in_memory_loggers:
-                if (
-                    isinstance(callback, TelemetryDevLogger)
-                    and callback.callback_name == "telemetry_dev"
-                ):
+                if isinstance(callback, TelemetryDevLogger) and callback.callback_name == "telemetry_dev":
                     return callback
 
-            telemetry_dev_logger = TelemetryDevLogger(
-                config=otel_config, callback_name="telemetry_dev"
-            )
+            telemetry_dev_logger = TelemetryDevLogger(config=otel_config, callback_name="telemetry_dev")
             _in_memory_loggers.append(telemetry_dev_logger)
             return telemetry_dev_logger
         elif logging_integration == "otel":
@@ -4711,6 +4706,15 @@ def get_custom_logger_compatible_class(
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenTelemetry) and callback.callback_name == "langtrace":
+                    return callback
+
+        elif logging_integration == "telemetry_dev":
+            from litellm.integrations.telemetry_dev.telemetry_dev import (
+                TelemetryDevLogger,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, TelemetryDevLogger) and callback.callback_name == "telemetry_dev":
                     return callback
 
         elif logging_integration == "mlflow":

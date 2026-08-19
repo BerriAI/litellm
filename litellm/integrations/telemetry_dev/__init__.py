@@ -1,3 +1,3 @@
 from litellm.integrations.telemetry_dev.telemetry_dev import TelemetryDevLogger
 
-__all__ = ["TelemetryDevLogger"]
+__all__ = ["TelemetryDevLogger"]  # mutable-ok: module export list
