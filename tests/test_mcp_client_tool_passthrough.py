@@ -1,0 +1,64 @@
+import pytest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+from litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler import (
+    anthropic_messages_with_mcp,
+)
+
+@pytest.mark.asyncio
+async def test_mcp_auto_execute_bypasses_client_side_tools():
+    """
+    Ensure that if a response contains client-native tools (not present in tool_server_map),
+    the auto-execution loop breaks early and passes the response back to the client.
+    """
+    mock_mcp_references = [{"type": "mcp", "server_url": "http://localhost/mcp", "require_approval": "never"}]
+    
+    # Mocking mcp.types.Tool objects that use dot notation
+    mock_mcp_tools = [
+        SimpleNamespace(name="mcp_tool_1", description="MCP Tool", inputSchema={"type": "object"})
+    ]
+    mock_tool_server_map = {"mcp_tool_1": "http://localhost/mcp"}
+
+    # Mock response containing both an MCP tool and a client-native tool ('Read')
+    mock_anthropic_response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {"type": "tool_use", "id": "call_mcp", "name": "mcp_tool_1", "input": {}},
+            {"type": "tool_use", "id": "call_client", "name": "Read", "input": {"file_path": "test.txt"}},
+        ],
+        "stop_reason": "tool_use",
+    }
+
+    mock_context = MagicMock()
+    mock_context.user_api_key_auth = None
+    mock_context.litellm_trace_id = "trace_123"
+    mock_context.mcp_auth_header = None
+    mock_context.mcp_server_auth_headers = None
+    mock_context.request_tags = None
+    mock_context.oauth2_headers = None
+    mock_context.raw_headers = None
+    mock_context.litellm_call_id = "call_123"
+
+    with patch("litellm.responses.mcp.request_context.MCPRequestContext.resolve", return_value=mock_context), \
+         patch("litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._parse_mcp_tools", return_value=(mock_mcp_references, [])), \
+         patch("litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform", new_callable=AsyncMock) as mock_process, \
+         patch("litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools", return_value=True), \
+         patch("litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._execute_tool_calls", new_callable=AsyncMock) as mock_execute, \
+         patch("litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler._AnthropicMessagesCall") as mock_call:
+
+        mock_process.return_value = (mock_mcp_tools, mock_tool_server_map)
+
+        mock_fn = AsyncMock(return_value=mock_anthropic_response)
+        mock_call.return_value.fn = mock_fn
+
+        response = await anthropic_messages_with_mcp(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Read test.txt and run image_understand"}],
+            model="claude-3-5-sonnet-20241022",
+            tools=mock_mcp_references,
+        )
+
+        mock_execute.assert_not_called()
+        assert response == mock_anthropic_response
