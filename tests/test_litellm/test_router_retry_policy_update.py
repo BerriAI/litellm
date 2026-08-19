@@ -44,6 +44,13 @@ def test_update_router_config_exposes_retry_policy_field():
     assert "retry_policy" in UpdateRouterConfig.model_fields
 
 
+def test_update_router_config_preserves_max_fallbacks():
+    value = 10
+    config = UpdateRouterConfig(max_fallbacks=value)
+
+    assert config.model_dump(exclude_none=True)["max_fallbacks"] == value
+
+
 def test_update_router_config_accepts_retry_policy_payload():
     """The exact payload the Admin UI Model Retry Settings tab sends must
     round-trip through the schema's ``dict(exclude_none=True)`` form, since
@@ -120,6 +127,14 @@ def test_update_settings_persists_retry_policy_dict():
     assert router.retry_policy.BadRequestErrorRetries == 5
     assert router.retry_policy.RateLimitErrorRetries == 7
     assert router.retry_policy.TimeoutErrorRetries == 3
+
+
+def test_update_settings_applies_max_fallbacks():
+    router = _build_router()
+
+    router.update_settings(max_fallbacks=10)
+
+    assert router.max_fallbacks == 10
 
 
 def test_update_settings_accepts_retry_policy_object_unchanged():

@@ -10456,6 +10456,7 @@ class Router:
             "allowed_fails",
             "cooldown_time",
             "num_retries",
+            "max_fallbacks",
             "timeout",
             "max_retries",
             "retry_after",
@@ -10494,6 +10495,7 @@ class Router:
             "allowed_fails",
             "cooldown_time",
             "num_retries",
+            "max_fallbacks",
             "timeout",
             "max_retries",
             "retry_after",
@@ -10510,6 +10512,7 @@ class Router:
         _int_settings: Final = [
             "timeout",
             "num_retries",
+            "max_fallbacks",
             "retry_after",
             "allowed_fails",
             "cooldown_time",

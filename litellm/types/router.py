@@ -117,6 +117,7 @@ class UpdateRouterConfig(BaseModel):
     allowed_fails: int | None = None
     cooldown_time: float | None = None
     num_retries: int | None = None
+    max_fallbacks: int | None = None
     timeout: float | None = None
     max_retries: int | None = None
     retry_after: float | None = None
