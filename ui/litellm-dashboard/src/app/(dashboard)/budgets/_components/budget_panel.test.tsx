@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -113,7 +113,7 @@ describe("Budget Panel", () => {
     renderPanel();
     await waitFor(() => expect(getMock).toHaveBeenCalled());
 
-    await user.type(screen.getByTestId("datatable-search"), "ecc");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "ecc" } });
     await waitFor(() => expect(lastQuery().q).toBe("ecc"));
     expect(queries().some((query) => query.q === "e" || query.q === "ec")).toBe(false);
   });
@@ -153,8 +153,8 @@ describe("Budget Panel", () => {
     await waitFor(() => expect(getMock).toHaveBeenCalled());
 
     await openFilters(user);
-    await user.type(screen.getByTestId("budget-filter-max-budget-min"), "10");
-    await user.type(screen.getByTestId("budget-filter-max-budget-max"), "500");
+    fireEvent.change(screen.getByTestId("budget-filter-max-budget-min"), { target: { value: "10" } });
+    fireEvent.change(screen.getByTestId("budget-filter-max-budget-max"), { target: { value: "500" } });
     await user.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() => expect(lastQuery()["filter[max_budget][gte]"]).toBe("10"));
@@ -171,7 +171,7 @@ describe("Budget Panel", () => {
     await waitFor(() => expect(getMock).toHaveBeenCalled());
 
     await openFilters(user);
-    await user.type(screen.getByTestId("budget-filter-max-budget-min"), "10");
+    fireEvent.change(screen.getByTestId("budget-filter-max-budget-min"), { target: { value: "10" } });
     await user.click(screen.getByTestId("budget-filter-max-budget-unlimited"));
     await user.click(screen.getByTestId("filter-drawer-apply"));
 
@@ -185,8 +185,8 @@ describe("Budget Panel", () => {
     await waitFor(() => expect(getMock).toHaveBeenCalled());
 
     await openFilters(user);
-    await user.type(screen.getByTestId("budget-filter-created-from"), "2026-01-05");
-    await user.type(screen.getByTestId("budget-filter-created-to"), "2026-01-06");
+    fireEvent.change(screen.getByTestId("budget-filter-created-from"), { target: { value: "2026-01-05" } });
+    fireEvent.change(screen.getByTestId("budget-filter-created-to"), { target: { value: "2026-01-06" } });
     await user.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() =>

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Button as AntButton, Modal } from "antd";
+import { Modal } from "antd";
 import {
   getPromptInfo,
   getPromptVersions,
@@ -191,17 +191,18 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
             <h1 className="text-2xl font-semibold">Prompt Details</h1>
             <div className="flex items-center cursor-pointer">
               <p className="text-sm text-gray-500 font-mono">{basePromptId}</p>
-              <AntButton
-                type="text"
-                size="small"
-                icon={copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 onClick={() => copyToClipboard(basePromptId, "prompt-id")}
                 className={`left-2 z-10 transition-all duration-200 ${
                   copiedStates["prompt-id"]
                     ? "text-green-600 bg-green-50 border-green-200"
                     : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                 }`}
-              />
+              >
+                {copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              </Button>
             </div>
           </div>
           <div className="flex gap-2">
@@ -412,10 +413,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               <Card className="block p-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-medium">Prompt Template</h3>
-                  <AntButton
-                    type="text"
-                    size="small"
-                    icon={copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => copyToClipboard(promptTemplate.content, "prompt-content")}
                     className={`transition-all duration-200 ${
                       copiedStates["prompt-content"]
@@ -423,8 +423,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                         : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                     }`}
                   >
+                    {copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
                     {copiedStates["prompt-content"] ? "Copied!" : "Copy Content"}
-                  </AntButton>
+                  </Button>
                 </div>
 
                 <div className="space-y-4">
@@ -462,10 +463,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Raw API Response</h3>
-                <AntButton
-                  type="text"
-                  size="small"
-                  icon={copiedStates["raw-json"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => copyToClipboard(JSON.stringify(rawApiResponse, null, 2), "raw-json")}
                   className={`transition-all duration-200 ${
                     copiedStates["raw-json"]
@@ -473,8 +473,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                       : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                   }`}
                 >
+                  {copiedStates["raw-json"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
                   {copiedStates["raw-json"] ? "Copied!" : "Copy JSON"}
-                </AntButton>
+                </Button>
               </div>
 
               <div className="p-4 bg-gray-50 rounded-md border overflow-auto">

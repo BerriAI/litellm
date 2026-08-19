@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +26,7 @@ vi.mock("./networking", () => ({
   modelPatchUpdateCall: vi.fn(),
   modelDeleteCall: vi.fn(),
   credentialCreateCall: vi.fn(),
+  vectorStoreListCall: vi.fn(),
 }));
 
 const mockUseModelsInfo = vi.fn();
@@ -57,6 +58,7 @@ const mockTestModelGroupConnection = vi.mocked(networking.testModelGroupConnecti
 const mockModelPatchUpdateCall = vi.mocked(networking.modelPatchUpdateCall);
 const mockModelDeleteCall = vi.mocked(networking.modelDeleteCall);
 const mockCredentialCreateCall = vi.mocked(networking.credentialCreateCall);
+const mockVectorStoreListCall = vi.mocked(networking.vectorStoreListCall);
 
 describe("ModelInfoView", () => {
   let queryClient: QueryClient;
@@ -166,6 +168,12 @@ describe("ModelInfoView", () => {
       status: "success",
     });
 
+    mockVectorStoreListCall.mockResolvedValue({
+      data: [
+        { vector_store_id: "vs-alpha", vector_store_name: "Alpha" },
+        { vector_store_id: "vs-beta", vector_store_name: "Beta" },
+      ],
+    } as never);
     mockModelPatchUpdateCall.mockResolvedValue({});
     mockModelDeleteCall.mockResolvedValue({});
     mockCredentialCreateCall.mockResolvedValue({});
@@ -484,7 +492,7 @@ describe("ModelInfoView", () => {
 
     const modelNameInput = await screen.findByPlaceholderText("Enter model name");
     await user.clear(modelNameInput);
-    await user.type(modelNameInput, "Updated Model Name");
+    fireEvent.change(modelNameInput, { target: { value: "Updated Model Name" } });
 
     expect(modelNameInput).toHaveValue("Updated Model Name");
   });
@@ -730,7 +738,7 @@ describe("ModelInfoView", () => {
         expect(screen.getByPlaceholderText("Enter input cost")).toBeInTheDocument();
       });
       await user.clear(screen.getByPlaceholderText("Enter input cost"));
-      await user.type(screen.getByPlaceholderText("Enter input cost"), "2.5");
+      fireEvent.change(screen.getByPlaceholderText("Enter input cost"), { target: { value: "2.5" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
@@ -760,12 +768,105 @@ describe("ModelInfoView", () => {
       await waitFor(() => {
         expect(screen.getByPlaceholderText("e.g. 15")).toBeInTheDocument();
       });
-      await user.type(screen.getByPlaceholderText("e.g. 15"), "15");
+      fireEvent.change(screen.getByPlaceholderText("e.g. 15"), { target: { value: "15" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
         expect(screen.queryByText(/bills by reserved capacity/i)).not.toBeInTheDocument();
       });
+    });
+
+    const enterPtuEdit = async (user: ReturnType<typeof userEvent.setup>) => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      renderWithPtuModel();
+      expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      expect(await screen.findByPlaceholderText("e.g. 15")).toBeInTheDocument();
+    };
+
+    const expectBlocked = async (user: ReturnType<typeof userEvent.setup>, message: RegExp) => {
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+      expect(await screen.findAllByText(message)).not.toHaveLength(0);
+      expect(mockModelPatchUpdateCall).not.toHaveBeenCalled();
+    };
+
+    it("skips PTU validation entirely when the feature is disabled, so a half-set stored record still saves", async () => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(false);
+      const halfSetPtuModel = {
+        ...ptuModelData,
+        model_info: { ...ptuModelData.model_info, cost_per_ptu_per_hour: null, ptu_effective_from: null },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [halfSetPtuModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [halfSetPtuModel] });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
+      expect(screen.queryByText(/must be set together/i)).not.toBeInTheDocument();
+    });
+
+    it("blocks a PTU count above the backend ceiling", async () => {
+      const user = userEvent.setup();
+      await enterPtuEdit(user);
+
+      await user.clear(screen.getByPlaceholderText("e.g. 15"));
+      await user.type(screen.getByPlaceholderText("e.g. 15"), "1000001");
+
+      await expectBlocked(user, /PTU Count must be a whole number between 1 and 1,000,000/i);
+    });
+
+    it("blocks a cost per PTU hour above the backend ceiling", async () => {
+      const user = userEvent.setup();
+      await enterPtuEdit(user);
+
+      await user.clear(screen.getByPlaceholderText("e.g. 2.00"));
+      await user.type(screen.getByPlaceholderText("e.g. 2.00"), "2000000");
+
+      await expectBlocked(user, /Cost per PTU \/ Hour must be between 0 and 1,000,000/i);
+    });
+
+    it("blocks a half-set PTU count and rate pair", async () => {
+      const user = userEvent.setup();
+      await enterPtuEdit(user);
+
+      await user.clear(screen.getByPlaceholderText("e.g. 2.00"));
+
+      await expectBlocked(user, /PTU Count and Cost per PTU \/ Hour must be set together/i);
+    });
+
+    it("blocks PTU config with no effective start", async () => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      const undatedPtuModel = {
+        ...ptuModelData,
+        model_info: { ...ptuModelData.model_info, ptu_effective_from: null, ptu_effective_to: null },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [undatedPtuModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [undatedPtuModel] });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      expect(await screen.findByPlaceholderText("e.g. 15")).toBeInTheDocument();
+
+      await expectBlocked(user, /PTU Effective From is required when PTU Count is set/i);
+    });
+
+    it("blocks a PTU window whose end is not after its start", async () => {
+      const user = userEvent.setup();
+      await enterPtuEdit(user);
+
+      const to = screen.getAllByPlaceholderText("Select date")[1];
+      await user.clear(to);
+      await user.type(to, "2026-06-01 00:00:00");
+      await user.tab();
+
+      await expectBlocked(user, /PTU Effective To must be after PTU Effective From/i);
     });
 
     it("sends the PTU fields on save when enabled", async () => {
@@ -791,6 +892,64 @@ describe("ModelInfoView", () => {
       expect(modelInfo.ptu_count).toBe(15);
       expect(modelInfo.cost_per_ptu_per_hour).toBe(2);
     });
+
+    it("routes each edited PTU field into its own model_info key", async () => {
+      mockUsePtuCostAttributionEnabled.mockReturnValue(true);
+      const user = userEvent.setup();
+      renderWithPtuModel();
+
+      expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
+
+      await user.clear(screen.getByPlaceholderText("e.g. 15"));
+      await user.type(screen.getByPlaceholderText("e.g. 15"), "20");
+      await user.clear(screen.getByPlaceholderText("e.g. 2.00"));
+      await user.type(screen.getByPlaceholderText("e.g. 2.00"), "3.5");
+
+      const dates = () => screen.getAllByPlaceholderText("Select date");
+      expect(dates()[0]).toHaveValue("2026-07-01 00:00:00");
+      expect(dates()[1]).toHaveValue("2026-08-01 00:00:00");
+
+      const setDate = async (index: number, value: string) => {
+        await user.clear(dates()[index]);
+        await user.type(dates()[index], value);
+        await user.tab();
+      };
+      await setDate(1, "2026-10-03 02:00:00");
+      await setDate(0, "2026-09-02 01:00:00");
+
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+      await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
+
+      const modelInfo = mockModelPatchUpdateCall.mock.calls[0][1].model_info;
+      expect(modelInfo.ptu_count).toBe(20);
+      expect(modelInfo.cost_per_ptu_per_hour).toBe(3.5);
+      expect(modelInfo.ptu_effective_from).toBe("2026-09-02T01:00:00.000Z");
+      expect(modelInfo.ptu_effective_to).toBe("2026-10-03T02:00:00.000Z");
+    });
+  });
+
+  it("blocks the save when the LiteLLM Params box does not hold valid JSON", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const extraParams = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) =>
+          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+      ) as HTMLTextAreaElement;
+    await user.clear(extraParams);
+    await user.paste("{not json");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(await screen.findByText("Please enter valid JSON")).toBeInTheDocument();
+    expect(mockModelPatchUpdateCall).not.toHaveBeenCalled();
   });
 
   it("should not include input_cost_per_token or output_cost_per_token in update payload when user does not touch cost fields", async () => {
@@ -1255,6 +1414,314 @@ describe("ModelInfoView", () => {
       render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
       expect(await screen.findByTestId("test-connection-button")).toBeInTheDocument();
+    });
+  });
+
+  describe("payload parity pins", () => {
+    const enterEditMode = async (user: ReturnType<typeof userEvent.setup>) => {
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+      expect(await screen.findByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+      expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    };
+
+    const save = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+      await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());
+      return mockModelPatchUpdateCall.mock.calls[0][1] as {
+        model_name: string;
+        litellm_params: Record<string, unknown>;
+        model_info: Record<string, unknown>;
+      };
+    };
+
+    it("sends the whole edit payload for an untouched save", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      const payload = await save(user);
+
+      expect(payload).toEqual({
+        model_name: "GPT-4",
+        litellm_params: {
+          model: "gpt-4",
+          api_base: "https://api.openai.com/v1",
+          custom_llm_provider: "openai",
+          litellm_credential_name: "selected-credential",
+          tags: [],
+          guardrails: [],
+        },
+        model_info: {
+          id: "123",
+          created_by: "123",
+          created_at: "2024-01-01T00:00:00Z",
+          db_model: true,
+          input_cost_per_token: 0.00003,
+          output_cost_per_token: 0.00006,
+          access_groups: [],
+        },
+      });
+    });
+
+    it("omits health_check_model for a model that is not a wildcard, whose field never renders", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+      const payload = await save(user);
+
+      expect(payload.model_info).not.toHaveProperty("health_check_model");
+    });
+
+    it("routes each edited field into its own payload key", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.clear(screen.getByPlaceholderText("Enter model name"));
+      await user.type(screen.getByPlaceholderText("Enter model name"), "renamed-model");
+      await user.clear(screen.getByPlaceholderText("Enter LiteLLM model name"));
+      await user.type(screen.getByPlaceholderText("Enter LiteLLM model name"), "gpt-4o");
+      await user.clear(screen.getByPlaceholderText("Enter API base"));
+      await user.type(screen.getByPlaceholderText("Enter API base"), "https://example.test/v1");
+      await user.clear(screen.getByPlaceholderText("Enter custom LLM provider"));
+      await user.type(screen.getByPlaceholderText("Enter custom LLM provider"), "azure");
+      await user.type(screen.getByPlaceholderText("Enter organization"), "org-9");
+      await user.type(screen.getByPlaceholderText("Enter TPM"), "111");
+      await user.type(screen.getByPlaceholderText("Enter RPM"), "222");
+      await user.type(screen.getByPlaceholderText("Enter max retries"), "4");
+      await user.type(screen.getByPlaceholderText("Enter timeout"), "33");
+      await user.type(screen.getByPlaceholderText("Enter stream timeout"), "44");
+
+      const payload = await save(user);
+
+      expect(payload.model_name).toBe("renamed-model");
+      expect(payload.litellm_params).toMatchObject({
+        model: "gpt-4o",
+        api_base: "https://example.test/v1",
+        custom_llm_provider: "azure",
+        organization: "org-9",
+        tpm: "111",
+        rpm: "222",
+        max_retries: "4",
+        timeout: "33",
+        stream_timeout: "44",
+      });
+    });
+
+    it("routes each edited pricing field into its own payload key", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.clear(screen.getByPlaceholderText("Enter output cost"));
+      await user.type(screen.getByPlaceholderText("Enter output cost"), "12");
+      const [cacheRead, cacheWrite] = screen.getAllByPlaceholderText("Defaults to Input Cost if blank");
+      await user.type(cacheRead, "5");
+      await user.type(cacheWrite, "9");
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).toMatchObject({
+        output_cost_per_token: 0.000012,
+        cache_read_input_token_cost: 0.000005,
+        cache_creation_input_token_cost: 0.000009,
+      });
+    });
+
+    const addTag = async (user: ReturnType<typeof userEvent.setup>, placeholder: string, tag: string) => {
+      const input = screen.getByPlaceholderText(placeholder);
+      await user.type(input, tag);
+      await user.keyboard("{Enter}");
+    };
+
+    it("routes each typed collection field into its own payload key", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await addTag(user, "Select existing groups or type to create new ones", "beta-testers");
+      await addTag(user, "Select existing guardrails or type to create new ones", "content_filter");
+      await addTag(user, "Select existing tags or type to create new ones", "production_tag");
+
+      const payload = await save(user);
+
+      expect(payload.model_info.access_groups).toEqual(["beta-testers"]);
+      expect(payload.litellm_params.guardrails).toEqual(["content_filter"]);
+      expect(payload.litellm_params.tags).toEqual(["production_tag"]);
+    });
+
+    it("sends the edited model info JSON", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      const modelInfo = screen.getByPlaceholderText('{"gpt-4": 100, "claude-v1": 200}');
+      await user.clear(modelInfo);
+      await user.paste('{"id":"123","team_id":"team-7"}');
+
+      const payload = await save(user);
+
+      expect(payload.model_info).toMatchObject({ team_id: "team-7" });
+    });
+
+    it("sends the edited LiteLLM extra params", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      const extraParams = screen
+        .getAllByRole("textbox")
+        .find(
+          (input) =>
+            input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+        ) as HTMLTextAreaElement;
+      await user.clear(extraParams);
+      await user.paste('{"drop_params":true}');
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.drop_params).toBe(true);
+    });
+
+    it("sends the credential picked in the selector", async () => {
+      mockCredentialListCall.mockResolvedValue({
+        credentials: [
+          { credential_name: "selected-credential", credential_values: {}, credential_info: {} },
+          { credential_name: "other-credential", credential_values: {}, credential_info: {} },
+        ],
+      } as never);
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.click(await screen.findByText("selected-credential"));
+      await user.click(await screen.findByText("other-credential"));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.litellm_credential_name).toBe("other-credential");
+    });
+
+    it("sends the vector stores picked in the knowledge base selector", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.click(screen.getByPlaceholderText("Select knowledge bases (optional)"));
+      await user.click(await screen.findByText("Beta (vs-beta)"));
+      await user.keyboard("{Escape}");
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.vector_store_ids).toEqual(["vs-beta"]);
+    });
+
+    it("sends the health check model picked for a wildcard deployment", async () => {
+      const wildcard = {
+        ...defaultModelData,
+        litellm_params: { ...defaultModelData.litellm_params, model: "openai/gpt-4*" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [wildcard] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [wildcard] });
+      mockUseModelHub.mockReturnValue({
+        data: { data: [{ model_group: "openai/gpt-4o", providers: ["openai"] }] },
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.click(screen.getByText("Select existing health check model"));
+      await user.click(await screen.findByText("openai/gpt-4o"));
+
+      const payload = await save(user);
+
+      expect(payload.model_info.health_check_model).toBe("openai/gpt-4o");
+    });
+
+    it("keeps a pricing field in the payload after the operator types a value and restores the original", async () => {
+      // antd marks a field touched on change and never clears it, so retyping the seeded value
+      // still ships the key. RHF's dirtyFields resets on a value returning to its default, which
+      // would silently drop input_cost_per_token here.
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      const inputCost = screen.getByPlaceholderText("Enter input cost") as HTMLInputElement;
+      const seeded = inputCost.value;
+      expect(seeded).toBe("30");
+
+      await user.clear(inputCost);
+      await user.type(inputCost, "7");
+      await user.clear(inputCost);
+      await user.type(inputCost, seeded);
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.input_cost_per_token).toBe(0.00003);
+      expect(payload.litellm_params.cache_read_input_token_cost).toBe(0.00003);
+    });
+
+    it("clears a pricing override with an explicit null once the field is emptied", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.clear(screen.getByPlaceholderText("Enter input cost"));
+      const payload = await save(user);
+
+      expect(payload.litellm_params.input_cost_per_token).toBeNull();
+      expect(payload.litellm_params).not.toHaveProperty("cache_read_input_token_cost");
+    });
+
+    describe("cache control injection points", () => {
+      const withCachePoints = (points: unknown) => {
+        const data = {
+          ...defaultModelData,
+          litellm_params: { ...defaultModelData.litellm_params, cache_control_injection_points: points },
+        };
+        mockUseModelsInfo.mockReturnValue({ data: { data: [data] }, isLoading: false, error: null });
+        mockModelInfoV1Call.mockResolvedValue({ data: [data] });
+      };
+
+      it("omits the key when the deployment has none and the operator leaves the toggle alone", async () => {
+        const user = userEvent.setup();
+        await enterEditMode(user);
+        const payload = await save(user);
+
+        expect(payload.litellm_params).not.toHaveProperty("cache_control_injection_points");
+      });
+
+      it("hides the injection point rows until the toggle is on", async () => {
+        const user = userEvent.setup();
+        await enterEditMode(user);
+
+        expect(screen.queryByRole("button", { name: /add injection point/i })).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole("switch"));
+
+        expect(await screen.findByRole("button", { name: /add injection point/i })).toBeInTheDocument();
+      });
+
+      it("round-trips the stored injection points on an untouched save", async () => {
+        withCachePoints([{ location: "message", role: "user" }]);
+        const user = userEvent.setup();
+        await enterEditMode(user);
+        const payload = await save(user);
+
+        expect(payload.litellm_params.cache_control_injection_points).toEqual([{ location: "message", role: "user" }]);
+      });
+
+      it("drops the stored injection points when the operator turns the toggle off", async () => {
+        withCachePoints([{ location: "message", role: "user" }]);
+        const user = userEvent.setup();
+        await enterEditMode(user);
+
+        await user.click(screen.getByRole("switch"));
+        const payload = await save(user);
+
+        expect(payload.litellm_params).not.toHaveProperty("cache_control_injection_points");
+      });
+
+      it("adds a typed index as a string, matching what the deployment already stores", async () => {
+        withCachePoints([{ location: "message" }]);
+        const user = userEvent.setup();
+        await enterEditMode(user);
+
+        await user.type(screen.getByPlaceholderText("Optional"), "2");
+        const payload = await save(user);
+
+        expect(payload.litellm_params.cache_control_injection_points).toEqual([{ location: "message", index: "2" }]);
+      });
     });
   });
 });

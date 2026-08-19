@@ -8,7 +8,8 @@ import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Button, Modal, Skeleton, Space, Typography } from "antd";
+import { Modal, Skeleton, Space, Typography } from "antd";
+import { Button } from "@/components/ui/button";
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
@@ -85,13 +86,12 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
       open={isVisible}
       footer={
         <Space>
-          <Button onClick={handleCancel} disabled={isPending || isLoadingConfig}>
+          <Button variant="outline" onClick={handleCancel} disabled={isPending || isLoadingConfig}>
             Cancel
           </Button>
           <Button
-            type="primary"
-            loading={isPending}
-            disabled={isLoadingConfig}
+            disabled={isPending || isLoadingConfig}
+            aria-busy={isPending}
             onClick={() => void form.handleSubmit(handleFormSubmit)()}
           >
             {isPending ? "Saving..." : "Save Settings"}

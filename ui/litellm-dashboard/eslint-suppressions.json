@@ -336,9 +336,6 @@
     "max-params": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 3
     }
@@ -790,16 +787,6 @@
   },
   "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/panels/AddModelPanel.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1312,9 +1299,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1740,7 +1724,7 @@
   },
   "src/components/add_model/AddModelForm.test.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/add_model/AddModelForm.tsx": {
@@ -1751,7 +1735,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "src/components/add_model/ClassificationMethodConfig.tsx": {
@@ -1803,9 +1787,6 @@
     },
     "no-restricted-imports": {
       "count": 3
-    },
-    "prefer-const": {
-      "count": 2
     }
   },
   "src/components/add_model/auto_router_connection_test.tsx": {
@@ -1815,17 +1796,6 @@
   },
   "src/components/add_model/cache_control_settings.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "prefer-const": {
-      "count": 1
-    }
-  },
-  "src/components/add_model/conditional_public_model_name.test.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1853,11 +1823,6 @@
       "count": 1
     }
   },
-  "src/components/add_model/litellm_model_name.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/add_model/litellm_model_name.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1875,11 +1840,6 @@
     },
     "no-nested-ternary": {
       "count": 2
-    }
-  },
-  "src/components/add_model/provider_specific_fields.test.tsx": {
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/add_model/provider_specific_fields.tsx": {
@@ -2276,15 +2236,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "max-lines": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 14
-    },
     "no-restricted-imports": {
       "count": 1
     },
@@ -2343,20 +2294,9 @@
       "count": 1
     }
   },
-  "src/components/organisms/create_key_button.test.tsx": {
-    "@typescript-eslint/no-require-imports": {
-      "count": 1
-    },
-    "react/display-name": {
-      "count": 8
-    }
-  },
   "src/components/organisms/create_key_button.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
-      "count": 2
     },
     "max-lines": {
       "count": 1
@@ -2650,15 +2590,6 @@
   },
   "src/components/templates/key_edit_view.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    },
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
