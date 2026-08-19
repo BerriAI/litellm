@@ -1308,3 +1308,37 @@ def test_count_reasoning_tokens_counts_visible_reasoning():
     )
 
     assert processor.count_reasoning_tokens(response) > 0
+
+
+@pytest.mark.parametrize(
+    "estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens",
+    [(40, 40, 60), (250, 100, 0)],
+)
+def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
+    estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens
+):
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-unknown-split",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None, role=None))],
+        usage=Usage(
+            prompt_tokens=50,
+            completion_tokens=100,
+            total_tokens=150,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=None, text_tokens=None),
+        ),
+    )
+    processor = ChunkProcessor(chunks=[chunk])
+
+    usage = processor.calculate_usage(
+        chunks=[chunk],
+        model="claude-opus-4-8",
+        completion_output="10",
+        reasoning_tokens=estimated_reasoning_tokens,
+    )
+
+    assert usage.completion_tokens == 100
+    assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
+    assert usage.completion_tokens_details.text_tokens == expected_text_tokens
