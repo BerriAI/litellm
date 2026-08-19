@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -492,7 +492,7 @@ describe("ModelInfoView", () => {
 
     const modelNameInput = await screen.findByPlaceholderText("Enter model name");
     await user.clear(modelNameInput);
-    await user.type(modelNameInput, "Updated Model Name");
+    fireEvent.change(modelNameInput, { target: { value: "Updated Model Name" } });
 
     expect(modelNameInput).toHaveValue("Updated Model Name");
   });
@@ -738,7 +738,7 @@ describe("ModelInfoView", () => {
         expect(screen.getByPlaceholderText("Enter input cost")).toBeInTheDocument();
       });
       await user.clear(screen.getByPlaceholderText("Enter input cost"));
-      await user.type(screen.getByPlaceholderText("Enter input cost"), "2.5");
+      fireEvent.change(screen.getByPlaceholderText("Enter input cost"), { target: { value: "2.5" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
@@ -768,7 +768,7 @@ describe("ModelInfoView", () => {
       await waitFor(() => {
         expect(screen.getByPlaceholderText("e.g. 15")).toBeInTheDocument();
       });
-      await user.type(screen.getByPlaceholderText("e.g. 15"), "15");
+      fireEvent.change(screen.getByPlaceholderText("e.g. 15"), { target: { value: "15" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

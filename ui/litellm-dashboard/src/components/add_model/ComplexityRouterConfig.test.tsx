@@ -281,7 +281,7 @@ describe("ComplexityRouterConfig", () => {
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
     const input = within(keywordsSection).getByRole("combobox");
-    await user.type(input, "udp,");
+    fireEvent.change(input, { target: { value: "udp," } });
     expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp"]);
   });
 
