@@ -1,7 +1,8 @@
 /* eslint-disable react/no-unescaped-entities */
 import React from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Select, Divider } from "antd";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +15,11 @@ import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callba
 import { Logo } from "@/components/molecules/logo/Logo";
 import NumericalInput from "../shared/numerical_input";
 
-const { Option } = Select;
+const CALLBACK_TYPE_ITEMS = [
+  { value: "success", label: "Success Only" },
+  { value: "failure", label: "Failure Only" },
+  { value: "success_and_failure", label: "Success & Failure" },
+];
 
 const CallbackVarInput: React.FC<{
   sensitive: boolean;
@@ -199,31 +204,31 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
 
         <div className="space-y-2">
           <label className="text-sm font-medium text-foreground">Disabled Callbacks</label>
-          <Select
-            mode="multiple"
-            placeholder="Select callbacks to disable"
-            value={disabledCallbacks}
-            onChange={handleDisabledCallbacksChange}
-            style={{ width: "100%" }}
-            optionLabelProp="label"
-          >
-            {allCallbacks.map((callbackName) => {
-              const description = callbackInfo[callbackName]?.description;
-              return (
-                <Option key={callbackName} value={callbackName} label={callbackName}>
-                  <SimpleTooltip content={description} side="right">
-                    <div className="flex items-center space-x-2">
-                      <Logo
-                        src={callbackInfo[callbackName]?.logo}
-                        label={callbackName}
-                        className="w-4 h-4 object-contain"
-                      />
-                      <span>{callbackName}</span>
-                    </div>
-                  </SimpleTooltip>
-                </Option>
-              );
-            })}
+          <Select multiple value={disabledCallbacks} onValueChange={handleDisabledCallbacksChange}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select callbacks to disable">
+                {(selected: string[]) => (selected.length === 0 ? "Select callbacks to disable" : selected.join(", "))}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {allCallbacks.map((callbackName) => {
+                const description = callbackInfo[callbackName]?.description;
+                return (
+                  <SelectItem key={callbackName} value={callbackName}>
+                    <SimpleTooltip content={description} side="right">
+                      <div className="flex items-center space-x-2">
+                        <Logo
+                          src={callbackInfo[callbackName]?.logo}
+                          label={callbackName}
+                          className="w-4 h-4 object-contain"
+                        />
+                        <span>{callbackName}</span>
+                      </div>
+                    </SimpleTooltip>
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
           </Select>
           <div className="text-xs text-muted-foreground">
             Select callbacks that should be disabled for this key. These callbacks will not receive any logging data.
@@ -231,7 +236,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
         </div>
       </div>
 
-      <Divider />
+      <Separator className="my-6" />
 
       {/* Logging Integrations Section */}
       <div className="flex justify-between items-center">
@@ -286,42 +291,51 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-foreground">Integration Type</label>
                     <Select
-                      value={callbackDisplayName}
-                      placeholder="Select integration"
-                      onChange={(value) => updateLoggingConfig(index, "callback_name", value)}
-                      className="w-full"
-                      optionLabelProp="label"
+                      value={callbackDisplayName ?? null}
+                      onValueChange={(value: string | null) => value && updateLoggingConfig(index, "callback_name", value)}
                     >
-                      {supportedCallbacks.map((callbackName) => {
-                        const description = callbackInfo[callbackName]?.description;
-                        return (
-                          <Option key={callbackName} value={callbackName} label={callbackName}>
-                            <SimpleTooltip content={description} side="right">
-                              <div className="flex items-center space-x-2">
-                                <Logo
-                                  src={callbackInfo[callbackName]?.logo}
-                                  label={callbackName}
-                                  className="w-4 h-4 object-contain"
-                                />
-                                <span>{callbackName}</span>
-                              </div>
-                            </SimpleTooltip>
-                          </Option>
-                        );
-                      })}
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select integration" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {supportedCallbacks.map((callbackName) => {
+                          const description = callbackInfo[callbackName]?.description;
+                          return (
+                            <SelectItem key={callbackName} value={callbackName}>
+                              <SimpleTooltip content={description} side="right">
+                                <div className="flex items-center space-x-2">
+                                  <Logo
+                                    src={callbackInfo[callbackName]?.logo}
+                                    label={callbackName}
+                                    className="w-4 h-4 object-contain"
+                                  />
+                                  <span>{callbackName}</span>
+                                </div>
+                              </SimpleTooltip>
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
                     </Select>
                   </div>
 
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-foreground">Event Type</label>
                     <Select
+                      items={CALLBACK_TYPE_ITEMS}
                       value={config.callback_type}
-                      onChange={(value) => updateLoggingConfig(index, "callback_type", value)}
-                      className="w-full"
+                      onValueChange={(value: string | null) => value && updateLoggingConfig(index, "callback_type", value)}
                     >
-                      <Option value="success">Success Only</Option>
-                      <Option value="failure">Failure Only</Option>
-                      <Option value="success_and_failure">Success &amp; Failure</Option>
+                      <SelectTrigger aria-label="Event Type" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CALLBACK_TYPE_ITEMS.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
                     </Select>
                   </div>
                 </div>

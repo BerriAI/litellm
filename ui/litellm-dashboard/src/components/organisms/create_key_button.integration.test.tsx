@@ -526,7 +526,7 @@ describe("CreateKey", () => {
       await openModal();
       await nameTheKey();
       await openSection(/Optional Settings/i);
-      await userEvent.click(await screen.findByLabelText("Disable Global Guardrails"));
+      await userEvent.click(await screen.findByRole("switch", { name: /Disable Global Guardrails/ }));
       await submit();
 
       expect((await createdPayload()).disable_global_guardrails).toBe(true);
@@ -935,7 +935,7 @@ describe("CreateKey", () => {
       await openModal();
       await nameTheKey();
       await openSection(/Optional Settings/i);
-      await userEvent.click(await screen.findByLabelText("Enable Prompt Caching"));
+      await userEvent.click(await screen.findByRole("switch", { name: /Enable Prompt Caching/ }));
       await submit();
 
       expect((await createdPayload()).enable_prompt_caching).toBe(true);
