@@ -2387,3 +2387,83 @@ async def test_forward_jsonrpc_sse_is_untouched_while_keepalives_are_unconfigure
 
     assert not any(chunk.startswith(":") for chunk in chunks)
     assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"
+
+
+async def _stream_message_response():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    return await _handle_stream_message(
+        api_base="http://upstream.local",
+        request_id="req-1",
+        params={
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hi"}],
+                "messageId": "msg-1",
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_pings_while_the_upstream_agent_is_still_silent(
+    monkeypatch,
+):
+    """message/stream is SSE like tasks/resubscribe, so a slow first event must be
+    held open by the same keepalives rather than sitting idle for the whole
+    time-to-first-token."""
+    import asyncio
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
+
+    async def fake_stream(**kwargs):
+        await asyncio.sleep(0.3)
+        yield {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}}
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _stream_message_response()
+        assert response.headers["x-accel-buffering"] == "no"
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert chunks[0] == ": ping\n\n"
+    assert chunks.count(": ping\n\n") >= 3
+    assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_is_untouched_while_keepalives_are_unconfigured(
+    monkeypatch,
+):
+    """Off until an operator sets an interval, so the default stream is unchanged."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", None)
+
+    async def fake_stream(**kwargs):
+        yield {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}}
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _stream_message_response()
+        assert "x-accel-buffering" not in response.headers
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert not any(chunk.startswith(":") for chunk in chunks)
+    assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"
