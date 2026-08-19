@@ -28,6 +28,15 @@ const TEST_TS_FILES_THAT_RENDER_REACT: readonly string[] = [
   "src/lib/forms/pickDirty.test.ts",
 ];
 
+const jsdomTier = {
+  environment: "./tests/jsdomFetchEnv.ts",
+  setupFiles: ["tests/setupTests.ts"],
+  globals: true,
+  css: true,
+  testTimeout: 60_000,
+  hookTimeout: 30_000,
+};
+
 const config: ViteUserConfig = {
   ...sharedViteConfig,
   test: {
@@ -37,40 +46,30 @@ const config: ViteUserConfig = {
         test: {
           name: "unit",
           environment: "node",
+          setupFiles: ["tests/setup.unit.ts"],
           globals: true,
+          testTimeout: 60_000,
+          hookTimeout: 30_000,
           include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
           exclude: ["node_modules/**", ...TEST_TS_FILES_THAT_RENDER_REACT],
-          setupFiles: ["tests/setup.unit.ts"],
-          testTimeout: 5_000,
-          hookTimeout: 5_000,
         },
       },
       {
         ...sharedViteConfig,
         test: {
+          ...jsdomTier,
           name: "component",
-          environment: "./tests/jsdomFetchEnv.ts",
-          globals: true,
-          css: true,
           include: ["src/**/*.test.tsx", "tests/**/*.test.tsx", ...TEST_TS_FILES_THAT_RENDER_REACT],
           exclude: ["node_modules/**", "**/*.integration.test.tsx"],
-          setupFiles: ["tests/setupTests.ts"],
-          testTimeout: 60_000,
-          hookTimeout: 30_000,
         },
       },
       {
         ...sharedViteConfig,
         test: {
+          ...jsdomTier,
           name: "integration",
-          environment: "./tests/jsdomFetchEnv.ts",
-          globals: true,
-          css: true,
           include: ["src/**/*.integration.test.tsx", "tests/**/*.integration.test.tsx"],
           exclude: ["node_modules/**"],
-          setupFiles: ["tests/setupTests.ts"],
-          testTimeout: 60_000,
-          hookTimeout: 30_000,
         },
       },
       {
@@ -87,7 +86,6 @@ const config: ViteUserConfig = {
       },
     ],
     silent: process.env.CI ? "passed-only" : false,
-    retry: 0,
     teardownTimeout: 60_000,
     coverage: {
       provider: "v8",

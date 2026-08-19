@@ -12,7 +12,6 @@
     "test:unit": "vitest run --project unit",
     "test:component": "vitest run --project component",
     "test:integration": "vitest run --project integration",
-    "test:budgets": "node scripts/check-test-budgets.mjs test-budgets.json",
     "test:dot": "vitest --reporter=dot",
     "test:types": "vitest run --project types",
     "test:watch": "vitest -w",

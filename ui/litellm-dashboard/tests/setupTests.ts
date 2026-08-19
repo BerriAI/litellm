@@ -1,8 +1,6 @@
 import "@testing-library/jest-dom";
-import { cleanup, configure } from "@testing-library/react";
+import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
-
-configure({ asyncUtilTimeout: 5_000 });
 
 const ensureTestLocalStorage = () => {
   if (typeof window === "undefined" || typeof window.Storage === "undefined") {

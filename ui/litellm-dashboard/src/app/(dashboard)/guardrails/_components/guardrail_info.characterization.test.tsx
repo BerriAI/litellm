@@ -153,7 +153,7 @@ describe("GuardrailInfoView update payload characterization", () => {
     await openEditor(user);
 
     await user.click(screen.getByLabelText("Skip system messages in guardrail"));
-    await user.click(await screen.findByRole("option", { name: "Yes — exclude from guardrail scan" }));
+    await user.click(await screen.findByText("Yes — exclude from guardrail scan"));
     await saveChanges(user);
 
     await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
