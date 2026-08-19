@@ -480,12 +480,18 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
 )
 
 
-def _failure_usage_to_lift(model_call_details: Mapping[str, object], dispatched: bool) -> tuple[object, object] | None:
+def _failure_usage_to_lift(
+    model_call_details: Mapping[str, object],
+    request_body: Mapping[str, object],
+    dispatched: bool,
+) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
     cost in model_call_details, so prefer it. Otherwise a request that was
     dispatched to a provider and failed without upstream usage gets an
-    estimated input-side Usage with zero cost. Returns the
+    estimated input-side Usage with zero cost. The raw request body backfills
+    the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
+    chat-completions provider) without filling optional_params. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
     recovered_usage: Final = model_call_details.get("combined_usage_object")
     if recovered_usage is not None:
@@ -495,11 +501,12 @@ def _failure_usage_to_lift(model_call_details: Mapping[str, object], dispatched:
     if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
     optional_params: Final = model_call_details.get("optional_params")
-    system_input: Final = (
+    dispatched_system: Final = (
         (optional_params.get("system") or optional_params.get("instructions"))
         if isinstance(optional_params, dict)
         else None
     )
+    system_input: Final = dispatched_system or request_body.get("system") or request_body.get("instructions")
     estimated_usage: Final = _estimate_dispatched_failure_usage(
         model=str(model_call_details.get("model") or ""),
         request_input=model_call_details.get("messages"),
@@ -2303,6 +2310,7 @@ class ProxyLogging:
             # is popped) record real token counts instead of zero.
             _usage_to_lift: Final = _failure_usage_to_lift(
                 model_call_details=_model_call_details,
+                request_body=request_data,
                 dispatched=_first_handoff is not None,
             )
             if _usage_to_lift is not None:
