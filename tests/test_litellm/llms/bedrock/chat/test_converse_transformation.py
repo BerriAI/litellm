@@ -6048,5 +6048,7 @@ def test_streaming_usage_chunk_is_transformed():
 def test_update_optional_params_with_thinking_tokens_bool_thinking_does_not_crash():
     config = AmazonConverseConfig()
     optional_params = {"thinking": True}
-    config.update_optional_params_with_thinking_tokens(non_default_params={"thinking": True}, optional_params=optional_params)
+    config.update_optional_params_with_thinking_tokens(
+        non_default_params={"thinking": True}, optional_params=optional_params
+    )
     assert "maxTokens" not in optional_params
