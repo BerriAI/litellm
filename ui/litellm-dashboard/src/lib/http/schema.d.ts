@@ -33292,18 +33292,17 @@ export interface components {
             shadow_percentage: number;
             /**
              * Status
-             * @description An operator's stop is a recorded fact, not an inference: a job with stopped_by
-             *     reads stopped permanently, and no attempt landing around the stop can reclassify
-             *     it as completed. Otherwise the job reads completed once its window passes or once
-             *     every key finished, whether or not a sweep stamped them yet; one key exhausting
-             *     its budget leaves the job running while any sibling still samples. A key stamped
-             *     under budget with no stopped_by predates the column and keeps reading stopped.
+             * @description Three recorded facts, no history-guessing: a stop is stopped_by (the migration
+             *     backfills it for every job that displayed stopped when the column arrived, so the
+             *     pre-column population is closed), completion is the window passing or every key
+             *     spending its budget, and anything else is running. The all-keys-stamped fallback
+             *     covers only stops written by pre-column pods during a rolling deploy.
              * @enum {string}
              */
             readonly status: "running" | "completed" | "stopped";
             /**
              * Stopped By
-             * @description The operator who stopped the job early, recorded by the stop endpoint; None when the job ended on its own. Its presence is what makes a job read stopped rather than completed
+             * @description The operator who stopped the job early, recorded by the stop endpoint; 'unknown' backfilled by migration for jobs that displayed stopped when the column arrived; None when the job ended on its own. Its presence is what makes a job read stopped rather than completed
              */
             stopped_by?: string | null;
         };
