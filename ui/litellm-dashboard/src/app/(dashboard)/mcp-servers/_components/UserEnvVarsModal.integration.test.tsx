@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -23,21 +23,27 @@ const statusWith = (required: MCPUserEnvVarsStatus["required"]): MCPUserEnvVarsS
 
 const renderModal = (status: MCPUserEnvVarsStatus, onSaved = vi.fn(), onClose = vi.fn()) => {
   vi.mocked(networking.getMCPUserEnvVars).mockResolvedValue(status);
-  render(
+  const view = render(
     <QueryClientProvider client={createQueryClient()}>
       <UserEnvVarsModal server={server} open accessToken="sk-test" onClose={onClose} onSaved={onSaved} />
     </QueryClientProvider>,
   );
-  return { onSaved, onClose };
+  const setOpen = (open: boolean) =>
+    view.rerender(
+      <QueryClientProvider client={createQueryClient()}>
+        <UserEnvVarsModal server={server} open={open} accessToken="sk-test" onClose={onClose} onSaved={onSaved} />
+      </QueryClientProvider>,
+    );
+  return { onSaved, onClose, setOpen };
 };
 
 const save = (user: ReturnType<typeof setup>) => user.click(screen.getByRole("button", { name: "Save Credentials" }));
 
+// Opening the modal remounts the form so nothing carries over from the last time it was open.
+// Settle that remount before handing back a node, or the caller holds a detached one.
 const fieldAfterOpen = async (label: RegExp): Promise<HTMLElement> => {
-  const initial = await screen.findByLabelText(label);
-  await waitFor(() => {
-    expect(initial).not.toBeInTheDocument();
-  });
+  await screen.findByLabelText(label);
+  await act(async () => {});
   return screen.getByLabelText(label);
 };
 
@@ -147,6 +153,22 @@ describe("UserEnvVarsModal", () => {
     expect(input).toHaveAttribute("type", "password");
     fireEvent.change(input, { target: { value: "hunter2" } });
     expect(screen.getByLabelText(/^API_KEY/)).toHaveAttribute("type", "password");
+  });
+
+  it("starts from a blank form each time it is opened", async () => {
+    const { setOpen } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
+
+    const input = await fieldAfterOpen(/^API_KEY/);
+    fireEvent.change(input, { target: { value: "hunter2" } });
+    expect(screen.getByLabelText(/^API_KEY/)).toHaveValue("hunter2");
+
+    setOpen(false);
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/^API_KEY/)).not.toBeInTheDocument();
+    });
+
+    setOpen(true);
+    expect(await fieldAfterOpen(/^API_KEY/)).toHaveValue("");
   });
 
   it("reports the empty state instead of a form when nothing is required", async () => {

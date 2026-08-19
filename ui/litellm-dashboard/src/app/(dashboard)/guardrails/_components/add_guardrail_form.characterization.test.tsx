@@ -1,7 +1,7 @@
 import React from "react";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddGuardrailForm from "./add_guardrail_form";
 
@@ -252,14 +252,13 @@ describe("AddGuardrailForm create payload characterization", () => {
     await user.type(await screen.findByLabelText("Guardrail Name"), "my-bedrock");
     await pickProvider(user, "Bedrock Guardrail");
 
-    await user.click(screen.getByLabelText("Always On"));
-    await user.click((await screen.findAllByText("Yes")).at(-1) as HTMLElement);
-
-    await user.click(screen.getByLabelText("Skip system messages in guardrail"));
-    await user.click((await screen.findAllByText(/exclude from guardrail scan/)).at(-1) as HTMLElement);
-
-    await user.click(screen.getByLabelText("Skip tool messages in guardrail"));
-    await user.click((await screen.findAllByText(/always include in scan/)).at(-1) as HTMLElement);
+    await chooseSelectOption(user, screen.getByLabelText("Always On"), "Yes");
+    await chooseSelectOption(
+      user,
+      screen.getByLabelText("Skip system messages in guardrail"),
+      /exclude from guardrail scan/,
+    );
+    await chooseSelectOption(user, screen.getByLabelText("Skip tool messages in guardrail"), /always include in scan/);
 
     await user.type(await screen.findByPlaceholderText("The guardrail id on Bedrock"), "gr-123");
     await user.click(screen.getByRole("button", { name: "Next" }));

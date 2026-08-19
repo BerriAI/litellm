@@ -1,5 +1,4 @@
 import { useRef, useState } from "react";
-import { Modal } from "antd";
 import { Info } from "lucide-react";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { UserAddOutlined } from "@ant-design/icons";
@@ -18,6 +17,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -208,67 +208,72 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   return (
-    <Modal title={title} open={isVisible} onCancel={handleClose} footer={null} width={800} maskClosable={!isSubmitting}>
-      <TooltipProvider>
-        <form onSubmit={form.handleSubmit(handleSubmit)} noValidate>
-          <Alert variant="info" className="mb-4" data-testid="member-existing-users-notice">
-            <Info />
-            <AlertTitle>
-              Search selects from users that already exist. To add someone new, ask a proxy admin to create their
-              account first.
-            </AlertTitle>
-          </Alert>
+    <Dialog open={isVisible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal={isSubmitting}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <TooltipProvider>
+          <form onSubmit={form.handleSubmit(handleSubmit)} noValidate>
+            <Alert variant="info" className="mb-4" data-testid="member-existing-users-notice">
+              <Info />
+              <AlertTitle>
+                Search selects from users that already exist. To add someone new, ask a proxy admin to create their
+                account first.
+              </AlertTitle>
+            </Alert>
 
-          <FieldGroup>
-            <FormField control={form.control} name="user_email" label="Email">
-              {({ id, value, onChange }) =>
-                renderUserSearch("user_email", "Search by email", { id, value, onChange }, "member-email-search")
-              }
-            </FormField>
+            <FieldGroup>
+              <FormField control={form.control} name="user_email" label="Email">
+                {({ id, value, onChange }) =>
+                  renderUserSearch("user_email", "Search by email", { id, value, onChange }, "member-email-search")
+                }
+              </FormField>
 
-            <div className="text-center">OR</div>
+              <div className="text-center">OR</div>
 
-            <FormField control={form.control} name="user_id" label="User ID">
-              {({ id, value, onChange }) => renderUserSearch("user_id", "Search by user ID", { id, value, onChange })}
-            </FormField>
+              <FormField control={form.control} name="user_id" label="User ID">
+                {({ id, value, onChange }) => renderUserSearch("user_id", "Search by user ID", { id, value, onChange })}
+              </FormField>
 
-            <FormField control={form.control} name="role" label="Member Role">
-              {({ id, value, onChange }) => (
-                <Select items={roles} value={value} onValueChange={(next) => onChange(next as string)}>
-                  <SelectTrigger id={id}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {roles.map((role) => (
-                      <SelectItem key={role.value} value={role.value}>
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <span>
-                                <span className="font-medium">{role.label}</span>
-                                <span className="ml-2 text-sm text-muted-foreground">- {role.description}</span>
-                              </span>
-                            }
-                          />
-                          <TooltipContent>{role.description}</TooltipContent>
-                        </Tooltip>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </FormField>
-          </FieldGroup>
+              <FormField control={form.control} name="role" label="Member Role">
+                {({ id, value, onChange }) => (
+                  <Select items={roles} value={value} onValueChange={(next) => onChange(next as string)}>
+                    <SelectTrigger id={id}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roles.map((role) => (
+                        <SelectItem key={role.value} value={role.value}>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <span>
+                                  <span className="font-medium">{role.label}</span>
+                                  <span className="ml-2 text-sm text-muted-foreground">- {role.description}</span>
+                                </span>
+                              }
+                            />
+                            <TooltipContent>{role.description}</TooltipContent>
+                          </Tooltip>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </FormField>
+            </FieldGroup>
 
-          <div className="mt-4 text-right">
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? <UiLoadingSpinner className="size-4" /> : <UserAddOutlined />}
-              {isSubmitting ? "Adding..." : "Add Member"}
-            </Button>
-          </div>
-        </form>
-      </TooltipProvider>
-    </Modal>
+            <div className="mt-4 text-right">
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? <UiLoadingSpinner className="size-4" /> : <UserAddOutlined />}
+                {isSubmitting ? "Adding..." : "Add Member"}
+              </Button>
+            </div>
+          </form>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

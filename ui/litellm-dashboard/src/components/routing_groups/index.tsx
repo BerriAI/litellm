@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Card, Flex, Input, Modal, Space, Typography } from "antd";
+import { Card, Flex, Input, Space, Typography } from "antd";
 import { Button } from "@/components/ui/button";
 import { PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
@@ -13,6 +13,7 @@ import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
 import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const { Text } = Typography;
 
@@ -154,20 +155,30 @@ const RoutingGroups: React.FC = () => {
         saving={saveMutation.isPending}
       />
 
-      <Modal
-        open={Boolean(deletingGroup)}
-        title="Delete routing group?"
-        okText="Delete"
-        okButtonProps={{ danger: true, loading: saveMutation.isPending }}
-        cancelText="Cancel"
-        onOk={confirmDelete}
-        onCancel={() => setDeletingGroup(null)}
-      >
-        <Text>
-          Models in <Text strong>{deletingGroup?.group_name}</Text> will fall back to the proxy&apos;s top-level routing
-          strategy. This cannot be undone.
-        </Text>
-      </Modal>
+      <Dialog open={Boolean(deletingGroup)} onOpenChange={(open) => !open && setDeletingGroup(null)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Delete routing group?</DialogTitle>
+          </DialogHeader>
+          <Text>
+            Models in <Text strong>{deletingGroup?.group_name}</Text> will fall back to the proxy&apos;s top-level
+            routing strategy. This cannot be undone.
+          </Text>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingGroup(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmDelete}
+              variant="destructive"
+              disabled={saveMutation.isPending}
+              aria-busy={saveMutation.isPending}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Space>
   );
 };

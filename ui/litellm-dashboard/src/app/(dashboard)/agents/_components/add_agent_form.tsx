@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Select, Steps, Tag } from "antd";
+import { Select, Steps, Tag } from "antd";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -49,6 +49,7 @@ import {
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const { Step } = Steps;
 
@@ -983,72 +984,64 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
   );
 
   return (
-    <Modal
-      title={
-        <div className="flex items-center space-x-3 border-b border-border pb-4">
-          {selectedLogo && currentStep < 1 && (
-            <Logo src={selectedLogo} label="Agent" className="h-6 w-6 object-contain" />
-          )}
-          <h2 className="text-xl font-semibold text-foreground">Add New Agent</h2>
-        </div>
-      }
-      open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={900}
-      className="top-8"
-      styles={{
-        body: { padding: "24px" },
-        header: { padding: "24px 24px 0 24px", border: "none" },
-      }}
-    >
-      <TooltipProvider>
-        <div className="mt-4">
-          <Steps current={currentStep} size="small" className="mb-8">
-            <Step title="Configure" />
-            <Step title="Entitlements" />
-            <Step title="Governance" />
-            <Step title="Agent Management" />
-            <Step title="Ready" />
-          </Steps>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[900px]">
+        <DialogHeader>
+          <div className="flex items-center space-x-3 border-b border-border pb-4">
+            {selectedLogo && currentStep < 1 && (
+              <Logo src={selectedLogo} label="Agent" className="h-6 w-6 object-contain" />
+            )}
+            <DialogTitle className="text-xl font-semibold text-foreground">Add New Agent</DialogTitle>
+          </div>
+        </DialogHeader>
+        <TooltipProvider>
+          <div className="mt-4">
+            <Steps current={currentStep} size="small" className="mb-8">
+              <Step title="Configure" />
+              <Step title="Entitlements" />
+              <Step title="Governance" />
+              <Step title="Agent Management" />
+              <Step title="Ready" />
+            </Steps>
 
-          <FormProvider {...form}>
-            <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
-              {currentStep === 0 && renderConfigureStep()}
-              {currentStep === 1 && renderEntitlementsStep()}
-              {currentStep === 2 && renderObservabilityStep()}
-              {currentStep === 3 && renderAssignKeyStep()}
-              {currentStep === 4 && renderReadyStep()}
-            </form>
-          </FormProvider>
+            <FormProvider {...form}>
+              <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
+                {currentStep === 0 && renderConfigureStep()}
+                {currentStep === 1 && renderEntitlementsStep()}
+                {currentStep === 2 && renderObservabilityStep()}
+                {currentStep === 3 && renderAssignKeyStep()}
+                {currentStep === 4 && renderReadyStep()}
+              </form>
+            </FormProvider>
 
-          <div className="mt-6 flex items-center justify-between border-t border-border pt-6">
-            <div>
-              {currentStep > 0 && currentStep < 4 && (
-                <Button type="button" variant="outline" onClick={handleBack}>
-                  ← Back
-                </Button>
-              )}
-            </div>
-            <div className="flex gap-3">
-              {currentStep < 4 && (
-                <Button variant="secondary" onClick={handleClose}>
-                  Cancel
-                </Button>
-              )}
-              {currentStep < 3 && <Button onClick={handleNext}>Next →</Button>}
-              {currentStep === 3 && (
-                <Button disabled={isSubmitting} aria-busy={isSubmitting} onClick={handleCreateAgent}>
-                  {isSubmitting && <UiLoadingSpinner className="size-4" />}
-                  {isSubmitting ? "Creating..." : "Create Agent →"}
-                </Button>
-              )}
-              {currentStep === 4 && <Button onClick={handleClose}>Done</Button>}
+            <div className="mt-6 flex items-center justify-between border-t border-border pt-6">
+              <div>
+                {currentStep > 0 && currentStep < 4 && (
+                  <Button type="button" variant="outline" onClick={handleBack}>
+                    ← Back
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-3">
+                {currentStep < 4 && (
+                  <Button variant="secondary" onClick={handleClose}>
+                    Cancel
+                  </Button>
+                )}
+                {currentStep < 3 && <Button onClick={handleNext}>Next →</Button>}
+                {currentStep === 3 && (
+                  <Button disabled={isSubmitting} aria-busy={isSubmitting} onClick={handleCreateAgent}>
+                    {isSubmitting && <UiLoadingSpinner className="size-4" />}
+                    {isSubmitting ? "Creating..." : "Create Agent →"}
+                  </Button>
+                )}
+                {currentStep === 4 && <Button onClick={handleClose}>Done</Button>}
+              </div>
             </div>
           </div>
-        </div>
-      </TooltipProvider>
-    </Modal>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

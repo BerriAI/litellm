@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Tag } from "antd";
+import { Tag } from "antd";
 import { z } from "zod/v4";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "@/components/policies/types";
 import { Guardrail } from "@/components/guardrails/types";
@@ -20,6 +20,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { CircleHelp, Info } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 
 interface AddPolicyFormProps {
@@ -336,231 +337,236 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   // ── Mode Picker Step ──────────────────────────────────────────────────────
   if (step === "pick_mode") {
     return (
-      <Modal title="Create New Policy" open={visible} onCancel={handleClose} footer={null} width={620}>
-        <ModePicker selected={selectedMode} onSelect={setSelectedMode} />
+      <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[620px]">
+          <DialogHeader>
+            <DialogTitle>Create New Policy</DialogTitle>
+          </DialogHeader>
+          <ModePicker selected={selectedMode} onSelect={setSelectedMode} />
 
-        {selectedMode === "flow_builder" && (
-          <Alert
-            variant="info"
-            className="mt-4 border border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950"
-          >
-            <AlertTitle>
-              You&apos;ll be redirected to the full-screen Flow Builder to design your policy logic visually.
-            </AlertTitle>
-          </Alert>
-        )}
-
-        <div className="mt-6 flex justify-end gap-2">
-          <Button type="button" variant="outline" onClick={handleClose}>
-            Cancel
-          </Button>
-          <Button type="button" onClick={handleModeConfirm}>
-            {selectedMode === "flow_builder" ? "Continue to Builder" : "Create Policy"}
-          </Button>
-        </div>
-      </Modal>
-    );
-  }
-
-  // ── Simple Form Step ──────────────────────────────────────────────────────
-  return (
-    <Modal
-      title={isEditing ? "Edit Policy" : "Create New Policy"}
-      open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={700}
-    >
-      <TooltipProvider>
-        <form onSubmit={(event) => event.preventDefault()} noValidate>
-          <FieldGroup>
-            <FormField control={form.control} name="policy_name" label="Policy Name">
-              {({ ref, ...control }) => (
-                <Input
-                  {...control}
-                  ref={ref}
-                  placeholder="e.g., global-baseline, healthcare-compliance"
-                  disabled={isEditing}
-                />
-              )}
-            </FormField>
-
-            <FormField control={form.control} name="description" label="Description">
-              {({ ref, ...control }) => (
-                <Textarea {...control} ref={ref} rows={2} placeholder="Describe what this policy does..." />
-              )}
-            </FormField>
-
-            <SectionHeading label="Inheritance" />
-
-            <FormField
-              control={form.control}
-              name="inherit"
-              label={labelWithHint(
-                "Inherit From",
-                "Inherit guardrails from another policy. The child policy will include all guardrails from the parent.",
-              )}
+          {selectedMode === "flow_builder" && (
+            <Alert
+              variant="info"
+              className="mt-4 border border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950"
             >
-              {({ id, value, onChange }) => (
-                <SearchSelect
-                  inputId={id}
-                  options={policyOptions}
-                  value={value}
-                  onValueChange={(selected) => {
-                    onChange(selected);
-                    refreshResolvedGuardrails({ inherit: selected });
-                  }}
-                  placeholder="Select a parent policy (optional)"
-                  className="h-9"
-                />
-              )}
-            </FormField>
-
-            <SectionHeading label="Guardrails" />
-
-            <FormField
-              control={form.control}
-              name="guardrails_add"
-              label={labelWithHint(
-                "Guardrails to Add",
-                "These guardrails will be added to requests matching this policy",
-              )}
-            >
-              {({ value, onChange }) => (
-                <MultiSelect
-                  options={guardrailOptions}
-                  value={value}
-                  onValueChange={(selected) => {
-                    onChange(selected);
-                    refreshResolvedGuardrails({ guardrails_add: selected });
-                  }}
-                  placeholder="Select guardrails to add"
-                />
-              )}
-            </FormField>
-
-            <FormField
-              control={form.control}
-              name="guardrails_remove"
-              label={labelWithHint(
-                "Guardrails to Remove",
-                "These guardrails will be removed from inherited guardrails",
-              )}
-            >
-              {({ value, onChange }) => (
-                <MultiSelect
-                  options={guardrailOptions}
-                  value={value}
-                  onValueChange={(selected) => {
-                    onChange(selected);
-                    refreshResolvedGuardrails({ guardrails_remove: selected });
-                  }}
-                  placeholder="Select guardrails to remove (from inherited)"
-                />
-              )}
-            </FormField>
-
-            {resolvedGuardrails.length > 0 && (
-              <Alert variant="info">
-                <Info />
-                <AlertTitle>Resolved Guardrails</AlertTitle>
-                <AlertDescription>
-                  <span className="mb-2 block text-muted-foreground">
-                    These are the final guardrails that will be applied (including inheritance):
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {resolvedGuardrails.map((g) => (
-                      <Tag key={g} color="blue">
-                        {g}
-                      </Tag>
-                    ))}
-                  </div>
-                </AlertDescription>
-              </Alert>
-            )}
-
-            <SectionHeading label="Conditions (Optional)" />
-
-            <Alert variant="info">
-              <Info />
-              <AlertTitle>Model Scope</AlertTitle>
-              <AlertDescription>
-                By default, this policy will run on all models. You can optionally restrict it to specific models below.
-              </AlertDescription>
+              <AlertTitle>
+                You&apos;ll be redirected to the full-screen Flow Builder to design your policy logic visually.
+              </AlertTitle>
             </Alert>
-
-            <div role="group" className="flex w-full flex-col gap-3">
-              <span className="text-sm leading-snug font-medium text-foreground">Model Condition Type</span>
-              <RadioGroup
-                value={modelConditionType}
-                onValueChange={(value) => {
-                  setModelConditionType(value as ModelConditionType);
-                  form.setValue("model_condition", "");
-                }}
-                className="flex flex-row gap-6"
-              >
-                <label className="flex cursor-pointer items-center gap-2 text-sm">
-                  <RadioGroupItem value="model" />
-                  Select Model
-                </label>
-                <label className="flex cursor-pointer items-center gap-2 text-sm">
-                  <RadioGroupItem value="regex" />
-                  Custom Regex Pattern
-                </label>
-              </RadioGroup>
-            </div>
-
-            <FormField
-              control={form.control}
-              name="model_condition"
-              label={labelWithHint(
-                modelConditionType === "model" ? "Model (Optional)" : "Regex Pattern (Optional)",
-                modelConditionType === "model"
-                  ? "Select a specific model to apply this policy to. Leave empty to apply to all models."
-                  : "Enter a regex pattern to match models (e.g., gpt-4.* or bedrock/.*). Leave empty to apply to all models.",
-              )}
-            >
-              {({ ref, id, value, onChange, ...control }) =>
-                modelConditionType === "model" ? (
-                  <SearchSelect
-                    inputId={id}
-                    options={availableModels.map((model) => ({ label: model, value: model }))}
-                    value={value}
-                    onValueChange={onChange}
-                    placeholder="Leave empty to apply to all models"
-                    className="h-9"
-                  />
-                ) : (
-                  <Input
-                    {...control}
-                    id={id}
-                    ref={ref}
-                    value={value}
-                    onChange={onChange}
-                    placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)"
-                  />
-                )
-              }
-            </FormField>
-          </FieldGroup>
+          )}
 
           <div className="mt-6 flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={handleClose}>
               Cancel
             </Button>
-            <Button
-              type="button"
-              onClick={form.handleSubmit(handleSubmit)}
-              disabled={isSubmitting}
-              aria-busy={isSubmitting}
-            >
-              {isSubmitting && <UiLoadingSpinner className="size-4" />}
-              {isEditing ? "Update Policy" : "Create Policy"}
+            <Button type="button" onClick={handleModeConfirm}>
+              {selectedMode === "flow_builder" ? "Continue to Builder" : "Create Policy"}
             </Button>
           </div>
-        </form>
-      </TooltipProvider>
-    </Modal>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // ── Simple Form Step ──────────────────────────────────────────────────────
+  return (
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+        <DialogHeader>
+          <DialogTitle>{isEditing ? "Edit Policy" : "Create New Policy"}</DialogTitle>
+        </DialogHeader>
+        <TooltipProvider>
+          <form onSubmit={(event) => event.preventDefault()} noValidate>
+            <FieldGroup>
+              <FormField control={form.control} name="policy_name" label="Policy Name">
+                {({ ref, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    placeholder="e.g., global-baseline, healthcare-compliance"
+                    disabled={isEditing}
+                  />
+                )}
+              </FormField>
+
+              <FormField control={form.control} name="description" label="Description">
+                {({ ref, ...control }) => (
+                  <Textarea {...control} ref={ref} rows={2} placeholder="Describe what this policy does..." />
+                )}
+              </FormField>
+
+              <SectionHeading label="Inheritance" />
+
+              <FormField
+                control={form.control}
+                name="inherit"
+                label={labelWithHint(
+                  "Inherit From",
+                  "Inherit guardrails from another policy. The child policy will include all guardrails from the parent.",
+                )}
+              >
+                {({ id, value, onChange }) => (
+                  <SearchSelect
+                    inputId={id}
+                    options={policyOptions}
+                    value={value}
+                    onValueChange={(selected) => {
+                      onChange(selected);
+                      refreshResolvedGuardrails({ inherit: selected });
+                    }}
+                    placeholder="Select a parent policy (optional)"
+                    className="h-9"
+                  />
+                )}
+              </FormField>
+
+              <SectionHeading label="Guardrails" />
+
+              <FormField
+                control={form.control}
+                name="guardrails_add"
+                label={labelWithHint(
+                  "Guardrails to Add",
+                  "These guardrails will be added to requests matching this policy",
+                )}
+              >
+                {({ value, onChange }) => (
+                  <MultiSelect
+                    options={guardrailOptions}
+                    value={value}
+                    onValueChange={(selected) => {
+                      onChange(selected);
+                      refreshResolvedGuardrails({ guardrails_add: selected });
+                    }}
+                    placeholder="Select guardrails to add"
+                  />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="guardrails_remove"
+                label={labelWithHint(
+                  "Guardrails to Remove",
+                  "These guardrails will be removed from inherited guardrails",
+                )}
+              >
+                {({ value, onChange }) => (
+                  <MultiSelect
+                    options={guardrailOptions}
+                    value={value}
+                    onValueChange={(selected) => {
+                      onChange(selected);
+                      refreshResolvedGuardrails({ guardrails_remove: selected });
+                    }}
+                    placeholder="Select guardrails to remove (from inherited)"
+                  />
+                )}
+              </FormField>
+
+              {resolvedGuardrails.length > 0 && (
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>Resolved Guardrails</AlertTitle>
+                  <AlertDescription>
+                    <span className="mb-2 block text-muted-foreground">
+                      These are the final guardrails that will be applied (including inheritance):
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      {resolvedGuardrails.map((g) => (
+                        <Tag key={g} color="blue">
+                          {g}
+                        </Tag>
+                      ))}
+                    </div>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              <SectionHeading label="Conditions (Optional)" />
+
+              <Alert variant="info">
+                <Info />
+                <AlertTitle>Model Scope</AlertTitle>
+                <AlertDescription>
+                  By default, this policy will run on all models. You can optionally restrict it to specific models
+                  below.
+                </AlertDescription>
+              </Alert>
+
+              <div role="group" className="flex w-full flex-col gap-3">
+                <span className="text-sm leading-snug font-medium text-foreground">Model Condition Type</span>
+                <RadioGroup
+                  value={modelConditionType}
+                  onValueChange={(value) => {
+                    setModelConditionType(value as ModelConditionType);
+                    form.setValue("model_condition", "");
+                  }}
+                  className="flex flex-row gap-6"
+                >
+                  <label className="flex cursor-pointer items-center gap-2 text-sm">
+                    <RadioGroupItem value="model" />
+                    Select Model
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm">
+                    <RadioGroupItem value="regex" />
+                    Custom Regex Pattern
+                  </label>
+                </RadioGroup>
+              </div>
+
+              <FormField
+                control={form.control}
+                name="model_condition"
+                label={labelWithHint(
+                  modelConditionType === "model" ? "Model (Optional)" : "Regex Pattern (Optional)",
+                  modelConditionType === "model"
+                    ? "Select a specific model to apply this policy to. Leave empty to apply to all models."
+                    : "Enter a regex pattern to match models (e.g., gpt-4.* or bedrock/.*). Leave empty to apply to all models.",
+                )}
+              >
+                {({ ref, id, value, onChange, ...control }) =>
+                  modelConditionType === "model" ? (
+                    <SearchSelect
+                      inputId={id}
+                      options={availableModels.map((model) => ({ label: model, value: model }))}
+                      value={value}
+                      onValueChange={onChange}
+                      placeholder="Leave empty to apply to all models"
+                      className="h-9"
+                    />
+                  ) : (
+                    <Input
+                      {...control}
+                      id={id}
+                      ref={ref}
+                      value={value}
+                      onChange={onChange}
+                      placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)"
+                    />
+                  )
+                }
+              </FormField>
+            </FieldGroup>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={handleClose}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={form.handleSubmit(handleSubmit)}
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
+              >
+                {isSubmitting && <UiLoadingSpinner className="size-4" />}
+                {isEditing ? "Update Policy" : "Create Policy"}
+              </Button>
+            </div>
+          </form>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

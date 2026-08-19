@@ -1,5 +1,5 @@
 import { Input } from "@/components/ui/input";
-import { Select as AntdSelect, Modal, Tooltip, Typography } from "antd";
+import { Select as AntdSelect, Tooltip, Typography } from "antd";
 import { Button } from "@/components/ui/button";
 import type { UploadProps } from "antd/es/upload";
 import { useState } from "react";
@@ -18,6 +18,7 @@ import { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const { Link } = Typography;
 
@@ -84,88 +85,86 @@ export default function CredentialModal({
   };
 
   return (
-    <Modal
-      title={isEdit ? "Edit Credential" : "Add New Credential"}
-      open={open}
-      onCancel={closeAndReset}
-      footer={null}
-      width={600}
-      destroyOnHidden={isEdit}
-    >
-      <FormProvider {...form}>
-        <MountedFormProvider value={{ control: form.control, registry }}>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleSubmit();
-            }}
-          >
-            <MountedFormField
-              label="Credential Name:"
-              name="credential_name"
-              required
-              rules={{ validate: { required: antdRequired("Credential name is required") } }}
-              className="mb-4"
+    <Dialog open={open} onOpenChange={(open) => !open && closeAndReset()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? "Edit Credential" : "Add New Credential"}</DialogTitle>
+        </DialogHeader>
+        <FormProvider {...form}>
+          <MountedFormProvider value={{ control: form.control, registry }}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleSubmit();
+              }}
             >
-              {(control) => (
-                <Input
-                  id={control.id}
-                  value={(control.value as string | undefined) ?? ""}
-                  onChange={control.onChange}
-                  onBlur={control.onBlur}
-                  placeholder="Enter a friendly name for these credentials"
-                  disabled={isEdit}
-                />
-              )}
-            </MountedFormField>
+              <MountedFormField
+                label="Credential Name:"
+                name="credential_name"
+                required
+                rules={{ validate: { required: antdRequired("Credential name is required") } }}
+                className="mb-4"
+              >
+                {(control) => (
+                  <Input
+                    id={control.id}
+                    value={(control.value as string | undefined) ?? ""}
+                    onChange={control.onChange}
+                    onBlur={control.onBlur}
+                    placeholder="Enter a friendly name for these credentials"
+                    disabled={isEdit}
+                  />
+                )}
+              </MountedFormField>
 
-            <MountedFormField
-              label={labelWithHint("Provider:", "Helper to auto-populate provider specific fields")}
-              name="custom_llm_provider"
-              required
-              rules={{ validate: { required: antdRequired("Required") } }}
-              className="mb-4"
-            >
-              {(control) => (
-                <AntdSelect
-                  id={control.id}
-                  showSearch
-                  value={control.value as string | undefined}
-                  onBlur={control.onBlur}
-                  onChange={(value) => {
-                    control.onChange(value);
-                    resetCredentialFormOnProviderChange(formAdapter, value as Providers, setSelectedProvider);
-                  }}
-                >
-                  {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
-                    <AntdSelect.Option key={providerEnum} value={providerEnum}>
-                      <div className="flex items-center space-x-2">
-                        <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />
-                        <span>{providerDisplayName}</span>
-                      </div>
-                    </AntdSelect.Option>
-                  ))}
-                </AntdSelect>
-              )}
-            </MountedFormField>
+              <MountedFormField
+                label={labelWithHint("Provider:", "Helper to auto-populate provider specific fields")}
+                name="custom_llm_provider"
+                required
+                rules={{ validate: { required: antdRequired("Required") } }}
+                className="mb-4"
+              >
+                {(control) => (
+                  <AntdSelect
+                    id={control.id}
+                    showSearch
+                    value={control.value as string | undefined}
+                    onBlur={control.onBlur}
+                    onChange={(value) => {
+                      control.onChange(value);
+                      resetCredentialFormOnProviderChange(formAdapter, value as Providers, setSelectedProvider);
+                    }}
+                  >
+                    {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
+                      <AntdSelect.Option key={providerEnum} value={providerEnum}>
+                        <div className="flex items-center space-x-2">
+                          <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />
+                          <span>{providerDisplayName}</span>
+                        </div>
+                      </AntdSelect.Option>
+                    ))}
+                  </AntdSelect>
+                )}
+              </MountedFormField>
 
-            <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+              <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
 
-            <div className="flex justify-between items-center">
-              <Tooltip title="Get help on our github">
-                <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
-              </Tooltip>
+              <div className="flex justify-between items-center">
+                <Tooltip title="Get help on our github">
+                  <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
+                </Tooltip>
 
-              <div>
-                <Button variant="outline" className="mr-2.5" onClick={closeAndReset}>
-                  Cancel
-                </Button>
-                <Button type="submit">{isEdit ? "Update Credential" : "Add Credential"}</Button>
+                <div>
+                  <Button variant="outline" className="mr-2.5" onClick={closeAndReset}>
+                    Cancel
+                  </Button>
+                  <Button type="submit">{isEdit ? "Update Credential" : "Add Credential"}</Button>
+                </div>
               </div>
-            </div>
-          </form>
-        </MountedFormProvider>
-      </FormProvider>
-    </Modal>
+            </form>
+          </MountedFormProvider>
+        </FormProvider>
+      </DialogContent>
+    </Dialog>
   );
 }

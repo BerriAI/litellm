@@ -18,7 +18,6 @@ import {
   Member,
 } from "@/components/networking";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Modal } from "antd";
 import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
 import {
   Combobox,
@@ -43,6 +42,7 @@ import MCPServerPermissions from "@/components/permissions/MCPServerPermissions"
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface UserInfoViewProps {
   userId: string;
@@ -703,71 +703,73 @@ export default function UserInfoView({
       />
 
       {/* Add to Team Modal */}
-      <Modal
-        title="Add User to Team"
+      <Dialog
         open={isAddTeamModalOpen}
-        onCancel={() => setIsAddTeamModalOpen(false)}
-        footer={null}
-        width={500}
-        maskClosable={!isAddingTeam}
+        onOpenChange={(open) => !open && setIsAddTeamModalOpen(false)}
+        disablePointerDismissal={isAddingTeam}
       >
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            handleAddTeamSubmit();
-          }}
-        >
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor={ADD_TEAM_FIELD_ID}>Team</FieldLabel>
-              <Combobox
-                items={availableTeamsForAdd}
-                value={selectedTeamOption}
-                onValueChange={(team: TeamOption | null) => setSelectedTeamId(team?.team_id ?? "")}
-                itemToStringLabel={(team: TeamOption) => team.team_alias}
-                isItemEqualToValue={(team: TeamOption, value: TeamOption) => team.team_id === value.team_id}
-              >
-                <ComboboxInput id={ADD_TEAM_FIELD_ID} placeholder="Select a team" className="w-full" />
-                <ComboboxContent>
-                  <ComboboxEmpty>No teams found</ComboboxEmpty>
-                  <ComboboxList>
-                    {(team: TeamOption) => (
-                      <ComboboxItem key={team.team_id} value={team} title={team.team_alias}>
-                        {team.team_alias}
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
-            </Field>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Add User to Team</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleAddTeamSubmit();
+            }}
+          >
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor={ADD_TEAM_FIELD_ID}>Team</FieldLabel>
+                <Combobox
+                  items={availableTeamsForAdd}
+                  value={selectedTeamOption}
+                  onValueChange={(team: TeamOption | null) => setSelectedTeamId(team?.team_id ?? "")}
+                  itemToStringLabel={(team: TeamOption) => team.team_alias}
+                  isItemEqualToValue={(team: TeamOption, value: TeamOption) => team.team_id === value.team_id}
+                >
+                  <ComboboxInput id={ADD_TEAM_FIELD_ID} placeholder="Select a team" className="w-full" />
+                  <ComboboxContent>
+                    <ComboboxEmpty>No teams found</ComboboxEmpty>
+                    <ComboboxList>
+                      {(team: TeamOption) => (
+                        <ComboboxItem key={team.team_id} value={team} title={team.team_alias}>
+                          {team.team_alias}
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
+              </Field>
 
-            <Field>
-              <FieldLabel htmlFor={ADD_TEAM_ROLE_FIELD_ID}>Member Role</FieldLabel>
-              <Select value={selectedRole} onValueChange={(value) => value !== null && setSelectedRole(value)}>
-                <SelectTrigger id={ADD_TEAM_ROLE_FIELD_ID} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MEMBER_ROLE_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value} title={option.value}>
-                      <SimpleTooltip content={option.hint}>
-                        <span className="font-medium">{option.value}</span>
-                        <span className="ml-2 text-muted-foreground text-sm">- {option.hint}</span>
-                      </SimpleTooltip>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-          </FieldGroup>
+              <Field>
+                <FieldLabel htmlFor={ADD_TEAM_ROLE_FIELD_ID}>Member Role</FieldLabel>
+                <Select value={selectedRole} onValueChange={(value) => value !== null && setSelectedRole(value)}>
+                  <SelectTrigger id={ADD_TEAM_ROLE_FIELD_ID} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MEMBER_ROLE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value} title={option.value}>
+                        <SimpleTooltip content={option.hint}>
+                          <span className="font-medium">{option.value}</span>
+                          <span className="ml-2 text-muted-foreground text-sm">- {option.hint}</span>
+                        </SimpleTooltip>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </FieldGroup>
 
-          <div className="text-right mt-4">
-            <Button type="submit" disabled={isAddingTeam || !selectedTeamId} aria-busy={isAddingTeam}>
-              {isAddingTeam ? "Adding..." : "Add to Team"}
-            </Button>
-          </div>
-        </form>
-      </Modal>
+            <div className="text-right mt-4">
+              <Button type="submit" disabled={isAddingTeam || !selectedTeamId} aria-busy={isAddingTeam}>
+                {isAddingTeam ? "Adding..." : "Add to Team"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
