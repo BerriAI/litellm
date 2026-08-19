@@ -1,6 +1,7 @@
-import { Alert } from "antd";
+import { CircleAlert, Info } from "lucide-react";
 import React from "react";
 import { z } from "zod/v4";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Field, FieldLabel, FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -46,11 +47,10 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
           </p>
 
           {variant === "signup" && (
-            <Alert
-              className="mt-4"
-              type="info"
-              message="SSO"
-              description={
+            <Alert className="mt-4" variant="info">
+              <Info />
+              <AlertTitle>SSO</AlertTitle>
+              <AlertDescription>
                 <div className="flex justify-between items-center">
                   <span>SSO is under the Enterprise Tier.</span>
                   <a
@@ -62,9 +62,8 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
                     Get Free Trial
                   </a>
                 </div>
-              }
-              showIcon
-            />
+              </AlertDescription>
+            </Alert>
           )}
 
           <form className="mt-10 mb-5" onSubmit={form.handleSubmit(handleSubmit)}>
@@ -84,7 +83,12 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
               </FormField>
             </FieldGroup>
 
-            {claimError && <Alert type="error" message={claimError} showIcon className="mt-6 mb-4" />}
+            {claimError && (
+              <Alert variant="error" className="mt-6 mb-4">
+                <CircleAlert />
+                <AlertTitle>{claimError}</AlertTitle>
+              </Alert>
+            )}
 
             <div className="mt-10">
               <Button type="submit" variant="outline" disabled={isPending}>

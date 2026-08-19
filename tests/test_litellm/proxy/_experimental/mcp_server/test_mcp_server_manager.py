@@ -4395,8 +4395,12 @@ class TestMCPServerManager:
 
         captured: dict = {}
 
-        def fake_create_tool_function(path, method, operation, base_url, headers=None):
+        def fake_create_tool_function(
+            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False
+        ):
             captured["headers"] = headers
+            captured["server_label"] = server_label
+            captured["relays_upstream_auth"] = relays_upstream_auth
 
             async def tool_func(**kwargs):
                 return "ok"
@@ -4425,6 +4429,11 @@ class TestMCPServerManager:
 
         assert captured["headers"] is not None
         assert captured["headers"]["Authorization"] == "STATIC token"
+        # The label names the server in an upstream-failure error, so registration must thread it;
+        # without this the fake would simply tolerate the argument and prove nothing about it.
+        assert captured["server_label"] == "openapi-server"
+        # auth_type is none here, so a 401 from this upstream must not be dressed up as a re-auth signal
+        assert captured["relays_upstream_auth"] is False
 
     @pytest.mark.asyncio
     async def test_pre_call_tool_check_allowed_tools_list_allows_tool(self):
@@ -10765,3 +10774,61 @@ class TestResolveOpenapiToolAuth:
         )
 
         assert "Authorization" not in (forwarded or {})
+
+
+class TestOpenApiHandlerRelaysUpstreamAuth:
+    """`_call_openapi_tool_handler` must not flatten a re-auth signal into a generic message.
+
+    Its catch-all turned every exception into "Error calling OpenAPI tool ...", which is an isError
+    result but loses the status, so the REST surface could no longer relay a 401 with the upstream's
+    WWW-Authenticate and the streamable surface could not name the status the caller must act on.
+    """
+
+    @staticmethod
+    def _server() -> MCPServer:
+        return MCPServer(
+            server_id="srv-openapi",
+            name="report_api",
+            server_name="report_api",
+            url="https://api.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth_delegate,
+            spec_path="https://api.example.com/openapi.json",
+        )
+
+    @pytest.mark.asyncio
+    async def test_upstream_auth_error_keeps_its_type(self):
+        from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        manager = MCPServerManager()
+        server = self._server()
+
+        async def raising_handler(**_kwargs):
+            raise MCPUpstreamAuthError(status_code=401, www_authenticate="Bearer realm=x", server_name="report_api")
+
+        tool = MagicMock()
+        tool.handler = raising_handler
+        with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+            with pytest.raises(MCPUpstreamAuthError) as exc:
+                await manager._call_openapi_tool_handler(server, "list_reports", {})
+
+        assert exc.value.status_code == 401
+        assert exc.value.www_authenticate == "Bearer realm=x"
+
+    @pytest.mark.asyncio
+    async def test_other_failures_still_become_an_error_result(self):
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        manager = MCPServerManager()
+
+        async def raising_handler(**_kwargs):
+            raise RuntimeError("upstream returned HTTP 503")
+
+        tool = MagicMock()
+        tool.handler = raising_handler
+        with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+            result = await manager._call_openapi_tool_handler(self._server(), "list_reports", {})
+
+        assert result.isError is True
+        assert "upstream returned HTTP 503" in result.content[0].text
