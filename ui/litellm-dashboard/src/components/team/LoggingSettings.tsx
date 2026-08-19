@@ -292,7 +292,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                     <label className="text-sm font-medium text-foreground">Integration Type</label>
                     <Select
                       value={callbackDisplayName ?? null}
-                      onValueChange={(value: string | null) => value && updateLoggingConfig(index, "callback_name", value)}
+                      onValueChange={(value: string | null) =>
+                        value && updateLoggingConfig(index, "callback_name", value)
+                      }
                     >
                       <SelectTrigger className="w-full">
                         <SelectValue placeholder="Select integration" />
@@ -324,7 +326,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                     <Select
                       items={CALLBACK_TYPE_ITEMS}
                       value={config.callback_type}
-                      onValueChange={(value: string | null) => value && updateLoggingConfig(index, "callback_type", value)}
+                      onValueChange={(value: string | null) =>
+                        value && updateLoggingConfig(index, "callback_type", value)
+                      }
                     >
                       <SelectTrigger aria-label="Event Type" className="w-full">
                         <SelectValue />
