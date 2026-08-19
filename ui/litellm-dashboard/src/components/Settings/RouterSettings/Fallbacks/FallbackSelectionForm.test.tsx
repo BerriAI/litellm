@@ -3,20 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
 import type { FallbackGroup } from "./FallbackGroupConfig";
+import { toast } from "@/lib/toast";
 
 const mockOnGroupsChange = vi.fn();
 const AVAILABLE_MODELS = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"];
-
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  return {
-    ...actual,
-    message: {
-      ...actual.message,
-      warning: vi.fn(),
-    },
-  };
-});
 
 describe("FallbackSelectionForm", () => {
   beforeEach(() => {
@@ -126,7 +116,6 @@ describe("FallbackSelectionForm", () => {
 
   it("should call onGroupsChange when a group is removed", async () => {
     const user = userEvent.setup();
-    const antd = await import("antd");
     const groups: FallbackGroup[] = [
       { id: "1", primaryModel: "gpt-4", fallbackModels: [] },
       { id: "2", primaryModel: "gpt-3.5-turbo", fallbackModels: [] },
@@ -142,7 +131,7 @@ describe("FallbackSelectionForm", () => {
     const [newGroups] = mockOnGroupsChange.mock.calls[0];
     expect(newGroups).toHaveLength(1);
     expect(newGroups[0].id).toBe("2");
-    expect(antd.message.warning).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 
   it("should render FallbackGroupConfig for each group", () => {

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -15,6 +16,13 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+
+
+async def _drain_tasks():
+    """Await the fire-and-forget managed object write and let its done callback run."""
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    await asyncio.gather(*pending, return_exceptions=True)
+    await asyncio.sleep(0)
 
 
 class TestAnthropicLoggingHandlerModelFallback:
@@ -925,6 +933,124 @@ class TestAnthropicBatchPassthroughCostTracking:
             assert call_kwargs["user_api_key_dict"].user_id == expected_user_id
             assert call_kwargs["user_api_key_dict"].team_id == expected_team_id
 
+    async def _store_with_metadata(self, mock_logging_obj, metadata):
+        mock_managed_files_hook = MagicMock()
+        mock_managed_files_hook.store_unified_object_id = AsyncMock()
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution.verbose_proxy_logger"
+            ),
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+            AnthropicPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object={"id": "b1", "object": "batch", "status": "validating"},
+                model_object_id="b1",
+                logging_obj=mock_logging_obj,
+                litellm_params={"metadata": metadata},
+            )
+            await _drain_tasks()
+        mock_managed_files_hook.store_unified_object_id.assert_awaited_once()
+        return mock_managed_files_hook.store_unified_object_id.call_args[1]
+
+    @pytest.mark.asyncio
+    async def test_persisted_tags_are_db_safe(self, mock_logging_obj):
+        """Regression for PostgreSQL 22P05, asserted on the value that actually reaches
+        store_unified_object_id so it stays pinned if the sanitation moves."""
+        call_kwargs = await self._store_with_metadata(
+            mock_logging_obj, {"user_api_key": "hashed-key-a", "tags": ["clean", "bad\x00tag"]}
+        )
+
+        assert call_kwargs["request_tags"] == ("clean", "badtag")
+
+    @pytest.mark.asyncio
+    async def test_create_persists_key_hash_and_tags(self, mock_logging_obj):
+        """Regression (LIT-5288): the batch create must persist the creating key's hashed
+        token and its tags so CheckBatchCost can attribute the batch-cost spend row to the
+        key, team and tags. Before this fix the stored api_key was always "" and no tags
+        were stored, so key/team/tag spend and budgets never moved for batch usage."""
+        call_kwargs = await self._store_with_metadata(
+            mock_logging_obj,
+            {
+                "user_api_key": "hashed-key-a",
+                "user_api_key_user_id": "alice",
+                "user_api_key_team_id": "team-alpha",
+                "user_api_key_auth_metadata": {"tags": ["env:prod", 7, "team:ml"]},
+            },
+        )
+
+        assert call_kwargs["user_api_key_dict"].api_key == "hashed-key-a"
+        assert call_kwargs["request_tags"] == ("env:prod", "team:ml")
+        assert call_kwargs["persist_attribution"] is True
+
+    @pytest.mark.asyncio
+    async def test_failed_create_write_is_reported_not_swallowed(self, mock_logging_obj):
+        """The managed object write is fire-and-forget, and only the create writes the row,
+        so a failed create is never back-filled by a later retrieve and that batch's cost
+        is never tracked. The failure has to reach the log instead of being reported as a
+        success."""
+        mock_managed_files_hook = MagicMock()
+        mock_managed_files_hook.store_unified_object_id = AsyncMock(
+            side_effect=RuntimeError("db down")
+        )
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution.verbose_proxy_logger"
+            ) as mock_logger,
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+            AnthropicPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object={"id": "b1", "object": "batch", "status": "validating"},
+                model_object_id="b1",
+                logging_obj=mock_logging_obj,
+                litellm_params={"metadata": {"user_api_key": "hashed-key-a"}},
+            )
+            await _drain_tasks()
+
+        mock_logger.info.assert_not_called()
+        mock_logger.error.assert_called_once()
+        assert "its cost will not be tracked" in mock_logger.error.call_args[0]
+        assert "Anthropic" in mock_logger.error.call_args[0]
+
+    @pytest.mark.parametrize(
+        "url_route, registers",
+        [
+            ("https://api.anthropic.com/v1/messages/batches", True),
+            ("https://api.anthropic.com/v1/messages/batches/", True),
+            ("https://api.anthropic.com/v1/messages/batches?limit=20", True),
+            ("https://api.anthropic.com/v1/messages/batches/msgbatch_123", False),
+            ("https://api.anthropic.com/v1/messages/batches/msgbatch_123/results", False),
+            ("https://api.anthropic.com/v1/messages/batches/msgbatch_123/cancel", False),
+        ],
+    )
+    def test_batch_is_registered_from_the_create_route_only(
+        self, mock_logging_obj, mock_httpx_response, mock_request_body, url_route, registers
+    ):
+        """Only a POST to the collection route registers the batch. Every id-scoped route
+        is a retrieve, results or cancel, and none of them can rebuild the unified object
+        id anyway: it embeds the model, which comes from the create's request body. Before
+        this gate an id-scoped route reached the store with a mismatched id, where it could
+        only either claim a row it did not create or fail the model_object_id unique
+        constraint."""
+        with patch.object(
+            AnthropicPassthroughLoggingHandler, "_store_batch_managed_object"
+        ) as mock_store:
+            AnthropicPassthroughLoggingHandler.batch_creation_handler(
+                httpx_response=mock_httpx_response,
+                logging_obj=mock_logging_obj,
+                url_route=url_route,
+                result="success",
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                cache_hit=False,
+                request_body=mock_request_body,
+            )
+
+        assert mock_store.call_count == (1 if registers else 0)
+
     def test_batch_creation_handler_failure_status_code(
         self, mock_logging_obj, mock_request_body
     ):
@@ -978,6 +1104,7 @@ class TestAnthropicBatchPassthroughCostTracking:
                 batch_object=batch_object,
                 model_object_id="msgbatch_123",
                 logging_obj=mock_logging_obj,
+                is_batch_create=True,
                 user_id="test-user",
             )
 
@@ -2192,3 +2319,116 @@ class TestAnthropicResponseCostRecordedOnModelCallDetails:
             logging_obj.model_call_details["response_cost"] == kwargs["response_cost"]
         )
         assert logging_obj.model_call_details["response_cost"] > 0
+
+
+class TestAnthropicPassthroughFastMode:
+    """Anthropic charges a provider-specific multiplier for ``speed=fast``, and the
+    multiplier is applied off ``usage.speed``. The pass-through handler only sees the
+    speed in the request body, so it has to thread it into every usage-building path or
+    fast-mode pass-through spend is under-reported."""
+
+    MODEL = "claude-opus-4-8"
+    STREAM_CHUNKS = [
+        'event: message_start',
+        'data: {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant",'
+        ' "model": "claude-opus-4-8", "content": [], "stop_reason": null,'
+        ' "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 0}}}',
+        'event: content_block_start',
+        'data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}',
+        'event: content_block_delta',
+        'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}}',
+        'event: content_block_stop',
+        'data: {"type": "content_block_stop", "index": 0}',
+        'event: message_delta',
+        'data: {"type": "message_delta", "delta": {"stop_reason": "end_turn"},'
+        ' "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 100}}',
+        'event: message_stop',
+        'data: {"type": "message_stop"}',
+    ]
+
+    def _logging_obj(self) -> LiteLLMLoggingObj:
+        return LiteLLMLoggingObj(
+            model=self.MODEL,
+            messages=[],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="fast-mode",
+            function_id="fast-mode",
+        )
+
+    def _cost(self, response) -> float:
+        import litellm
+
+        return litellm.completion_cost(completion_response=response, model=f"anthropic/{self.MODEL}")
+
+    def _expected_fast_cost(self, standard_cost: float) -> float:
+        import litellm
+
+        model_info = litellm.get_model_info(model=self.MODEL, custom_llm_provider="anthropic")
+        cache_read_cost = 200 * (model_info.get("cache_read_input_token_cost") or 0.0)
+        return (standard_cost - cache_read_cost) * 2.0 + cache_read_cost
+
+    def test_non_streaming_applies_fast_multiplier(self):
+        import httpx
+
+        response_body = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": self.MODEL,
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1000, "cache_read_input_tokens": 200, "output_tokens": 100},
+        }
+
+        def _handle(request_body):
+            logging_obj = self._logging_obj()
+            logging_obj.model_call_details["stream"] = False
+            return AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+                httpx_response=httpx.Response(status_code=200, json=response_body),
+                response_body=response_body,
+                logging_obj=logging_obj,
+                url_route="https://api.anthropic.com/v1/messages",
+                result="",
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                cache_hit=False,
+                request_body=request_body,
+            )
+
+        fast = _handle({"model": self.MODEL, "speed": "fast"})
+        standard = _handle({"model": self.MODEL})
+
+        assert fast["result"].usage.speed == "fast"
+        assert self._cost(fast["result"]) == pytest.approx(self._expected_fast_cost(self._cost(standard["result"])))
+
+    def test_streaming_reconstruction_applies_fast_multiplier(self):
+        fast = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=self.STREAM_CHUNKS,
+            litellm_logging_obj=self._logging_obj(),
+            model=self.MODEL,
+            speed="fast",
+        )
+        standard = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=self.STREAM_CHUNKS,
+            litellm_logging_obj=self._logging_obj(),
+            model=self.MODEL,
+        )
+
+        assert fast.usage.speed == "fast"
+        assert self._cost(fast) == pytest.approx(self._expected_fast_cost(self._cost(standard)))
+
+    def test_usage_only_fallback_applies_fast_multiplier(self):
+        fast = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self.STREAM_CHUNKS,
+            model=self.MODEL,
+            speed="fast",
+        )
+        standard = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self.STREAM_CHUNKS,
+            model=self.MODEL,
+        )
+
+        assert fast.usage.speed == "fast"
+        assert self._cost(fast) == pytest.approx(self._expected_fast_cost(self._cost(standard)))

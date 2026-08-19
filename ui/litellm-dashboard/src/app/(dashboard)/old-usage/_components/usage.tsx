@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "@/components/view_user_spend";
 import { ProxySettings } from "@/components/user_dashboard";
-import UsageDatePicker from "@/components/shared/usage_date_picker";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -15,6 +15,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -37,6 +38,7 @@ import {
 } from "@/components/networking";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { MoneyCell } from "@/components/shared/table_cells";
+import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface UsagePageProps {
@@ -90,6 +92,8 @@ const TeamSpendBarList: React.FC<{ data: TeamSpendTotal[] }> = ({ data }) => {
 };
 
 const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, userID, keys, premiumUser }) => {
+  const anchor = useComboboxAnchor();
+  const canViewGlobalSpend = hasCapability(userRole, "viewGlobalSpend");
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
   const [topKeys, setTopKeys] = useState<any[]>([]);
@@ -155,8 +159,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
   };
 
   useEffect(() => {
+    if (!canViewGlobalSpend) {
+      return;
+    }
     updateTagSpendData(dateValue.from, dateValue.to);
-  }, [dateValue, selectedTags]);
+  }, [canViewGlobalSpend, dateValue, selectedTags]);
 
   const updateEndUserData = async (
     startTime: Date | undefined,
@@ -319,10 +326,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
 
   const fetchProviderSpend = () =>
     fetchAndSetData(
-      () =>
-        accessToken && token
-          ? adminspendByProvider(accessToken, token, startTime, endTime)
-          : Promise.reject("No access token or token"),
+      () => (accessToken ? adminspendByProvider(accessToken, startTime, endTime) : Promise.reject("No access token")),
       setSpendByProvider,
       "Error fetching provider spend",
     );
@@ -467,6 +471,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
 
   useEffect(() => {
     const initlizeUsageData = async () => {
+      if (!canViewGlobalSpend) {
+        return;
+      }
       if (accessToken && token && userRole && userID) {
         const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
         if (proxy_settings) {
@@ -493,7 +500,24 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
     };
 
     initlizeUsageData();
-  }, [accessToken, token, userRole, userID, startTime, endTime]);
+  }, [canViewGlobalSpend, accessToken, token, userRole, userID, startTime, endTime]);
+
+  if (!canViewGlobalSpend) {
+    return (
+      <div className="w-full p-8">
+        <Card>
+          <CardHeader>
+            <CardTitle>Usage</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Proxy-wide usage is only available to admin users. Your own usage is on the Usage page.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
     return (
@@ -772,7 +796,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </p>
           <div className="grid grid-cols-2">
             <div>
-              <UsageDatePicker
+              <AdvancedDatePicker
+                align="left"
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
@@ -838,7 +863,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
         <TabsContent value="tag-based-usage">
           <div className="grid grid-cols-2">
             <div className="col-span-1">
-              <UsageDatePicker
+              <AdvancedDatePicker
+                align="left"
                 className="mb-4"
                 value={dateValue}
                 onValueChange={(value) => {
@@ -857,7 +883,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                 isItemEqualToValue={(a: TagOption, b: TagOption) => a.value === b.value}
                 itemToStringLabel={(option: TagOption) => option.label}
               >
-                <ComboboxChips>
+                <ComboboxChips render={<div ref={anchor} />}>
                   <ComboboxValue>
                     {(options: TagOption[]) =>
                       options.map((option) => (
@@ -867,9 +893,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select tags" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select tags" />
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor}>
                   <ComboboxEmpty>No tags found</ComboboxEmpty>
                   <ComboboxList>
                     {(option: TagOption) => (

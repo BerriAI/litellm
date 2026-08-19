@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import Mock
 
 import pytest
@@ -190,6 +190,32 @@ def test_transform_usage_with_cached_tokens_only():
     assert responses_usage.output_tokens_details is None
 
     print("✓ Transformation works with cached_tokens only")
+
+
+def test_transform_usage_maps_nested_cache_creation_input_tokens():
+    """
+    Regression (LIT-5757): DashScope nests cache_creation_input_tokens inside
+    prompt_tokens_details; the bridge must surface it as cache_write_tokens.
+    """
+    usage: Final = Usage(
+        prompt_tokens=2059,
+        completion_tokens=31,
+        total_tokens=2090,
+        prompt_tokens_details={
+            "cached_tokens": 0,
+            "text_tokens": 2059,
+            "cache_type": "ephemeral",
+            "cache_creation_input_tokens": 2048,
+            "cache_creation": {"ephemeral_5m_input_tokens": 2048},
+        },
+    )
+
+    responses_usage: Final = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        usage
+    )
+
+    assert responses_usage.input_tokens_details is not None
+    assert responses_usage.input_tokens_details.cache_write_tokens == 2048
 
 
 def test_transform_usage_with_reasoning_tokens_only():

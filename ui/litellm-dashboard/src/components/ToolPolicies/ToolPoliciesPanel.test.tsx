@@ -7,6 +7,7 @@ import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { ToolRow } from "@/components/networking";
 import { ToolPoliciesPanel } from "./ToolPoliciesPanel";
+import { toast } from "@/lib/toast";
 
 const fetchToolsList = vi.fn();
 const updateToolPolicy = vi.fn();
@@ -16,9 +17,11 @@ vi.mock("@/components/networking", () => ({
   updateToolPolicy: (...args: unknown[]) => updateToolPolicy(...args),
 }));
 
-const fromBackend = vi.fn();
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { fromBackend: (...args: unknown[]) => fromBackend(...args) },
+const fromBackend = vi.mocked(toast.fromError);
+
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
 }));
 
 const NOW = new Date("2026-07-21T12:00:00Z");
@@ -104,6 +107,7 @@ beforeEach(() => {
   fetchToolsList.mockReset().mockResolvedValue(TOOLS);
   updateToolPolicy.mockReset().mockResolvedValue({});
   fromBackend.mockReset();
+  can.mockReset().mockReturnValue(true);
   Element.prototype.scrollIntoView = vi.fn();
 });
 
@@ -112,6 +116,18 @@ afterEach(() => {
 });
 
 describe("ToolPoliciesPanel data loading", () => {
+  it("should not fetch tools when the caller lacks the viewToolPolicies capability", async () => {
+    can.mockReturnValue(false);
+    renderPanel();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+
+    expect(can).toHaveBeenCalledWith("viewToolPolicies");
+    expect(fetchToolsList).not.toHaveBeenCalled();
+  });
+
   it("should load tools once and never auto-refresh on a timer", async () => {
     renderPanel();
     await waitForRows();

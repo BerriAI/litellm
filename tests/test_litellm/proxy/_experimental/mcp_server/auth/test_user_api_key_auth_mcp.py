@@ -1154,21 +1154,27 @@ class TestMCPOAuth2AuthFlow:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 500
 
-    async def test_proxy_exception_non_delegate_oauth2_propagates(self):
+    async def test_proxy_exception_non_delegate_oauth2_challenges_with_per_server_metadata(self):
         """
         Production raises ProxyException (not HTTPException) on auth failure. For
-        a non-delegate oauth2 server the bearer is treated as a LiteLLM credential
-        and a 401 must propagate as a real auth error, not be exchanged for an
-        anonymous upstream-passthrough session.
+        a gateway-managed oauth2 server the bearer is treated as a LiteLLM
+        credential and its failure stays a 401, never an anonymous
+        upstream-passthrough session. The 401 now carries the RFC 9728
+        invalid_token challenge with the per-server resource metadata (LIT-4864):
+        a keyless client holding a stale upstream token (the relayed gho_ shape)
+        re-discovers the gateway as this resource's authorization server instead
+        of dead-ending on a bare 401.
         """
         from litellm.proxy._types import ProxyException
         from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
         scope = {
             "type": "http",
             "method": "POST",
             "path": "/mcp/atlassian_mcp",
             "headers": [
+                (b"host", b"testserver"),
                 (b"authorization", b"Bearer atlassian-oauth2-access-token-xyz"),
             ],
         }
@@ -1181,10 +1187,14 @@ class TestMCPOAuth2AuthFlow:
                 code=401,
             )
 
-        oauth2_server = MagicMock()
-        oauth2_server.auth_type = MCPAuth.oauth2
-        oauth2_server.delegate_auth_to_upstream = False
-        oauth2_server.is_oauth_passthrough = False
+        oauth2_server = MCPServer(
+            server_id="atlassian-id",
+            name="atlassian_mcp",
+            server_name="atlassian_mcp",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+        )
 
         with (
             patch(
@@ -1194,9 +1204,14 @@ class TestMCPOAuth2AuthFlow:
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
-            with pytest.raises(ProxyException) as exc_info:
+            with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(scope)
-            assert str(exc_info.value.code) == "401"
+            assert exc_info.value.status_code == 401
+            www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+            assert www_authenticate == (
+                'Bearer error="invalid_token", '
+                'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/atlassian_mcp"'
+            )
 
     async def test_proxy_exception_non_auth_still_raises(self):
         """
@@ -2631,7 +2646,7 @@ class TestMCPDelegateAuthToUpstream:
 
     def test_extract_target_server_names_matches_routing_parser(self):
         """
-        Regression: _extract_target_server_names_from_path must match the
+        Regression: extract_target_server_names_from_path must match the
         downstream regex parser in server.py::_get_mcp_servers_in_path.
 
         Previously, a request to ``/mcp/<delegated>/garbage`` was parsed as
@@ -2667,7 +2682,7 @@ class TestMCPDelegateAuthToUpstream:
             ("/", []),
         ]
         for path_input, expected in cases:
-            assert MCPRequestHandler._extract_target_server_names_from_path(path_input) == expected, (
+            assert MCPRequestHandler.extract_target_server_names_from_path(path_input) == expected, (
                 f"path={path_input!r} → expected {expected!r}"
             )
             assert (_get_mcp_servers_in_path(path_input) or []) == expected, (
@@ -2859,7 +2874,7 @@ class TestMCPCustomHeaderName:
                 mock_general_settings.get.return_value = general_setting
 
                 # Call the method
-                result = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+                result = MCPRequestHandler.get_mcp_client_side_auth_header_name()
 
                 # Assert the result
                 assert result == expected_header_name
@@ -2923,7 +2938,7 @@ class TestMCPCustomHeaderName:
         # Mock the header name method
         with patch.object(
             MCPRequestHandler,
-            "_get_mcp_client_side_auth_header_name",
+            "get_mcp_client_side_auth_header_name",
             return_value=custom_header_name,
         ):
             # Create headers from the test data
@@ -2948,7 +2963,7 @@ class TestMCPCustomHeaderName:
         # Mock the custom header name
         with patch.object(
             MCPRequestHandler,
-            "_get_mcp_client_side_auth_header_name",
+            "get_mcp_client_side_auth_header_name",
             return_value="custom-auth-header",
         ):
             # Create ASGI scope with custom header
@@ -6250,14 +6265,133 @@ class TestAggregateGatewayDcrChallenge:
                     self._scope(extra_headers=((b"x-litellm-api-key", b"sk-typo"),))
                 )
 
-    async def test_no_challenge_for_named_servers_header(self):
-        """x-mcp-servers names explicit targets; the per-server challenge paths
-        own those, so the aggregate challenge must not fire."""
+    async def test_challenge_for_named_servers_header(self):
+        """x-mcp-servers scopes the fan-out but the resource the client configured is still
+        the aggregate /mcp URL, so an unauthenticated request gets the aggregate challenge
+        and completes the same keyless flow; the header names then narrow (never broaden)
+        the admitted subject's servers downstream (LIT-4864)."""
         with (
             patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
         ):
-            with pytest.raises(ProxyException):
+            with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler.process_mcp_request(self._scope(extra_headers=((b"x-mcp-servers", b"github"),)))
+        assert exc_info.value.status_code == 401
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert www_authenticate == f"Bearer {self._EXPECTED_RESOURCE_METADATA}"
+
+    async def test_per_server_challenge_for_gateway_managed_oauth2(self):
+        """Anonymous request to a per-server path whose single target is a gateway-managed
+        oauth2 server: 401 plus the RFC 9728 challenge advertising the PER-SERVER
+        protected-resource metadata in the same URL spelling the request used, so a keyless
+        DCR client configured with either per-server spelling discovers the gateway as the
+        authorization server (LIT-4864). Covers interactive and M2M, which the gateway can
+        both serve end to end."""
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        server = MCPServer(
+            server_id="gh-id",
+            name="github",
+            server_name="github",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+        )
+        for path, expected_metadata_path in (
+            ("/mcp/github", "/.well-known/oauth-protected-resource/mcp/github"),
+            ("/github/mcp", "/.well-known/oauth-protected-resource/github/mcp"),
+        ):
+            with (
+                patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+                ) as mock_mgr,
+            ):
+                mock_mgr.get_mcp_server_by_name.return_value = server
+                with pytest.raises(HTTPException) as exc_info:
+                    await MCPRequestHandler.process_mcp_request(self._scope(path=path))
+            assert exc_info.value.status_code == 401
+            www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+            assert www_authenticate == f'Bearer resource_metadata="http://testserver{expected_metadata_path}"'
+
+    async def test_no_per_server_challenge_for_non_gateway_managed_targets(self):
+        """The per-server challenge fires only for the server set the gateway's keyless flow
+        serves: an OBO server and a multi-server CSV path keep the original admission error
+        through the full pipeline, so no client-forwarded mode is redirected into the gateway
+        sign-in flow and no cell broadens (LIT-4864)."""
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        obo_server = MCPServer(
+            server_id="o-id",
+            name="obo",
+            server_name="obo",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth.oauth2_token_exchange,
+        )
+        for path, resolved in (
+            ("/mcp/obo", obo_server),
+            ("/mcp/github,linear", None),
+        ):
+            with (
+                patch(self._AUTH_PATCH_TARGET, side_effect=self._auth_401()),
+                patch(
+                    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+                ) as mock_mgr,
+            ):
+                mock_mgr.get_mcp_server_by_name.return_value = resolved
+                with pytest.raises(ProxyException):
+                    await MCPRequestHandler.process_mcp_request(
+                        self._scope(path=path, extra_headers=((b"authorization", b"Bearer not-a-key"),))
+                    )
+
+    def test_challenge_target_excludes_every_non_gateway_managed_mode(self):
+        """Unit pin of the challenge-target owner: only a resolved gateway-managed oauth2
+        target (interactive or M2M) yields a per-server challenge; delegate-auth oauth2
+        (whose keyless flow is upstream PKCE via the relay), every client-forwarded auth
+        type, OBO, api_key, unknown names, and CSV paths yield None (LIT-4864)."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            _gateway_dcr_challenge_target,
+        )
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        def _server(auth_type, **kw):
+            return MCPServer(
+                server_id="s-id",
+                name="srv",
+                server_name="srv",
+                url="https://upstream.example/mcp",
+                transport="http",
+                auth_type=auth_type,
+                **kw,
+            )
+
+        cases = [
+            (_server(MCPAuth.oauth2), "srv"),
+            (_server(MCPAuth.oauth2, oauth2_flow="client_credentials"), "srv"),
+            (_server(MCPAuth.oauth2, delegate_auth_to_upstream=True), None),
+            (_server(MCPAuth.oauth2_token_exchange), None),
+            (_server(MCPAuth.true_passthrough), None),
+            (_server(MCPAuth.oauth_delegate), None),
+            (_server(MCPAuth.oauth_delegate, dcr_bridge=True), None),
+            (_server(MCPAuth.api_key), None),
+            (None, None),
+        ]
+        for resolved, expected in cases:
+            with patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr:
+                mock_mgr.get_mcp_server_by_name.return_value = resolved
+                assert _gateway_dcr_challenge_target("/mcp/srv", None, None) == expected, resolved
+        assert _gateway_dcr_challenge_target("/mcp/a,b", None, None) is None
+        assert _gateway_dcr_challenge_target("/mcp", None, None) is None
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+        ) as mock_mgr:
+            mock_mgr.get_mcp_server_by_name.return_value = _server(MCPAuth.oauth2)
+            assert _gateway_dcr_challenge_target("/mcp/srv", ["other"], None) is None
 
     async def test_no_challenge_for_path_named_server(self):
         """/mcp/{server} targets one server; the aggregate challenge must not
@@ -6295,10 +6429,11 @@ class TestAggregateGatewayDcrChallenge:
 
 @pytest.mark.asyncio
 class TestGatewaySessionAdmission:
-    """The aggregate /mcp session-bearer admission arm (mcp_gateway_dcr). A valid session
-    token admits under the LIVE litellm user it references; an invalid/expired/refresh/foreign
-    token fails closed with the aggregate invalid_token challenge; the arm fires ONLY at the
-    aggregate scope, never for named servers or per-server flows."""
+    """The session-bearer admission arm (mcp_gateway_dcr). A valid session token admits under
+    the LIVE litellm user it references at any MCP scope (aggregate, per-server path, or
+    x-mcp-servers scoped; LIT-4864) with downstream grant resolution narrowing to the
+    requested servers; an invalid/expired/refresh/foreign token fails closed with the
+    requested scope's invalid_token challenge."""
 
     _MASTER_KEY = "sk-gateway-session-admission-master-key"
 
@@ -6471,21 +6606,89 @@ class TestGatewaySessionAdmission:
         assert oauth2_headers is None
         assert not any(k.lower() == "authorization" for k in (raw_headers or {}))
 
-    async def test_arm_does_not_fire_for_named_server(self):
-        """A session-shaped bearer aimed at a named server (path scope) does not enter the
-        aggregate arm; it is treated as an ordinary bearer on that server."""
-        token = self._access_token()
+    @pytest.mark.parametrize(
+        "path, original_path, extra_headers",
+        [
+            ("/mcp/github", None, ()),
+            ("/mcp/github", "/github/mcp", ()),
+            ("/mcp", None, ((b"x-mcp-servers", b"github"),)),
+        ],
+    )
+    async def test_arm_admits_session_bearer_on_per_server_scopes(self, path, original_path, extra_headers):
+        """A valid session bearer admits the live user on per-server paths (the standard
+        spelling and the legacy /{server}/mcp spelling as dynamic_mcp_route rewrites it) and
+        x-mcp-servers scoped requests, never touching user_api_key_auth; downstream grant
+        resolution then intersects the named servers against the admitted subject's grants,
+        so the narrower scope can never broaden access (LIT-4864)."""
+        token = self._access_token(user_id="sso-user-42")
+        scope = self._scope(token, path=path, extra_headers=extra_headers)
+        if original_path is not None:
+            scope["_original_path"] = original_path
         with (
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
-                side_effect=ProxyException(message="bad key", type="auth_error", param="api_key", code=401),
             ) as mock_auth,
+            self._patch_user_reload(user_id="sso-user-42"),
         ):
-            with pytest.raises((HTTPException, ProxyException)):
-                await MCPRequestHandler.process_mcp_request(self._scope(token, path="/mcp/github"))
-        mock_auth.assert_called_once()
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+        assert auth_result.user_id == "sso-user-42"
+        assert auth_result.mcp_admitted_user_subject is True
+        mock_auth.assert_not_called()
+
+    async def test_expired_session_bearer_on_per_server_path_gets_per_server_challenge(self):
+        """An expired session bearer on a per-server path targeting a gateway-managed oauth2
+        server re-challenges with the PER-SERVER resource metadata (matching the resource the
+        client configured), so a spec client re-authorizes against the right document instead
+        of a bare 401 or the aggregate metadata (LIT-4864)."""
+        from datetime import datetime, timezone
+
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        mint, _refresh, principal, keys = self._session_bearer()
+        bearer = mint(principal, keys, datetime(2020, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+        server = MCPServer(
+            server_id="gh-id",
+            name="github",
+            server_name="github",
+            url="https://upstream.example/mcp",
+            transport="http",
+            auth_type=MCPAuth.oauth2,
+        )
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = server
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(self._scope(bearer, path="/mcp/github"))
+        assert exc_info.value.status_code == 401
+        www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
+        assert www_authenticate == (
+            'Bearer error="invalid_token", '
+            'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/github"'
+        )
+
+    async def test_session_bearer_scrubbed_from_egress_on_per_server_path(self):
+        """After a per-server keyless admission the session bearer must be scrubbed from every
+        egress header context exactly as at the aggregate scope, so no per-server passthrough
+        egress can forward it upstream for replay (LIT-4864)."""
+        token = self._access_token(user_id="sso-user-42")
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ),
+            self._patch_user_reload(user_id="sso-user-42"),
+        ):
+            _auth, _h, _servers, _msah, oauth2_headers, raw_headers = await MCPRequestHandler.process_mcp_request(
+                self._scope(token, path="/mcp/github")
+            )
+        assert oauth2_headers is None
+        assert not any(k.lower() == "authorization" for k in (raw_headers or {}))
 
 
 def _make_team(team_id, mcp_servers, *, org_id=None, tool_perms=None, members=("sso-user",)):
@@ -7645,3 +7848,581 @@ class TestSessionBearerEgressScrub:
         assert oauth2 is None
         assert "authorization" not in {k.lower() for k in raw}
         assert per_server == {"github": {"Authorization": "Bearer gh_injected_upstream"}}
+
+
+# ---------------------------------------------------------------------------
+# Internal-user (human) MCP entitlement tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestUserMCPEntitlement:
+    """The entitlement attached to the HUMAN, read at both list time and tool-call time.
+
+    A key's object_permission scopes the credential and a team's scopes the group; the user's own
+    scopes the person, so it must cap every key they hold and every tool those keys may invoke.
+    """
+
+    def _auth(self, user_id: str = "human-1", **kwargs) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="sk-test", user_id=user_id, **kwargs)
+
+    def _perm(self, *, servers=None, access_groups=None, tool_permissions=None) -> LiteLLM_ObjectPermissionTable:
+        return LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-human-1",
+            mcp_servers=servers if servers is not None else [],
+            mcp_access_groups=access_groups if access_groups is not None else [],
+            mcp_tool_permissions=tool_permissions,
+        )
+
+    @contextlib.contextmanager
+    def _entitled(self, perm):
+        """Patch the human's entitlement lookup. ``perm`` may be a permission row, None, or an
+        exception instance to raise (an entitlement that cannot be resolved)."""
+        side_effect = perm if isinstance(perm, Exception) else None
+        with patch.object(
+            MCPRequestHandler,
+            "_get_user_object_permission",
+            new_callable=AsyncMock,
+            return_value=None if side_effect else perm,
+            side_effect=side_effect,
+        ) as patched:
+            yield patched
+
+    @contextlib.contextmanager
+    def _key_and_team_servers(self, key_servers, team_servers):
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_key",
+                new_callable=AsyncMock,
+                return_value=key_servers,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                new_callable=AsyncMock,
+                return_value=team_servers,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_key_access_group_mcp_server_extras",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            yield
+
+    async def test_entitlement_caps_the_servers_the_key_reaches(self):
+        """The key grants two servers; the human is entitled to one, so only that one resolves."""
+        with self._key_and_team_servers(["srv-a", "srv-b"], []):
+            with self._entitled(self._perm(servers=["srv-a"])):
+                result = await MCPRequestHandler.get_allowed_mcp_servers(self._auth())
+        assert result == ["srv-a"]
+
+    async def test_entitlement_never_widens_the_key(self):
+        """A human entitled to a server their key does not grant still cannot reach it: the level is a
+        ceiling, so it intersects rather than unions."""
+        with self._key_and_team_servers(["srv-a"], []):
+            with self._entitled(self._perm(servers=["srv-a", "srv-elsewhere"])):
+                result = await MCPRequestHandler.get_allowed_mcp_servers(self._auth())
+        assert result == ["srv-a"]
+
+    async def test_no_entitlement_places_no_ceiling(self):
+        """A human with no entitlement row leaves the key/team result untouched."""
+        with self._key_and_team_servers(["srv-a", "srv-b"], []):
+            with self._entitled(None):
+                result = await MCPRequestHandler.get_allowed_mcp_servers(self._auth())
+        assert sorted(result) == ["srv-a", "srv-b"]
+
+    async def test_unresolvable_entitlement_denies_every_server(self):
+        """A KNOWN entitlement whose contents cannot be read must deny, not fall back to the key's
+        wider scope."""
+        with self._key_and_team_servers(["srv-a", "srv-b"], []):
+            with self._entitled(ValueError("permission row unreadable")):
+                result = await MCPRequestHandler.get_allowed_mcp_servers(self._auth())
+        assert result == []
+
+    async def test_entitlement_caps_the_tools_the_key_reaches(self):
+        """Tool-level: the key allows three tools on the server, the human is entitled to one."""
+        key_perm = self._perm(tool_permissions={"srv-a": ["read", "write", "delete"]})
+        with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_perm):
+            with patch.object(
+                MCPRequestHandler, "_get_team_object_permission", new_callable=AsyncMock, return_value=None
+            ):
+                with self._entitled(self._perm(tool_permissions={"srv-a": ["read"]})):
+                    result = await MCPRequestHandler.get_allowed_tools_for_server("srv-a", self._auth())
+        assert result == ["read"]
+
+    async def test_entitlement_alone_restricts_tools_on_an_otherwise_unrestricted_key(self):
+        """An unrestricted key (no tool permissions of its own) is still bound by the human's tools."""
+        with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None):
+            with patch.object(
+                MCPRequestHandler, "_get_team_object_permission", new_callable=AsyncMock, return_value=None
+            ):
+                with self._entitled(self._perm(tool_permissions={"srv-a": ["read"]})):
+                    result = await MCPRequestHandler.get_allowed_tools_for_server("srv-a", self._auth())
+        assert result == ["read"]
+
+    async def test_entitlement_on_another_server_does_not_restrict_this_one(self):
+        """Tool grants are per server: naming tools on srv-b places no bound on srv-a."""
+        with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None):
+            with patch.object(
+                MCPRequestHandler, "_get_team_object_permission", new_callable=AsyncMock, return_value=None
+            ):
+                with self._entitled(self._perm(tool_permissions={"srv-b": ["read"]})):
+                    result = await MCPRequestHandler.get_allowed_tools_for_server("srv-a", self._auth())
+        assert result is None
+
+    async def test_unresolvable_entitlement_denies_every_tool(self):
+        """Fail closed on the tool axis too. The caller's own except-handler treats a raise as
+        allow-all for key auth, so the ceiling must return the empty allowlist itself."""
+        with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None):
+            with patch.object(
+                MCPRequestHandler, "_get_team_object_permission", new_callable=AsyncMock, return_value=None
+            ):
+                with self._entitled(ValueError("permission row unreadable")):
+                    result = await MCPRequestHandler.get_allowed_tools_for_server("srv-a", self._auth())
+        assert result == []
+
+    async def test_tool_call_is_rejected_at_call_time(self):
+        """The end-to-end contract: a tool the human is not entitled to is refused when INVOKED, not
+        merely hidden from the advertised list."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        server = MCPServer(
+            server_id="srv-a",
+            name="srv-a",
+            server_name="srv-a",
+            url="https://srv-a.example.com",
+            transport=MCPTransport.http,
+        )
+        with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None):
+            with patch.object(
+                MCPRequestHandler, "_get_team_object_permission", new_callable=AsyncMock, return_value=None
+            ):
+                with self._entitled(self._perm(tool_permissions={"srv-a": ["read"]})):
+                    await global_mcp_server_manager.check_tool_permission_for_key_team(
+                        tool_name="read", server=server, user_api_key_auth=self._auth()
+                    )
+                    with pytest.raises(HTTPException) as exc:
+                        await global_mcp_server_manager.check_tool_permission_for_key_team(
+                            tool_name="delete", server=server, user_api_key_auth=self._auth()
+                        )
+        assert exc.value.status_code == 403
+
+    async def test_keyless_admitted_source_is_not_capped_by_the_user_level(self):
+        """A gateway-admitted human resolves as a UNION over their own grants plus their teams', and
+        their own grants ARE the user source there. Re-applying them as a ceiling per source would
+        make one team's narrower scope silently bound another's, so the level is skipped."""
+        with self._key_and_team_servers(["srv-a", "srv-b"], []):
+            with self._entitled(self._perm(servers=["srv-a"])) as lookup:
+                result = await MCPRequestHandler.get_allowed_mcp_servers(self._auth(), keyless_source=True)
+        assert sorted(result) == ["srv-a", "srv-b"]
+        lookup.assert_not_awaited()
+
+    async def test_keyless_admitted_source_tools_are_not_capped_by_the_user_level(self):
+        with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None):
+            with patch.object(
+                MCPRequestHandler, "_get_team_object_permission", new_callable=AsyncMock, return_value=None
+            ):
+                with self._entitled(self._perm(tool_permissions={"srv-a": ["read"]})) as lookup:
+                    result = await MCPRequestHandler.get_allowed_tools_for_server(
+                        "srv-a", self._auth(), keyless_source=True
+                    )
+        assert result is None
+        lookup.assert_not_awaited()
+
+    async def test_servers_named_only_under_tool_permissions_are_entitled(self):
+        """Granting one tool on a server entitles the human to that server, so an admin never has to
+        name it twice."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        global_mcp_server_manager.registry["srv-a"] = MCPServer(
+            server_id="srv-a",
+            name="srv-a",
+            server_name="srv-a",
+            url="https://srv-a.example.com",
+            transport=MCPTransport.http,
+        )
+        try:
+            with self._entitled(self._perm(tool_permissions={"srv-a": ["read"]})):
+                with patch.object(
+                    MCPRequestHandler,
+                    "_get_mcp_servers_from_access_groups",
+                    new_callable=AsyncMock,
+                    return_value=[],
+                ):
+                    result = await MCPRequestHandler._get_allowed_mcp_servers_for_user(self._auth())
+        finally:
+            global_mcp_server_manager.registry.pop("srv-a", None)
+        assert result == ["srv-a"]
+
+    async def test_places_ceiling_is_true_when_unresolvable(self):
+        """``_user_places_mcp_ceiling`` gates the admin shortcut that hands over the whole registry, so
+        an entitlement it cannot resolve must still count as a ceiling."""
+        with self._entitled(ValueError("boom")):
+            assert await MCPRequestHandler._user_places_mcp_ceiling(self._auth()) is True
+        with self._entitled(None):
+            assert await MCPRequestHandler._user_places_mcp_ceiling(self._auth()) is False
+
+
+@pytest.mark.asyncio
+class TestGetUserObjectPermission:
+    """Resolution of the ``user_id -> object_permission_id -> grants`` chain."""
+
+    def _prisma_with_user(self, user_row):
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+        return prisma_client
+
+    async def test_resolves_through_the_shared_permission_cache(self):
+        from litellm.caching.dual_cache import DualCache
+
+        user_row = MagicMock()
+        user_row.object_permission_id = "perm-1"
+        prisma_client = self._prisma_with_user(user_row)
+        auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-shared")
+        expected = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ) as mock_get_perm,
+        ):
+            assert await MCPRequestHandler._get_user_object_permission(auth) is expected
+            assert mock_get_perm.await_args.kwargs["object_permission_id"] == "perm-1"
+
+            # The user_id -> object_permission_id link is cached, so the user row is read once.
+            prisma_client.db.litellm_usertable.find_unique.reset_mock()
+            await MCPRequestHandler._get_user_object_permission(auth)
+            prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+
+    async def test_caches_a_sentinel_for_a_human_with_no_entitlement(self):
+        """A human without an entitlement is the common case and must cost no DB read per request."""
+        from litellm.caching.dual_cache import DualCache
+
+        user_row = MagicMock()
+        user_row.object_permission_id = None
+        prisma_client = self._prisma_with_user(user_row)
+        auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-no-perm")
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.auth.auth_checks.get_object_permission", new_callable=AsyncMock) as mock_get_perm,
+        ):
+            assert await MCPRequestHandler._get_user_object_permission(auth) is None
+            assert await MCPRequestHandler._get_user_object_permission(auth) is None
+            mock_get_perm.assert_not_awaited()
+            prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
+
+    async def test_missing_user_row_places_no_ceiling(self):
+        """Whether this human is entitled at all is unknown when their row is absent, which is the
+        state before the level existed, so it must not deny."""
+        from litellm.caching.dual_cache import DualCache
+
+        prisma_client = self._prisma_with_user(None)
+        auth = UserAPIKeyAuth(api_key="sk-test", user_id="ghost")
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        ):
+            assert await MCPRequestHandler._get_user_object_permission(auth) is None
+
+    async def test_unreadable_user_row_places_no_ceiling(self):
+        from litellm.caching.dual_cache import DualCache
+
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_usertable.find_unique = AsyncMock(side_effect=Exception("db down"))
+        auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-db-down")
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        ):
+            assert await MCPRequestHandler._get_user_object_permission(auth) is None
+
+    async def test_named_but_unreadable_permission_raises(self):
+        """A KNOWN entitlement with unknown contents is indeterminate: it must surface so the callers
+        can deny rather than serve the wider key scope."""
+        from litellm.caching.dual_cache import DualCache
+
+        user_row = MagicMock()
+        user_row.object_permission_id = "perm-gone"
+        prisma_client = self._prisma_with_user(user_row)
+        auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-dangling")
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_object_permission",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            with pytest.raises(ValueError):
+                await MCPRequestHandler._get_user_object_permission(auth)
+
+    async def test_no_user_id_places_no_ceiling(self):
+        assert await MCPRequestHandler._get_user_object_permission(UserAPIKeyAuth(api_key="sk-test")) is None
+        assert await MCPRequestHandler._get_user_object_permission(None) is None
+
+
+def _key_auth_reaching(server, *, tools=None, **fields):
+    """A key-authenticated caller whose OWN key grant reaches ``server`` (and optionally its ``tools``).
+
+    The key grant is the thing an upper-level entitlement fault must not silently hand back: every
+    test below asserts against what this key reaches when the level under test cannot be resolved.
+    """
+    return UserAPIKeyAuth(
+        api_key="sk-hash",
+        user_id="u1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-key",
+            mcp_servers=[server],
+            mcp_tool_permissions={server: tools} if tools else None,
+        ),
+        **fields,
+    )
+
+
+def _agent_prisma(object_permission_id=None, side_effect=None):
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=MagicMock(object_permission_id=object_permission_id),
+        side_effect=side_effect,
+    )
+    return prisma_client
+
+
+@contextlib.contextmanager
+def _entitlement_fault_globals(prisma_client=None):
+    from litellm.caching.dual_cache import DualCache
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client or MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+class TestEntitlementFaultSemantics:
+    """Each entitlement level distinguishes two fault classes for a KEY-authenticated caller.
+
+    A principal row that NAMES an object_permission we cannot load is a known entitlement with
+    unknown contents, so the level denies rather than handing back the wider key scope. A lookup
+    that fails before we can tell whether the principal is entitled at all leaves no ceiling, which
+    is the state that existed before the level did; denying there would refuse MCP to the majority
+    of callers, who have no such entitlement configured, for the duration of a cold-cache fault.
+    """
+
+    async def test_end_user_named_but_unloadable_permission_denies(self):
+        end_user = MagicMock(object_permission=None, object_permission_id="op-eu")
+        auth = _key_auth_reaching("srv1", end_user_id="eu-1")
+        with _entitlement_fault_globals():
+            with (
+                patch("litellm.proxy.auth.auth_checks.get_end_user_object", AsyncMock(return_value=end_user)),
+                patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)),
+            ):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed == [], "an end-user entitlement we know exists but cannot read must deny"
+
+    async def test_end_user_without_an_entitlement_places_no_ceiling(self):
+        """The three shapes that are NOT evidence of an entitlement: an end user row linking no
+        permission, no end user row at all, and a lookup that blew up before answering either."""
+        auth = _key_auth_reaching("srv1", end_user_id="eu-1")
+        linked_none = MagicMock(object_permission=None, object_permission_id=None)
+        for lookup, shape in (
+            (AsyncMock(return_value=linked_none), "row links no permission"),
+            (AsyncMock(return_value=None), "no end user row"),
+            (AsyncMock(side_effect=RuntimeError("connection reset by peer")), "lookup failed"),
+        ):
+            with _entitlement_fault_globals():
+                with patch("litellm.proxy.auth.auth_checks.get_end_user_object", lookup):
+                    allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            assert set(allowed) == {"srv1"}, f"{shape}: no evidence of an entitlement, so no ceiling"
+
+    async def test_agent_named_but_unloadable_permission_denies(self):
+        auth = _key_auth_reaching("srv1", agent_id="agent-unloadable")
+        with _entitlement_fault_globals(_agent_prisma(object_permission_id="op-agent")):
+            with patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed == [], "an agent entitlement we know exists but cannot read must deny"
+
+    async def test_agent_without_an_entitlement_places_no_ceiling(self):
+        """An agent row linking no permission, and an agent row we could not read at all."""
+        for prisma_client, agent_id, shape in (
+            (_agent_prisma(object_permission_id=None), "agent-unlinked", "agent links no permission"),
+            (_agent_prisma(side_effect=RuntimeError("connection reset by peer")), "agent-unread", "row read failed"),
+        ):
+            auth = _key_auth_reaching("srv1", agent_id=agent_id)
+            with _entitlement_fault_globals(prisma_client):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            assert set(allowed) == {"srv1"}, f"{shape}: no evidence of an entitlement, so no ceiling"
+
+    async def test_agent_named_but_unloadable_permission_denies_tools(self):
+        """The tools axis denies with [] rather than the None (allow-all) key auth gets for an
+        indeterminate fault, so an unreadable agent entitlement cannot widen the key's tool scope."""
+        auth = _key_auth_reaching("srv1", tools=["tool_a"], agent_id="agent-tools-unloadable")
+        with _entitlement_fault_globals(_agent_prisma(object_permission_id="op-agent")):
+            with patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)):
+                tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == [], "an agent entitlement we know exists but cannot read must deny its tools"
+
+    async def test_org_named_but_unloadable_ceiling_denies(self):
+        auth = _key_auth_reaching("srv1", org_id="org-a")
+        org = MagicMock(object_permission_id="op-org")
+        with _entitlement_fault_globals():
+            with (
+                patch("litellm.proxy.auth.auth_checks.get_org_object", AsyncMock(return_value=org)),
+                patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)),
+            ):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed == [], "an org ceiling we know exists but cannot read must deny, key auth included"
+
+    async def test_org_named_but_unloadable_ceiling_denies_tools(self):
+        auth = _key_auth_reaching("srv1", tools=["tool_a"], org_id="org-a")
+        org = MagicMock(object_permission_id="op-org")
+        with _entitlement_fault_globals():
+            with (
+                patch("litellm.proxy.auth.auth_checks.get_org_object", AsyncMock(return_value=org)),
+                patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)),
+            ):
+                tools = await MCPRequestHandler.get_allowed_tools_for_server("srv1", auth)
+        assert tools == [], "an org tool ceiling we know exists but cannot read must deny its tools"
+
+    async def test_org_without_a_resolvable_entitlement_places_no_ceiling(self):
+        """A deleted org and an org lookup that failed are both cases where we cannot point at a
+        ceiling; key auth keeps its long-standing fail-open behavior for them."""
+        from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
+
+        auth = _key_auth_reaching("srv1", org_id="org-a")
+        for lookup, shape in (
+            (AsyncMock(return_value=MagicMock(object_permission_id=None)), "org names no permission"),
+            (AsyncMock(side_effect=OrganizationNotFoundError("Organization doesn't exist in db.")), "org deleted"),
+            (AsyncMock(side_effect=RuntimeError("connection reset by peer")), "org lookup failed"),
+        ):
+            with _entitlement_fault_globals():
+                with patch("litellm.proxy.auth.auth_checks.get_org_object", lookup):
+                    allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            assert set(allowed) == {"srv1"}, f"{shape}: no ceiling we can point at, so key auth stays open"
+
+    async def test_keyless_org_ceiling_denies_on_either_fault_class(self):
+        """The keyless gateway-admitted path is untouched: it already denied on ANY org-ceiling
+        fault, and still denies on both classes, because a per-source org ceiling is the only org
+        bound a keyless subject has and an unbounded source would win the union."""
+        auth = _make_admitted_subject("sso-user", org_id="org-a", own_servers=["srv1"])
+        org = MagicMock(object_permission_id="op-org")
+        with _entitlement_fault_globals():
+            with patch("litellm.proxy.auth.auth_checks.get_org_object", AsyncMock(return_value=org)):
+                with patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)):
+                    named_unloadable = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_org_object",
+                AsyncMock(side_effect=RuntimeError("connection reset by peer")),
+            ):
+                indeterminate = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert named_unloadable == [] and indeterminate == []
+
+    async def test_keyless_source_never_consults_the_end_user_or_agent_levels(self):
+        """A keyless subject's grant sources carry neither end_user_id nor agent_id, so neither
+        level runs for it and neither new deny can reach its union. Pinned because a source that
+        DID consult them would fail closed on a fault and silently drop a team's grants."""
+        auth = _make_admitted_subject("sso-user", own_servers=["srv1"])
+        auth.end_user_id = "eu-1"
+        auth.agent_id = "agent-unloadable"
+        with _entitlement_fault_globals(_agent_prisma(object_permission_id="op-agent")):
+            with (
+                patch("litellm.proxy.auth.auth_checks.get_end_user_object", AsyncMock(side_effect=AssertionError)),
+                patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)),
+            ):
+                allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(allowed) == {"srv1"}
+
+
+@pytest.mark.asyncio
+class TestScopedSessionAdmission:
+    """LIT-4917: a session bearer sealed to one server (RFC 8707 resource at authorize)
+    carries that scope onto the admitted auth object, where the grant resolution intersects
+    it fail closed; an unscoped bearer carries None and is byte-identical to before."""
+
+    _MASTER_KEY = "sk-scoped-session-admission-master-key"
+
+    def _bearer(self, resource_server_id):
+        from datetime import datetime, timezone
+
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            session_keys_from_master_key,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+            SessionPrincipal,
+            mint_session_token,
+        )
+
+        keys = session_keys_from_master_key(self._MASTER_KEY)
+        principal = SessionPrincipal(
+            user_id="scoped-user", client_id="llm_dcrc_abc", resource_server_id=resource_server_id
+        )
+        return mint_session_token(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+
+    @pytest.mark.parametrize("scope", ["github-server-id", None])
+    async def test_admission_carries_sealed_resource_scope(self, scope):
+        token = self._bearer(scope)
+        scope_dict = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/github",
+            "headers": [(b"host", b"testserver"), (b"authorization", f"Bearer {token}".encode())],
+        }
+        get_user_object = AsyncMock(
+            return_value=MagicMock(
+                user_id="scoped-user",
+                organization_id=None,
+                metadata={"scim_active": True},
+                user_role=None,
+                object_permission=None,
+                object_permission_id=None,
+                tpm_limit=None,
+                rpm_limit=None,
+            )
+        )
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ):
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope_dict)
+        assert auth_result.mcp_admitted_user_subject is True
+        assert auth_result.mcp_session_resource_server_id == scope
+
+    def test_scope_field_cannot_be_forged_through_construction(self):
+        forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_id="any-server")
+        assert forged.mcp_session_resource_server_id is None

@@ -1,11 +1,12 @@
 import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
-import userEvent from "@testing-library/user-event";
-import { Form } from "antd";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import type { UploadProps } from "antd/es/upload";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
 import type { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
+import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
+import { useForm } from "react-hook-form";
 import AddModelForm from "./AddModelForm";
 
 vi.mock("../molecules/models/ProviderLogo", () => ({
@@ -131,8 +132,12 @@ const testTeam: Team = {
 };
 
 const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmin = false) => {
-  const { result } = renderHook(() => Form.useForm());
-  const [form] = result.current;
+  const { result } = renderHook(() => {
+    const form = useForm<MountedFormValues>({ mode: "onChange" });
+    const registry = useMountRegistry();
+    return { form, registry };
+  });
+  const { form, registry } = result.current;
 
   const teams = [
     {
@@ -159,7 +164,9 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
 
   return {
     form,
-    handleOk: vi.fn(),
+    registry,
+    mountedValues: () => projectMountedValues(registry, form.getValues),
+    handleOk: vi.fn().mockResolvedValue(true),
     setSelectedProvider: vi.fn(),
     setProviderModelsFn: vi.fn(),
     getPlaceholder: vi.fn((provider: Providers) => `Enter ${provider} model name`),
@@ -296,5 +303,95 @@ describe("AddModelForm", () => {
     expect(screen.queryByText("Provider")).not.toBeInTheDocument();
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("should display the provider field and the Test Connect / Add Model buttons", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+
+    const props = createTestProps();
+
+    renderWithProviders(<AddModelForm {...props} />);
+
+    expect(await screen.findByText("Provider")).toBeInTheDocument();
+    expect((await screen.findAllByRole("button", { name: "Test Connect" })).length).toBeGreaterThan(0);
+    expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
+  });
+
+  describe("cache control bindings reach the parent form store", () => {
+    const renderWithForm = async () => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+      const props = createTestProps();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      renderWithProviders(<AddModelForm {...props} />);
+      await screen.findByText("Provider");
+
+      return {
+        user,
+        openCacheControl: async () => {
+          await user.click(await screen.findByText("Advanced Settings"));
+          await user.click(screen.getByLabelText("Cache Control Injection Points"));
+          await screen.findByText("Add Injection Point");
+        },
+        closeCacheControl: async () => {
+          await user.click(screen.getByLabelText("Cache Control Injection Points"));
+          await waitFor(() => expect(screen.queryByText("Add Injection Point")).not.toBeInTheDocument());
+        },
+        mountedValues: async (): Promise<Record<string, unknown>> => props.mountedValues(),
+      };
+    };
+
+    it("omits both cache control keys while the section is untouched", async () => {
+      const { mountedValues } = await renderWithForm();
+      const values = await mountedValues();
+      expect(values).not.toHaveProperty("cache_control_injection_points");
+      expect(values.cache_control).toBeUndefined();
+    });
+
+    it("sends the seeded injection point once the toggle is on", async () => {
+      const { openCacheControl, mountedValues } = await renderWithForm();
+      await openCacheControl();
+      const values = await mountedValues();
+      expect(values.cache_control).toBe(true);
+      expect(values.cache_control_injection_points).toEqual([{ location: "message" }]);
+    });
+
+    it("carries an edited role and keeps the index a string, as the antd control did", async () => {
+      const { user, openCacheControl, mountedValues } = await renderWithForm();
+      await openCacheControl();
+
+      await user.click(screen.getByText("Select a role"));
+      await user.click(await screen.findByText("System"));
+      await user.type(screen.getByPlaceholderText("Optional"), "3");
+
+      const values = await mountedValues();
+      expect(values.cache_control_injection_points).toEqual([{ location: "message", role: "system", index: "3" }]);
+    });
+
+    it("adds a second injection point row", async () => {
+      const { user, openCacheControl, mountedValues } = await renderWithForm();
+      await openCacheControl();
+
+      await user.click(screen.getByText("Add Injection Point"));
+      await waitFor(() => expect(screen.getAllByPlaceholderText("Optional")).toHaveLength(2));
+      await user.type(screen.getAllByPlaceholderText("Optional")[1], "7");
+
+      const values = await mountedValues();
+      expect(values.cache_control_injection_points).toEqual([
+        { location: "message" },
+        { location: "message", index: "7" },
+      ]);
+    });
+
+    it("drops the injection points again when the toggle goes back off", async () => {
+      const { openCacheControl, closeCacheControl, mountedValues } = await renderWithForm();
+      await openCacheControl();
+      await closeCacheControl();
+
+      const values = await mountedValues();
+      expect(values.cache_control).toBe(false);
+      expect(values).not.toHaveProperty("cache_control_injection_points");
+    });
   });
 });

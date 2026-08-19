@@ -48,6 +48,7 @@ const deriveDetailMessage = (detail: any): string | undefined => {
   if (Array.isArray(detail)) return detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ");
   if (typeof detail === "string") return detail;
   if (typeof detail?.error === "string") return detail.error;
+  if (detail && typeof detail === "object") return detail.error?.message || detail.message;
   return undefined;
 };
 
@@ -60,6 +61,38 @@ export const deriveErrorMessage = (errorData: any): string => {
     detailStr ||
     JSON.stringify(errorData)
   );
+};
+
+/**
+ * The proxy serializes HTTPException details as the string form of a Python dict,
+ * so a rejection reaches the UI as "{'error': 'actual message'}" (or that string
+ * nested inside the JSON error envelope). Unwraps to the actual message; returns
+ * the input unchanged when it does not match a known wrapper shape.
+ */
+export const unwrapProxyErrorMessage = (raw: string): string => {
+  const trimmed = raw.trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object") {
+      const derived = deriveErrorMessage(parsed);
+      if (typeof derived === "string" && derived !== trimmed) {
+        return unwrapProxyErrorMessage(derived);
+      }
+    }
+  } catch {
+    const pythonDictMatch = trimmed.match(/^\{'error':\s*(['"])([\s\S]*)\1\}$/);
+    if (pythonDictMatch) {
+      return pythonDictMatch[2];
+    }
+  }
+  return raw;
+};
+
+export const extractProxyErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) {
+    return unwrapProxyErrorMessage(error.message);
+  }
+  return unwrapProxyErrorMessage(String(error));
 };
 
 export interface ApiClientConfig {

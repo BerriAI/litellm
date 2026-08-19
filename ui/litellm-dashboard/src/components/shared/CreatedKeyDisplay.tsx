@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Button } from "antd";
-import MessageManager from "@/components/molecules/message_manager";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/lib/toast";
 
 interface CreatedKeyDisplayProps {
   apiKey: string;
@@ -16,7 +16,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
 
   const handleCopy = () => {
     setCopied(true);
-    MessageManager.success("Key copied to clipboard");
+    toast.success("Key copied to clipboard");
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -41,9 +41,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
       </div>
 
       <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-        <Button type="primary" style={{ marginTop: 12 }}>
-          {copied ? "Copied!" : "Copy Virtual Key"}
-        </Button>
+        <Button className="mt-3">{copied ? "Copied!" : "Copy Virtual Key"}</Button>
       </CopyToClipboard>
     </div>
   );

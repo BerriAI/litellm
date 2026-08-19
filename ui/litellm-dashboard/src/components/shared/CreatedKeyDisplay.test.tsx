@@ -3,11 +3,7 @@ import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CreatedKeyDisplay from "./CreatedKeyDisplay";
 
-vi.mock("@/components/molecules/message_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), loading: vi.fn(), destroy: vi.fn() },
-}));
-
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 
 describe("CreatedKeyDisplay", () => {
   beforeEach(() => {
@@ -48,7 +44,7 @@ describe("CreatedKeyDisplay", () => {
 
     await user.click(screen.getByRole("button", { name: /copy virtual key/i }));
 
-    expect(MessageManager.success).toHaveBeenCalledWith("Key copied to clipboard");
+    expect(toast.success).toHaveBeenCalledWith("Key copied to clipboard");
   });
 
   it("should revert button text back after 2 seconds", async () => {
