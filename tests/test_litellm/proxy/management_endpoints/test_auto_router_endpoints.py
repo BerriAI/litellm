@@ -550,7 +550,18 @@ def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-ha
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[_key_record(token) for token in known_keys])
     async def execute_raw(sql: str, *params: object):
         if "SET stopped_by" in sql:
-            return sum(1 for row in stored if row.group_id == params[0] and row.stopped_by is None)
+            group = [row for row in stored if row.group_id == params[0]]
+            counts = {row["job_id"]: row["attempt_count"] for row in prisma.attempt_rows}
+            sampling = any(row.stopped_at is None and counts.get(row.id, 0) < row.max_turns for row in group)
+            window_open = bool(group) and group[0].ends_at > datetime.now(timezone.utc)
+            claimable = [row for row in group if row.stopped_by is None]
+            if not (claimable and sampling and window_open):
+                return 0
+            for row in claimable:
+                row.stopped_by = params[1]
+                if row.stopped_at is None:
+                    row.stopped_at = datetime.fromisoformat(str(params[2])).replace(tzinfo=timezone.utc)
+            return len(claimable)
         return 0
 
     prisma.db.execute_raw = AsyncMock(side_effect=execute_raw)
@@ -1153,6 +1164,8 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
     stop_sql, stop_group, stop_operator, stop_stamp = prisma.db.execute_raw.call_args.args
     assert "SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamp)" in stop_sql
     assert "WHERE group_id = $1 AND stopped_by IS NULL" in stop_sql
+    assert "ends_at > (NOW() AT TIME ZONE 'utc')" in stop_sql
+    assert ") < k.max_turns" in stop_sql
     assert (stop_group, stop_operator) == ("job-1", "admin")
     assert datetime.fromisoformat(stop_stamp).tzinfo is None
     assert prisma.db.execute_raw.await_count == 1
@@ -1161,12 +1174,14 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
     assert by_key["key-hash-2"] == earned
     assert by_key["key-hash"] is not None and by_key["key-hash"] != earned
 
-    prisma_done = _shadow_prisma(legs=[_leg_record(ends_at=datetime.now(timezone.utc) - timedelta(days=1))])
+    done_leg = _leg_record(ends_at=datetime.now(timezone.utc) - timedelta(days=1))
+    prisma_done = _shadow_prisma(legs=[done_leg])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_done)
     with pytest.raises(HTTPException) as exc:
         await stop_shadow_eval_job("job-1", ADMIN)
     assert exc.value.status_code == 400
-    prisma_done.db.execute_raw.assert_not_called()
+    assert "already completed" in exc.value.detail
+    assert done_leg.stopped_by is None
 
     with pytest.raises(HTTPException) as forbidden:
         await stop_shadow_eval_job("job-1", VIEWER)
@@ -1189,15 +1204,36 @@ def test_every_shadow_eval_sql_constant_speaks_naive_utc():
 
 
 @pytest.mark.asyncio
+async def test_a_stop_racing_the_last_budgeted_attempt_reports_completed_not_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The statement claims the job only while a leg still samples, so a stop landing in
+    the same instant the budget spends records nothing and the job keeps reading
+    completed; stamping it would misreport a self-ended job as operator-stopped forever."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record(max_turns=2)])
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 2}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(HTTPException) as exc:
+        await stop_shadow_eval_job("job-1", ADMIN)
+    assert exc.value.status_code == 400
+    assert "already completed" in exc.value.detail
+    assert prisma.db.litellm_shadowevaljob.find_many.await_args.kwargs["where"] == {"group_id": "job-1"}
+
+
+@pytest.mark.asyncio
 async def test_two_racing_stops_produce_exactly_one_winner(monkeypatch: pytest.MonkeyPatch):
-    """Both operators can pass the derived-status guard in the race window; the stop
-    statement's stopped_by IS NULL predicate lets only one claim rows, and the loser gets
-    the same already-stopped answer a late caller gets."""
+    """The statement's stopped_by IS NULL predicate lets only one racer claim rows; the
+    loser reads the stamped state and gets the same answer a late caller gets."""
     import litellm.proxy.proxy_server as proxy_server
 
     prisma = _shadow_prisma(legs=[_leg_record()])
-    prisma.db.execute_raw = AsyncMock(return_value=0)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    first = await stop_shadow_eval_job("job-1", ADMIN)
+    assert first.status == "stopped"
 
     with pytest.raises(HTTPException) as exc:
         await stop_shadow_eval_job("job-1", ADMIN)

@@ -564,6 +564,12 @@ _STOP_JOB_SQL: Final = """
 UPDATE "LiteLLM_ShadowEvalJob"
 SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamp)
 WHERE group_id = $1 AND stopped_by IS NULL
+  AND ends_at > (NOW() AT TIME ZONE 'utc')
+  AND EXISTS (
+    SELECT 1 FROM "LiteLLM_ShadowEvalJob" k
+    WHERE k.group_id = $1 AND k.stopped_at IS NULL
+      AND (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_turns
+  )
 """
 
 
@@ -990,14 +996,20 @@ async def stop_shadow_eval_job(
 ) -> ShadowEvalJobResponse:
     """Stop an active shadow eval job, every key it scopes at once. Attempts are kept;
     sampling halts within ~10s. Keys that already stopped on their own budget keep the
-    stopped_at they earned. One statement stamps stopped_by and every missing stopped_at
-    together, so a half-applied stop can never read stopped while legs keep sampling, and
-    its row count picks exactly one winner when two operators race the guard."""
+    stopped_at they earned. The statement is the whole state machine: it claims the job
+    only while a leg still samples inside the window with no stop recorded, so a racing
+    operator, a same-instant budget spend, and a repeat stop all read the same 400 with
+    the status the job actually holds."""
     from litellm.proxy.proxy_server import prisma_client
 
     _require_admin_writer(user_api_key_dict, "stop a shadow eval")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    stamp: Final = datetime.now(timezone.utc)
+    operator: Final = user_api_key_dict.user_id or "operator"
+    claimed: Final = await prisma_client.db.execute_raw(
+        _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
+    )
     legs: Final = _LEG_ROWS.validate_python(
         await prisma_client.db.litellm_shadowevaljob.find_many(
             where={"group_id": job_id}  # mutable-ok: Prisma filter
@@ -1008,22 +1020,7 @@ async def stop_shadow_eval_job(
         raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
     counts: Final = await _leg_attempt_counts(prisma_client, legs)
     current: Final = _group_response(job_id, legs, counts)
-    if current.status != "running":
-        raise HTTPException(status_code=400, detail=f"Job {job_id} is already {current.status}")
-    stamp: Final = datetime.now(timezone.utc)
-    operator: Final = user_api_key_dict.user_id or "operator"
-    claimed: Final = await prisma_client.db.execute_raw(
-        _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
-    )
     if claimed == 0:
-        raise HTTPException(status_code=400, detail=f"Job {job_id} is already stopped")
-    stopped: Final = tuple(
-        (
-            leg
-            if leg.stopped_at is not None
-            else leg.model_copy(update={"stopped_at": stamp})  # mutable-ok: pydantic update payload
-        ).model_copy(update={"stopped_by": operator})  # mutable-ok: pydantic update payload
-        for leg in legs
-    )
-    labeled: Final = await _with_key_labels(prisma_client, (_group_response(job_id, stopped, counts),))
+        raise HTTPException(status_code=400, detail=f"Job {job_id} is already {current.status}")
+    labeled: Final = await _with_key_labels(prisma_client, (current,))
     return labeled[0]
