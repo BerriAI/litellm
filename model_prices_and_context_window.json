@@ -10004,6 +10004,7 @@
         "supports_vision": true
     },
     "babbage-002": {
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "text-completion-openai",
         "max_input_tokens": 16384,
@@ -15042,6 +15043,7 @@
         "mode": "search"
     },
     "davinci-002": {
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "text-completion-openai",
         "max_input_tokens": 16384,
@@ -20562,8 +20564,8 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-image": {
-        "input_cost_per_token": 2.5e-07,
-        "input_cost_per_token_batches": 1.25e-07,
+        "input_cost_per_token": 5e-07,
+        "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
@@ -20571,8 +20573,8 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.045,
         "output_cost_per_image_token": 6e-05,
-        "output_cost_per_token": 1.5e-06,
-        "output_cost_per_token_batches": 7.5e-07,
+        "output_cost_per_token": 3e-06,
+        "output_cost_per_token_batches": 1.5e-06,
         "rpm": 1000,
         "tpm": 4000000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-flash-image",
@@ -20605,8 +20607,8 @@
     },
     "gemini/gemini-3.1-flash-image-preview": {
         "deprecation_date": "2026-06-25",
-        "input_cost_per_token": 2.5e-07,
-        "input_cost_per_token_batches": 1.25e-07,
+        "input_cost_per_token": 5e-07,
+        "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
@@ -20614,8 +20616,8 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.045,
         "output_cost_per_image_token": 6e-05,
-        "output_cost_per_token": 1.5e-06,
-        "output_cost_per_token_batches": 7.5e-07,
+        "output_cost_per_token": 3e-06,
+        "output_cost_per_token_batches": 1.5e-06,
         "rpm": 1000,
         "tpm": 4000000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-flash-image-preview",
@@ -23245,6 +23247,7 @@
         "supports_tool_choice": true
     },
     "gpt-3.5-turbo-instruct": {
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "text-completion-openai",
         "max_input_tokens": 8192,
@@ -36161,6 +36164,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
     "text-moderation-007": {
+        "deprecation_date": "2025-10-27",
         "input_cost_per_token": 0.0,
         "litellm_provider": "openai",
         "max_input_tokens": 32768,
@@ -36170,6 +36174,7 @@
         "output_cost_per_token": 0.0
     },
     "text-moderation-latest": {
+        "deprecation_date": "2025-10-27",
         "input_cost_per_token": 0.0,
         "litellm_provider": "openai",
         "max_input_tokens": 32768,
@@ -36179,6 +36184,7 @@
         "output_cost_per_token": 0.0
     },
     "text-moderation-stable": {
+        "deprecation_date": "2025-10-27",
         "input_cost_per_token": 0.0,
         "litellm_provider": "openai",
         "max_input_tokens": 32768,
@@ -47975,15 +47981,15 @@
     },
     "deepseek-v4-flash": {
         "cache_creation_input_token_cost": 0.0,
-        "cache_read_input_token_cost": 2.8e-09,
-        "input_cost_per_token": 1.4e-07,
-        "input_cost_per_token_cache_hit": 2.8e-09,
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 2.8e-07,
+        "output_cost_per_token": 1.32e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -48001,15 +48007,15 @@
     },
     "deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
-        "cache_read_input_token_cost": 3.625e-09,
-        "input_cost_per_token": 4.35e-07,
-        "input_cost_per_token_cache_hit": 3.625e-09,
+        "cache_read_input_token_cost": 4.4e-08,
+        "input_cost_per_token": 1.32e-06,
+        "input_cost_per_token_cache_hit": 4.4e-08,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 8.7e-07,
+        "output_cost_per_token": 3.96e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -48027,15 +48033,15 @@
     },
     "deepseek/deepseek-v4-flash": {
         "cache_creation_input_token_cost": 0.0,
-        "cache_read_input_token_cost": 2.8e-09,
-        "input_cost_per_token": 1.4e-07,
-        "input_cost_per_token_cache_hit": 2.8e-09,
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 2.8e-07,
+        "output_cost_per_token": 1.32e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -48053,15 +48059,15 @@
     },
     "deepseek/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
-        "cache_read_input_token_cost": 3.625e-09,
-        "input_cost_per_token": 4.35e-07,
-        "input_cost_per_token_cache_hit": 3.625e-09,
+        "cache_read_input_token_cost": 4.4e-08,
+        "input_cost_per_token": 1.32e-06,
+        "input_cost_per_token_cache_hit": 4.4e-08,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 8.7e-07,
+        "output_cost_per_token": 3.96e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
