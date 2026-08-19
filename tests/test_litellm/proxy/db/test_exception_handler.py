@@ -623,6 +623,49 @@ def test_only_p2024_counts_as_pool_exhaustion(other_error):
     assert PrismaDBExceptionHandler.is_connection_pool_timeout_error(other_error) is False
 
 
+def test_pool_exhaustion_is_detected_in_the_shape_the_engine_actually_raises():
+    """Contention raises a typed prisma error carrying the code, and that path is
+    covered above. When the database itself is unreachable the engine reports the
+    same P2024 as a raw HTTP error instead, with no `code` attribute at all and
+    the code recorded only in the JSON body. Prisma classifies both as P2024, so
+    the counter should not depend on which layer surfaced it. Body captured
+    verbatim from a live proxy run at connection limit 1 with Postgres paused."""
+    from types import SimpleNamespace
+
+    from prisma.engine.errors import EngineRequestError
+
+    body = (
+        '{"is_panic":false,"message":"Timed out fetching a new connection from the connection pool. '
+        'More info: http://pris.ly/d/connection-pool (Current connection pool timeout: 2, connection limit: 1)",'
+        '"meta":{"connection_limit":1,"timeout":2},"error_code":"P2024"}'
+    )
+    error = EngineRequestError(response=SimpleNamespace(status=500), body=body)
+
+    assert not hasattr(error, "code"), "the shape under test is the one with no code attribute"
+    assert PrismaDBExceptionHandler.is_connection_pool_timeout_error(error) is True
+
+
+def test_another_engine_error_code_is_not_read_as_pool_exhaustion():
+    """The body is matched on prisma's own error_code field, so a different
+    engine failure carrying its own code must not be counted."""
+    from types import SimpleNamespace
+
+    from prisma.engine.errors import EngineRequestError
+
+    error = EngineRequestError(
+        response=SimpleNamespace(status=500),
+        body='{"is_panic":false,"message":"boom","error_code":"P2010"}',
+    )
+
+    assert PrismaDBExceptionHandler.is_connection_pool_timeout_error(error) is False
+
+
+def test_a_message_merely_mentioning_the_code_is_not_pool_exhaustion():
+    """Matching loose text would let any error whose message quotes P2024 inflate
+    the exhaustion counter."""
+    assert PrismaDBExceptionHandler.is_connection_pool_timeout_error(Exception("see P2024 docs")) is False
+
+
 def test_pool_exhaustion_is_not_mistaken_for_a_reachability_failure():
     """P2024's message contains "Timed out", which the transport classifier
     keyword-matches. The pool predicate must not inherit that ambiguity."""
