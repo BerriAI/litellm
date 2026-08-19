@@ -69,7 +69,7 @@ describe("FallbackSelectionForm", () => {
       <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
     );
 
-    const addTabButton = screen.getByRole("button", { name: /add tab/i });
+    const addTabButton = screen.getByRole("button", { name: /add fallback group/i });
     await user.click(addTabButton);
 
     expect(mockOnGroupsChange).toHaveBeenCalledTimes(1);
@@ -98,7 +98,7 @@ describe("FallbackSelectionForm", () => {
         maxGroups={5}
       />,
     );
-    expect(screen.queryByRole("button", { name: /add tab/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add fallback group/i })).not.toBeInTheDocument();
   });
 
   it("should show add tab button when below maxGroups with custom maxGroups", () => {
@@ -111,7 +111,7 @@ describe("FallbackSelectionForm", () => {
         maxGroups={3}
       />,
     );
-    expect(screen.getByRole("button", { name: /add tab/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add fallback group/i })).toBeInTheDocument();
   });
 
   it("should call onGroupsChange when a group is removed", async () => {
@@ -124,7 +124,8 @@ describe("FallbackSelectionForm", () => {
       <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
     );
 
-    const removeButtons = screen.getAllByRole("tab", { name: "remove" });
+    const removeButtons = screen.getAllByRole("button", { name: /^remove /i });
+    expect(removeButtons).toHaveLength(2);
     await user.click(removeButtons[0]);
 
     expect(mockOnGroupsChange).toHaveBeenCalledTimes(1);
@@ -168,7 +169,7 @@ describe("FallbackSelectionForm", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /add tab/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /add fallback group/i })).not.toBeInTheDocument();
     expect(mockOnGroupsChange).not.toHaveBeenCalled();
   });
 });

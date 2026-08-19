@@ -1,15 +1,19 @@
 import React from "react";
-import { Switch, Select, Tooltip, DatePicker } from "antd";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import type { Dayjs } from "dayjs";
 import { ChevronDown } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { Row, Col, Typography } from "antd";
-import TextArea from "antd/es/input/TextArea";
+import { Textarea } from "@/components/ui/textarea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
 import { antdRules } from "../common_components/antdFormRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MountedFormField } from "../common_components/MountedFormField";
+import { UtcDateTimeInput } from "@/components/shared/form/UtcDateTimeInput";
 import CacheControlInjectionPoints, {
   CACHE_CONTROL_LABEL,
   CACHE_CONTROL_TOOLTIP,
@@ -31,7 +35,6 @@ import {
   PTU_END_FIELD,
 } from "../../utils/ptuValidation";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
-const { Link } = Typography;
 
 interface AdvancedSettingsProps {
   showAdvancedSettings: boolean;
@@ -51,6 +54,11 @@ const USAGE_COST_FIELDS = [
 ];
 
 const REVALIDATED_WHEN_PTU_COUNT_CHANGES = [PTU_RATE_FIELD, PTU_START_FIELD, ...USAGE_COST_FIELDS];
+
+const PRICING_MODEL_ITEMS = [
+  { value: "per_token", label: "Per Million Tokens" },
+  { value: "per_second", label: "Per Second" },
+] as const;
 
 const validateNumber = (_: unknown, value: unknown) => {
   if (!value) {
@@ -94,11 +102,10 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 <Switch
                   id={control.id}
                   checked={control.value === true}
-                  onChange={(checked) => {
+                  onCheckedChange={(checked) => {
                     control.onChange(checked);
                     setCustomPricing(checked);
                   }}
-                  className="bg-gray-600"
                 />
               )}
             </MountedFormField>
@@ -108,7 +115,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               label={
                 <span>
                   Attached Knowledge Bases (RAG){" "}
-                  <Tooltip title="Vector stores to use for RAG. Every request to this model will automatically retrieve context from these knowledge bases.">
+                  <SimpleTooltip content="Vector stores to use for RAG. Every request to this model will automatically retrieve context from these knowledge bases.">
                     <a
                       href="https://docs.litellm.ai/docs/completion/knowledgebase"
                       target="_blank"
@@ -117,7 +124,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     >
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </a>
-                  </Tooltip>
+                  </SimpleTooltip>
                 </span>
               }
               className="mt-4"
@@ -138,7 +145,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               label={
                 <span>
                   Guardrails{" "}
-                  <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
+                  <SimpleTooltip content="Apply safety guardrails to this key to filter content or enforce policies">
                     <a
                       href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
                       target="_blank"
@@ -147,41 +154,39 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     >
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </a>
-                  </Tooltip>
+                  </SimpleTooltip>
                 </span>
               }
               className="mt-4"
               help="Select existing guardrails. Go to 'Guardrails' tab to create new guardrails."
             >
               {(control) => (
-                <Select
+                <MultiSelect
                   id={control.id}
-                  mode="tags"
-                  style={{ width: "100%" }}
                   placeholder="Select or enter guardrails"
-                  value={control.value as string[] | undefined}
-                  onChange={control.onChange}
-                  onBlur={control.onBlur}
+                  emptyText="Type to add a guardrail"
+                  value={(control.value as string[] | undefined) ?? []}
+                  onValueChange={control.onChange}
                   options={guardrailsList.map((name) => ({ value: name, label: name }))}
+                  allowCustomValues
                 />
               )}
             </MountedFormField>
 
             <MountedFormField name="tags" label="Tags" className="mb-4">
               {(control) => (
-                <Select
+                <MultiSelect
                   id={control.id}
-                  mode="tags"
-                  style={{ width: "100%" }}
                   placeholder="Select or enter tags"
-                  value={control.value as string[] | undefined}
-                  onChange={control.onChange}
-                  onBlur={control.onBlur}
+                  emptyText="Type to add a tag"
+                  value={(control.value as string[] | undefined) ?? []}
+                  onValueChange={control.onChange}
                   options={Object.values(tagsList).map((tag) => ({
                     value: tag.name,
                     label: tag.name,
-                    title: tag.description || tag.name,
+                    description: tag.description || undefined,
                   }))}
+                  allowCustomValues
                 />
               )}
             </MountedFormField>
@@ -250,11 +255,9 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   className="mb-4"
                 >
                   {(control) => (
-                    <DatePicker
+                    <UtcDateTimeInput
                       id={control.id}
-                      showTime
-                      style={{ width: "100%" }}
-                      value={control.value as never}
+                      value={control.value as Dayjs | null}
                       onChange={control.onChange}
                       onBlur={control.onBlur}
                     />
@@ -274,11 +277,9 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   className="mb-4"
                 >
                   {(control) => (
-                    <DatePicker
+                    <UtcDateTimeInput
                       id={control.id}
-                      showTime
-                      style={{ width: "100%" }}
-                      value={control.value as never}
+                      value={control.value as Dayjs | null}
                       onChange={control.onChange}
                       onBlur={control.onBlur}
                     />
@@ -292,19 +293,25 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 <MountedFormField name="pricing_model" label="Pricing Model" className="mb-4">
                   {(control) => (
                     <Select
-                      id={control.id}
-                      defaultValue="per_token"
-                      value={control.value as "per_token" | "per_second" | undefined}
-                      onBlur={control.onBlur}
-                      onChange={(value: "per_token" | "per_second") => {
+                      items={PRICING_MODEL_ITEMS}
+                      value={(control.value as "per_token" | "per_second" | undefined) ?? "per_token"}
+                      onValueChange={(value: "per_token" | "per_second" | null) => {
+                        if (value === null) return;
                         control.onChange(value);
                         setPricingModel(value);
                       }}
-                      options={[
-                        { value: "per_token", label: "Per Million Tokens" },
-                        { value: "per_second", label: "Per Second" },
-                      ]}
-                    />
+                    >
+                      <SelectTrigger id={control.id} onBlur={control.onBlur} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PRICING_MODEL_ITEMS.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   )}
                 </MountedFormField>
 
@@ -402,20 +409,20 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 "Use in pass through routes",
                 <span>
                   Allow using these credentials in pass through routes.{" "}
-                  <Link href="https://docs.litellm.ai/docs/pass_through/vertex_ai" target="_blank">
+                  <a
+                    href="https://docs.litellm.ai/docs/pass_through/vertex_ai"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline-offset-4 hover:underline"
+                  >
                     Learn more
-                  </Link>
+                  </a>
                 </span>,
               )}
               className="mb-4 mt-4"
             >
               {(control) => (
-                <Switch
-                  id={control.id}
-                  checked={control.value === true}
-                  onChange={control.onChange}
-                  className="bg-gray-600"
-                />
+                <Switch id={control.id} checked={control.value === true} onCheckedChange={control.onChange} />
               )}
             </MountedFormField>
 
@@ -428,11 +435,10 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 <Switch
                   id={control.id}
                   checked={control.value === true}
-                  onChange={(checked) => {
+                  onCheckedChange={(checked) => {
                     control.onChange(checked);
                     setShowCacheControl(checked);
                   }}
-                  className="bg-gray-600"
                 />
               )}
             </MountedFormField>
@@ -457,7 +463,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               rules={{ validate: antdRules({ validator: formItemValidateJSON }) }}
             >
               {(control) => (
-                <TextArea
+                <Textarea
                   id={control.id}
                   value={(control.value as string | undefined) ?? ""}
                   onChange={control.onChange}
@@ -471,17 +477,19 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 />
               )}
             </MountedFormField>
-            <Row className="mb-4">
-              <Col span={10}></Col>
-              <Col span={10}>
-                <p className="text-muted-foreground text-sm">
-                  Pass JSON of litellm supported params{" "}
-                  <Link href="https://docs.litellm.ai/docs/completion/input" target="_blank">
-                    litellm.completion() call
-                  </Link>
-                </p>
-              </Col>
-            </Row>
+            <div className="grid grid-cols-24 mb-4">
+              <p className="col-start-11 col-span-10 text-muted-foreground text-sm">
+                Pass JSON of litellm supported params{" "}
+                <a
+                  href="https://docs.litellm.ai/docs/completion/input"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  litellm.completion() call
+                </a>
+              </p>
+            </div>
             <MountedFormField
               name="model_info_params"
               label={labelWithHint(
@@ -492,7 +500,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               rules={{ validate: antdRules({ validator: formItemValidateJSON }) }}
             >
               {(control) => (
-                <TextArea
+                <Textarea
                   id={control.id}
                   value={(control.value as string | undefined) ?? ""}
                   onChange={control.onChange}
