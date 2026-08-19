@@ -482,7 +482,7 @@ describe("projection shape", () => {
     expect(projected.command).toBe("npx");
   });
 
-  it("passes Form.List rows through whole, since antd does not project a row to its mounted sub-fields", () => {
+  it("passes list rows through whole, since a list field is projected as one key and not per mounted sub-field", () => {
     const row = { name: "N", value: "V", scope: "user", description: "D" };
     const projected = projectMountedEditValues({ ...HTTP_NONE, env_vars: [row] });
     expect(projected.env_vars).toStrictEqual([row]);
