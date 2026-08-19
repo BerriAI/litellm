@@ -11,7 +11,6 @@ import {
   isHeldOAuthTokenStale,
   preservedAdminCredentials,
   preservedDeclaredAppCredentials,
-  ADMIN_CONFIG_CREDENTIAL_KEYS,
   withoutMintedTokenCredentials,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
@@ -41,13 +40,8 @@ import IdJagFormFields from "./IdJagFormFields";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
-import {
-  validateMCPServerUrl,
-  validateMCPServerName,
-  normalizeEnvVars,
-  normalizeToolOverrideMap,
-  TOOL_DISPLAY_NAME_PATTERN,
-} from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeToolOverrideMap } from "./utils";
+import { BuildEditPayloadResult, buildEditServerPayload } from "./editServerPayload";
 import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -71,6 +65,23 @@ const AUTH_TYPES_REQUIRING_CREDENTIALS = [
   AUTH_TYPE.TRUE_PASSTHROUGH,
   AUTH_TYPE.OAUTH_DELEGATE,
 ];
+const editPayloadErrorMessage = (result: Exclude<BuildEditPayloadResult, { kind: "ok" }>): string => {
+  switch (result.kind) {
+    case "invalid_tool_display_name":
+      return `Tool display name "${result.displayName}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`;
+    case "invalid_stdio_json":
+      return "Invalid JSON in stdio configuration";
+    case "stdio_config_missing_command":
+      return "Stdio configuration must include a command";
+    case "invalid_stdio_env_json":
+      return "Invalid JSON in stdio env configuration";
+    case "stdio_missing_command":
+      return "Stdio transport requires a command";
+    case "invalid_token_validation_json":
+      return "Invalid JSON in Token Validation Rules";
+  }
+};
+
 export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
@@ -672,283 +683,31 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
-    const invalidDisplayName = Object.entries(toolNameToDisplayName).find(
-      ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
+
+    const result = buildEditServerPayload(
+      values,
+      {
+        costConfig,
+        allowedTools,
+        hasExistingToolAllowlist,
+        hasToolAllowlistInteraction,
+        toolNameToDisplayName,
+        toolNameToDescription,
+        logoUrl,
+        removeStoredApp,
+      },
+      mcpServer,
     );
-    if (invalidDisplayName) {
-      toast.fromError(
-        `Tool display name "${invalidDisplayName[1]}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`,
-      );
+    if (result.kind !== "ok") {
+      toast.fromError(editPayloadErrorMessage(result));
       return;
     }
+
+    const payload = result.payload;
+    const authType = values.auth_type;
+    const delegateAuthToUpstreamRaw = values.delegate_auth_to_upstream;
+
     try {
-      // Ensure access groups is always a string array
-      const {
-        static_headers: staticHeadersList,
-        env_vars: envVarsList,
-        credentials: credentialValues,
-        stdio_config: rawStdioConfig,
-        env_json: rawEnvJson,
-        command: rawCommand,
-        args: rawArgs,
-        allow_all_keys: allowAllKeysRaw,
-        available_on_public_internet: availableOnPublicInternetRaw,
-        delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
-        oauth_passthrough: oauthPassthroughRaw,
-        dcr_bridge: dcrBridgeRaw,
-        token_validation_json: rawTokenValidationJson,
-        ...restValues
-      } = values;
-
-      const accessGroups = (restValues.mcp_access_groups || []).map((g: any) =>
-        typeof g === "string" ? g : g.name || String(g),
-      );
-
-      const staticHeaders = Array.isArray(staticHeadersList)
-        ? staticHeadersList.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
-            const header = entry?.header?.trim();
-            if (!header) {
-              return acc;
-            }
-            acc[header] = (entry?.value ?? "").trim();
-            return acc;
-          }, {})
-        : ({} as Record<string, string>);
-
-      const envVars = normalizeEnvVars(envVarsList);
-
-      const credentialsPayload =
-        credentialValues && typeof credentialValues === "object"
-          ? Object.entries(credentialValues).reduce((acc: Record<string, any>, [key, value]) => {
-              if (value === undefined || value === null || value === "") {
-                if (value === "" && (ADMIN_CONFIG_CREDENTIAL_KEYS as readonly string[]).includes(key)) {
-                  acc[key] = null;
-                }
-                return acc;
-              }
-              if (key === "scopes") {
-                if (Array.isArray(value)) {
-                  const filteredScopes = value.filter((scope) => scope != null && scope !== "");
-                  if (filteredScopes.length > 0) {
-                    acc[key] = filteredScopes;
-                  }
-                }
-              } else {
-                acc[key] = value;
-              }
-              return acc;
-            }, {})
-          : undefined;
-
-      let stdioFields: Record<string, any> = {};
-
-      if (restValues.transport === "stdio") {
-        // Prefer JSON config if provided (matches Create screen behavior)
-        if (rawStdioConfig) {
-          try {
-            const stdioConfig = JSON.parse(rawStdioConfig);
-
-            let actualConfig = stdioConfig;
-            if (stdioConfig?.mcpServers && typeof stdioConfig.mcpServers === "object") {
-              const serverNames = Object.keys(stdioConfig.mcpServers);
-              if (serverNames.length > 0) {
-                actualConfig = stdioConfig.mcpServers[serverNames[0]];
-              }
-            }
-
-            const parsedArgs = Array.isArray(actualConfig?.args)
-              ? actualConfig.args.map((v: any) => String(v)).filter((v: string) => v.trim() !== "")
-              : [];
-
-            const parsedEnv =
-              actualConfig?.env && typeof actualConfig.env === "object" && !Array.isArray(actualConfig.env)
-                ? Object.entries(actualConfig.env).reduce((acc: Record<string, string>, [k, v]) => {
-                    if (k == null || String(k).trim() === "") return acc;
-                    acc[String(k)] = v == null ? "" : String(v);
-                    return acc;
-                  }, {})
-                : {};
-
-            stdioFields = {
-              command: actualConfig?.command ? String(actualConfig.command) : undefined,
-              args: parsedArgs,
-              env: parsedEnv,
-            };
-
-            if (!stdioFields.command) {
-              toast.fromError("Stdio configuration must include a command");
-              return;
-            }
-          } catch {
-            toast.fromError("Invalid JSON in stdio configuration");
-            return;
-          }
-        } else {
-          // Dedicated fields path (command/args + env JSON)
-          let parsedEnv: Record<string, string> = {};
-          if (rawEnvJson) {
-            try {
-              const env = JSON.parse(rawEnvJson);
-              if (env && typeof env === "object" && !Array.isArray(env)) {
-                parsedEnv = Object.entries(env).reduce((acc: Record<string, string>, [k, v]) => {
-                  if (k == null || String(k).trim() === "") return acc;
-                  acc[String(k)] = v == null ? "" : String(v);
-                  return acc;
-                }, {});
-              }
-            } catch {
-              toast.fromError("Invalid JSON in stdio env configuration");
-              return;
-            }
-          }
-          const parsedArgs = Array.isArray(rawArgs)
-            ? rawArgs.map((v: any) => String(v)).filter((v: string) => v.trim() !== "")
-            : [];
-
-          const parsedCommand = rawCommand ? String(rawCommand).trim() : "";
-          if (!parsedCommand) {
-            toast.fromError("Stdio transport requires a command");
-            return;
-          }
-
-          stdioFields = {
-            command: parsedCommand,
-            args: parsedArgs,
-            env: parsedEnv,
-          };
-        }
-      }
-
-      // Map "openapi" transport to "http" for the backend
-      if (restValues.transport === TRANSPORT.OPENAPI) {
-        restValues.transport = "http";
-      }
-
-      // Parse token_validation JSON if provided
-      let tokenValidation: Record<string, any> | null = null;
-      if (rawTokenValidationJson && rawTokenValidationJson.trim() !== "") {
-        try {
-          tokenValidation = JSON.parse(rawTokenValidationJson);
-        } catch {
-          toast.fromError("Invalid JSON in Token Validation Rules");
-          return;
-        }
-      }
-
-      // Prepare the payload with cost configuration and permission fields
-      const mcpInfoServerName =
-        restValues.server_name ||
-        restValues.url ||
-        mcpServer.server_name ||
-        mcpServer.url ||
-        restValues.alias ||
-        mcpServer.alias ||
-        "unknown";
-
-      const toolAllowlistEnforced = hasExistingToolAllowlist || hasToolAllowlistInteraction || allowedTools.length > 0;
-
-      const payload: Record<string, any> = {
-        ...restValues,
-        ...stdioFields,
-        // Remove UI-only fields
-        stdio_config: undefined,
-        env_json: undefined,
-        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2 && restValues.auth_type !== AUTH_TYPE.OAUTH2
-          ? { issuer: null, authorization_url: null, token_url: null, registration_url: null }
-          : {}),
-        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
-        restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE
-          ? { token_exchange_endpoint: null, audience: null, subject_token_type: null, token_exchange_profile: null }
-          : {}),
-        server_id: mcpServer.server_id,
-        mcp_info: {
-          ...(mcpServer.mcp_info ?? {}),
-          server_name: mcpInfoServerName,
-          description: restValues.description,
-          logo_url: logoUrl || undefined,
-          mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
-          tool_allowlist_enforced: toolAllowlistEnforced,
-        },
-        mcp_access_groups: accessGroups,
-        alias: restValues.alias,
-        // Include permission management fields
-        extra_headers: restValues.extra_headers || [],
-        ...(toolAllowlistEnforced
-          ? {
-              allowed_tools: allowedTools,
-            }
-          : {}),
-        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
-        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
-        disallowed_tools: restValues.disallowed_tools || [],
-        static_headers: staticHeaders,
-        env_vars: envVars,
-        allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
-        available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
-        // ``delegate_auth_to_upstream`` is only honored server-side for
-        // ``auth_type=oauth2`` (PKCE passthrough). The Form.Item is
-        // conditionally rendered so the value drops out of the form on
-        // auth_type change; force false for any other configuration to avoid
-        // persisting a stale ``true`` that would silently re-activate if the
-        // configuration is later switched back.
-        delegate_auth_to_upstream: (() => {
-          const isOauth2 = restValues.auth_type === AUTH_TYPE.OAUTH2;
-          return isOauth2 ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream) : false;
-        })(),
-        // ``oauth_passthrough`` is the dedicated, non-oauth2 opt-in. It is only
-        // honored for ``auth_type=none`` servers that forward ``Authorization``
-        // upstream. Kept separate from ``delegate_auth_to_upstream`` so enabling
-        // pass-through never regresses oauth2 servers. Force false otherwise.
-        oauth_passthrough: (() => {
-          const isNoneAuth = restValues.auth_type === AUTH_TYPE.NONE || restValues.auth_type == null;
-          const extraHeaders = Array.isArray(restValues.extra_headers) ? restValues.extra_headers : [];
-          const hasAuthorizationHeader = extraHeaders.some(
-            (h: unknown) => typeof h === "string" && h.toLowerCase() === "authorization",
-          );
-          return isNoneAuth && hasAuthorizationHeader
-            ? Boolean(oauthPassthroughRaw ?? mcpServer.oauth_passthrough)
-            : false;
-        })(),
-        // ``dcr_bridge`` is only meaningful for the client-forwarded token
-        // modes (true_passthrough / oauth_delegate). The Form.Item is
-        // conditionally rendered so the value drops out of the form on
-        // auth_type change; force false for any other configuration to avoid
-        // persisting a stale ``true`` that would silently re-activate if the
-        // mode is later switched back.
-        dcr_bridge: isClientForwardedTokenMode(restValues.auth_type)
-          ? Boolean(dcrBridgeRaw ?? mcpServer.dcr_bridge)
-          : false,
-        ...(restValues.auth_type === AUTH_TYPE.OAUTH2 && restValues.oauth_flow_type
-          ? {
-              oauth2_flow:
-                restValues.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : MCP_OAUTH2_FLOW_INTERACTIVE,
-            }
-          : {}),
-        // Include token_validation when it is set (non-null) or when clearing an existing value
-        ...(tokenValidation !== null || mcpServer.token_validation ? { token_validation: tokenValidation } : {}),
-      };
-
-      const includeCredentials =
-        restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
-
-      // Client-forwarded rows persist ONLY the declared app; strip any token material lingering in the
-      // form (e.g. from a prior oauth2 authorize this session) so it can never reach the row.
-      const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
-        ? preservedAdminCredentials(credentialsPayload)
-        : credentialsPayload;
-
-      if (includeCredentials && submitCredentials && Object.keys(submitCredentials).length > 0) {
-        payload.credentials = submitCredentials;
-      }
-
-      // Explicit removal of a saved app for the client-forwarded modes, applied AFTER the filter so it
-      // always wins. Blank fields are the keep-existing convention (the backend merges partial
-      // credential updates), so removal must be an explicit-null write: encrypt skips nulls and the
-      // merge overrides the stored keys, returning the server to dynamic client registration.
-      if (removeStoredApp && isClientForwardedTokenMode(restValues.auth_type)) {
-        payload.credentials = { client_id: null, client_secret: null };
-      }
-
       const updated = await updateMCPServer(accessToken, payload);
 
       // Persist the token staged via "Authorize & Fetch" (mirrors the create flow's
@@ -957,7 +716,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       // never in the server row. M2M/static auth resolve server-side and need neither.
       if (oauthTokenResponse?.access_token) {
         const oauthMode = getMcpOAuthMode({
-          auth_type: restValues.auth_type,
+          auth_type: authType,
           oauth2_flow: isM2MFlow ? MCP_OAUTH2_FLOW_M2M : null,
           delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream),
         });
@@ -971,7 +730,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
             };
             await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, oauthCredentialPayload);
-          } else if (oauthMode === "passthrough" || isClientForwardedTokenMode(restValues.auth_type)) {
+          } else if (oauthMode === "passthrough" || isClientForwardedTokenMode(authType)) {
             const browserHeldToken = {
               access_token: oauthTokenResponse.access_token,
               expires_in: oauthTokenResponse.expires_in,
