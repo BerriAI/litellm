@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,9 +36,9 @@ describe("PluginSettings config payload", () => {
     expect(await screen.findAllByText("No data")).not.toHaveLength(0);
 
     await user.click(screen.getByRole("button", { name: /add plugin/i }));
-    await user.type(await screen.findByLabelText(/Name \(identifier\)/), "beta");
-    await user.type(screen.getByLabelText(/Display Name/), "Beta");
-    await user.type(screen.getByLabelText(/^URL/), "https://beta.example.com");
+    fireEvent.change(await screen.findByLabelText(/Name \(identifier\)/), { target: { value: "beta" } });
+    fireEvent.change(screen.getByLabelText(/Display Name/), { target: { value: "Beta" } });
+    fireEvent.change(screen.getByLabelText(/^URL/), { target: { value: "https://beta.example.com" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(updateConfigFieldSettingMock).toHaveBeenCalledTimes(1));
@@ -89,7 +89,7 @@ describe("PluginSettings config payload", () => {
     expect(await screen.findByText("Alpha")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "edit" }));
-    await user.type(await screen.findByLabelText(/Plugin Key/), "sk-brand-new");
+    fireEvent.change(await screen.findByLabelText(/Plugin Key/), { target: { value: "sk-brand-new" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(updateConfigFieldSettingMock).toHaveBeenCalledTimes(1));

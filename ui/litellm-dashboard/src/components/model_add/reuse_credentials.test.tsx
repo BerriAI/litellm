@@ -1,7 +1,7 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { renderWithProviders, screen } from "@/../tests/test-utils";
+import { fireEvent, renderWithProviders, screen } from "@/../tests/test-utils";
 
 import type { CredentialItem } from "../networking";
 import ReuseCredentialsModal from "./reuse_credentials";
@@ -38,7 +38,7 @@ describe("ReuseCredentialsModal", () => {
 
     const nameInput = screen.getByLabelText("Credential Name:");
     await user.clear(nameInput);
-    await user.type(nameInput, "reused-openai");
+    fireEvent.change(nameInput, { target: { value: "reused-openai" } });
     await submit(user);
 
     expect(onAddCredential).toHaveBeenCalledTimes(1);

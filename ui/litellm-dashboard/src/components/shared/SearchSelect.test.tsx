@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -40,7 +40,7 @@ describe("SearchSelect", () => {
     render(<SearchSelect options={OPTIONS} onValueChange={vi.fn()} />);
     const input = screen.getByRole("combobox");
     await user.click(input);
-    await user.type(input, "grow");
+    fireEvent.change(input, { target: { value: "grow" } });
     expect(await screen.findByText("Growth")).toBeInTheDocument();
     expect(screen.queryByText("Acme Prod")).not.toBeInTheDocument();
   });
@@ -56,7 +56,7 @@ describe("SearchSelect", () => {
     const input = screen.getByRole("combobox");
     await user.click(input);
     expect(await screen.findByText("team-abc-123")).toBeInTheDocument();
-    await user.type(input, "abc-123");
+    fireEvent.change(input, { target: { value: "abc-123" } });
     expect(await screen.findByText("Acme Prod")).toBeInTheDocument();
   });
 

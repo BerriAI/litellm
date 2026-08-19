@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdminPanel from "./AdminPanel";
@@ -355,7 +355,7 @@ describe("AdminPanel add allowed IP form", () => {
   it("sends the access token and the typed IP address", async () => {
     const user = userEvent.setup();
 
-    await user.type(ipField(), "192.168.1.50");
+    fireEvent.change(ipField(), { target: { value: "192.168.1.50" } });
     await submitAddIP(user);
 
     await waitFor(() => {
@@ -387,7 +387,7 @@ describe("AdminPanel add allowed IP form", () => {
     const user = userEvent.setup();
     mockGetAllowedIPs.mockResolvedValue(["10.0.0.1", "192.168.1.50"]);
 
-    await user.type(ipField(), "192.168.1.50");
+    fireEvent.change(ipField(), { target: { value: "192.168.1.50" } });
     await submitAddIP(user);
 
     expect(await screen.findByText("192.168.1.50")).toBeInTheDocument();
