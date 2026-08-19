@@ -1,7 +1,7 @@
 import React from "react";
 import { CircleAlert, Info } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { z } from "zod/v4";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Field, FieldLabel, FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";

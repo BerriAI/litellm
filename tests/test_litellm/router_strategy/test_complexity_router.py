@@ -267,6 +267,24 @@ class TestReasoningMarkerScoring:
         # 2+ reasoning markers should force REASONING tier
         assert tier == ComplexityTier.REASONING
 
+    def test_reasoning_override_does_not_rescue_a_simple_score(self, complexity_router):
+        """Reasoning markers on an otherwise trivial prompt must not reach REASONING."""
+        prompt = "hi, step by step, pros and cons"
+        tier, score, signals = complexity_router.classify(prompt)
+        assert score < complexity_router.config.tier_boundaries["simple_medium"]
+        assert any("step by step" in s and "pros and cons" in s for s in signals)
+        assert tier == ComplexityTier.SIMPLE
+
+    def test_reasoning_override_applies_at_the_simple_medium_boundary(self, complexity_router):
+        """A score sitting exactly on simple_medium is not SIMPLE, so the override still promotes it."""
+        prompt = (
+            "Give me the pros and cons, step by step, of moving our checkout service "
+            "to an event-driven architecture."
+        )
+        tier, score, signals = complexity_router.classify(prompt)
+        assert score == complexity_router.config.tier_boundaries["simple_medium"]
+        assert tier == ComplexityTier.REASONING
+
     def test_system_prompt_reasoning_not_counted(self, complexity_router):
         """Reasoning markers in system prompt should not count for override."""
         user_prompt = "What is 2+2?"

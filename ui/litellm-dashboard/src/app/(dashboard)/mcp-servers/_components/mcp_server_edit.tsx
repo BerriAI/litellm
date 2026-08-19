@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Select, Tooltip, Input, InputNumber, Alert } from "antd";
+import { Select, Tooltip, Input, InputNumber } from "antd";
+import { TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { FormProvider, useForm } from "react-hook-form";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button } from "@/components/ui/button";
@@ -171,7 +173,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
   const isIdJagAuthType = authType === AUTH_TYPE.OAUTH2_ID_JAG;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
-  const oauthFlowTypeValue = mountedValues.oauth_flow_type as string | undefined;
+  // Same fallback as the delegate switch below: the value is undefined until the field mounts, so
+  // reading it alone flashes the "no OAuth flow set" warning at a server that already has one.
+  const oauthFlowTypeValue =
+    (mountedValues.oauth_flow_type as string | undefined) ?? oauth2FlowToFormValue(mcpServer.oauth2_flow);
   const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
   // Watch reflects a live toggle when the delegate switch is mounted; fall back to
   // the stored value otherwise (useWatch returns undefined for an unmounted field,
@@ -1041,13 +1046,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 {!isStdioTransport && isOAuthAuthType && (
                   <>
                     {!oauthFlowTypeValue && !isDelegateAuth && (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        className="mb-4 rounded-lg"
-                        message="This server has no OAuth flow set"
-                        description="Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats a machine-to-machine credential shape conservatively."
-                      />
+                      <Alert variant="warning" className="mb-4 rounded-lg">
+                        <TriangleAlert />
+                        <AlertTitle>This server has no OAuth flow set</AlertTitle>
+                        <AlertDescription>
+                          Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you
+                          intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats
+                          a machine-to-machine credential shape conservatively.
+                        </AlertDescription>
+                      </Alert>
                     )}
                     <OAuthFormFields
                       isM2M={isM2MFlow}

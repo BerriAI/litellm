@@ -2330,7 +2330,15 @@ class MCPServerManager:
                     input_schema = build_input_schema(resolved_operation)
 
                     # Create tool function with headers using imported function
-                    tool_func = create_tool_function(path, method, resolved_operation, base_url, headers=headers)
+                    tool_func = create_tool_function(
+                        path,
+                        method,
+                        resolved_operation,
+                        base_url,
+                        headers=headers,
+                        server_label=server.name or server.server_name or server.alias or server.server_id,
+                        relays_upstream_auth=server.is_client_forwarded_token,
+                    )
                     tool_func.__name__ = prefixed_tool_name
                     tool_func.__doc__ = description
 
@@ -4979,6 +4987,12 @@ class MCPServerManager:
 
             return result
 
+        except MCPUpstreamAuthError:
+            # The caller must re-authenticate upstream, so this keeps its type all the way to the
+            # renderers: the streamable path turns it into an isError result naming the status, and
+            # the REST path relays a real 401 with the upstream's WWW-Authenticate. Flattening it
+            # into the generic message below would lose both.
+            raise
         except Exception as e:
             error_msg = f"Error calling OpenAPI tool {tool_name}: {e}"
             verbose_logger.error(error_msg)

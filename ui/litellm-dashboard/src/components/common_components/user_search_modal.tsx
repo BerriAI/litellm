@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { Modal, Alert } from "antd";
+import { Modal } from "antd";
+import { Info } from "lucide-react";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { UserAddOutlined } from "@ant-design/icons";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { useForm } from "react-hook-form";
@@ -202,13 +204,13 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     <Modal title={title} open={isVisible} onCancel={handleClose} footer={null} width={800} maskClosable={!isSubmitting}>
       <TooltipProvider>
         <form onSubmit={form.handleSubmit(handleSubmit)} noValidate>
-          <Alert
-            type="info"
-            showIcon
-            className="mb-4"
-            message="Search selects from users that already exist. To add someone new, ask a proxy admin to create their account first."
-            data-testid="member-existing-users-notice"
-          />
+          <Alert variant="info" className="mb-4" data-testid="member-existing-users-notice">
+            <Info />
+            <AlertTitle>
+              Search selects from users that already exist. To add someone new, ask a proxy admin to create their
+              account first.
+            </AlertTitle>
+          </Alert>
 
           <FieldGroup>
             <FormField control={form.control} name="user_email" label="Email">
