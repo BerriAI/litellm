@@ -26,6 +26,7 @@ export interface RoutingDecision {
   classifier_model?: string;
   escalated?: boolean;
   tier_boundaries?: RoutingDecisionTierBoundaries;
+  reasoning_override_min_score?: number;
 }
 
 const ROUTER_TYPE_LABELS: Record<string, string> = {
@@ -65,14 +66,26 @@ function describePlanModeFloor(matchedKeyword: string | undefined): string {
   return "Plan-mode floor";
 }
 
+/** Rows logged before the floor was recorded name what it tracked back then instead of a number. */
+function describeReasoningOverride(tierLabel: string | undefined, floor: number | undefined): string {
+  const stated = floor === undefined ? "the Simple to Medium boundary" : String(floor);
+  return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers, score of at least ${stated})`;
+}
+
 function describeCause(decision: RoutingDecision): string {
-  const { cause, classifier_model: classifierModel, matched_keyword: matchedKeyword, tier_label: tierLabel } = decision;
+  const {
+    cause,
+    classifier_model: classifierModel,
+    matched_keyword: matchedKeyword,
+    tier_label: tierLabel,
+    reasoning_override_min_score: overrideFloor,
+  } = decision;
 
   switch (cause) {
     case "heuristic_scorer":
       return "Heuristic scorer";
     case "reasoning_override":
-      return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers, score above the lowest tier)`;
+      return describeReasoningOverride(tierLabel, overrideFloor);
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
     case "literal_keyword_match":
