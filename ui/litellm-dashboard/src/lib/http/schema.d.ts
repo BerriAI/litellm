@@ -27571,6 +27571,8 @@ export interface components {
             max_budget?: number | null;
             /** Max File Size Mb */
             max_file_size_mb?: number | null;
+            /** Max Fallbacks */
+            max_fallbacks?: number | null;
             /** Max Retries */
             max_retries?: number | null;
             /**
