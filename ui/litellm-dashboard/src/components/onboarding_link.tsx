@@ -1,5 +1,6 @@
 import React from "react";
-import { Button, Modal, Typography } from "antd";
+import { Modal, Typography } from "antd";
+import { Button } from "@/components/ui/button";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { toast } from "@/lib/toast";
 
@@ -98,9 +99,7 @@ export default function OnboardingModal({
       </div>
       <div className="flex justify-end mt-5">
         <CopyToClipboard text={getInvitationUrl()} onCopy={() => toast.success("Copied!")}>
-          <Button type="primary">
-            {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
-          </Button>
+          <Button>{modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}</Button>
         </CopyToClipboard>
       </div>
     </Modal>

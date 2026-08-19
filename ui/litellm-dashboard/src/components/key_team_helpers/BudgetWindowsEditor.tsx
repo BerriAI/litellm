@@ -1,4 +1,5 @@
-import { Button, InputNumber, Select } from "antd";
+import { InputNumber, Select } from "antd";
+import { Button } from "@/components/ui/button";
 import React from "react";
 
 export interface BudgetWindowEntry {
@@ -55,7 +56,12 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 style={{ width: 160 }}
                 prefix="$"
               />
-              <Button type="text" danger size="small" onClick={() => removeWindow(idx)} style={{ padding: "0 4px" }}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="px-1 text-destructive hover:text-destructive"
+                onClick={() => removeWindow(idx)}
+              >
                 ✕
               </Button>
             </div>
@@ -64,7 +70,8 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
         );
       })}
       <Button
-        size="small"
+        variant="outline"
+        size="sm"
         onClick={(e) => {
           e.preventDefault();
           addWindow();

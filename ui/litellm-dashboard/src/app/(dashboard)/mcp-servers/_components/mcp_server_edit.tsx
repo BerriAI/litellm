@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Select, Button as AntdButton, Tooltip, Input, InputNumber, Alert } from "antd";
+import { Select, Tooltip, Input, InputNumber, Alert } from "antd";
 import { FormProvider, useForm } from "react-hook-form";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button } from "@/components/ui/button";
@@ -1271,7 +1271,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 </div>
 
                 <div className="flex justify-end gap-2">
-                  <AntdButton onClick={onCancel}>Cancel</AntdButton>
+                  <Button variant="outline" onClick={onCancel}>
+                    Cancel
+                  </Button>
                   <Button type="submit">Save Changes</Button>
                 </div>
               </form>
@@ -1284,7 +1286,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={isLoadingTools} />
 
             <div className="flex justify-end gap-2">
-              <AntdButton onClick={onCancel}>Cancel</AntdButton>
+              <Button variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
               <Button onClick={() => void submitForm()}>Save Changes</Button>
             </div>
           </div>
