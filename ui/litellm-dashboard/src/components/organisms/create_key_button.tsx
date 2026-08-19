@@ -587,7 +587,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setUserOptions(options);
     } catch (error) {
       console.error("Error fetching users:", error);
-      toast.fromError("Failed to search for users");
+      if (isLatestSearch()) toast.fromError("Failed to search for users");
     } finally {
       if (isLatestSearch()) setUserSearchLoading(false);
     }
