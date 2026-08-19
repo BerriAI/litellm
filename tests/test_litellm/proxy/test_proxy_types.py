@@ -139,3 +139,41 @@ def test_key_request_router_settings_keeps_enable_tag_filtering():
     dumped = req.router_settings.model_dump(exclude_none=True)
     assert dumped["enable_tag_filtering"] is True
     assert dumped["num_retries"] == 2
+
+
+def test_update_key_request_requires_key_or_key_alias():
+    """``/key/update`` can be addressed by ``key`` or by ``key_alias``;
+    a request with neither has no way to identify the target key and must
+    fail validation before hitting the endpoint."""
+    import pydantic
+
+    from litellm.proxy._types import UpdateKeyRequest
+
+    with pytest.raises(pydantic.ValidationError, match="either key or key_alias must be provided"):
+        UpdateKeyRequest(max_budget=10.0)
+
+    by_key = UpdateKeyRequest(key="sk-1234")
+    assert by_key.key == "sk-1234"
+    assert by_key.key_alias is None
+
+    by_alias = UpdateKeyRequest(key_alias="my-alias")
+    assert by_alias.key is None
+    assert by_alias.key_alias == "my-alias"
+
+
+@pytest.mark.parametrize("request_type", ["new", "update"])
+def test_project_io_token_limits_are_stored_in_metadata(request_type):
+    from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
+
+    limits = {
+        "model_itpm_limit": {"bedrock_mantle/openai.gpt-oss-120b": 20_000_000},
+        "model_otpm_limit": {"bedrock_mantle/openai.gpt-oss-120b": 4_000_000},
+    }
+    request = (
+        NewProjectRequest(team_id="team-1", **limits)
+        if request_type == "new"
+        else UpdateProjectRequest(project_id="project-1", **limits)
+    )
+
+    assert request.metadata == limits
+    assert request.model_dump(exclude_none=True)["metadata"] == limits

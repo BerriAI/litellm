@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { setSecureItem } from "@/utils/secureStorage";
 import * as networking from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { selectAntOption } from "./testUtils";
 
 vi.mock("@/components/networking", () => ({
@@ -13,13 +13,6 @@ vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
   storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
-}));
-
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
 }));
 
 const mockOauth: {
@@ -1052,6 +1045,62 @@ describe("MCPServerEdit (interactive OAuth)", () => {
   });
 });
 
+describe("MCPServerEdit (resource indicator)", () => {
+  const RESOURCE_PLACEHOLDER = "auto, or https://mcp.example.com/mcp";
+  const serverWithResource = {
+    ...interactiveOAuthServer,
+    credentials: { upstream_resource: "api://finance-api/.default" },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOauth.tokenResponse = null;
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...serverWithResource });
+  });
+
+  async function renderAndSave() {
+    render(
+      <MCPServerEdit
+        mcpServer={serverWithResource}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+    const input = await screen.findByPlaceholderText(RESOURCE_PLACEHOLDER);
+    await waitFor(() => expect(input).toHaveValue("api://finance-api/.default"));
+    return async () => {
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+      });
+      await waitFor(() => {
+        expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+      });
+      const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+      return payload;
+    };
+  }
+
+  // Regression: the edit form hand-rolled its own OAuth fields and never mounted this one, while the
+  // submit path re-added every missing admin-config key as an explicit null. Saving any unrelated
+  // change therefore wiped a configured resource indicator.
+  it("leaves an untouched resource indicator alone instead of clearing it", async () => {
+    const save = await renderAndSave();
+    const payload = await save();
+    expect(payload.credentials?.upstream_resource).toBe("api://finance-api/.default");
+  });
+
+  it("sends an explicit null when the admin empties the field, so the backend merge clears it", async () => {
+    const save = await renderAndSave();
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(RESOURCE_PLACEHOLDER), { target: { value: "" } });
+    });
+    const payload = await save();
+    expect(payload.credentials?.upstream_resource).toBeNull();
+  });
+});
+
 describe("MCPServerEdit (tool list fetch)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1158,8 +1207,9 @@ describe("MCPServerEdit (tool list fetch)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
-        "Authorize with the upstream (browser-only",
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-error",
+        expect.stringContaining("Authorize with the upstream (browser-only"),
       );
     });
     expect(networking.listMCPTools).not.toHaveBeenCalled();
@@ -1186,8 +1236,9 @@ describe("MCPServerEdit (tool list fetch)", () => {
     const { rerender } = render(<MCPServerEdit {...props} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
-        "Authenticate with this server in the Tools tab",
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-error",
+        expect.stringContaining("Authenticate with this server in the Tools tab"),
       );
     });
     expect(networking.listMCPTools).not.toHaveBeenCalled();
@@ -1221,8 +1272,9 @@ describe("MCPServerEdit (tool list fetch)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
-        "Authenticate with this server in the Tools tab",
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-error",
+        expect.stringContaining("Authenticate with this server in the Tools tab"),
       );
     });
     expect(networking.listMCPTools).not.toHaveBeenCalled();
@@ -1331,10 +1383,8 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     await waitFor(() => {
       expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalled();
     });
-    expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-      "MCP Server updated, but failed to persist OAuth token: write failed",
-    );
-    expect(NotificationsManager.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
+    expect(toast.fromError).toHaveBeenCalledWith("MCP Server updated, but failed to persist OAuth token: write failed");
+    expect(toast.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
@@ -1601,9 +1651,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
 
     // Check "remove saved app" on server A.
     fireEvent.click(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }));
-    expect(
-      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
-    ).toBe(true);
+    expect(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ })).toBeChecked();
 
     // Switch the panel to server B without unmounting.
     rerender(
@@ -1618,9 +1666,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     );
 
     // The checkbox must have reset, so saving server B does not send the explicit-null delete write.
-    expect(
-      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
-    ).toBe(false);
+    expect(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ })).not.toBeChecked();
 
     await act(async () => {
       fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
@@ -2154,5 +2200,52 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
 
     const payload = await saveAndGetPayload();
     expect(payload.dcr_bridge).toBe(true);
+  });
+});
+
+describe("MCPServerEdit (tab mount contract)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const plainServer = {
+    ...interactiveOAuthServer,
+    auth_type: "none",
+    max_concurrent_requests: 5,
+  };
+
+  it("carries pending server edits into a save triggered from the Cost Configuration tab", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...plainServer,
+      max_concurrent_requests: 2,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={plainServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 10"), { target: { value: "2" } });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Cost Configuration" }));
+    expect(await screen.findByTestId("mcp-cost-config")).toBeInTheDocument();
+
+    const costTabSaveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    expect(costTabSaveButtons).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(costTabSaveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.max_concurrent_requests).toBe(2);
   });
 });

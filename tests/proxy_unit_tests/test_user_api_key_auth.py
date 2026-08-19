@@ -219,8 +219,8 @@ async def test_aaauser_personal_budgets(key_ownership):
     """
     Set a personal budget on a user
 
-    User budget is enforced regardless of key ownership (personal or team).
-    Both cases should raise BudgetExceededError when the user is over budget.
+    - have it only apply when key belongs to user -> raises BudgetExceededError
+    - if key belongs to team, have key respect team budget -> allows call to go through
     """
     import asyncio
     import time
@@ -278,9 +278,12 @@ async def test_aaauser_personal_budgets(key_ownership):
         == valid_token
     )
 
-    with pytest.raises(ProxyException) as exc_info:
+    if key_ownership == "user_key":
+        with pytest.raises(ProxyException) as exc_info:
+            await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    else:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
 
 
 @pytest.mark.asyncio
@@ -523,15 +526,6 @@ def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api
 
 
 def test_get_api_key_from_custom_header_bearer_token():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": f"Bearer {token}"},
-        custom_header_name="x-custom-api-key",
-        expected_api_key=token,
-    )
-
-
-def test_get_api_key_from_custom_header_raw_token():
     token = "sk-" + "1" * 8
     _assert_api_key_from_custom_header(
         headers={"x-custom-api-key": f"Bearer {token}"},
@@ -1115,6 +1109,7 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
         "team_id": None,
         "team_object": None,
         "user_id": None,
+        "user_email": None,
         "user_object": None,
         "org_id": None,
         "org_object": None,

@@ -4,18 +4,26 @@ import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Form, Input, Select, Switch, Tooltip } from "antd";
-import { useEffect, useState } from "react";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { Form, Input as AntdInput, Select, Switch, Tooltip } from "antd";
+import { useEffect, useRef, useState } from "react";
+import { hasCapability } from "../../utils/capabilities";
+import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
+import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
+import { routerSettingsEditorValue, routerSettingsUpdate } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { estimateFields, estimateRules, estimateTooltips, withNormalizedEstimates } from "./estimatedOutputTokens";
+import { canonicalBudgetDuration, keyTypeFromRoutes } from "./keyEditFieldNormalizers";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import {
@@ -29,7 +37,7 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
 import { fetchTeamModels } from "../organisms/create_key_button";
 import NumericalInput from "../shared/numerical_input";
@@ -48,45 +56,6 @@ interface KeyEditViewProps {
   premiumUser?: boolean;
 }
 
-// Add this helper function
-const getAvailableModelsForKey = (keyData: KeyResponse, teams: any[] | null): string[] => {
-  // If no teams data is available, return empty array
-  if (!teams || !keyData.team_id) {
-    return [];
-  }
-
-  // Find the team that matches the key's team_id
-  const keyTeam = teams.find((team) => team.team_id === keyData.team_id);
-
-  // If team found and has models, return those models
-  if (keyTeam?.models) {
-    return keyTeam.models;
-  }
-
-  return [];
-};
-
-// Helper function to determine key_type display value from allowed_routes
-const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
-  if (!allowedRoutes || allowedRoutes.length === 0) {
-    return "default";
-  }
-
-  if (allowedRoutes.includes("llm_api_routes")) {
-    return "llm_api";
-  }
-
-  if (allowedRoutes.includes("management_routes")) {
-    return "management";
-  }
-
-  if (allowedRoutes.includes("info_routes")) {
-    return "read_only";
-  }
-
-  return "default";
-};
-
 export function KeyEditView({
   keyData,
   onCancel,
@@ -98,6 +67,10 @@ export function KeyEditView({
   premiumUser = false,
 }: KeyEditViewProps) {
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const canViewPolicies = hasCapability(userRole, "viewPolicies");
+  const canViewPrompts = hasCapability(userRole, "viewPrompts");
+  const canEditEstimates = userRole != null && isProxyAdminRole(userRole);
+  const estimateTooltip = estimateTooltips(canEditEstimates);
   const [form] = Form.useForm();
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
@@ -122,6 +95,7 @@ export function KeyEditView({
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
   );
+  const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -163,41 +137,33 @@ export function KeyEditView({
       }
     };
 
-    fetchPrompts();
+    if (canViewPrompts) fetchPrompts();
     fetchModels();
-  }, [userID, userRole, accessToken, team, keyData.team_id]);
+  }, [userID, userRole, accessToken, team, keyData.team_id, canViewPrompts]);
 
   // Sync disabled callbacks with form when component mounts
   useEffect(() => {
     form.setFieldValue("disabled_callbacks", disabledCallbacks);
   }, [form, disabledCallbacks]);
 
-  // Convert API budget duration to form format
-  const getBudgetDuration = (duration: string | null) => {
-    if (!duration) return null;
-    const durationMap: Record<string, string> = {
-      "24h": "daily",
-      "7d": "weekly",
-      "30d": "monthly",
-    };
-    return durationMap[duration] || null;
-  };
-
   // Set initial form values
   const initialValues = {
     ...keyData,
     token: keyData.token || keyData.token_id,
-    budget_duration: getBudgetDuration(keyData.budget_duration),
+    budget_duration: canonicalBudgetDuration(keyData.budget_duration),
     metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
     guardrails: keyData.metadata?.guardrails,
     disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
     throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
+    enable_prompt_caching: keyData.metadata?.enable_prompt_caching || false,
+    ...estimateFields(keyData.metadata),
     prompts: keyData.metadata?.prompts,
     tags: keyData.metadata?.tags,
     vector_stores: keyData.object_permission?.vector_stores || [],
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
       accessGroups: keyData.object_permission?.mcp_access_groups || [],
+      toolsets: keyData.object_permission?.mcp_toolsets || [],
     },
     mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
     agents_and_groups: {
@@ -218,34 +184,8 @@ export function KeyEditView({
   };
 
   useEffect(() => {
-    form.setFieldsValue({
-      ...keyData,
-      token: keyData.token || keyData.token_id,
-      budget_duration: getBudgetDuration(keyData.budget_duration),
-      metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
-      guardrails: keyData.metadata?.guardrails,
-      disable_global_guardrails: keyData.metadata?.disable_global_guardrails || false,
-      prompts: keyData.metadata?.prompts,
-      tags: keyData.metadata?.tags,
-      vector_stores: keyData.object_permission?.vector_stores || [],
-      mcp_servers_and_groups: {
-        servers: keyData.object_permission?.mcp_servers || [],
-        accessGroups: keyData.object_permission?.mcp_access_groups || [],
-      },
-      mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
-      throttle_on_budget_exceeded: keyData.metadata?.throttle_on_budget_exceeded || false,
-      logging_settings: extractLoggingSettings(keyData.metadata),
-      disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
-        ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
-        : [],
-      access_group_ids: keyData.access_group_ids || [],
-      auto_rotate: keyData.auto_rotate || false,
-      ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
-      allowed_routes:
-        Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
-          ? keyData.allowed_routes.join(", ")
-          : "",
-    });
+    form.setFieldsValue(initialValues);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initialValues is rebuilt from keyData every render; depending on it would re-run each render
   }, [keyData, form]);
 
   // Sync auto-rotation state with form values
@@ -267,7 +207,7 @@ export function KeyEditView({
         const response = await tagListCall(accessToken);
         setTagsList(response);
       } catch (error) {
-        NotificationsManager.fromBackend("Error fetching tags: " + error);
+        toast.fromError("Error fetching tags: " + error);
       }
     };
     fetchTags();
@@ -306,15 +246,34 @@ export function KeyEditView({
         values.duration = null;
       }
 
+      if (keyData.budget_duration && !values.budget_duration) {
+        values.budget_duration = null;
+      }
+
       // Reconcile multi-window budget limits from the editor state, dropping
-      // incomplete entries (no max_budget). Sending [] tells the backend to clear
-      // all stored windows, so only send it when the user removed every window;
-      // when entries remain but are still incomplete, omit the field so the saved
-      // windows are left untouched (JSON.stringify drops the undefined key).
+      // incomplete entries (no max_budget). The backend treats any budget_limits
+      // in a /key/update request as an admin-only budget change, so re-sending
+      // the stored windows on an unrelated edit 403s a non-admin key owner
+      // (issue #33246). Only send the field when the user actually changed the
+      // windows, mirroring how allowed_routes is dropped above when unchanged:
+      // compare on (duration, cap), ignoring server-owned reset_at and order.
+      // Sending [] clears every window, so send it only when the user removed
+      // the last one; otherwise leave the field off (JSON.stringify drops the
+      // undefined key) so an unchanged or incomplete editor state never touches
+      // storage.
+      const windowSignature = (windows: Array<{ budget_duration: string; max_budget: number | null }> | undefined) =>
+        (windows ?? [])
+          .filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined)
+          .map((w) => `${w.budget_duration}:${w.max_budget}`)
+          .sort()
+          .join("|");
       const validWindows = budgetLimits.filter(
         (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
       );
-      if (validWindows.length > 0) {
+      const budgetLimitsUnchanged = windowSignature(keyData.budget_limits) === windowSignature(validWindows);
+      if (budgetLimitsUnchanged) {
+        // no-op: leave budget_limits off the payload
+      } else if (validWindows.length > 0) {
         values.budget_limits = validWindows;
       } else if (budgetLimits.length === 0) {
         values.budget_limits = [];
@@ -332,7 +291,15 @@ export function KeyEditView({
         values.budget_fallbacks = {};
       }
 
-      await onSubmit(values);
+      const routerSettings = routerSettingsUpdate(
+        routerSettingsRef.current?.getValue()?.router_settings,
+        keyData.router_settings,
+      );
+      if (routerSettings) {
+        values.router_settings = routerSettings;
+      }
+
+      await onSubmit(withNormalizedEstimates(values));
     } finally {
       setIsKeySaving(false);
     }
@@ -341,7 +308,7 @@ export function KeyEditView({
   return (
     <Form form={form} onFinish={handleSubmit} initialValues={initialValues} layout="vertical">
       <Form.Item label="Key Alias" name="key_alias">
-        <TextInput />
+        <Input />
       </Form.Item>
 
       <Form.Item label="Models" name="models">
@@ -411,7 +378,7 @@ export function KeyEditView({
         >
           {({ getFieldValue, setFieldValue }) => {
             const allowedRoutesValue = getFieldValue("allowed_routes") || "";
-            // Convert string to array for getKeyTypeFromRoutes
+            // Convert string to array for keyTypeFromRoutes
             const allowedRoutes =
               typeof allowedRoutesValue === "string" && allowedRoutesValue.trim() !== ""
                 ? allowedRoutesValue
@@ -419,7 +386,7 @@ export function KeyEditView({
                     .map((r: string) => r.trim())
                     .filter((r: string) => r.length > 0)
                 : [];
-            const keyTypeValue = getKeyTypeFromRoutes(allowedRoutes);
+            const keyTypeValue = keyTypeFromRoutes(allowedRoutes);
 
             return (
               <Select
@@ -483,7 +450,7 @@ export function KeyEditView({
         }
         name="allowed_routes"
       >
-        <Input placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes" />
+        <AntdInput placeholder="Enter allowed routes (comma-separated). Special values: llm_api_routes, management_routes. Examples: llm_api_routes, /chat/completions, /keys/*. Leave empty to allow all routes" />
       </Form.Item>
 
       <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -491,11 +458,7 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">
-        <Select placeholder="n/a">
-          <Select.Option value="daily">Daily</Select.Option>
-          <Select.Option value="weekly">Weekly</Select.Option>
-          <Select.Option value="monthly">Monthly</Select.Option>
-        </Select>
+        <BudgetDurationDropdown placeholder="Never resets" />
       </Form.Item>
 
       <Form.Item
@@ -532,13 +495,17 @@ export function KeyEditView({
         <NumericalInput min={0} />
       </Form.Item>
 
-      <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" showDetailedDescriptions={false} />
+      <Form.Item name="tpm_limit_type" initialValue={null} noStyle>
+        <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" showDetailedDescriptions={false} />
+      </Form.Item>
 
       <Form.Item label="RPM Limit" name="rpm_limit">
         <NumericalInput min={0} />
       </Form.Item>
 
-      <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" showDetailedDescriptions={false} />
+      <Form.Item name="rpm_limit_type" initialValue={null} noStyle>
+        <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" showDetailedDescriptions={false} />
+      </Form.Item>
 
       <Form.Item
         label={
@@ -555,16 +522,49 @@ export function KeyEditView({
         <Switch checkedChildren="Yes" unCheckedChildren="No" />
       </Form.Item>
 
+      <Form.Item
+        label={
+          <span>
+            Enable Prompt Caching{" "}
+            <Tooltip title="Automatically add prompt caching breakpoints (cache_control markers) to requests made with this key, cutting input cost on repeated prompts. Applies to Anthropic and Bedrock Claude models; requests that already set their own cache_control markers are left untouched.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="enable_prompt_caching"
+        valuePropName="checked"
+      >
+        <Switch checkedChildren="Yes" unCheckedChildren="No" />
+      </Form.Item>
+
       <Form.Item label="Max Parallel Requests" name="max_parallel_requests">
         <NumericalInput min={0} />
       </Form.Item>
 
       <Form.Item label="Model TPM Limit" name="model_tpm_limit">
-        <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
+        <AntdInput.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
       </Form.Item>
 
       <Form.Item label="Model RPM Limit" name="model_rpm_limit">
-        <Input.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
+        <AntdInput.TextArea rows={4} placeholder='{"gpt-4": 100, "claude-v1": 200}' />
+      </Form.Item>
+
+      <Form.Item
+        label="Estimated Output Tokens"
+        name="default_estimated_output_tokens"
+        tooltip={estimateTooltip.estimate}
+        rules={[estimateRules.positive]}
+      >
+        <NumericalInput min={1} step={1} disabled={!canEditEstimates} />
+      </Form.Item>
+
+      <Form.Item
+        label="Estimated Output Tokens Per Model"
+        name="default_estimated_output_tokens_per_model"
+        tooltip={estimateTooltip.perModel}
+        rules={[estimateRules.perModel]}
+      >
+        <AntdInput.TextArea rows={4} placeholder='{"gpt-4": 4096}' disabled={!canEditEstimates} />
       </Form.Item>
 
       <Form.Item
@@ -607,27 +607,29 @@ export function KeyEditView({
         <Switch disabled={!canEditGuardrails} checkedChildren="Yes" unCheckedChildren="No" />
       </Form.Item>
 
-      <Form.Item
-        label={
-          <span>
-            Policies{" "}
-            <Tooltip title="Apply policies to this key to control guardrails and other settings">
-              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-            </Tooltip>
-          </span>
-        }
-        name="policies"
-      >
-        {accessToken && (
-          <PolicySelector
-            onChange={(v) => {
-              form.setFieldValue("policies", v);
-            }}
-            accessToken={accessToken}
-            disabled={!premiumUser}
-          />
-        )}
-      </Form.Item>
+      {canViewPolicies && (
+        <Form.Item
+          label={
+            <span>
+              Policies{" "}
+              <Tooltip title="Apply policies to this key to control guardrails and other settings">
+                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+              </Tooltip>
+            </span>
+          }
+          name="policies"
+        >
+          {accessToken && (
+            <PolicySelector
+              onChange={(v) => {
+                form.setFieldValue("policies", v);
+              }}
+              accessToken={accessToken}
+              disabled={!premiumUser}
+            />
+          )}
+        </Form.Item>
+      )}
 
       <Form.Item label="Tags" name="tags">
         <Select
@@ -642,23 +644,25 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Prompts" name="prompts">
-        <Tooltip title={!premiumUser ? "Setting prompts by key is a premium feature" : ""} placement="top">
-          <Select
-            mode="tags"
-            style={{ width: "100%" }}
-            disabled={!premiumUser}
-            placeholder={
-              !premiumUser
-                ? "Premium feature - Upgrade to set prompts by key"
-                : Array.isArray(keyData.metadata?.prompts) && keyData.metadata.prompts.length > 0
-                  ? `Current: ${keyData.metadata.prompts.join(", ")}`
-                  : "Select or enter prompts"
-            }
-            options={promptsList.map((name) => ({ value: name, label: name }))}
-          />
-        </Tooltip>
-      </Form.Item>
+      {canViewPrompts && (
+        <Form.Item label="Prompts" name="prompts">
+          <Tooltip title={!premiumUser ? "Setting prompts by key is a premium feature" : ""} placement="top">
+            <Select
+              mode="tags"
+              style={{ width: "100%" }}
+              disabled={!premiumUser}
+              placeholder={
+                !premiumUser
+                  ? "Premium feature - Upgrade to set prompts by key"
+                  : Array.isArray(keyData.metadata?.prompts) && keyData.metadata.prompts.length > 0
+                    ? `Current: ${keyData.metadata.prompts.join(", ")}`
+                    : "Select or enter prompts"
+              }
+              options={promptsList.map((name) => ({ value: name, label: name }))}
+            />
+          </Tooltip>
+        </Form.Item>
+      )}
 
       <Form.Item
         label={
@@ -674,26 +678,23 @@ export function KeyEditView({
         <AccessGroupSelector placeholder="Select access groups (optional)" />
       </Form.Item>
 
-      <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
-        <Tooltip
-          title={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : ""}
-          placement="top"
-        >
-          <PassThroughRoutesSelector
-            onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
-            value={form.getFieldValue("allowed_passthrough_routes")}
-            accessToken={accessToken || ""}
-            placeholder={
-              !premiumUser
-                ? "Premium feature - Upgrade to set allowed pass through routes by key"
-                : Array.isArray(keyData.metadata?.allowed_passthrough_routes) &&
-                    keyData.metadata.allowed_passthrough_routes.length > 0
-                  ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
-                  : "Select or enter allowed pass through routes"
-            }
-            disabled={!premiumUser}
-          />
-        </Tooltip>
+      <Form.Item
+        label="Allowed Pass Through Routes"
+        name="allowed_passthrough_routes"
+        tooltip={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : undefined}
+      >
+        <PassThroughRoutesSelector
+          accessToken={accessToken || ""}
+          placeholder={
+            !premiumUser
+              ? "Premium feature - Upgrade to set allowed pass through routes by key"
+              : Array.isArray(keyData.metadata?.allowed_passthrough_routes) &&
+                  keyData.metadata.allowed_passthrough_routes.length > 0
+                ? `Current: ${keyData.metadata.allowed_passthrough_routes.join(", ")}`
+                : "Select or enter allowed pass through routes"
+          }
+          disabled={!premiumUser}
+        />
       </Form.Item>
 
       <Form.Item label="Vector Stores" name="vector_stores">
@@ -717,7 +718,7 @@ export function KeyEditView({
 
       {/* Hidden field to register mcp_tool_permissions with the form */}
       <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
-        <Input type="hidden" />
+        <AntdInput type="hidden" />
       </Form.Item>
 
       <Form.Item
@@ -812,9 +813,18 @@ export function KeyEditView({
       </Form.Item>
       {enableProjectsUI && hasProject && (
         <Form.Item label="Project">
-          <Input value={projectDisplay ?? ""} disabled />
+          <AntdInput value={projectDisplay ?? ""} disabled />
         </Form.Item>
       )}
+      <Form.Item label="Router Settings">
+        <RouterSettingsAccordion
+          ref={routerSettingsRef}
+          accessToken={accessToken || ""}
+          teamId={keyData.team_id}
+          value={routerSettingsEditorValue(keyData.router_settings)}
+        />
+      </Form.Item>
+
       <Form.Item label="Logging Settings" name="logging_settings">
         <EditLoggingSettings
           value={form.getFieldValue("logging_settings")}
@@ -831,51 +841,50 @@ export function KeyEditView({
       </Form.Item>
 
       <Form.Item label="Metadata" name="metadata">
-        <Input.TextArea rows={10} />
+        <AntdInput.TextArea rows={10} />
       </Form.Item>
 
       {/* Auto-Rotation Settings */}
       <div className="mb-4">
-        <KeyLifecycleSettings
-          form={form}
-          autoRotationEnabled={autoRotationEnabled}
-          onAutoRotationChange={setAutoRotationEnabled}
-          rotationInterval={rotationInterval}
-          onRotationIntervalChange={setRotationInterval}
-          neverExpire={neverExpire}
-          onNeverExpireChange={setNeverExpire}
-        />
-        <Form.Item name="duration" hidden initialValue="">
-          <Input />
+        <Form.Item name="duration" initialValue="" noStyle>
+          <KeyLifecycleSettings
+            autoRotationEnabled={autoRotationEnabled}
+            onAutoRotationChange={setAutoRotationEnabled}
+            rotationInterval={rotationInterval}
+            onRotationIntervalChange={setRotationInterval}
+            neverExpire={neverExpire}
+            onNeverExpireChange={setNeverExpire}
+          />
         </Form.Item>
       </div>
 
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
-        <Input />
+        <AntdInput />
       </Form.Item>
 
       {/* Hidden form field for disabled callbacks */}
       <Form.Item name="disabled_callbacks" hidden>
-        <Input />
+        <AntdInput />
       </Form.Item>
 
       {/* Hidden form fields for auto-rotation */}
       <Form.Item name="auto_rotate" hidden>
-        <Input />
+        <AntdInput />
       </Form.Item>
       <Form.Item name="rotation_interval" hidden>
-        <Input />
+        <AntdInput />
       </Form.Item>
 
       <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6">
         <div className="flex justify-end items-center gap-2">
-          <TremorButton variant="secondary" onClick={onCancel} disabled={isKeySaving}>
+          <Button variant="secondary" onClick={onCancel} disabled={isKeySaving}>
             Cancel
-          </TremorButton>
-          <TremorButton type="submit" loading={isKeySaving}>
+          </Button>
+          <Button type="submit" disabled={isKeySaving} aria-busy={isKeySaving}>
+            {isKeySaving && <UiLoadingSpinner className="size-4" />}
             Save Changes
-          </TremorButton>
+          </Button>
         </div>
       </div>
     </Form>

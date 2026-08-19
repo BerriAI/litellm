@@ -177,12 +177,19 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("Loading request & response data...")).toBeInTheDocument();
   });
 
-  it("should display Request & Response section with Pretty and JSON view modes", () => {
+  it("should switch the Request & Response body between the Pretty and JSON view modes", async () => {
+    const user = userEvent.setup();
     render(<LogDetailContent logEntry={createLogEntry()} />);
 
     expect(screen.getByText("Request & Response")).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Pretty" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "JSON" })).toBeInTheDocument();
+    expect(screen.getByText("Pretty")).toBeInTheDocument();
+    expect(screen.getByText("JSON")).toBeInTheDocument();
+
+    await user.click(screen.getByText("JSON"));
+    expect(screen.getByRole("tab", { name: "Request" })).toBeInTheDocument();
+
+    await user.click(screen.getByText("Pretty"));
+    expect(screen.queryByRole("tab", { name: "Request" })).not.toBeInTheDocument();
   });
 
   it("should display Request and Response tabs when JSON view is selected", async () => {
@@ -255,26 +262,101 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("2 masked")).toBeInTheDocument();
   });
 
-  it("should display cache hit information when cache_hit is true", () => {
+  it("should display a Response Cache 'Hit' tag when the response cache served the request", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True" })} />);
+
+    expect(screen.getByText("Response Cache")).toBeInTheDocument();
+    expect(screen.getByText("Hit")).toBeInTheDocument();
+  });
+
+  it("should show prompt cache tokens and no response-cache hit when only provider prompt caching occurred", () => {
     render(
       <LogDetailContent
         logEntry={createLogEntry({
-          cache_hit: "true",
+          cache_hit: "False",
           metadata: {
             status: "success",
             additional_usage_values: {
-              cache_read_input_tokens: 100,
-              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 34462,
+              cache_creation_input_tokens: 83,
             },
           },
         })}
       />,
     );
 
-    expect(screen.getByText("Cache Hit")).toBeInTheDocument();
-    expect(screen.getByText("true")).toBeInTheDocument();
-    expect(screen.getByText("Cache Read Tokens")).toBeInTheDocument();
-    expect(screen.getByText("100")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Cache Read Tokens")).toBeInTheDocument();
+    expect(screen.getByText("34,462")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Cache Creation Tokens")).toBeInTheDocument();
+    expect(screen.getByText("83")).toBeInTheDocument();
+    expect(screen.getByText("Miss")).toBeInTheDocument();
+    expect(screen.queryByText("Cache Hit")).not.toBeInTheDocument();
+  });
+
+  it("should display Prompt Cache Creation Tokens even when there are no cache read tokens", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          cache_hit: "None",
+          metadata: {
+            status: "success",
+            additional_usage_values: {
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 83,
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Prompt Cache Creation Tokens")).toBeInTheDocument();
+    expect(screen.getByText("83")).toBeInTheDocument();
+  });
+
+  it("should link the Response Cache tooltip to the response caching docs", async () => {
+    const user = userEvent.setup();
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True" })} />);
+
+    expect(screen.getByText("Response Cache")).toBeInTheDocument();
+    const infoIcons = screen.getAllByRole("img", { name: /info/i });
+    expect(infoIcons).toHaveLength(1);
+    await user.hover(infoIcons[0]);
+
+    expect(await screen.findByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/caching",
+    );
+  });
+
+  it("should link the prompt cache tooltips to the prompt caching docs", async () => {
+    const user = userEvent.setup();
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          cache_hit: "None",
+          metadata: {
+            status: "success",
+            additional_usage_values: { cache_read_input_tokens: 100 },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Prompt Cache Read Tokens")).toBeInTheDocument();
+    const infoIcons = screen.getAllByRole("img", { name: /info/i });
+    expect(infoIcons).toHaveLength(1);
+    await user.hover(infoIcons[0]);
+
+    expect(await screen.findByRole("link", { name: "Docs" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/completion/prompt_caching",
+    );
+  });
+
+  it("should hide the Response Cache row when cache_hit is not a true/false value", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "None" })} />);
+
+    expect(screen.queryByText("Response Cache")).not.toBeInTheDocument();
   });
 
   it("should display LiteLLM Overhead when litellm_overhead_time_ms is in metadata", () => {
@@ -299,7 +381,7 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText("LiteLLM Overhead")).not.toBeInTheDocument();
   });
 
-  const retriesItem = () => screen.getByText("Retries").closest(".ant-descriptions-item") as HTMLElement;
+  const retriesItem = () => screen.getByText("Retries").parentElement as HTMLElement;
 
   it("should display attempted_retries / max_retries for Retries when attempted_retries > 0", () => {
     render(
@@ -311,11 +393,10 @@ describe("LogDetailContent", () => {
     expect(within(retriesItem()).getByText("2 / 3")).toBeInTheDocument();
   });
 
-  it("should display a green 'None' tag for Retries when attempted_retries is 0", () => {
+  it("should display a 'None' tag for Retries when attempted_retries is 0", () => {
     render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success", attempted_retries: 0 } })} />);
 
-    const noneTag = within(retriesItem()).getByText("None");
-    expect(noneTag.closest(".ant-tag")).toHaveClass("ant-tag-green");
+    expect(within(retriesItem()).getByText("None")).toBeInTheDocument();
   });
 
   it("should display '-' for Retries when attempted_retries is absent from metadata", () => {
@@ -373,8 +454,8 @@ describe("LogDetailContent", () => {
       />,
     );
 
-    const descriptions = screen.getByText("Provider").closest(".ant-descriptions-item");
+    const descriptions = screen.getByText("Provider").parentElement as HTMLElement;
     expect(descriptions).toBeInTheDocument();
-    expect(within(descriptions as HTMLElement).getByText("-")).toBeInTheDocument();
+    expect(within(descriptions).getByText("-")).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import { fetchTeams } from "@/app/(dashboard)/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { teamInfoCall } from "@/components/networking";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
+import { teamListScopeUserId } from "@/utils/roles";
 
 export interface TeamsResponse {
   teams: Team[];
@@ -24,6 +25,7 @@ export interface TeamListCallOptions {
   teamID?: string | null;
   team_alias?: string | null;
   search?: string | null;
+  searchTeamIdMatch?: "exact" | "prefix" | null;
   userID?: string | null;
   sortBy?: string | null;
   sortOrder?: string | null;
@@ -48,6 +50,7 @@ export const teamListCall = async (
         organization_id: options.organizationID,
         team_alias: options.team_alias,
         search: options.search,
+        search_team_id_match: options.searchTeamIdMatch,
         user_id: options.userID,
         page,
         page_size: pageSize,
@@ -114,24 +117,30 @@ export const useTeams = (): UseQueryResult<Team[]> => {
 
 const ALL_TEAMS_PAGE_SIZE = 100;
 
-const fetchAllTeamsPaged = async (accessToken: string): Promise<Team[]> => {
-  const firstPage: TeamsResponse = await teamListCall(accessToken, 1, ALL_TEAMS_PAGE_SIZE);
+const fetchAllTeamsPaged = async (accessToken: string, userID: string | null): Promise<Team[]> => {
+  const firstPage: TeamsResponse = await teamListCall(accessToken, 1, ALL_TEAMS_PAGE_SIZE, { userID });
   const totalPages = firstPage.total_pages ?? 1;
   if (totalPages <= 1) return firstPage.teams;
 
   const remainingPages: TeamsResponse[] = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) => teamListCall(accessToken, i + 2, ALL_TEAMS_PAGE_SIZE)),
+    Array.from({ length: totalPages - 1 }, (_, i) => teamListCall(accessToken, i + 2, ALL_TEAMS_PAGE_SIZE, { userID })),
   );
   return [firstPage, ...remainingPages].flatMap((page) => page.teams);
 };
 
 export const useAllTeams = (): UseQueryResult<Team[]> => {
-  const { accessToken } = useAuthorized();
+  const { accessToken, userId, userRole } = useAuthorized();
+  const scopedUserID = teamListScopeUserId(userRole, userId);
   return useQuery<Team[]>({
     queryKey: teamKeys.list({
-      filters: { scope: "all", pageSize: ALL_TEAMS_PAGE_SIZE, accessToken: accessToken ?? "" },
+      filters: {
+        scope: "all",
+        pageSize: ALL_TEAMS_PAGE_SIZE,
+        accessToken: accessToken ?? "",
+        userID: scopedUserID ?? "",
+      },
     }),
-    queryFn: async () => await fetchAllTeamsPaged(accessToken!),
+    queryFn: async () => await fetchAllTeamsPaged(accessToken!, scopedUserID),
     enabled: Boolean(accessToken),
     staleTime: 30000,
   });
@@ -213,6 +222,7 @@ const deletedTeamListCall = async (
         organization_id: options.organizationID,
         team_alias: options.team_alias,
         search: options.search,
+        search_team_id_match: options.searchTeamIdMatch,
         user_id: options.userID,
         page,
         page_size: pageSize,

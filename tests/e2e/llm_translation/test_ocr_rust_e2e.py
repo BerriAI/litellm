@@ -19,14 +19,20 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import pytest
-
 from e2e_config import unique_marker
-from e2e_http import unwrap
+from e2e_http import assert_client_error, unwrap
 from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, OcrBody, OcrDocument, OcrResponse
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
+
+
+class _OptionalOcrBody(BaseModel):
+    model: str | None = None
+    document: dict[str, object] | None = None
+
 
 # Tiny in-repo fixtures served via jsdelivr (sha-pinned, immutable) so the request
 # bodies stay stable across runs.
@@ -153,4 +159,19 @@ class TestRustOcrGateway:
         response = unwrap(endpoints_client.proxy.ocr(key, OcrBody(model=model, document=case.document)))
         _assert_ocr_document(response)
 
+    @pytest.mark.skip(reason="stage red: product gap, /v1/ocr 500s (aocr TypeError) on missing document instead of 400")
+    @pytest.mark.covers("llm.ocr.openai.input_validation.nonstream.works")
+    def test_missing_document_returns_error(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"rust-ocr-val-{unique_marker()}"
+        model_id = endpoints_client.create_model(model, MistralOcr().litellm_params())
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+        result = endpoints_client.proxy.transport.send(
+            "/v1/ocr",
+            headers=endpoints_client.proxy.transport.bearer(key),
+            json=_OptionalOcrBody(model=model),
+        )
+        assert_client_error(result, "ocr missing document")
 

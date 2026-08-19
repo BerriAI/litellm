@@ -1,1 +1,1 @@
-pub use crate::ocr::{ocr, OcrRequest};
+pub use crate::ocr::{OcrRequest, ocr};
