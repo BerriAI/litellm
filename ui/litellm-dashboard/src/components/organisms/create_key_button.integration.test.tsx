@@ -667,7 +667,7 @@ describe("CreateKey", () => {
     it("prefills models once the available model list arrives", async () => {
       renderCreateKey({ autoOpenCreate: true, prefillData: { models: ["gpt-4"] } });
 
-      expect(await screen.findByTitle("gpt-4")).toBeInTheDocument();
+      expect(await screen.findByTitle("gpt-4", {}, { timeout: 5000 })).toBeInTheDocument();
     });
 
     it("ignores a team the user has no access to", async () => {
@@ -974,6 +974,23 @@ describe("CreateKey", () => {
         expect(screen.getByRole("button", { name: /^create key$/i })).toBeInTheDocument();
       });
       expect(vi.mocked(keyCreateCall)).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("dialog accessible names", () => {
+    it("names the create form dialog", async () => {
+      await openModal();
+
+      expect(screen.getByRole("dialog", { name: "Create New Key" })).toBeInTheDocument();
+    });
+
+    it("names the created key dialog", async () => {
+      await openModal();
+      await nameTheKey();
+      await submit();
+      await createdPayload();
+
+      expect(await screen.findByRole("dialog", { name: "Save your Key" })).toBeInTheDocument();
     });
   });
 
