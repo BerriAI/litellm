@@ -3694,3 +3694,48 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == "42 files found"
     assert _image_urls_in_user_messages(result) == []
+
+
+def test_tool_result_with_tool_reference_and_empty_list_emits_all_tool_messages():
+    """Regression test for issue #37462: Anthropic adapter must emit tool messages for tool_reference and empty list."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "search"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "call_1", "name": "ToolSearch", "input": {"q": "read"}},
+                {"type": "tool_use", "id": "call_2", "name": "get_weather", "input": {"city": "Paris"}},
+                {"type": "tool_use", "id": "call_3", "name": "empty_tool", "input": {}},
+                {"type": "tool_use", "id": "call_4", "name": "unknown_tool", "input": {}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_1",
+                    "content": [{"type": "tool_reference", "tool_name": "Read"}],
+                },
+                {"type": "tool_result", "tool_use_id": "call_2", "content": "20C"},
+                {"type": "tool_result", "tool_use_id": "call_3", "content": []},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_4",
+                    "content": [{"type": "custom_plugin_block", "data": "xyz"}],
+                },
+            ],
+        },
+    ]
+
+    translated = adapter.translate_anthropic_messages_to_openai(messages=messages)
+    tool_messages = [m for m in translated if isinstance(m, dict) and m.get("role") == "tool"]
+    tool_ids = [m["tool_call_id"] for m in tool_messages]
+
+    assert tool_ids == ["call_1", "call_2", "call_3", "call_4"]
+    assert tool_messages[0]["content"] == "[Loaded tool: Read]"
+    assert tool_messages[1]["content"] == "20C"
+    assert tool_messages[2]["content"] == ""
+    assert tool_messages[3]["content"] == "[custom_plugin_block block]"
+

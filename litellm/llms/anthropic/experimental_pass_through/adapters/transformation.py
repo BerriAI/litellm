@@ -389,7 +389,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
-                            if "content" not in content:
+                            if "content" not in content or content.get("content") is None:
                                 tool_result = ChatCompletionToolMessage(
                                     role="tool",
                                     tool_call_id=content.get("tool_use_id", ""),
@@ -411,9 +411,15 @@ class LiteLLMAnthropicMessagesAdapter:
                                 # (each tool_use must have exactly one tool_result)
                                 content_items = list(content.get("content", []))
 
-                                # Single-item text keeps the backward-compatible string format; a single
-                                # image becomes a structured image_url part
-                                if len(content_items) == 1:
+                                if len(content_items) == 0:
+                                    tool_result = ChatCompletionToolMessage(
+                                        role="tool",
+                                        tool_call_id=content.get("tool_use_id", ""),
+                                        content="",
+                                    )
+                                    self._add_cache_control_if_applicable(content, tool_result, model)
+                                    tool_message_list.append(tool_result)
+                                elif len(content_items) == 1:
                                     c = content_items[0]
                                     if isinstance(c, str):
                                         tool_result = ChatCompletionToolMessage(
@@ -443,6 +449,33 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
+                                        elif c.get("type") == "tool_reference":
+                                            tool_name = c.get("tool_name", "")
+                                            text_content = f"[Loaded tool: {tool_name}]" if tool_name else "[Loaded tool]"
+                                            tool_result = ChatCompletionToolMessage(
+                                                role="tool",
+                                                tool_call_id=content.get("tool_use_id", ""),
+                                                content=text_content,
+                                            )
+                                            self._add_cache_control_if_applicable(content, tool_result, model)
+                                            tool_message_list.append(tool_result)
+                                        else:
+                                            text_content = c.get("text") or f"[{c.get('type', 'block')} block]"
+                                            tool_result = ChatCompletionToolMessage(
+                                                role="tool",
+                                                tool_call_id=content.get("tool_use_id", ""),
+                                                content=text_content,
+                                            )
+                                            self._add_cache_control_if_applicable(content, tool_result, model)
+                                            tool_message_list.append(tool_result)
+                                    else:
+                                        tool_result = ChatCompletionToolMessage(
+                                            role="tool",
+                                            tool_call_id=content.get("tool_use_id", ""),
+                                            content=str(c),
+                                        )
+                                        self._add_cache_control_if_applicable(content, tool_result, model)
+                                        tool_message_list.append(tool_result)
                                 else:
                                     # For multiple content items, combine into a single tool message
                                     # with list content to preserve all items while having one tool_use_id
@@ -464,15 +497,37 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 image_part = self._tool_result_image_part(c.get("source"))
                                                 if image_part:
                                                     combined_content_parts.append(image_part)
+                                            elif c.get("type") == "tool_reference":
+                                                tool_name = c.get("tool_name", "")
+                                                text_content = f"[Loaded tool: {tool_name}]" if tool_name else "[Loaded tool]"
+                                                combined_content_parts.append(
+                                                    ChatCompletionTextObject(type="text", text=text_content)
+                                                )
+                                            else:
+                                                text_content = c.get("text") or f"[{c.get('type', 'block')} block]"
+                                                combined_content_parts.append(
+                                                    ChatCompletionTextObject(type="text", text=text_content)
+                                                )
+                                        else:
+                                            combined_content_parts.append(
+                                                ChatCompletionTextObject(type="text", text=str(c))
+                                            )
                                     # Create a single tool message with combined content
-                                    if combined_content_parts:
-                                        tool_result = ChatCompletionToolMessage(
-                                            role="tool",
-                                            tool_call_id=content.get("tool_use_id", ""),
-                                            content=combined_content_parts,
-                                        )
-                                        self._add_cache_control_if_applicable(content, tool_result, model)
-                                        tool_message_list.append(tool_result)
+                                    tool_result = ChatCompletionToolMessage(
+                                        role="tool",
+                                        tool_call_id=content.get("tool_use_id", ""),
+                                        content=combined_content_parts if combined_content_parts else "",
+                                    )
+                                    self._add_cache_control_if_applicable(content, tool_result, model)
+                                    tool_message_list.append(tool_result)
+                            else:
+                                tool_result = ChatCompletionToolMessage(
+                                    role="tool",
+                                    tool_call_id=content.get("tool_use_id", ""),
+                                    content=str(content.get("content", "")),
+                                )
+                                self._add_cache_control_if_applicable(content, tool_result, model)
+                                tool_message_list.append(tool_result)
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
