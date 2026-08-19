@@ -4700,7 +4700,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 litellm_parent_otel_span=span,
             )
             stash.batch_enqueued_reservation = None
-        if view.status in BATCH_ENQUEUED_REFUND_STATUSES:
+        if view.status.lower() in BATCH_ENQUEUED_REFUND_STATUSES:
             popped: Final = await self.batch_enqueued_token_store.pop_reservation(
                 batch_id=canonical_provider_batch_id(view.id),
                 litellm_parent_otel_span=span,

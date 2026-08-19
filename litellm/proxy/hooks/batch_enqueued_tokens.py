@@ -77,10 +77,14 @@ class BatchEnqueuedTokenScope:
     limit: int
 
 
+ReservationBackend: TypeAlias = Literal["redis", "memory"]
+
+
 @dataclass(frozen=True, slots=True)
 class BatchEnqueuedTokenReservation:
     tokens: int
     scopes: tuple[BatchEnqueuedTokenScope, ...]
+    backend: ReservationBackend = "redis"
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,9 +174,10 @@ class BatchEnqueuedTokenStore:
 
     Counters and records live in Redis when Redis is configured, through
     single-key Lua scripts issued one scope at a time (Redis Cluster safe: no
-    cross-slot commands), with an over-limit scope rolling back the scopes
-    reserved before it; otherwise a single-process in-memory fallback guarded
-    by one asyncio lock is used. Everything expires after
+    cross-slot commands), with an over-limit or failing scope rolling back the
+    scopes reserved before it; otherwise a single-process in-memory fallback
+    guarded by one asyncio lock is used. Reservations remember which backend
+    granted them so a refund never debits counters the grant did not charge. Everything expires after
     ``BATCH_ENQUEUED_TOKEN_TTL_SECONDS`` so a crash between submission and the
     terminal-state refund can never leak tokens forever.
     """
@@ -229,15 +234,49 @@ class BatchEnqueuedTokenStore:
         scopes: tuple[BatchEnqueuedTokenScope, ...],
     ) -> BatchEnqueuedTokenOutcome:
         for index, scope in enumerate(scopes):
-            raw_result = await reserve_script(
-                (self._counter_key(scope),),
-                (tokens, BATCH_ENQUEUED_TOKEN_TTL_SECONDS, scope.limit),
+            result = await self._run_reserve_script(
+                reserve_script,
+                refund_script,
+                tokens=tokens,
+                scope=scope,
+                already_reserved=scopes[:index],
             )
-            result = _RESERVE_RESULT_ADAPTER.validate_python(raw_result)
             if result[0] != 1:
                 await self._refund_via_redis(refund_script, tokens=tokens, scopes=scopes[:index])
                 return BatchEnqueuedTokenOverLimit(scope=scope, enqueued=result[1])
-        return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes)
+        return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes, backend="redis")
+
+    async def _run_reserve_script(
+        self,
+        reserve_script: _ScriptRunner,
+        refund_script: _ScriptRunner,
+        tokens: int,
+        scope: BatchEnqueuedTokenScope,
+        already_reserved: tuple[BatchEnqueuedTokenScope, ...],
+    ) -> tuple[int, int]:
+        try:
+            raw_result: Final = await reserve_script(
+                (self._counter_key(scope),),
+                (tokens, BATCH_ENQUEUED_TOKEN_TTL_SECONDS, scope.limit),
+            )
+            return _RESERVE_RESULT_ADAPTER.validate_python(raw_result)
+        except Exception:
+            await self._rollback_partial_reserve(refund_script, tokens=tokens, scopes=already_reserved)
+            raise
+
+    async def _rollback_partial_reserve(
+        self,
+        refund_script: _ScriptRunner,
+        tokens: int,
+        scopes: tuple[BatchEnqueuedTokenScope, ...],
+    ) -> None:
+        try:
+            await self._refund_via_redis(refund_script, tokens=tokens, scopes=scopes)
+        except Exception as e:  # noqa: BLE001  # best-effort rollback: the leak is TTL-bounded and only tightens the allowance
+            verbose_proxy_logger.warning(
+                "Rollback of partially reserved enqueued tokens failed; leaked increments expire with the TTL: %s",
+                str(e),
+            )
 
     async def _refund_via_redis(
         self,
@@ -261,7 +300,7 @@ class BatchEnqueuedTokenStore:
                     return BatchEnqueuedTokenOverLimit(scope=scope, enqueued=current)
             for scope, current in zip(scopes, currents):
                 await self._set_local_counter(scope, current + tokens, span)
-        return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes)
+        return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes, backend="memory")
 
     async def refund(
         self,
@@ -271,7 +310,7 @@ class BatchEnqueuedTokenStore:
         if reservation.tokens <= 0 or not reservation.scopes:
             return
         refund_script: Final = self._refund_script
-        if refund_script is not None:
+        if reservation.backend == "redis" and refund_script is not None:
             try:
                 await self._refund_via_redis(refund_script, tokens=reservation.tokens, scopes=reservation.scopes)
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory counters
