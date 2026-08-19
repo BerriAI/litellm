@@ -118,7 +118,7 @@ def _iter_successful_output_line_stats(
 
 
 def _safe_output_line_stats(
-    entry: Mapping,
+    entry: Mapping[str, Any],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
     model_info: ModelInfo | None,
@@ -142,7 +142,7 @@ def _safe_output_line_stats(
 
 
 def _compute_output_line_stats(
-    entry: Mapping,
+    entry: Mapping[str, Any],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
     model_info: ModelInfo | None,
@@ -171,7 +171,7 @@ def _compute_output_line_stats(
 
 
 def _output_line_cost(
-    response_body: Mapping,
+    response_body: Mapping[str, Any],
     usage: Usage,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
@@ -503,7 +503,9 @@ def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
     return 0
 
 
-def _get_batch_job_usage_from_response_body(response_body: Mapping, custom_llm_provider: str = "openai") -> Usage:
+def _get_batch_job_usage_from_response_body(
+    response_body: Mapping[str, Any], custom_llm_provider: str = "openai"
+) -> Usage:
     """
     Get the tokens of a batch job from the response body
     """
@@ -535,7 +537,7 @@ def _get_batch_job_usage_from_response_body(response_body: Mapping, custom_llm_p
     return usage
 
 
-def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping) -> dict:
+def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[str, Any]) -> dict:
     """
     Get the ``result`` object from a line of an Anthropic message batch results JSONL file.
 
@@ -546,7 +548,7 @@ def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping) -
 
 
 def _get_response_from_batch_job_output_file(
-    batch_job_output_file: Mapping, custom_llm_provider: str = "openai"
+    batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
 ) -> Any:
     """
     Get the response from the batch job output file
@@ -560,7 +562,9 @@ def _get_response_from_batch_job_output_file(
     return _response_body
 
 
-def _batch_response_was_successful(batch_job_output_file: Mapping, custom_llm_provider: str = "openai") -> bool:
+def _batch_response_was_successful(
+    batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
+) -> bool:
     """
     Check if the batch job response was successful
 
