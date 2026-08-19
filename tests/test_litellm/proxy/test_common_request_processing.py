@@ -4956,6 +4956,93 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert call_count == 2
 
     @pytest.mark.asyncio
+    async def test_a_recovered_rate_limit_does_not_leave_the_request_marked_as_shed(self):
+        """The mark is set when the error is constructed, so a rejection that is
+        recovered from by falling back would otherwise stay marked and make a
+        provider 429 on the fallback count as this pod shedding load."""
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_utils.request_pressure_metrics import (
+            clear_request_shed_marker,
+            was_request_shed_by_proxy,
+        )
+
+        clear_request_shed_marker()
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+        marked_during_fallback = []
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(detail="TPM limit exceeded for gpt-4")
+            marked_during_fallback.append(was_request_shed_by_proxy())
+            return processor.data, MagicMock()
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert marked_during_fallback == [False], "the fallback attempt must not inherit the recovered rejection's mark"
+        assert not was_request_shed_by_proxy()
+
+    @pytest.mark.asyncio
+    async def test_a_rejection_returned_to_the_client_stays_marked_as_shed(self):
+        """When every fallback is rate limited too, the original rejection is what
+        the client gets, so it must still count as this pod shedding."""
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_utils.request_pressure_metrics import (
+            clear_request_shed_marker,
+            was_request_shed_by_proxy,
+        )
+
+        clear_request_shed_marker()
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            raise ProxyRateLimitError(detail="TPM limit exceeded")
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            with pytest.raises(ProxyRateLimitError):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model="gpt-4",
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        assert was_request_shed_by_proxy()
+
+    @pytest.mark.asyncio
     async def test_raises_when_no_fallbacks_configured(self):
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing

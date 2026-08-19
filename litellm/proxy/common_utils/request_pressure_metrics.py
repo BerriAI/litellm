@@ -34,6 +34,17 @@ def mark_request_shed_by_proxy() -> None:
     proxy_shed_request.set(True)
 
 
+def clear_request_shed_marker() -> None:
+    """Undo the mark because the rejection is being recovered from, not returned.
+
+    The mark is set when the error is constructed, which is the only point every
+    raise site passes through. A caught rejection that falls back to another
+    model would otherwise leave the request marked, and a provider 429 on that
+    fallback would be counted as this pod shedding load.
+    """
+    proxy_shed_request.set(False)
+
+
 def was_request_shed_by_proxy() -> bool:
     return proxy_shed_request.get()
 
