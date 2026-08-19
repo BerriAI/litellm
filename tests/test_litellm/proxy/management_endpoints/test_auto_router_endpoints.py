@@ -548,7 +548,12 @@ def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-ha
     group read that matched on a leg id would come back empty."""
     prisma = MagicMock()
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[_key_record(token) for token in known_keys])
-    prisma.db.execute_raw = AsyncMock(return_value=0)
+    async def execute_raw(sql: str, *params: object):
+        if "SET stopped_by" in sql:
+            return sum(1 for row in stored if row.group_id == params[0] and row.stopped_by is None)
+        return 0
+
+    prisma.db.execute_raw = AsyncMock(side_effect=execute_raw)
     stored = legs if isinstance(legs, list) else list(legs)
 
     async def find_many_legs(where=None, **_: object):
@@ -1147,6 +1152,7 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
     assert stopped.stopped_by == "admin"
     stop_sql, stop_group, stop_operator, stop_stamp = prisma.db.execute_raw.call_args.args
     assert "SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamp)" in stop_sql
+    assert "WHERE group_id = $1 AND stopped_by IS NULL" in stop_sql
     assert (stop_group, stop_operator) == ("job-1", "admin")
     assert datetime.fromisoformat(stop_stamp).tzinfo is None
     assert prisma.db.execute_raw.await_count == 1
@@ -1180,3 +1186,20 @@ def test_every_shadow_eval_sql_constant_speaks_naive_utc():
         assert "::timestamptz" not in sql, name
         for occurrence in sql.split("NOW()")[1:]:
             assert occurrence.startswith(" AT TIME ZONE 'utc'"), name
+
+
+@pytest.mark.asyncio
+async def test_two_racing_stops_produce_exactly_one_winner(monkeypatch: pytest.MonkeyPatch):
+    """Both operators can pass the derived-status guard in the race window; the stop
+    statement's stopped_by IS NULL predicate lets only one claim rows, and the loser gets
+    the same already-stopped answer a late caller gets."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record()])
+    prisma.db.execute_raw = AsyncMock(return_value=0)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(HTTPException) as exc:
+        await stop_shadow_eval_job("job-1", ADMIN)
+    assert exc.value.status_code == 400
+    assert "already stopped" in exc.value.detail

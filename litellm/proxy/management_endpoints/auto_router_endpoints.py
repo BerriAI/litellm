@@ -563,7 +563,7 @@ GROUP BY a.job_id
 _STOP_JOB_SQL: Final = """
 UPDATE "LiteLLM_ShadowEvalJob"
 SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamp)
-WHERE group_id = $1
+WHERE group_id = $1 AND stopped_by IS NULL
 """
 
 
@@ -991,7 +991,8 @@ async def stop_shadow_eval_job(
     """Stop an active shadow eval job, every key it scopes at once. Attempts are kept;
     sampling halts within ~10s. Keys that already stopped on their own budget keep the
     stopped_at they earned. One statement stamps stopped_by and every missing stopped_at
-    together, so a half-applied stop can never read stopped while legs keep sampling."""
+    together, so a half-applied stop can never read stopped while legs keep sampling, and
+    its row count picks exactly one winner when two operators race the guard."""
     from litellm.proxy.proxy_server import prisma_client
 
     _require_admin_writer(user_api_key_dict, "stop a shadow eval")
@@ -1011,7 +1012,11 @@ async def stop_shadow_eval_job(
         raise HTTPException(status_code=400, detail=f"Job {job_id} is already {current.status}")
     stamp: Final = datetime.now(timezone.utc)
     operator: Final = user_api_key_dict.user_id or "operator"
-    await prisma_client.db.execute_raw(_STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat())
+    claimed: Final = await prisma_client.db.execute_raw(
+        _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
+    )
+    if claimed == 0:
+        raise HTTPException(status_code=400, detail=f"Job {job_id} is already stopped")
     stopped: Final = tuple(
         (
             leg
