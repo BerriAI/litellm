@@ -171,6 +171,12 @@ const PER_SECOND_PRICING_PAYLOAD = {
   input_cost_per_second: undefined,
 };
 
+const CACHE_CONTROL_PAYLOAD = {
+  ...EXPANDED_PAYLOAD,
+  cache_control: true,
+  cache_control_injection_points: [{ location: "message", role: "system" }],
+};
+
 describe("AddModelPanel submit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -247,5 +253,20 @@ describe("AddModelPanel submit payload", () => {
     await screen.findByText("Cost Per Second");
 
     expect(await submitAndCapturePayload(user)).toStrictEqual(PER_SECOND_PRICING_PAYLOAD);
+  });
+
+  it("carries a cache control injection point chosen in the child through to the payload", async () => {
+    const user = setup();
+    renderWithProviders(<AddModelPanel />);
+    await fillRequiredFields(user);
+    await user.click(screen.getByText("Advanced Settings"));
+    await screen.findByText("LiteLLM Params");
+
+    await user.click(screen.getByLabelText(/Cache Control Injection Points/i));
+    const roleCombos = await screen.findAllByRole("combobox");
+    await user.click(roleCombos[roleCombos.length - 1]);
+    await user.click(await screen.findByRole("option", { name: "System" }));
+
+    expect(await submitAndCapturePayload(user)).toStrictEqual(CACHE_CONTROL_PAYLOAD);
   });
 });
