@@ -4049,7 +4049,7 @@ def resolve_complexity_router_plugins(
     classifier_plugin_path: Final = complexity_router_config.get("classifier_plugin")
     if isinstance(classifier_plugin_path, str):
         resolved_classifier: Final = resolve_classifier_plugin(
-            plugin_path=classifier_plugin_path,
+            plugin_reference=classifier_plugin_path,
             config_file_path=config_file_path,
             source_label=f"complexity_router_config.classifier_plugin on model {model_name!r}",
         )
@@ -4079,7 +4079,7 @@ def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-para
 
 
 def resolve_classifier_plugin(
-    plugin_path: str,
+    plugin_reference: str,
     config_file_path: str | None,
     source_label: str,
 ) -> ClassifierPlugin:
@@ -4089,15 +4089,15 @@ def resolve_classifier_plugin(
     sync `def classify` passes the runtime_checkable isinstance and would only fail on the
     first classified request, so reject it here where the error names the config key.
     """
-    registered: Final = litellm.classifier_plugin_registry.get(plugin_path)
+    registered: Final = litellm.classifier_plugin_registry.get(plugin_reference)
     if registered is not None:
         return registered
-    resolved: Final = get_instance_fn(value=plugin_path, config_file_path=config_file_path)
+    resolved: Final = get_instance_fn(value=plugin_reference, config_file_path=config_file_path)
     if not isinstance(resolved, ClassifierPlugin) or not inspect.iscoroutinefunction(
         getattr(resolved, "classify", None)
     ):
         raise ValueError(
-            f"{source_label} entry {plugin_path!r} resolved to {resolved!r}, which does not "
+            f"{source_label} entry {plugin_reference!r} resolved to {resolved!r}, which does not "
             "implement the ClassifierPlugin interface (an async `classify(context)` method). Fix "
             "the referenced module before starting the proxy."
         )
@@ -5323,7 +5323,7 @@ class ProxyConfig:
             (
                 str(plugin_name),
                 resolve_classifier_plugin(
-                    plugin_path=plugin_path,
+                    plugin_reference=plugin_path,
                     config_file_path=config_file_path,
                     source_label=f"classifier_plugins.{plugin_name}",
                 ),
@@ -5332,10 +5332,10 @@ class ProxyConfig:
         )
         # Replace, never merge: a reload that drops a name, empties the block, or removes it
         # entirely must evict the stale entries, or a deleted plugin stays selectable until
-        # the next restart. Resolution runs before the clear, so a module broken at reload
-        # time keeps the old registry intact.
-        litellm.classifier_plugin_registry.clear()
-        litellm.classifier_plugin_registry.update(resolved_classifier_entries)
+        # the next restart. Rebinding swaps the mapping atomically, so an in-flight request
+        # validating mid-reload sees the old set or the new one, never an empty window, and
+        # a module broken at reload time keeps the old registry intact.
+        litellm.classifier_plugin_registry = dict(resolved_classifier_entries)  # mutable-ok: the registry global's type
 
         ## MODEL LIST
         model_list: Final = config.get("model_list", None)

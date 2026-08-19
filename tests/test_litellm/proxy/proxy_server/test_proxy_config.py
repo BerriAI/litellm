@@ -251,7 +251,7 @@ def test_resolve_classifier_plugin_prefers_the_registry_over_dotted_import(monke
     instance = _Classifier()
     monkeypatch.setitem(litellm.classifier_plugin_registry, "tier-by-team", instance)
     resolved = resolve_classifier_plugin(
-        plugin_path="tier-by-team", config_file_path=None, source_label="classifier_plugins.tier-by-team"
+        plugin_reference="tier-by-team", config_file_path=None, source_label="classifier_plugins.tier-by-team"
     )
     assert resolved is instance
 
@@ -280,7 +280,6 @@ def test_classifier_plugins_config_key_replaces_the_registry_on_reload(monkeypat
         "  stale-name: reg_classifier.instance\n"
     )
     monkeypatch.setattr(litellm, "classifier_plugin_registry", {}, raising=True)
-    asyncio.get_event_loop_policy()
     proxy_config = ProxyConfig()
     asyncio.run(proxy_config.load_config(router=None, config_file_path=str(config_path)))
     assert set(litellm.classifier_plugin_registry) == {"stale-name"}
