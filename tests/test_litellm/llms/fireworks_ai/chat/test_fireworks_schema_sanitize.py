@@ -228,6 +228,51 @@ def test_sanitize_deeply_nested():
     assert "pattern" not in deep
 
 
+def test_sanitize_recurses_into_propertyNames():
+    """propertyNames subschema must be traversed (Greptile P1)."""
+    config = FireworksAIConfig()
+    schema = {
+        "type": "object",
+        "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z]+$",
+            "title": "Prop Name",
+        },
+    }
+    config._sanitize_tool_schema(schema)
+    assert "pattern" not in schema["propertyNames"]
+    assert "title" not in schema["propertyNames"]
+
+
+def test_sanitize_recurses_into_prefixItems():
+    """prefixItems array must be traversed."""
+    config = FireworksAIConfig()
+    schema = {
+        "type": "array",
+        "prefixItems": [
+            {"type": "string", "pattern": "^[A-Z]+$"},
+            {"type": "string", "title": "Second"},
+        ],
+    }
+    config._sanitize_tool_schema(schema)
+    assert "pattern" not in schema["prefixItems"][0]
+    assert "title" not in schema["prefixItems"][1]
+
+
+def test_sanitize_recurses_into_definitions():
+    """Legacy draft-04 definitions must be traversed."""
+    config = FireworksAIConfig()
+    schema = {
+        "type": "object",
+        "definitions": {
+            "Foo": {"type": "string", "pattern": "^[a-z]+$", "title": "Foo"},
+        },
+    }
+    config._sanitize_tool_schema(schema)
+    assert "pattern" not in schema["definitions"]["Foo"]
+    assert "title" not in schema["definitions"]["Foo"]
+
+
 # ---------------------------------------------------------------------------
 # _transform_tools integration tests
 # ---------------------------------------------------------------------------
