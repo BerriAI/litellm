@@ -1740,12 +1740,14 @@ class MCPServerManager:
             server: The MCP server whose OAuth metadata must be resolved.
 
         Returns:
-            The resolved server, or the registered server when no discovery is
-            pending.
+            The resolved server; the registered server when no discovery is
+            pending, or when discovery failed for a client-forwarded-token
+            server, whose session consumes no discovered endpoint.
 
         Raises:
             HTTPException: Status 503 when discovery times out or returns
-                incomplete metadata.
+                incomplete metadata for a server whose OAuth flow the gateway
+                runs itself.
         """
         acquisition: Final = self._get_or_start_oauth_discovery_task(server)
         if acquisition is None:
@@ -1764,6 +1766,8 @@ class MCPServerManager:
                 return await self.ensure_oauth_metadata_discovered(server)
             case _OAuthDiscoveryFailed(timed_out=timed_out):
                 current: Final = self._registered_server(server)
+                if current.is_client_forwarded_token:
+                    return current
                 server_ref: Final = current.alias or current.server_name or current.name or current.server_id
                 reason: Final = "timed out" if timed_out else "returned incomplete metadata"
                 raise HTTPException(
@@ -5249,7 +5253,7 @@ class MCPServerManager:
                     user_api_key_auth=user_api_key_auth,
                 ):
                     extra_headers = _without_authorization(extra_headers)
-        elif mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+        elif mcp_server.is_client_forwarded_token:
             extra_headers = _client_forwarded_authorization_headers(
                 mcp_server=mcp_server,
                 oauth2_headers=oauth2_headers,
@@ -5356,7 +5360,7 @@ class MCPServerManager:
             # Scoped to the two client-forwarded token modes this stack introduced; legacy
             # oauth2 + delegate_auth_to_upstream (is_oauth_passthrough) is being removed, so it is not
             # added here even though the list path still relays for it.
-            relays_upstream_auth: Final = mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate
+            relays_upstream_auth: Final = mcp_server.is_client_forwarded_token
             server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
             async def _call_tool_via_client(client, params):

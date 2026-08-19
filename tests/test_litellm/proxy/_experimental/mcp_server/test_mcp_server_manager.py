@@ -10457,3 +10457,142 @@ class TestSessionResourceScopeIntersect:
         ):
             fallback = await manager.get_allowed_mcp_servers(auth)
         assert fallback == ["granted-id"]
+
+
+class TestClientForwardedDiscoveryFailureIsNotFatal:
+    """A failed OAuth metadata discovery may only brick the flows the gateway runs itself.
+
+    ``true_passthrough`` / ``oauth_delegate`` forward the caller's own bearer and mint nothing, so an
+    upstream that publishes no RFC 9728 metadata (an internal API, or any IdP unreachable from the
+    pod) must still serve sessions instead of 503-ing before the upstream is ever contacted.
+    """
+
+    @staticmethod
+    def _config(auth_type: MCPAuthType, dcr_bridge: bool | None) -> dict[str, dict[str, object]]:
+        entry: Final[dict[str, object]] = {
+            "url": "https://up.example.com/mcp",
+            "transport": MCPTransport.http,
+            "auth_type": auth_type,
+            **({"oauth2_flow": "authorization_code"} if auth_type == MCPAuth.oauth2 else {}),
+            **({"dcr_bridge": dcr_bridge} if dcr_bridge is not None else {}),
+        }
+        return {"upstream": entry}
+
+    async def _registered(self, manager: MCPServerManager, auth_type: MCPAuthType, dcr_bridge: bool | None):
+        with (
+            patch.object(manager, "_discover_oauth_metadata_for_server", new=AsyncMock(return_value=None)),
+            patch.object(manager, "initialize_tool_name_to_mcp_server_name_mapping"),
+        ):
+            await manager.load_servers_from_config(self._config(auth_type, dcr_bridge))
+        return next(iter(manager.config_mcp_servers.values()))
+
+    @pytest.mark.parametrize(
+        "auth_type, dcr_bridge, serves_without_endpoints",
+        [
+            (MCPAuth.true_passthrough, None, True),
+            (MCPAuth.true_passthrough, True, True),
+            (MCPAuth.oauth_delegate, None, True),
+            (MCPAuth.oauth_delegate, True, True),
+            (MCPAuth.oauth2, None, False),
+            (MCPAuth.oauth2_token_exchange, None, False),
+        ],
+    )
+    @pytest.mark.parametrize("failure", ["incomplete", "timed_out"])
+    @pytest.mark.asyncio
+    async def test_discovery_failure_blocks_only_gateway_run_flows(
+        self,
+        auth_type: MCPAuthType,
+        dcr_bridge: bool | None,
+        serves_without_endpoints: bool,
+        failure: str,
+    ):
+        manager = MCPServerManager()
+        server = await self._registered(manager, auth_type, dcr_bridge)
+        manager._set_oauth_discovery_deferred(server.server_id, True)
+
+        async def never_returns(_server):
+            await asyncio.Future()
+
+        discovery_patch: Final = (
+            {"new": AsyncMock(return_value=None)} if failure == "incomplete" else {"side_effect": never_returns}
+        )
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_METADATA_TIMEOUT", 0.01),
+            patch.object(manager, "_discover_oauth_metadata_for_server", **discovery_patch),
+        ):
+            if not serves_without_endpoints:
+                with pytest.raises(HTTPException) as exc:
+                    await manager.ensure_oauth_metadata_discovered(server)
+                assert exc.value.status_code == 503
+                return
+
+            resolved = await manager.ensure_oauth_metadata_discovered(server)
+
+        assert resolved is manager.config_mcp_servers[server.server_id]
+        assert resolved.authorization_url is None
+        assert resolved.token_url is None
+        assert manager._oauth_discovery_slot(server.server_id) is not None
+
+    @pytest.mark.parametrize(
+        "auth_type, serves_the_listing",
+        [(MCPAuth.true_passthrough, True), (MCPAuth.oauth_delegate, True), (MCPAuth.oauth2, False)],
+    )
+    @pytest.mark.asyncio
+    async def test_listing_leg_serves_a_forwarding_server_whose_discovery_failed(
+        self, auth_type: MCPAuthType, serves_the_listing: bool
+    ):
+        """The listing leg is where the 503 became an empty tool list, so pin the fix there too.
+
+        ``_get_tools_from_server`` is the per-server leg the aggregate absorbs: a failure here is what
+        the fan-out turns into HTTP 200 with ``tools: []``, which is why the outage carried no
+        diagnostic. A forwarding server must now reach its upstream, and a gateway-run flow must still
+        surface the fault rather than be silently listed as empty.
+        """
+        manager = MCPServerManager()
+        server = await self._registered(manager, auth_type, None)
+        manager._set_oauth_discovery_deferred(server.server_id, True)
+        manager._fetch_tools_with_timeout = AsyncMock(
+            return_value=[MCPTool(name="list_reports", description="d", inputSchema={"type": "object"})]
+        )
+
+        with patch.object(manager, "_discover_oauth_metadata_for_server", new=AsyncMock(return_value=None)):
+            if not serves_the_listing:
+                with pytest.raises(MCPServerListError):
+                    await manager._get_tools_from_server(server=server)
+                return
+            tools = await manager._get_tools_from_server(server=server)
+
+        assert [tool.name for tool in tools] == ["upstream-list_reports"]
+        manager._fetch_tools_with_timeout.assert_awaited_once()
+
+    @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+    @pytest.mark.asyncio
+    async def test_client_forwarded_servers_keep_discovering_their_front_door_endpoints(
+        self, auth_type: MCPAuthType
+    ):
+        """Exempting these modes from the FAILURE must not exempt them from discovery itself.
+
+        ``/authorize``, ``/token`` and ``/register`` read the discovered endpoints for these servers
+        (``_resolve_ephemeral_dcr_client`` mints for ``true_passthrough`` whatever ``dcr_bridge``
+        says), so an exemption written into the unresolved-endpoints predicate would disarm the slot
+        and silently drop a working front door.
+        """
+        manager = MCPServerManager()
+        metadata: Final = MCPOAuthMetadata(
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            registration_url="https://idp.example.com/register",
+        )
+        with (
+            patch.object(manager, "_discover_oauth_metadata_for_server", new=AsyncMock(return_value=metadata)),
+            patch.object(manager, "initialize_tool_name_to_mcp_server_name_mapping"),
+        ):
+            await manager.load_servers_from_config(self._config(auth_type, None))
+            server = next(iter(manager.config_mcp_servers.values()))
+            resolved = await manager.ensure_oauth_metadata_discovered(server)
+
+        assert resolved.authorization_url == "https://idp.example.com/authorize"
+        assert resolved.token_url == "https://idp.example.com/token"
+        assert resolved.registration_url == "https://idp.example.com/register"
+        assert manager.config_mcp_servers[server.server_id].authorization_url == "https://idp.example.com/authorize"
+        assert manager._oauth_discovery_slot(server.server_id) is None
