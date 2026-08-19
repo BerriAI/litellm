@@ -285,6 +285,23 @@ describe("ComplexityRouterConfig", () => {
     expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp"]);
   });
 
+  it("splits a comma-separated keyword entry into one keyword per token", async () => {
+    const user = userEvent.setup();
+    const onCustomTechnicalKeywordsChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        customTechnicalKeywords={[]}
+        onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
+    await user.type(within(keywordsSection).getByRole("combobox"), "udp, kafka ,terraform");
+    await user.click(await screen.findByText('Create "udp, kafka ,terraform"'));
+    expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp", "kafka", "terraform"]);
+  });
+
   it("should render an empty state when no keyword tier rules exist", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));

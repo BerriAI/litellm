@@ -445,7 +445,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <MultiSelect
             options={(customTechnicalKeywords ?? []).map((keyword) => ({ label: keyword, value: keyword }))}
             value={customTechnicalKeywords ?? []}
-            onValueChange={(keywords: string[]) => onCustomTechnicalKeywordsChange?.(keywords)}
+            onValueChange={(keywords: string[]) =>
+              onCustomTechnicalKeywordsChange?.(
+                Array.from(
+                  new Set(keywords.flatMap((keyword) => keyword.split(",").map((part) => part.trim())).filter(Boolean)),
+                ),
+              )
+            }
             placeholder="Type a keyword and press Enter"
             emptyText="Type to add a keyword"
             allowCustomValues
