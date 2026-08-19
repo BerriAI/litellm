@@ -539,7 +539,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
     _entries: Final = (
         ("first_api_call_start_time", _first_handoff),
         ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),
-        ("response_cost", None if _usage_to_lift is None else _usage_to_lift[1]),
+        ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
@@ -2322,6 +2322,9 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
+        # Auth and pass-through failures reach this hook with the raw request
+        # body unstripped, so only the logging object may supply this key.
+        request_data.pop("standard_logging_object", None)
         request_data.update(_failure_fields_to_lift(request_data))
 
         # Remove before callbacks iterate — not serialisable
