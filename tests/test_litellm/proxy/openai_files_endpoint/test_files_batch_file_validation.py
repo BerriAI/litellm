@@ -69,6 +69,12 @@ def test_no_cap_skips_size_check():
     assert check_batch_file_upload("batch.jsonl", content, None) is None
 
 
+@pytest.mark.parametrize("cap", [0, -3])
+def test_nonpositive_cap_disables_size_check(cap):
+    content = (VALID_LINE + b"\n") * 5000
+    assert check_batch_file_upload("batch.jsonl", content, cap) is None
+
+
 @pytest.mark.parametrize("content", [b"", b"\n\n", b"  \n\t\n"])
 def test_empty_file_rejected(content):
     assert check_batch_file_upload("batch.jsonl", content, None) == BatchFileEmpty()

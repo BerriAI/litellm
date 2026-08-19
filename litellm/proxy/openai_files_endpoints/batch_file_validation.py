@@ -108,7 +108,7 @@ def check_batch_file_upload(
 ) -> BatchFileValidationFailure | None:
     if filename is None or not filename.lower().endswith(".jsonl"):
         return BatchFileWrongExtension(filename=filename or "")
-    if max_batch_file_size_mb is not None:
+    if max_batch_file_size_mb is not None and max_batch_file_size_mb > 0:
         size_bytes: Final = _file_size_bytes(file_source)
         if size_bytes > max_batch_file_size_mb * _MB:
             return BatchFileTooLarge(size_bytes=size_bytes, limit_mb=max_batch_file_size_mb)
