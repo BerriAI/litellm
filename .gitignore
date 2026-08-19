@@ -3,7 +3,8 @@
 .venv-typecheck
 .venv_policy_test
 .env
-.claude
+.claude/settings*.json
+.claude/*.local.json
 .newenv
 newenv/*
 litellm/proxy/myenv/*
