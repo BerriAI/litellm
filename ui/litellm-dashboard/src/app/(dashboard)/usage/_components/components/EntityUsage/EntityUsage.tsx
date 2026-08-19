@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
+import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import type { EntityType } from "@/components/EntityUsageExport/types";
@@ -31,6 +32,7 @@ import {
   customerDailyActivityCall,
   organizationDailyActivityCall,
   tagDailyActivityCall,
+  teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
   userDailyActivityCall,
 } from "@/components/networking";
@@ -84,6 +86,7 @@ interface EntityUsageProps {
   entityList: EntityList[] | null;
   premiumUser: boolean;
   dateValue: DateRangePickerValue;
+  isOrgAdmin?: boolean;
 }
 
 const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
@@ -93,6 +96,12 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
   customer: customerDailyActivityCall,
   agent: agentDailyActivityCall,
   user: userDailyActivityCall,
+};
+
+// Single-shot endpoints returning the whole range in one response; entity types
+// without one fall back to page-draining the paginated endpoint.
+const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, (...args: any[]) => Promise<any>>> = {
+  team: teamDailyActivityAggregatedCall,
 };
 
 const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
@@ -107,6 +116,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityList,
   userRole,
   dateValue,
+  isOrgAdmin = false,
 }) => {
   const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -125,8 +135,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   }, [entityType, selectedTags]);
 
   const fetchFn = ENTITY_FETCH_FNS[entityType];
+  const aggregatedFetchFn = ENTITY_AGGREGATED_FETCH_FNS[entityType];
   const entityCapability = ENTITY_CAPABILITIES[entityType];
-  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability);
+  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability, isOrgAdmin);
   const showAgentBreakdown = entityType === "team" && hasCapability(userRole, "viewAgentUsage");
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
@@ -141,6 +152,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     fetchFn,
     args: [accessToken, startTime, endTime, entityFilterArg],
     enabled,
+    aggregatedFetchFn,
   });
 
   const spendData = spendDataRaw as unknown as EntitySpendData;
@@ -253,6 +265,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const getFilterPlaceholder = (entityType: string) => {
     return `Select ${entityType} to filter...`;
   };
+
+  const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
+    team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
+    user: (
+      <UserDropdown value={selectedTags[0] ?? null} onChange={(userId) => setSelectedTags(userId ? [userId] : [])} />
+    ),
+  };
+  const filterSlot = entityFilterSlots[entityType];
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
@@ -679,16 +699,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
-        showFilters={entityType !== "team" && entityList !== null && entityList.length > 0}
-        filterSlot={
-          entityType === "team" ? <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} /> : undefined
-        }
-        filterLabel={entityType === "team" ? "Filter by team" : getFilterLabel(entityType)}
+        showFilters={filterSlot === undefined && entityList !== null && entityList.length > 0}
+        filterSlot={filterSlot}
+        filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
-        filterMode={entityType === "user" ? "single" : "multiple"}
         teams={teams || []}
       />
       <Tabs defaultValue={tabs[0].key}>

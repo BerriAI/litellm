@@ -11,7 +11,7 @@ import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { useBudgetList, useDeleteBudget, budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import BudgetModal from "./budget_modal";
 import BudgetTable from "./BudgetTable";
@@ -60,14 +60,10 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
     }
     try {
       await deleteBudget.mutateAsync(selectedBudget.budget_id);
-      NotificationsManager.success("Budget deleted.");
+      toast.success("Budget deleted.");
     } catch (error) {
       console.error("Error deleting budget:", error);
-      if (typeof NotificationsManager.fromBackend === "function") {
-        NotificationsManager.fromBackend("Failed to delete budget");
-      } else {
-        NotificationsManager.info("Failed to delete budget");
-      }
+      toast.fromError("Failed to delete budget");
     } finally {
       setIsDeleteModalVisible(false);
       setSelectedBudget(null);

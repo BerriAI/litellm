@@ -26,6 +26,7 @@ def _dev_env_hot_reload_enabled() -> bool:
 if os.getenv("LITELLM_MODE", "DEV") == "DEV":
     _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
+from collections.abc import Sequence
 from typing import (
     Any,
     Callable,
@@ -216,6 +217,9 @@ add_user_information_to_llm_headers: Optional[bool] = (
 )
 overwrite_user_with_key_hash: bool = (
     False  # force the outgoing `user` param to the hashed api key, so providers see a stable, tamper-proof id
+)
+bedrock_request_metadata_fields: Optional[Sequence[str]] = (
+    None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
 )
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 skip_system_message_in_guardrail: bool = False
@@ -788,6 +792,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             nlp_cloud_models.add(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             aleph_alpha_models.add(key)
+        elif value.get("litellm_provider") == "bedrock" and value.get("mode") == "guardrail":
+            pass
         elif value.get("litellm_provider") == "bedrock" and not is_bedrock_pricing_only_model(key):
             bedrock_models.add(key)
         elif value.get("litellm_provider") == "bedrock_converse":

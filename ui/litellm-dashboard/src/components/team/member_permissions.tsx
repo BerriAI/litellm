@@ -5,7 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RotateCw, Save } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getPermissionInfo } from "./permission_definitions";
 
 interface MemberPermissionsProps {
@@ -32,7 +32,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
       setSelectedPermissions(teamPermissions);
       setHasChanges(false);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to load permissions");
+      toast.fromError("Failed to load permissions");
       console.error("Error fetching permissions:", error);
     } finally {
       setLoading(false);
@@ -56,10 +56,10 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
       if (!accessToken) return;
       setSaving(true);
       await teamPermissionsUpdateCall(accessToken, teamId, selectedPermissions);
-      NotificationsManager.success("Permissions updated successfully");
+      toast.success("Permissions updated successfully");
       setHasChanges(false);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update permissions");
+      toast.fromError("Failed to update permissions");
       console.error("Error updating permissions:", error);
     } finally {
       setSaving(false);

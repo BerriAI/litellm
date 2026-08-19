@@ -45,6 +45,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
@@ -1029,12 +1030,16 @@ async def list_passthrough_ids_from_db(
     if resource_kind is None:
         return None
 
+    raw_limit, fetch_limit = _parse_list_limit(query_params)
+    if resource_kind == "batches":
+        validate_batch_list_limit(raw_limit)
+        if raw_limit == 0:
+            return _empty_list_response()
+
     owner_filter: Final = build_owner_filter(user_api_key_dict)
     if owner_filter is None:
         verbose_proxy_logger.warning("managed_id_rewriter: list denied — caller has no user_id or team_id")
         return _empty_list_response()
-
-    raw_limit, fetch_limit = _parse_list_limit(query_params)
     where, fetch_order = await _build_list_where_with_cursor(
         prisma_client, resource_kind, provider, owner_filter, query_params
     )

@@ -79,7 +79,7 @@ test.describe("Proxy Admin - Teams", () => {
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
     // The email field is a Select — type to search, then select from dropdown
-    await modal.locator(".ant-select").first().click();
+    await modal.getByRole("combobox").first().click();
     await page.keyboard.type("invitable@test.local");
 
     // Wait for the option to appear, then select via keyboard (avoids viewport issues)

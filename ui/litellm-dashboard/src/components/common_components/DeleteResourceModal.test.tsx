@@ -118,7 +118,7 @@ describe("DeleteResourceModal", () => {
     const input = screen.getByPlaceholderText("DELETE");
     await user.type(input, "DELETE");
     const deleteButton = screen.getByRole("button", { name: /delete/i });
-    expect(deleteButton).not.toBeDisabled();
+    expect(deleteButton).toBeEnabled();
   });
 
   it("should reset requiredConfirmation input when modal opens", async () => {

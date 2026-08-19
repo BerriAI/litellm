@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { ChevronDown } from "lucide-react";
-import { Modal, Form } from "antd";
+import { Modal } from "antd";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -66,8 +66,6 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   const [models, setModels] = useState<string[]>([]);
   const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
-  const [form] = Form.useForm();
-  const [marginForm] = Form.useForm();
 
   const isProxyAdmin = userRole === "proxy_admin" || userRole === "Admin";
 
@@ -118,13 +116,8 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
 
   const handleModalCancel = () => {
     setIsModalVisible(false);
-    form.resetFields();
     setSelectedProvider(undefined);
     setNewDiscount("");
-  };
-
-  const handleFormSubmit = () => {
-    handleAddProvider();
   };
 
   const handleRemoveProvider = (provider: string, providerDisplayName: string) => {
@@ -164,7 +157,6 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
 
   const handleMarginModalCancel = () => {
     setIsMarginModalVisible(false);
-    marginForm.resetFields();
     setSelectedMarginProvider(undefined);
     setPercentageValue("");
     setFixedAmountValue("");
@@ -356,7 +348,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             Select a provider and set its discount percentage. Enter a value between 0% and 100% (e.g., 5 for a 5%
             discount).
           </p>
-          <Form form={form} onFinish={handleFormSubmit} layout="vertical" className="space-y-6">
+          <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
             <AddProviderForm
               discountConfig={discountConfig}
               selectedProvider={selectedProvider}
@@ -365,7 +357,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
               onDiscountChange={setNewDiscount}
               onAddProvider={handleAddProvider}
             />
-          </Form>
+          </form>
         </div>
       </Modal>
 
@@ -390,7 +382,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             Select a provider (or &quot;Global&quot; for all providers) and configure the margin. You can use
             percentage-based or fixed amount.
           </p>
-          <Form form={marginForm} layout="vertical" className="space-y-6">
+          <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
             <AddMarginForm
               marginConfig={marginConfig}
               selectedProvider={selectedMarginProvider}
@@ -403,7 +395,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
               onFixedAmountChange={setFixedAmountValue}
               onAddProvider={handleAddMargin}
             />
-          </Form>
+          </form>
         </div>
       </Modal>
     </div>

@@ -25,6 +25,6 @@ describe("LitellmModelNameField", () => {
       </Form>,
     );
     expect(getByPlaceholderText("my-deployment")).toBeInTheDocument();
-    expect(queryByPlaceholderText("gpt-3.5-turbo")).toBeNull();
+    expect(queryByPlaceholderText("gpt-3.5-turbo")).not.toBeInTheDocument();
   });
 });

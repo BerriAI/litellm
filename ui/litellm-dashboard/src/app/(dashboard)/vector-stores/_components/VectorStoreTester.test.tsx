@@ -5,26 +5,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { vectorStoreSearchCall } from "@/components/networking";
 
 import { VectorStoreTester } from "./VectorStoreTester";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   vectorStoreSearchCall: vi.fn(),
 }));
 
-const mockWarning = vi.fn();
-vi.mock("@/components/molecules/message_manager", () => ({
-  __esModule: true,
-  default: { warning: (...args: unknown[]) => mockWarning(...args) },
-}));
-
-const mockFromBackend = vi.fn();
-const mockSuccess = vi.fn();
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: {
-    fromBackend: (...args: unknown[]) => mockFromBackend(...args),
-    success: (...args: unknown[]) => mockSuccess(...args),
-  },
-}));
+const mockWarning = vi.mocked(toast.warning);
+const mockFromBackend = vi.mocked(toast.fromError);
 
 const mockSearch = vi.mocked(vectorStoreSearchCall);
 

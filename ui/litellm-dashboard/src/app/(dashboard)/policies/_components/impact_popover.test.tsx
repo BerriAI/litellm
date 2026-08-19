@@ -30,16 +30,6 @@ vi.mock("@heroicons/react/outline", () => ({
   },
 }));
 
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Icon: React.forwardRef<HTMLButtonElement, LegacyIconProps>(({ icon: _icon, ...props }, ref) => (
-      <button ref={ref} type="button" {...props} />
-    )),
-  };
-});
-
 vi.mock("antd", async (importOriginal) => {
   const actual = await importOriginal<typeof import("antd")>();
   return {

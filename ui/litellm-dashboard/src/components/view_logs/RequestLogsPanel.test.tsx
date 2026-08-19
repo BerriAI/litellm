@@ -210,15 +210,16 @@ describe("RequestLogsPanel", () => {
       await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
       await user.click(await screen.findByRole("button", { name: "Last 15 Minutes" }));
 
-      await waitFor(() => {
+      const windowSeconds = () => {
         const call = lastCall();
         if (!call) throw new Error("no call");
-        const diff = moment
+        return moment
           .utc(call.end_date, "YYYY-MM-DD HH:mm:ss")
           .diff(moment.utc(call.start_date, "YYYY-MM-DD HH:mm:ss"), "seconds");
-        expect(diff).toBeGreaterThanOrEqual(15 * 60);
-        expect(diff).toBeLessThanOrEqual(16 * 60);
-      });
+      };
+
+      await waitFor(() => expect(windowSeconds()).toBeGreaterThanOrEqual(15 * 60));
+      expect(windowSeconds()).toBeLessThanOrEqual(16 * 60);
     });
 
     it("restores the default 24 hour window when filters are reset", async () => {
@@ -228,7 +229,7 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
       await user.click(await screen.findByRole("button", { name: "Last 15 Minutes" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: /Last 15 Minutes/i })).toBeInTheDocument());
+      expect(await screen.findByRole("button", { name: /Last 15 Minutes/i })).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Reset Filters" }));
 
@@ -262,8 +263,8 @@ describe("RequestLogsPanel", () => {
       expect(historyModes()).toEqual(["push"]);
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-1");
       });
+      expect(drawer()).toHaveAttribute("data-log-id", "req-1");
     });
 
     it("opens the drawer on load when ?log_id= matches a log in the loaded page", async () => {
@@ -272,8 +273,8 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-2");
       });
+      expect(drawer()).toHaveAttribute("data-log-id", "req-2");
     });
 
     it("fetches the log by request_id and opens the drawer when it is not in the loaded page", async () => {
@@ -286,8 +287,8 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-old");
       });
+      expect(drawer()).toHaveAttribute("data-log-id", "req-old");
 
       const byIdCall = vi
         .mocked(uiSpendLogsCall)
@@ -344,8 +345,8 @@ describe("RequestLogsPanel", () => {
       expect(historyModes()).toEqual(["push"]);
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-session-id", "sess-solo");
       });
+      expect(drawer()).toHaveAttribute("data-session-id", "sess-solo");
     });
 
     it("clicking a log row clears a lingering ?session_id= so the drawer shows the clicked log", async () => {
@@ -366,8 +367,8 @@ describe("RequestLogsPanel", () => {
       expect(urlParams().get("session_id")).toBeNull();
       await waitFor(() => {
         expect(drawer()).toHaveAttribute("data-log-id", "req-b");
-        expect(drawer()).toHaveAttribute("data-session-id", "");
       });
+      expect(drawer()).toHaveAttribute("data-session-id", "");
     });
 
     it("closing a drawer opened via a session id clears both params", async () => {
@@ -394,9 +395,9 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-llm");
-        expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
       });
+      expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
+      expect(drawer()).toHaveAttribute("data-log-id", "req-llm");
     });
 
     it("clicking a multi-call session's row writes ?session_id= alongside ?log_id=", async () => {
@@ -442,7 +443,7 @@ describe("RequestLogsPanel", () => {
 
       await user.click(screen.getByRole("button", { name: "Stop" }));
 
-      expect(screen.queryByText("Auto-refreshing every 15 seconds")).toBeNull();
+      expect(screen.queryByText("Auto-refreshing every 15 seconds")).not.toBeInTheDocument();
     });
   });
 });

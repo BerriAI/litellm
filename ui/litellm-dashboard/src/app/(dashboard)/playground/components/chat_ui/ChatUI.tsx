@@ -28,7 +28,7 @@ import PolicySelector from "@/components/policies/PolicySelector";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "@/components/mcp_tools/MCPToolArgumentsForm";
 import { MCPServer } from "@/components/mcp_tools/types";
 import { ByokCredentialModal } from "@/components/mcp_tools/ByokCredentialModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools } from "@/components/networking";
 import { MCPTool, MCPToolset } from "@/components/mcp_tools/types";
 import TagSelector from "@/components/tag_management/TagSelector";
@@ -82,6 +82,11 @@ import {
   validateChatAttachment,
   validateImageEditFile,
 } from "./uploadValidation";
+
+const SDK_ITEMS = [
+  { value: "openai", label: "OpenAI SDK" },
+  { value: "azure", label: "Azure SDK" },
+] as const;
 
 interface ChatUIProps {
   accessToken: string | null;
@@ -512,7 +517,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       setIsLoading(false);
-      NotificationsManager.info("Request cancelled");
+      toast.info("Request cancelled");
     }
   };
 
@@ -528,7 +533,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     for (const file of files) {
       const result = validateImageEditFile(file, nextCount);
       if (!result.ok) {
-        NotificationsManager.error(result.error);
+        toast.error(result.error);
         continue;
       }
       accepted.push(file);
@@ -565,7 +570,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const handleResponsesImageUpload = (file: File): void => {
     const result = validateChatAttachment(file);
     if (!result.ok) {
-      NotificationsManager.error(result.error);
+      toast.error(result.error);
       return;
     }
     setResponsesUploadedImage(file);
@@ -583,7 +588,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const handleChatImageUpload = (file: File): void => {
     const result = validateChatAttachment(file);
     if (!result.ok) {
-      NotificationsManager.error(result.error);
+      toast.error(result.error);
       return;
     }
     setChatUploadedImage(file);
@@ -601,7 +606,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const handleAudioUpload = (file: File): void => {
     const result = validateAudioFile(file);
     if (!result.ok) {
-      NotificationsManager.error(result.error);
+      toast.error(result.error);
       return;
     }
     setUploadedAudio(file);
@@ -706,19 +711,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     // For image edits, require both image and prompt
     if (endpointType === EndpointType.IMAGE_EDITS && uploadedImages.length === 0) {
-      NotificationsManager.fromBackend("Please upload at least one image for editing");
+      toast.fromError("Please upload at least one image for editing");
       return;
     }
 
     // For audio transcriptions, require audio file
     if (endpointType === EndpointType.TRANSCRIPTION && !uploadedAudio) {
-      NotificationsManager.fromBackend("Please upload an audio file for transcription");
+      toast.fromError("Please upload an audio file for transcription");
       return;
     }
 
     // For A2A agents, require agent selection
     if (endpointType === EndpointType.A2A_AGENTS && !selectedAgent) {
-      NotificationsManager.fromBackend("Please select an agent to send a message");
+      toast.fromError("Please select an agent to send a message");
       return;
     }
 
@@ -728,11 +733,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
       const rawSelected =
         selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__" ? selectedMCPServers[0] : null;
       if (!rawSelected) {
-        NotificationsManager.fromBackend("Please select an MCP server to test");
+        toast.fromError("Please select an MCP server to test");
         return;
       }
       if (!selectedMCPDirectTool) {
-        NotificationsManager.fromBackend("Please select an MCP tool to call");
+        toast.fromError("Please select an MCP tool to call");
         return;
       }
       // For toolsets, find the tool in the servers that back this toolset
@@ -750,13 +755,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }
       const mcpTool = searchPool.find((t: any) => t.name === selectedMCPDirectTool);
       if (!mcpTool) {
-        NotificationsManager.fromBackend("Please wait for tool schema to load");
+        toast.fromError("Please wait for tool schema to load");
         return;
       }
       try {
         mcpToolArguments = (await mcpToolArgsFormRef.current?.getSubmitValues()) ?? {};
       } catch (err) {
-        NotificationsManager.fromBackend(err instanceof Error ? err.message : "Please fill in all required parameters");
+        toast.fromError(err instanceof Error ? err.message : "Please fill in all required parameters");
         return;
       }
     }
@@ -775,7 +780,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     ];
 
     if (modelRequiredEndpoints.includes(endpointType as EndpointType) && !selectedModel) {
-      NotificationsManager.fromBackend("Please select a model before sending a request");
+      toast.fromError("Please select a model before sending a request");
       return;
     }
 
@@ -786,7 +791,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const effectiveApiKey = simplified ? accessToken : apiKeySource === "session" ? accessToken : apiKey;
 
     if (!effectiveApiKey) {
-      NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
+      toast.fromError("Please provide a Virtual Key or select Current UI Session");
       return;
     }
 
@@ -802,7 +807,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       try {
         newUserMessage = await createMultimodalMessage(inputMessage, responsesUploadedImage);
       } catch (error) {
-        NotificationsManager.fromBackend("Failed to process image. Please try again.");
+        toast.fromError("Failed to process image. Please try again.");
         return;
       }
     }
@@ -811,7 +816,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       try {
         newUserMessage = await createChatMultimodalMessage(inputMessage, chatUploadedImage);
       } catch (error) {
-        NotificationsManager.fromBackend("Failed to process image. Please try again.");
+        toast.fromError("Failed to process image. Please try again.");
         return;
       }
     } else {
@@ -1139,7 +1144,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     handleRemoveResponsesImage();
     handleRemoveChatImage();
     handleRemoveAudio();
-    NotificationsManager.success("Chat history cleared.");
+    toast.success("Chat history cleared.");
   };
 
   const onModelChange = (value: string) => {
@@ -1314,7 +1319,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <Volume2 className="mr-2 size-4" aria-hidden="true" />
                         Voice
                       </label>
-                      <ShadcnSelect value={selectedVoice} onValueChange={handleVoiceChange}>
+                      <ShadcnSelect
+                        items={OPEN_AI_VOICE_SELECT_OPTIONS}
+                        value={selectedVoice}
+                        onValueChange={handleVoiceChange}
+                      >
                         <SelectTrigger className="w-full" size="sm" aria-label="Voice">
                           <SelectValue />
                         </SelectTrigger>
@@ -2028,7 +2037,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             onToggle={() => {
                               codeInterpreter.toggle();
                               if (!codeInterpreter.enabled) {
-                                NotificationsManager.success("Code Interpreter enabled!");
+                                toast.success("Code Interpreter enabled!");
                               }
                             }}
                           />
@@ -2082,13 +2091,20 @@ const ChatUI: React.FC<ChatUIProps> = ({
           <div className="my-2 flex items-end justify-between gap-3">
             <div>
               <p className="mb-1 text-sm font-medium text-gray-700">SDK Type</p>
-              <ShadcnSelect value={selectedSdk} onValueChange={(value) => setSelectedSdk(value as "openai" | "azure")}>
+              <ShadcnSelect
+                items={SDK_ITEMS}
+                value={selectedSdk}
+                onValueChange={(value) => setSelectedSdk(value as "openai" | "azure")}
+              >
                 <SelectTrigger className="w-[150px]" size="sm" aria-label="SDK Type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="openai">OpenAI SDK</SelectItem>
-                  <SelectItem value="azure">Azure SDK</SelectItem>
+                  {SDK_ITEMS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </ShadcnSelect>
             </div>
@@ -2098,8 +2114,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
               size="sm"
               onClick={() => {
                 void navigator.clipboard.writeText(generatedCode).then(
-                  () => NotificationsManager.success("Copied to clipboard!"),
-                  () => NotificationsManager.error("Unable to copy to clipboard"),
+                  () => toast.success("Copied to clipboard!"),
+                  () => toast.error("Unable to copy to clipboard"),
                 );
               }}
             >

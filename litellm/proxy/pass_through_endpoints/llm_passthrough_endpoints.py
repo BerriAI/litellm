@@ -9,7 +9,8 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
-from typing import Any, Final, cast
+from types import MappingProxyType
+from typing import Annotated, Any, Final, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -27,7 +28,7 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_websocket
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -49,7 +50,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
 )
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import get_secret_str, str_to_bool
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -1015,15 +1016,21 @@ async def bedrock_proxy_route(
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
     aws_region_name: Final = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
-    if _is_bedrock_agent_runtime_route(endpoint=endpoint):  # handle bedrock agents
-        base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
-    else:
+    if not _is_bedrock_agent_runtime_route(endpoint=endpoint):
         return await bedrock_llm_proxy_route(
             endpoint=endpoint,
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
         )
+
+    if _is_bedrock_agent_runtime_passthrough_disabled():
+        raise HTTPException(
+            status_code=403,
+            detail="bedrock-agent-runtime pass-through is disabled on this proxy.",
+        )
+
+    base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -1077,6 +1084,130 @@ async def bedrock_proxy_route(
     )
 
     return received_value
+
+
+COMPREHEND_MEDICAL_TARGET_PREFIX: Final = "ComprehendMedical_20181030"
+
+
+def _resolve_comprehend_medical_region() -> str | None:
+    region_candidates: Final = (
+        get_secret_str(secret_name="AWS_REGION_NAME"),
+        get_secret_str(secret_name="AWS_REGION"),
+        get_secret_str(secret_name="AWS_DEFAULT_REGION"),
+    )
+    return next((region for region in region_candidates if region), None)
+
+
+@router.post(
+    "/comprehendmedical/{operation}",
+    tags=["AWS Comprehend Medical Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def comprehend_medical_proxy_route(
+    operation: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Pass-through for Amazon Comprehend Medical, e.g. `POST /comprehendmedical/DetectEntitiesV2`.
+
+    The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
+    using the proxy's AWS credentials.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+    """
+    try:
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+        from botocore.credentials import Credentials
+    except ImportError:
+        raise ImportError("Missing boto3 to call comprehendmedical. Run 'pip install boto3'.")
+
+    from .llm_provider_handlers.comprehend_medical_passthrough_logging_handler import (
+        COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS,
+    )
+
+    if operation not in COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported Comprehend Medical operation: {operation}. "
+                f"Supported operations: {', '.join(sorted(COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS))}"
+            ),
+        )
+
+    aws_region_name: Final = _resolve_comprehend_medical_region()
+    if aws_region_name is None:
+        raise HTTPException(
+            status_code=400,
+            detail="AWS region not found. Set AWS_REGION_NAME in the proxy environment.",
+        )
+
+    try:
+        data: Final = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    if "stream" in data:
+        raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
+
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    credentials: Final[Credentials] = BaseAWSLLM().get_credentials(aws_region_name=aws_region_name)
+    sigv4: Final = SigV4Auth(credentials, "comprehendmedical", aws_region_name)
+    headers: Final = MappingProxyType(
+        {
+            "Content-Type": "application/x-amz-json-1.1",
+            "X-Amz-Target": f"{COMPREHEND_MEDICAL_TARGET_PREFIX}.{operation}",
+        }
+    )
+    target_url: Final = f"https://comprehendmedical.{aws_region_name}.amazonaws.com/"
+    _request: Final = AWSRequest(method="POST", url=target_url, data=json.dumps(data), headers=headers)
+    sigv4.add_auth(_request)
+    prepped: Final = _request.prepare()
+
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=operation,
+        target=str(prepped.url),
+        custom_headers=prepped.headers,
+        custom_llm_provider="comprehendmedical",
+    )
+    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepped.body)
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.post(
+    "/comprehendmedical",
+    tags=["AWS Comprehend Medical Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def comprehend_medical_sdk_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    AWS-SDK-shaped pass-through for Amazon Comprehend Medical: point the SDK's
+    `endpoint_url` at `/comprehendmedical` and the operation is read from the
+    `X-Amz-Target` header, per the AWS JSON 1.1 protocol.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
+    """
+    target_header: Final = request.headers.get("x-amz-target", "")
+    target_prefix, _, operation = target_header.partition(".")
+    if target_prefix != COMPREHEND_MEDICAL_TARGET_PREFIX or not operation:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Expected an X-Amz-Target header of the form {COMPREHEND_MEDICAL_TARGET_PREFIX}.<Operation>",
+        )
+    return await comprehend_medical_proxy_route(
+        operation=operation,
+        request=request,
+        fastapi_response=fastapi_response,
+        user_api_key_dict=user_api_key_dict,
+    )
 
 
 def _resolve_vertex_model_from_router(
@@ -1165,6 +1296,15 @@ def _is_bedrock_agent_runtime_route(endpoint: str) -> bool:
         if _route in endpoint:
             return True
     return False
+
+
+def _is_bedrock_agent_runtime_passthrough_disabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    setting: Final = general_settings.get("disable_bedrock_agent_runtime_passthrough")
+    if isinstance(setting, str):
+        return str_to_bool(setting) is True
+    return setting is True
 
 
 @router.api_route(
@@ -1972,6 +2112,104 @@ async def openai_proxy_route(
     )
 
 
+def _join_url_paths(base_url: httpx.URL, path: str, custom_llm_provider: litellm.LlmProviders) -> str:
+    """
+    Properly joins a base URL with a path, preserving any existing path in the base URL.
+    """
+    # Combine paths via the shared helper so any '..' in the path cannot
+    # climb above the configured base path.
+    joined_path_str = str(
+        base_url.copy_with(path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, path))
+    )
+
+    # Apply OpenAI-specific path handling for both branches
+    if custom_llm_provider == litellm.LlmProviders.OPENAI and "/v1/" not in joined_path_str:
+        # Insert v1 after api.openai.com for OpenAI requests
+        joined_path_str = joined_path_str.replace("api.openai.com/", "api.openai.com/v1/")
+
+    return joined_path_str
+
+
+_OPENAI_WS_ALL_MODEL_ACCESS: Final = frozenset(
+    {
+        SpecialModelNames.all_proxy_models.value,
+        SpecialModelNames.all_team_models.value,
+        "*",
+    }
+)
+
+
+def _key_has_model_restrictions(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    scoped_models: Final = (*user_api_key_dict.models, *user_api_key_dict.team_models)
+    return any(str(model) not in _OPENAI_WS_ALL_MODEL_ACCESS for model in scoped_models)
+
+
+@router.websocket("/openai_passthrough/{endpoint:path}")
+@router.websocket("/openai/{endpoint:path}")
+async def openai_websocket_proxy_route(
+    websocket: WebSocket,
+    endpoint: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
+) -> None:
+    """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
+    if _key_has_model_restrictions(user_api_key_dict):
+        await websocket.close(
+            code=1008,
+            reason="Keys with model restrictions cannot use OpenAI websocket passthrough",
+        )
+        return
+
+    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    openai_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.OPENAI.value,
+        region_name=None,
+    )
+    if openai_api_key is None:
+        await websocket.close(
+            code=1011,
+            reason="Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.",
+        )
+        return
+
+    raw_path: Final = httpx.URL(endpoint).path
+    encoded_endpoint: Final = raw_path if raw_path.startswith("/") else f"/{raw_path}"
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = _join_url_paths(
+        base_url=base_url,
+        path=encoded_endpoint,
+        custom_llm_provider=litellm.LlmProviders.OPENAI,
+    )
+    wss_base: Final = (
+        "wss://" + updated_url[len("https://") :]
+        if updated_url.startswith("https://")
+        else "ws://" + updated_url[len("http://") :]
+        if updated_url.startswith("http://")
+        else updated_url
+    )
+    query_string: Final = websocket.url.query
+    wss_target: Final = f"{wss_base}{'&' if '?' in wss_base else '?'}{query_string}" if query_string else wss_base
+    custom_headers: Final = {  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
+        "Authorization": f"Bearer {openai_api_key}"
+    }
+
+    requested_subprotocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+    await websocket.accept(subprotocol=requested_subprotocols[0] if requested_subprotocols else None)
+
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target=wss_target,
+        custom_headers=custom_headers,
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=websocket.url.path,
+        accept_websocket=False,
+    )
+
+
 class BaseOpenAIPassThroughHandler:
     @staticmethod
     async def _base_openai_pass_through_handler(
@@ -1991,7 +2229,7 @@ class BaseOpenAIPassThroughHandler:
 
         # Construct the full target URL by properly joining the base URL and endpoint path
         base_url: Final = httpx.URL(base_target_url)
-        updated_url: Final = BaseOpenAIPassThroughHandler._join_url_paths(
+        updated_url: Final = _join_url_paths(
             base_url=base_url,
             path=encoded_endpoint,
             custom_llm_provider=custom_llm_provider,
@@ -2049,24 +2287,6 @@ class BaseOpenAIPassThroughHandler:
             headers=base_headers,
             request=request,
         )
-
-    @staticmethod
-    def _join_url_paths(base_url: httpx.URL, path: str, custom_llm_provider: litellm.LlmProviders) -> str:
-        """
-        Properly joins a base URL with a path, preserving any existing path in the base URL.
-        """
-        # Combine paths via the shared helper so any '..' in the path cannot
-        # climb above the configured base path.
-        joined_path_str = str(
-            base_url.copy_with(path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, path))
-        )
-
-        # Apply OpenAI-specific path handling for both branches
-        if custom_llm_provider == litellm.LlmProviders.OPENAI and "/v1/" not in joined_path_str:
-            # Insert v1 after api.openai.com for OpenAI requests
-            joined_path_str = joined_path_str.replace("api.openai.com/", "api.openai.com/v1/")
-
-        return joined_path_str
 
 
 @router.api_route(

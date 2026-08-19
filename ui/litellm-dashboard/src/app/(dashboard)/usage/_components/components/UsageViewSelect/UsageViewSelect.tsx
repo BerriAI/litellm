@@ -19,6 +19,7 @@ export interface UsageViewSelectProps {
   onChange: (value: UsageOption) => void;
   userRole: string | null;
   canViewTagUsage?: boolean;
+  isOrgAdmin?: boolean;
   title?: string;
   description?: string;
   "data-id"?: string;
@@ -108,6 +109,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   onChange,
   userRole,
   canViewTagUsage = false,
+  isOrgAdmin = false,
   title = "Usage View",
   description = "Select the usage data you want to view",
   "data-id": dataId,
@@ -116,7 +118,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   const getFilteredOptions = () => {
     return OPTIONS.filter((option) => {
       if (option.capability) {
-        return hasCapability(userRole, option.capability);
+        return hasCapability(userRole, option.capability, isOrgAdmin);
       }
       if (option.value === "tag" && canViewTagUsage) {
         return true;
