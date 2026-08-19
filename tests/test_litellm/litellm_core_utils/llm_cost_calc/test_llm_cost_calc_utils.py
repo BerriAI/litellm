@@ -1358,6 +1358,40 @@ def test_string_cost_values():
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
+def test_generic_cost_per_token_overlapping_cached_and_image_tokens():
+    """Some providers report cached_tokens and image_tokens as overlapping subsets of
+    prompt_tokens. Billing each in full charged the overlap twice, once at the cache rate
+    and again at the input rate."""
+    model = "litellm-test-overlapping-cached-image"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "cache_read_input_token_cost": 1e-7,
+                "output_cost_per_token": 2e-6,
+            }
+        }
+    )
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=None, cached_tokens=90, image_tokens=80
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider="openai"
+    )
+
+    # 90 cached at 1e-7, the remaining 10 uncached tokens once at 1e-6
+    assert prompt_cost == pytest.approx(90 * 1e-7 + 10 * 1e-6)
+    assert completion_cost == pytest.approx(10 * 2e-6)
+
+
 def test_calculate_cost_component_with_string_values():
     """Test the calculate_cost_component function directly with string cost values."""
     from litellm.litellm_core_utils.llm_cost_calc.utils import calculate_cost_component
