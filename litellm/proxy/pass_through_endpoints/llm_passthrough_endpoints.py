@@ -24,7 +24,7 @@ from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, is_anthropic_oauth_key
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -601,7 +601,13 @@ async def anthropic_proxy_route(
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
-    auth_header: Final = AnthropicModelInfo.get_auth_header(anthropic_api_key or None)
+    # A client-forwarded Anthropic OAuth token (e.g. Claude Code Max subscription auth)
+    # must not be sent alongside a server-configured x-api-key: Anthropic authenticates
+    # off x-api-key when both are present, silently discarding the client's own identity.
+    client_forwards_own_oauth: Final = is_anthropic_oauth_key(request.headers.get("authorization"))
+    auth_header: Final = (
+        None if client_forwards_own_oauth else AnthropicModelInfo.get_auth_header(anthropic_api_key or None)
+    )
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
