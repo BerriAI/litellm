@@ -2443,6 +2443,43 @@ async def test_ProxyConfig__update_general_settings_updates_max_parallel(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_applies_db_max_batch_file_size_mb(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings({"max_batch_file_size_mb": 5})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("max_batch_file_size_mb") == 5
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_yaml_max_batch_file_size_mb_wins_over_db(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"max_batch_file_size_mb": 3},
+    )
+    pc = ProxyConfig()
+    pc._yaml_general_settings_keys = {"max_batch_file_size_mb"}
+    await pc._update_general_settings({"max_batch_file_size_mb": 5})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("max_batch_file_size_mb") == 3
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_cleared_db_max_batch_file_size_mb_lifts_cap(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"max_batch_file_size_mb": 8},
+    )
+    pc = ProxyConfig()
+    await pc._update_general_settings({"max_parallel_requests": 1})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("max_batch_file_size_mb") is None
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_none_input_noop():
     pc = ProxyConfig()
     # None input returns early.
