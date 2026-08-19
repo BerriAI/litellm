@@ -11,6 +11,7 @@ import {
   StatusBadge,
   type StatusTone,
 } from "@/components/shared/table_cells";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 const SCOPE_LABELS: Record<string, string> = {
   proxy: "Proxy",
@@ -36,6 +37,19 @@ const STATUS_ORDER: Record<string, number> = { exceeded: 0, ok: 1, unlimited: 2 
 
 export const severityRank = (entry: KeyBudgetEntry): number =>
   (STATUS_ORDER[entry.status] ?? STATUS_ORDER.unlimited) * 2 + (isAlertOnly(entry) ? 1 : 0);
+
+const COMPARISON_GLYPH: Record<string, string> = { ">=": "≥", ">": ">" };
+
+/**
+ * Scopes disagree on whether hitting the limit exactly is over it: team_member enforces `>=`
+ * so 50 of 50 is already denied, while team enforces `>` so 300 of 300 still passes. Two rows
+ * can therefore show identical numbers and opposite statuses, so state each row's real threshold.
+ */
+export const budgetThresholdRule = (entry: KeyBudgetEntry): string | null => {
+  if (entry.max_budget == null) return null;
+  const threshold = `${COMPARISON_GLYPH[entry.comparison] ?? entry.comparison} $${formatNumberWithCommas(entry.max_budget, 2)}`;
+  return isAlertOnly(entry) ? `Alerts at ${threshold}` : `Blocks at ${threshold}`;
+};
 
 const statusPresentation = (entry: KeyBudgetEntry): { tone: StatusTone; label: string } => {
   if (entry.status === "unlimited") return { tone: "neutral", label: "Unlimited" };
@@ -114,9 +128,15 @@ export const getKeyBudgetsTableColumns = (): ColumnDef<KeyBudgetEntry>[] => [
     header: "Spend / Limit",
     size: 200,
     enableSorting: false,
-    cell: ({ row }) => (
-      <SpendBudgetCell spend={row.original.spend} maxBudget={row.original.max_budget} budgetDecimals={2} />
-    ),
+    cell: ({ row }) => {
+      const rule = budgetThresholdRule(row.original);
+      return (
+        <div className="flex flex-col gap-0.5">
+          <SpendBudgetCell spend={row.original.spend} maxBudget={row.original.max_budget} budgetDecimals={2} />
+          {rule && <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{rule}</span>}
+        </div>
+      );
+    },
   },
   {
     id: "remaining",
@@ -138,6 +158,7 @@ export const getKeyBudgetsTableColumns = (): ColumnDef<KeyBudgetEntry>[] => [
         <StatusBadge
           tone={tone}
           label={label}
+          tooltip={budgetThresholdRule(row.original)}
           dataTestId={isBlockingRow(row.original) ? "key-budget-blocking" : undefined}
         />
       );

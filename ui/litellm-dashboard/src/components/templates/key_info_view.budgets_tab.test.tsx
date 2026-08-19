@@ -271,6 +271,52 @@ describe("KeyInfoView Budgets tab", () => {
     expect(softRow).toHaveTextContent("alert only");
   });
 
+  it("explains why two rows on identical numbers get opposite statuses", async () => {
+    const inclusive: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "team_member",
+      entity_type: "team_member",
+      entity_label: "alice @ Platform",
+      comparison: ">=",
+      max_budget: 300,
+      spend: 300,
+      remaining: 0,
+      status: "exceeded",
+    };
+    const exclusive: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "team",
+      entity_type: "team",
+      entity_label: "Platform",
+      comparison: ">",
+      max_budget: 300,
+      spend: 300,
+      remaining: 0,
+      status: "ok",
+    };
+    mockBudgets([inclusive, exclusive]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const blockedRow = rowFor(panel, "alice @ Platform");
+    const allowedRow = rowFor(panel, "Platform");
+
+    expect(blockedRow).toHaveTextContent("Blocks at ≥ $300.00");
+    expect(allowedRow).toHaveTextContent("Blocks at > $300.00");
+
+    expect(within(blockedRow).getByTestId("key-budget-blocking")).toBeInTheDocument();
+    expect(within(allowedRow).queryByTestId("key-budget-blocking")).not.toBeInTheDocument();
+    expect(within(allowedRow).getByText("Within budget")).toBeInTheDocument();
+
+    expect(blockedRow).toHaveTextContent("$300.0000 of $300.00");
+    expect(allowedRow).toHaveTextContent("$300.0000 of $300.00");
+  });
+
+  it("states no threshold for a scope with nothing configured", async () => {
+    const panel = await renderAndOpenBudgetsTab();
+
+    expect(rowFor(panel, "Acme Org")).not.toHaveTextContent("Blocks at");
+  });
+
   it("renders a scope with nothing configured as Unlimited rather than $0", async () => {
     const panel = await renderAndOpenBudgetsTab();
 
