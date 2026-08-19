@@ -2321,22 +2321,29 @@ class MCPServerManager:
             openapi_key_prefix: Final = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
             global_mcp_tool_registry.unregister_tools_with_prefix(openapi_key_prefix)
 
-        owned_raw: Final[set[str]] = set()
-        for p in iter_known_server_prefixes(server):
-            if p:
-                owned_raw.add(p)
-        if server.name:
-            owned_raw.add(server.name)
+        owned_normalized: Final = self._owned_mapping_values(server)
 
-        owned_normalized: Final = {normalize_server_name(x) for x in owned_raw}
-
-        stale_mapping_keys: Final[list[str]] = []
-        for tool_name, mapped_server in list(self.tool_name_to_mcp_server_name_mapping.items()):
-            if mapped_server in owned_raw or normalize_server_name(str(mapped_server)) in owned_normalized:
-                stale_mapping_keys.append(tool_name)
+        stale_mapping_keys: Final = tuple(
+            tool_name
+            for tool_name, mapped_server in self.tool_name_to_mcp_server_name_mapping.items()
+            if normalize_server_name(str(mapped_server)) in owned_normalized
+        )
 
         for key in stale_mapping_keys:
             del self.tool_name_to_mcp_server_name_mapping[key]
+
+    def _owned_mapping_values(self, server: MCPServer) -> frozenset[str]:
+        return frozenset(
+            normalize_server_name(value) for value in (*iter_known_server_prefixes(server), server.name) if value
+        )
+
+    def _server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
+        owned: Final = self._owned_mapping_values(server)
+        mapped_owners: Final = (
+            self.tool_name_to_mcp_server_name_mapping.get(spelling)
+            for spelling in iter_known_tool_name_spellings(tool_name, server)
+        )
+        return any(owner is not None and normalize_server_name(owner) in owned for owner in mapped_owners)
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
@@ -5463,13 +5470,8 @@ class MCPServerManager:
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
 
-        if resolved_by_server_name_only:
-            tool_known: Final = (
-                name in self.tool_name_to_mcp_server_name_mapping
-                or prefixed_tool_name in self.tool_name_to_mcp_server_name_mapping
-            )
-            if not tool_known:
-                raise ValueError(f"Tool {name} not found")
+        if resolved_by_server_name_only and not self._server_exposes_tool(mcp_server, name):
+            raise ValueError(f"Tool {name} not found")
 
         return mcp_server
 
@@ -5847,10 +5849,7 @@ class MCPServerManager:
         if matched is not None:
             matched_prefix, original_tool_name = matched
             matched_server: Final = prefix_to_server.get(matched_prefix)
-            if matched_server is not None and (
-                original_tool_name in self.tool_name_to_mcp_server_name_mapping
-                or tool_name in self.tool_name_to_mcp_server_name_mapping
-            ):
+            if matched_server is not None and self._server_exposes_tool(matched_server, original_tool_name):
                 return matched_server
 
         return None

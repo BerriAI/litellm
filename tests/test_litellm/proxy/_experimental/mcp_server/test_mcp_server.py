@@ -6406,7 +6406,7 @@ async def test_execute_mcp_tool_rest_server_id_injects_requested_server_credenti
     with (
         patch.dict(
             mcp_module.global_mcp_server_manager.tool_name_to_mcp_server_name_mapping,
-            {"echo": collision_server.name},
+            {"echo": collision_server.name, "echo_requested-echo": requested_server.name},
         ),
         patch.object(
             mcp_module.global_mcp_server_manager,
