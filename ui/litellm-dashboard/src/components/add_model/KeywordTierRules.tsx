@@ -1,4 +1,4 @@
-import { DeleteOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { Info, Plus, Trash2 } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Card, Empty, Select as AntdSelect, Typography } from "antd";
 import { Button } from "@/components/ui/button";
@@ -73,11 +73,11 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
             Keyword Tier Overrides
           </Typography.Title>
           <SimpleTooltip content="Match known terms and force the request straight to a chosen complexity tier, bypassing rule-based scoring.">
-            <InfoCircleOutlined className="text-gray-400" />
+            <Info className="size-4 text-gray-400" />
           </SimpleTooltip>
         </div>
         <Button variant="outline" onClick={addRule}>
-          <PlusOutlined />
+          <Plus />
           Add keyword rule
         </Button>
       </div>
@@ -139,7 +139,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
                   aria-label={`Remove keyword rule ${index + 1}`}
                   onClick={() => removeRule(rule.id)}
                 >
-                  <DeleteOutlined />
+                  <Trash2 />
                 </Button>
               </div>
             </Card>

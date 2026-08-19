@@ -1,9 +1,8 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { CircleHelp, TriangleAlert } from "lucide-react";
+import { Check, CircleHelp, Copy, RefreshCw, TriangleAlert } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -264,7 +263,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
               </Button>
               <CopyToClipboard text={regeneratedKey} onCopy={handleCopyKey}>
                 <Button>
-                  {copied ? <CheckOutlined /> : <CopyOutlined />}
+                  {copied ? <Check /> : <Copy />}
                   {copied ? "Copied" : "Copy Key"}
                 </Button>
               </CopyToClipboard>
@@ -275,7 +274,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
                 Cancel
               </Button>
               <Button onClick={handleRegenerateKey} disabled={isRegenerating} aria-busy={isRegenerating}>
-                <SyncOutlined />
+                <RefreshCw />
                 Regenerate
               </Button>
             </>

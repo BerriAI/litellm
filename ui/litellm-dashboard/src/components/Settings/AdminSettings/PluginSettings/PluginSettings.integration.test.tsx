@@ -62,7 +62,7 @@ describe("PluginSettings config payload", () => {
     render(<PluginSettings />);
     expect(await screen.findByText("Alpha")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "edit" }));
+    await user.click(screen.getByRole("button", { name: "Edit alpha" }));
     expect(await screen.findByLabelText(/Plugin Key/)).toHaveValue("");
 
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -88,7 +88,7 @@ describe("PluginSettings config payload", () => {
     render(<PluginSettings />);
     expect(await screen.findByText("Alpha")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "edit" }));
+    await user.click(screen.getByRole("button", { name: "Edit alpha" }));
     fireEvent.change(await screen.findByLabelText(/Plugin Key/), { target: { value: "sk-brand-new" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
@@ -119,7 +119,7 @@ describe("PluginSettings plugin key reveal (post-migration shadcn affordance)", 
     render(<PluginSettings />);
     expect(await screen.findByText("Alpha")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "edit" }));
+    await user.click(screen.getByRole("button", { name: "Edit alpha" }));
     const keyInput = await screen.findByLabelText(/Plugin Key/);
     expect(keyInput).toHaveAttribute("type", "password");
 

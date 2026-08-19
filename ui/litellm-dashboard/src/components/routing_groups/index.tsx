@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { Card, Flex, Input, Space, Typography } from "antd";
 import { Button } from "@/components/ui/button";
-import { PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { Plus, RefreshCw, Search } from "lucide-react";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
 import { useRouterFields } from "@/app/(dashboard)/hooks/router/useRouterFields";
 import { useModelHub } from "@/app/(dashboard)/hooks/models/useModels";
@@ -107,7 +107,7 @@ const RoutingGroups: React.FC = () => {
         <Flex justify="space-between" align="center" gap={12} className="mb-4">
           <Input
             allowClear
-            prefix={<SearchOutlined className="text-gray-400" />}
+            prefix={<Search className="text-gray-400" />}
             placeholder="Search groups..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -120,11 +120,11 @@ const RoutingGroups: React.FC = () => {
               disabled={isFetching && !isLoading}
               aria-busy={isFetching && !isLoading}
             >
-              <ReloadOutlined />
+              <RefreshCw />
               Refresh
             </Button>
             <Button onClick={openCreate}>
-              <PlusOutlined />
+              <Plus />
               Create Group
             </Button>
             <Text type="secondary" className="text-sm whitespace-nowrap">

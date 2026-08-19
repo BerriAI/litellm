@@ -5,15 +5,7 @@ import { Input, Switch } from "antd";
 import { toast } from "@/lib/toast";
 import { fetchClient } from "@/lib/http/api";
 import { ApiError } from "@/lib/http/client";
-import {
-  KeyOutlined,
-  LockOutlined,
-  CheckOutlined,
-  ArrowRightOutlined,
-  ArrowLeftOutlined,
-  CloseOutlined,
-  LinkOutlined,
-} from "@ant-design/icons";
+import { ArrowLeft, ArrowRight, Check, Key, Link2, Lock, X } from "lucide-react";
 import { MCPServer } from "./types";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 
@@ -84,7 +76,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 onClick={() => setStep(1)}
                 className="flex items-center gap-1 text-gray-500 hover:text-gray-800 text-sm"
               >
-                <ArrowLeftOutlined /> Back
+                <ArrowLeft className="size-3.5" /> Back
               </button>
             ) : (
               <div />
@@ -94,7 +86,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               <div className={`w-2 h-2 rounded-full ${step === 2 ? "bg-blue-500" : "bg-gray-300"}`} />
             </div>
             <button onClick={handleClose} className="text-gray-400 hover:text-gray-600">
-              <CloseOutlined />
+              <X className="size-4" />
             </button>
           </div>
 
@@ -105,7 +97,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 <div className="w-14 h-14 rounded-xl bg-linear-to-br from-teal-400 to-cyan-600 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                   L
                 </div>
-                <ArrowRightOutlined className="text-gray-400 text-lg" />
+                <ArrowRight className="size-4.5 text-gray-400" />
                 <div className="w-14 h-14 rounded-xl bg-linear-to-br from-blue-600 to-indigo-800 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                   {firstLetter}
                 </div>
@@ -148,7 +140,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                   <ul className="space-y-2">
                     {server.byok_description.map((item, i) => (
                       <li key={i} className="flex items-center gap-2 text-sm text-gray-700">
-                        <CheckOutlined className="text-green-500 shrink-0" />
+                        <Check className="size-3.5 shrink-0 text-green-500" />
                         {item}
                       </li>
                     ))}
@@ -160,7 +152,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 onClick={() => setStep(2)}
                 className="w-full bg-gray-900 hover:bg-gray-700 text-white font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
               >
-                Continue to Authentication <ArrowRightOutlined />
+                Continue to Authentication <ArrowRight className="size-4" />
               </button>
               <button onClick={handleClose} className="mt-3 w-full text-gray-400 hover:text-gray-600 text-sm py-2">
                 Cancel
@@ -170,7 +162,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
             <div>
               {/* Key icon */}
               <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center mb-4">
-                <KeyOutlined className="text-blue-400 text-xl" />
+                <Key className="size-5 text-blue-400" />
               </div>
 
               <h2 className="text-2xl font-bold text-gray-900 mb-2">Provide API Key</h2>
@@ -192,7 +184,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                     rel="noopener noreferrer"
                     className="text-blue-500 hover:text-blue-700 text-sm mt-2 flex items-center gap-1"
                   >
-                    Where do I find my API key? <LinkOutlined />
+                    Where do I find my API key? <Link2 className="size-3.5" />
                   </a>
                 )}
               </div>
@@ -213,7 +205,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
 
               {/* Security note */}
               <div className="bg-blue-50 rounded-xl p-4 flex items-start gap-3 mb-6">
-                <LockOutlined className="text-blue-400 mt-0.5 shrink-0" />
+                <Lock className="mt-0.5 size-4 shrink-0 text-blue-400" />
                 <p className="text-sm text-blue-700">
                   Your key is stored securely and transmitted over HTTPS. It is never shared with third parties.
                 </p>
@@ -224,7 +216,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 disabled={loading}
                 className="w-full bg-blue-500 hover:bg-blue-600 disabled:opacity-60 text-white font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
               >
-                <LockOutlined /> Connect &amp; Authorize
+                <Lock className="size-4" /> Connect &amp; Authorize
               </button>
             </div>
           )}

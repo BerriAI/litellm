@@ -1,4 +1,4 @@
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Select as AntdSelect, Card, InputNumber, Radio, Space, Switch, Typography } from "antd";
 import React from "react";
@@ -303,7 +303,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             <div className="flex items-center gap-2 mb-1">
               <Text strong>Classification Rubric</Text>
               <SimpleTooltip content="Every rubric uses the same four tiers and the same tier definitions. They differ only in the worked examples that show the classifier where the boundary between tiers sits.">
-                <InfoCircleOutlined className="text-gray-400" />
+                <Info className="size-4 text-gray-400" />
               </SimpleTooltip>
             </div>
             <SimpleTooltip
@@ -413,7 +413,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               />
               <Text strong>Include Assistant Turns</Text>
               <SimpleTooltip content="Off by default. Enabling it changes tier decisions, and therefore spend, for an existing router, and sends assistant text to the classifier model, which may be a different provider than the routed model.">
-                <InfoCircleOutlined className="text-gray-400" />
+                <Info className="size-4 text-gray-400" />
               </SimpleTooltip>
             </div>
             <Text type="secondary" style={{ fontSize: 12 }}>
@@ -431,7 +431,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <div className="flex items-center gap-2 mb-1">
             <Text strong>Custom Technical Keywords</Text>
             <SimpleTooltip content="Domain-specific terms appended to the built-in technical keyword list. Prompts containing these terms score higher on the technical dimension and route to more capable models.">
-              <InfoCircleOutlined className="text-gray-400" />
+              <Info className="size-4 text-gray-400" />
             </SimpleTooltip>
           </div>
           <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>

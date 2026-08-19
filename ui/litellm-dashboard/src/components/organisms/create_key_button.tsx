@@ -7,14 +7,13 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/shared/form/field";
 import { Input as AntdInput, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Info } from "lucide-react";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -647,7 +646,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     <span>
                       Owned By{" "}
                       <Tooltip title="Select who will own this Virtual Key">
-                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        <Info className="ml-1 inline size-3.5 align-text-bottom" />
                       </Tooltip>
                     </span>
                   </FieldLabel>
@@ -667,7 +666,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <span>
                         User ID{" "}
                         <Tooltip title="The user who will own this key and be responsible for its usage">
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
                         </Tooltip>
                       </span>
                     }
@@ -740,7 +739,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     <span>
                       Organization{" "}
                       <Tooltip title="The organization this key belongs to. Selecting an organization filters the available teams.">
-                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        <Info className="ml-1 inline size-3.5 align-text-bottom" />
                       </Tooltip>
                     </span>
                   }
@@ -763,7 +762,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     <span>
                       Team{" "}
                       <Tooltip title="The team this key belongs to, which determines available models and budget limits">
-                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        <Info className="ml-1 inline size-3.5 align-text-bottom" />
                       </Tooltip>
                     </span>
                   }
@@ -790,7 +789,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <span>
                         Project{" "}
                         <Tooltip title="Assign this key to a project. Selecting a project will lock the team to the project's team.">
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
                         </Tooltip>
                       </span>
                     }
@@ -836,7 +835,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               : "Unique identifier for this service account"
                           }
                         >
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
                         </Tooltip>
                       </span>
                     }
@@ -856,7 +855,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <span>
                         Models{" "}
                         <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team. Leave empty to allow access to all models.">
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
                         </Tooltip>
                       </span>
                     }
@@ -909,7 +908,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <span>
                         Key Type{" "}
                         <Tooltip title="Select the type of key to determine what routes and operations this key can access">
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
                         </Tooltip>
                       </span>
                     }
@@ -972,7 +971,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Max Budget (USD){" "}
                             <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -999,7 +998,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Reset Budget{" "}
                             <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -1021,7 +1020,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Budget Windows{" "}
                             <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         </FieldLabel>
@@ -1032,7 +1031,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Budget Fallbacks{" "}
                             <Tooltip title="When a model exceeds its per-model budget (model_max_budget), requests automatically reroute to fallback models instead of failing. Configure per-model budgets in Advanced Settings.">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         </FieldLabel>
@@ -1049,7 +1048,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Tokens per minute Limit (TPM){" "}
                             <Tooltip title="Maximum number of tokens this key can process per minute. Helps control usage and costs">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -1090,7 +1089,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Requests per minute Limit (RPM){" "}
                             <Tooltip title="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -1130,7 +1129,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Per-Tag Rate Limits{" "}
                             <Tooltip title="Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         </FieldLabel>
@@ -1142,7 +1141,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Throttle on budget exceeded{" "}
                             <Tooltip title="When this key exceeds its max budget, throttle its TPM/RPM to the globally configured percentage instead of blocking access entirely. Requires budget_exceeded_throttle_percentage in litellm_settings and a TPM/RPM limit on the key.">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -1164,7 +1163,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Enable Prompt Caching{" "}
                             <Tooltip title="Automatically add prompt caching breakpoints (cache_control markers) to requests made with this key, cutting input cost on repeated prompts. Applies to Anthropic and Bedrock Claude models; requests that already set their own cache_control markers are left untouched.">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -1191,7 +1190,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 rel="noopener noreferrer"
                                 onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
                               >
-                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
                               </a>
                             </Tooltip>
                           </span>
@@ -1231,7 +1230,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 rel="noopener noreferrer"
                                 onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
                               >
-                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
                               </a>
                             </Tooltip>
                           </span>
@@ -1267,7 +1266,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                   rel="noopener noreferrer"
                                   onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
                                 >
-                                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
                                 </a>
                               </Tooltip>
                             </span>
@@ -1309,7 +1308,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                   rel="noopener noreferrer"
                                   onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
                                 >
-                                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
                                 </a>
                               </Tooltip>
                             </span>
@@ -1344,7 +1343,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Access Groups{" "}
                             <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -1371,7 +1370,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 rel="noopener noreferrer"
                                 onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
                               >
-                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
                               </a>
                             </Tooltip>
                           </span>
@@ -1404,7 +1403,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Allowed Vector Stores{" "}
                             <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -1426,7 +1425,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Metadata{" "}
                             <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -1447,7 +1446,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <span>
                             Tags{" "}
                             <Tooltip title="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
-                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
                             </Tooltip>
                           </span>
                         }
@@ -1478,7 +1477,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               <span>
                                 Allowed MCP Servers{" "}
                                 <Tooltip title="Select which MCP servers or access groups this key can access">
-                                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
                                 </Tooltip>
                               </span>
                             }
@@ -1521,7 +1520,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               <span>
                                 Allowed Agents{" "}
                                 <Tooltip title="Select which agents or access groups this key can access">
-                                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
                                 </Tooltip>
                               </span>
                             }
@@ -1688,7 +1687,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 </span>
                               }
                             >
-                              <InfoCircleOutlined className="text-muted-foreground hover:text-foreground cursor-help" />
+                              <Info className="size-4 text-muted-foreground hover:text-foreground cursor-help" />
                             </Tooltip>
                           </div>
                           <ChevronDown className={SECTION_CHEVRON_CLASS} />

@@ -3,7 +3,7 @@ import { Select, Steps, Tag } from "antd";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined } from "@ant-design/icons";
+import { Bot, CircleCheck, Key, LayoutGrid } from "lucide-react";
 import CreatedKeyDisplay from "@/components/shared/CreatedKeyDisplay";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -707,7 +707,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                   }`}
                   onClick={() => handleAgentTypeChange(CUSTOM_AGENT_TYPE)}
                 >
-                  <AppstoreOutlined className="text-lg text-amber-600 dark:text-amber-400" />
+                  <LayoutGrid className="size-4.5 text-amber-600 dark:text-amber-400" />
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-amber-700 dark:text-amber-400">Custom / Other</span>
@@ -846,7 +846,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       <div>
         {/* Agent name chip */}
         <div className="mb-6 flex justify-center">
-          <Tag icon={<RobotOutlined />} color="purple" className="px-3 py-1 text-sm">
+          <Tag icon={<Bot />} color="purple" className="px-3 py-1 text-sm">
             {agentName}
           </Tag>
         </div>
@@ -884,7 +884,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                 <RadioGroupItem value="create_new" aria-label="Create a new key for this agent" />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <KeyOutlined className="text-indigo-600 dark:text-indigo-400" />
+                    <Key className="size-4 text-indigo-600 dark:text-indigo-400" />
                     <span className="font-medium text-foreground">Create a new key for this agent</span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">A dedicated key scoped to this agent.</p>
@@ -920,7 +920,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
               <RadioGroupItem value="existing_key" aria-label="Assign an existing key" />
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <KeyOutlined className="text-muted-foreground" />
+                  <Key className="size-4 text-muted-foreground" />
                   <span className="font-medium text-foreground">Assign an existing key</span>
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">Re-assign a key you already have to this agent.</p>
@@ -958,10 +958,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const renderReadyStep = () => (
     <div className="py-6 text-center">
-      <CheckCircleFilled className="mb-4 text-5xl text-green-500" style={{ fontSize: 48 }} />
+      <CircleCheck className="mb-4 size-12 text-green-500" />
       <h3 className="mb-2 text-xl font-semibold text-foreground">Agent Created!</h3>
       <div className="mb-4 flex justify-center">
-        <Tag icon={<RobotOutlined />} color="purple" className="px-3 py-1 text-sm">
+        <Tag icon={<Bot />} color="purple" className="px-3 py-1 text-sm">
           {createdAgentName}
         </Tag>
       </div>

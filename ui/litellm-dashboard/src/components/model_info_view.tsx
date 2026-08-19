@@ -2,7 +2,6 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useQueryClient } from "@tanstack/react-query";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -10,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
-import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
+import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
@@ -757,7 +756,7 @@ export default function ModelInfoView({
                     )
                   ) : (
                     <SimpleTooltip content="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
-                      <InfoCircleOutlined />
+                      <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                   )}
                 </div>
