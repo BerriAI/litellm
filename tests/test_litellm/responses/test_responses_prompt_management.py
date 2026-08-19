@@ -60,18 +60,15 @@ def _patch_responses_dispatch():
             return_value=("gpt-4o", "openai", None, None),
         ),
         patch(
-            "litellm.responses.mcp.litellm_proxy_mcp_handler."
-            "LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
+            "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
             return_value=False,
         ),
         patch(
-            "litellm.responses.main.ProviderConfigManager"
-            ".get_provider_responses_api_config",
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
             return_value=None,
         ),
         patch(
-            "litellm.responses.main.litellm_completion_transformation_handler"
-            ".response_api_handler",
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
             return_value=MagicMock(),
         ),
     ]
@@ -133,6 +130,35 @@ def _make_cache_control_case() -> tuple[
 
 
 class TestResponsesAPIPromptManagement:
+    def test_cache_control_hook_wins_over_prompt_manager_without_prompt_id(self):
+        """Dynamic hooks must not be shadowed by a generic prompt manager."""
+        logging_obj = LiteLLMLoggingObj.__new__(LiteLLMLoggingObj)
+        logging_obj.model_call_details = {}
+        prompt_manager = MagicMock()
+        cache_hook = MagicMock(spec=AnthropicCacheControlHook)
+        with (
+            patch("litellm.litellm_core_utils.litellm_logging.litellm.logging_callback_manager") as callback_manager,
+            patch("litellm.litellm_core_utils.litellm_logging.AnthropicCacheControlHook") as hook_class,
+        ):
+            callback_manager.get_custom_loggers_for_type.return_value = [prompt_manager]
+            hook_class.get_custom_logger_for_anthropic_cache_control_hook.return_value = cache_hook
+
+            result = logging_obj.get_custom_logger_for_prompt_management(
+                model="anthropic/claude",
+                non_default_params={"cache_control_injection_points": [{"role": "system", "location": "message"}]},
+                prompt_id=None,
+            )
+            cache_integration = logging_obj.model_call_details["prompt_integration"]
+
+            result_with_prompt = logging_obj.get_custom_logger_for_prompt_management(
+                model="anthropic/claude",
+                non_default_params={},
+                prompt_id="managed-prompt",
+            )
+
+        assert result is cache_hook
+        assert cache_integration == "AnthropicCacheControlHook"
+        assert result_with_prompt is prompt_manager
 
     def test_str_input_coerced_and_merged(self):
         """[A] str input is wrapped into a message list before being passed to the hook."""
@@ -164,9 +190,7 @@ class TestResponsesAPIPromptManagement:
         logging_obj.get_chat_completion_prompt.assert_called_once()
         call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
         # str was coerced to a single user message before being passed to the hook
-        assert call_kwargs["messages"] == [
-            {"role": "user", "content": "Tell me about AI."}
-        ]
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Tell me about AI."}]
         assert call_kwargs["prompt_id"] == "summariser-prompt"
 
     def test_list_input_merged_with_template(self):
