@@ -174,6 +174,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                       value={value[guardrailName]?.request_fields ?? []}
                       onValueChange={(fields) => handleFieldChange(guardrailName, "request_fields", fields)}
                       tokenSeparators={[","]}
+                      disabled={disabled}
                     />
                   </Field>
                   <Field>
@@ -212,6 +213,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                       value={value[guardrailName]?.response_fields ?? []}
                       onValueChange={(fields) => handleFieldChange(guardrailName, "response_fields", fields)}
                       tokenSeparators={[","]}
+                      disabled={disabled}
                     />
                   </Field>
                 </div>
