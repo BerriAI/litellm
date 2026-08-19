@@ -5,6 +5,7 @@ tests/e2e/.fixtures/
 .venv_policy_test
 .env
 .claude
+CLAUDE.local.md
 .newenv
 newenv/*
 litellm/proxy/myenv/*
