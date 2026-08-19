@@ -46,6 +46,11 @@ from litellm.proxy.openai_files_endpoints.batch_file_validation import (
     check_batch_file_upload,
     raise_batch_file_validation_failure,
 )
+from litellm.proxy.openai_files_endpoints.batch_guardrails import (
+    EMPTY_MAPPING,
+    raise_public,
+    scan_batch_input_file,
+)
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     add_internal_model_credentials,
@@ -470,6 +475,22 @@ async def create_file(
             version=version,
             proxy_config=proxy_config,
         )
+
+        # /v1/files stores its proxy metadata under litellm_metadata, not metadata
+        request_metadata: Final = data.get("metadata") or data.get("litellm_metadata") or EMPTY_MAPPING
+        if (
+            purpose == "batch"
+            and not isinstance(file_source, bytes)
+            and proxy_logging_obj.has_pre_call_guardrails(request_metadata)
+        ):
+            scan_failure: Final = await scan_batch_input_file(
+                file_source=file_source,
+                request_metadata=request_metadata,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if scan_failure is not None:
+                raise_public(scan_failure)
 
         # Prepare the file data according to FileTypes
         file_data: Final = (file.filename, file_source, file.content_type)
