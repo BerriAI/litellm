@@ -1660,3 +1660,218 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(payload.object_permission).toHaveProperty("search_tools");
   });
 });
+
+describe("TeamInfoView - the exact bytes the update call sends", () => {
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4"],
+    editTeam: false,
+  };
+
+  beforeEach(seedDefaultMocks);
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const storedTeam = () =>
+    createMockTeamData({
+      models: ["gpt-4"],
+      max_budget: 100,
+      budget_duration: "1d",
+      tpm_limit: 1000,
+      rpm_limit: 1000,
+      team_member_budget_table: { max_budget: 42, budget_duration: "30d", tpm_limit: 11, rpm_limit: 22 },
+      default_team_member_models: ["gpt-4"],
+      object_permission: { search_tools: ["tool-a"], vector_stores: ["vs-1"] },
+    });
+
+  const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(storedTeam());
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  const save = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    return vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+  };
+
+  const wireBody = (payload: Record<string, unknown>) => JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+
+  const alwaysSent = {
+    team_id: "123",
+    team_alias: "Test Team",
+    models: ["gpt-4"],
+    tpm_limit: 1000,
+    rpm_limit: 1000,
+    model_tpm_limit: {},
+    model_rpm_limit: {},
+    max_budget: 100,
+    soft_budget: null,
+    budget_duration: "1d",
+    metadata: {
+      allowed_passthrough_routes: [],
+      guardrails: [],
+      opted_out_global_guardrails: [],
+      disable_global_guardrails: false,
+      soft_budget_alerting_emails: [],
+    },
+    access_group_ids: [],
+  };
+
+  const mcpPermissions = {
+    mcp_servers: [],
+    mcp_access_groups: [],
+    mcp_tool_permissions: {},
+    mcp_toolsets: [],
+    vector_stores: ["vs-1"],
+  };
+
+  it("leaves every team member key out of the request body for an untouched save with both sections closed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    const payload = await save(user);
+
+    expect(payload).toStrictEqual({
+      ...alwaysSent,
+      team_member_budget_duration: undefined,
+      object_permission: mcpPermissions,
+    });
+    expect(wireBody(payload)).toStrictEqual({
+      ...alwaysSent,
+      object_permission: mcpPermissions,
+    });
+  });
+
+  it("resends every stored value once both sections are opened", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    await user.click(screen.getByText("Search Tool Settings"));
+    await screen.findByPlaceholderText("Select search tools (optional, empty = all allowed)");
+
+    const payload = await save(user);
+
+    const expected = {
+      ...alwaysSent,
+      team_member_budget_duration: "30d",
+      team_member_budget: 42,
+      team_member_tpm_limit: 11,
+      team_member_rpm_limit: 22,
+      default_team_member_models: ["gpt-4"],
+      object_permission: { ...mcpPermissions, search_tools: ["tool-a"] },
+    };
+    expect(payload).toStrictEqual(expected);
+    expect(wireBody(payload)).toStrictEqual(expected);
+  });
+
+  it("carries every typed value to the update payload at the type and shape antd sends today", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    const alias = screen.getByLabelText("Team Name");
+    await user.clear(alias);
+    await user.type(alias, "Renamed Team");
+
+    const softBudget = screen.getByLabelText("Soft Budget (USD)");
+    await user.clear(softBudget);
+    await user.type(softBudget, "9.5");
+
+    const emails = screen.getByLabelText(/Soft Budget Alerting Emails/);
+    await user.clear(emails);
+    await user.type(emails, "a@test.com,  b@test.com ");
+
+    const tpm = screen.getByLabelText("Tokens per minute Limit (TPM)");
+    await user.clear(tpm);
+    await user.type(tpm, "555");
+
+    const payload = await save(user);
+
+    expect(payload.team_alias).toBe("Renamed Team");
+    expect(payload.soft_budget).toBe("9.5");
+    expect(payload.tpm_limit).toBe("555");
+    expect((payload.metadata as Record<string, unknown>).soft_budget_alerting_emails).toStrictEqual([
+      "a@test.com",
+      "b@test.com",
+    ]);
+  });
+
+  it("builds model_tpm_limit and model_rpm_limit from the model-specific rate limit rows", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        max_budget: 100,
+        budget_duration: "1d",
+        tpm_limit: 1000,
+        rpm_limit: 1000,
+        object_permission: { vector_stores: ["vs-1"] },
+        metadata: { model_tpm_limit: { "gpt-4": 30 }, model_rpm_limit: { "gpt-4": 40 } },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    const payload = await save(user);
+
+    expect(payload.model_tpm_limit).toStrictEqual({ "gpt-4": 30 });
+    expect(payload.model_rpm_limit).toStrictEqual({ "gpt-4": 40 });
+  });
+
+  it("keeps a team member budget edited before the section is collapsed and resends it on reopen", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    const budgetInput = await screen.findByLabelText("Default Budget (USD)");
+    await user.clear(budgetInput);
+    await user.type(budgetInput, "77");
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await waitFor(() => expect(screen.queryByLabelText("Default Budget (USD)")).not.toBeInTheDocument());
+
+    await user.click(screen.getByText("Team Member Settings"));
+    expect(await screen.findByLabelText("Default Budget (USD)")).toHaveValue(77);
+
+    const payload = await save(user);
+    expect(payload.team_member_budget).toBe(77);
+  });
+
+  it("sends no team member key at all when the section is collapsed again after an edit", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    const budgetInput = await screen.findByLabelText("Default Budget (USD)");
+    await user.clear(budgetInput);
+    await user.type(budgetInput, "77");
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await waitFor(() => expect(screen.queryByLabelText("Default Budget (USD)")).not.toBeInTheDocument());
+
+    const payload = await save(user);
+
+    expect(Object.keys(wireBody(payload)).filter((key) => key.startsWith("team_member"))).toEqual([]);
+    expect(wireBody(payload)).not.toHaveProperty("default_team_member_models");
+  });
+});
