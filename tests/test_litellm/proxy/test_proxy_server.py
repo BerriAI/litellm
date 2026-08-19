@@ -6781,6 +6781,38 @@ async def test_async_data_generator_cleanup_on_midstream_error():
 
 
 # ============================================================================
+@pytest.mark.asyncio
+async def test_update_general_settings_propagates_health_check_settings(monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(ps, "use_background_health_checks", False)
+    monkeypatch.setattr(ps, "use_shared_health_check", False)
+    monkeypatch.setattr(ps, "health_check_interval", None)
+    monkeypatch.setattr(ps, "health_check_concurrency", None)
+    monkeypatch.setattr(ps, "health_check_details", True)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    await proxy_config._update_general_settings(
+        db_general_settings={
+            "background_health_checks": True,
+            "use_shared_health_check": True,
+            "health_check_interval": 300,
+            "health_check_concurrency": 4,
+            "health_check_details": False,
+            "enable_health_check_routing": True,
+        }
+    )
+
+    assert ps.use_background_health_checks is True
+    assert ps.use_shared_health_check is True
+    assert ps.health_check_interval == 300
+    assert ps.health_check_concurrency == 4
+    assert ps.health_check_details is False
+    assert ps.general_settings["enable_health_check_routing"] is True
+
 # store_model_in_db DB Config Override Tests
 # ============================================================================
 

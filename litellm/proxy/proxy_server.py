@@ -6306,9 +6306,71 @@ class ProxyConfig:
         Pull from DB, read general settings value
         """
         global general_settings, store_model_in_db
+        global use_background_health_checks, use_shared_health_check
+        global health_check_interval, health_check_concurrency, health_check_details
         if db_general_settings is None:
             return
         _general_settings: Final = dict(db_general_settings)
+        health_check_settings: Final = (
+            "background_health_checks",
+            "use_shared_health_check",
+            "health_check_interval",
+            "health_check_concurrency",
+            "health_check_details",
+            "enable_health_check_routing",
+            "health_check_staleness_threshold",
+            "health_check_ignore_transient_errors",
+        )
+        for key in health_check_settings:
+            if key not in _general_settings or key in self._yaml_general_settings_keys:
+                continue
+            general_settings[key] = _general_settings[key]
+
+        if (
+            "background_health_checks" in _general_settings
+            and "background_health_checks" not in self._yaml_general_settings_keys
+        ):
+            use_background_health_checks = _general_settings["background_health_checks"]
+        if (
+            "use_shared_health_check" in _general_settings
+            and "use_shared_health_check" not in self._yaml_general_settings_keys
+        ):
+            use_shared_health_check = _general_settings["use_shared_health_check"]
+        if (
+            "health_check_interval" in _general_settings
+            and "health_check_interval" not in self._yaml_general_settings_keys
+        ):
+            health_check_interval = _general_settings["health_check_interval"]
+        if (
+            "health_check_concurrency" in _general_settings
+            and "health_check_concurrency" not in self._yaml_general_settings_keys
+        ):
+            health_check_concurrency = _general_settings["health_check_concurrency"]
+        if (
+            "health_check_details" in _general_settings
+            and "health_check_details" not in self._yaml_general_settings_keys
+        ):
+            health_check_details = _general_settings["health_check_details"]
+
+        if llm_router is not None:
+            if (
+                "enable_health_check_routing" in _general_settings
+                and "enable_health_check_routing" not in self._yaml_general_settings_keys
+            ):
+                llm_router.enable_health_check_routing = _general_settings["enable_health_check_routing"]
+            if (
+                "health_check_staleness_threshold" in _general_settings
+                and "health_check_staleness_threshold" not in self._yaml_general_settings_keys
+            ):
+                llm_router.health_check_staleness_threshold = _general_settings["health_check_staleness_threshold"]
+            if (
+                "health_check_ignore_transient_errors" in _general_settings
+                and "health_check_ignore_transient_errors" not in self._yaml_general_settings_keys
+            ):
+                llm_router.health_check_ignore_transient_errors = _general_settings[
+                    "health_check_ignore_transient_errors"
+                ]
+
         ## MAX PARALLEL REQUESTS ##
         if "max_parallel_requests" in _general_settings:
             general_settings["max_parallel_requests"] = _general_settings["max_parallel_requests"]
