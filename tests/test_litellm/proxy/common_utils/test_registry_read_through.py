@@ -94,6 +94,32 @@ async def test_distinct_keys_do_not_share_negative_cache():
     assert spy.calls == ["ghost-a", "ghost-b"]
 
 
+@pytest.mark.asyncio
+async def test_resync_budget_exhausted_blocks_resync_without_negative_caching():
+    spy: Final = ResyncSpy(found=False)
+    read_through: Final = RegistryReadThrough(
+        resync=spy, miss_ttl_seconds=60.0, max_resyncs_per_window=2, resync_window_seconds=60.0
+    )
+
+    assert await read_through.attempt("ghost-a") is False
+    assert await read_through.attempt("ghost-b") is False
+    assert await read_through.attempt("ghost-c") is False
+    assert spy.calls == ["ghost-a", "ghost-b"]
+    assert read_through._recent_misses.get_cache("ghost-c") is None
+
+
+@pytest.mark.asyncio
+async def test_resync_budget_replenishes_after_window():
+    spy: Final = ResyncSpy(found=True)
+    read_through: Final = RegistryReadThrough(resync=spy, max_resyncs_per_window=1, resync_window_seconds=0.05)
+
+    assert await read_through.attempt("model-a") is True
+    assert await read_through.attempt("model-b") is False
+    await asyncio.sleep(0.1)
+    assert await read_through.attempt("model-b") is True
+    assert spy.calls == ["model-a", "model-b"]
+
+
 class FakeAgentRow:
     def __init__(self, agent_id: str, agent_name: str) -> None:
         self.agent_id = agent_id
@@ -101,15 +127,15 @@ class FakeAgentRow:
         self.object_permission = None
         self.spend = 0.0
 
-    def __iter__(self):
-        return iter(
-            {
-                "agent_id": self.agent_id,
-                "agent_name": self.agent_name,
-                "agent_card_params": {"name": self.agent_name, "url": "http://db-agent"},
-                "litellm_params": {},
-            }.items()
-        )
+    def model_dump(self):
+        return {
+            "agent_id": self.agent_id,
+            "agent_name": self.agent_name,
+            "agent_card_params": {"name": self.agent_name, "url": "http://db-agent"},
+            "litellm_params": {},
+            "object_permission": None,
+            "spend": self.spend,
+        }
 
 
 @pytest.fixture
@@ -138,8 +164,8 @@ async def test_get_agent_with_read_through_recovers_agent_created_on_sibling_rep
 
     agent_id: Final = "read-through-db-agent-id"
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_agentstable.find_many = AsyncMock(
-        return_value=[FakeAgentRow(agent_id, "read-through-db-agent")]
+    prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=FakeAgentRow(agent_id, "read-through-db-agent")
     )
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
@@ -149,6 +175,35 @@ async def test_get_agent_with_read_through_recovers_agent_created_on_sibling_rep
 
     assert agent is not None
     assert agent.agent_id == agent_id
+    prisma_client.db.litellm_agentstable.find_unique.assert_awaited_once_with(
+        where={"agent_id": agent_id},
+        include={"object_permission": True},
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_agent_with_read_through_recovers_agent_by_name(clean_agent_registry, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
+
+    agent_name: Final = "read-through-db-agent-by-name"
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+        side_effect=[None, FakeAgentRow("read-through-name-lookup-id", agent_name)]
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    agent: Final = await get_agent_with_read_through(agent_name)
+
+    assert agent is not None
+    assert agent.agent_name == agent_name
+    prisma_client.db.litellm_agentstable.find_unique.assert_awaited_with(
+        where={"agent_name": agent_name},
+        include={"object_permission": True},
+    )
 
 
 @pytest.mark.asyncio
@@ -159,11 +214,33 @@ async def test_get_agent_with_read_through_returns_none_for_unknown_agent(clean_
     from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
 
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 
     assert await get_agent_with_read_through("agent-nobody-created") is None
+    assert prisma_client.db.litellm_agentstable.find_unique.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_resync_agents_already_registered_skips_db(clean_agent_registry, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_agents
+
+    agent_id: Final = "read-through-dedup-agent-id"
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=FakeAgentRow(agent_id, "read-through-dedup-agent")
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    assert await _resync_agents(agent_id) is True
+    assert await _resync_agents(agent_id) is True
+    assert prisma_client.db.litellm_agentstable.find_unique.await_count == 1
+    assert len(clean_agent_registry.agent_list) == 1
 
 
 class FakeGuardrailRow:
@@ -200,8 +277,11 @@ async def test_get_guardrail_with_read_through_recovers_guardrail_created_on_sib
     guardrail_id: Final = "read-through-db-guardrail-id"
     guardrail_name: Final = "read-through-db-guardrail"
     prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
+        return_value=FakeGuardrailRow(guardrail_id, guardrail_name)
+    )
     prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
-        return_value=[FakeGuardrailRow(guardrail_id, guardrail_name)]
+        side_effect=AssertionError("full-table guardrail scan on read-through miss")
     )
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
@@ -210,6 +290,9 @@ async def test_get_guardrail_with_read_through_recovers_guardrail_created_on_sib
         guardrail: Final = await get_initialized_guardrail_with_read_through(guardrail_name=guardrail_name)
         assert guardrail is not None
         assert guardrail.guardrail_name == guardrail_name
+        prisma_client.db.litellm_guardrailstable.find_unique.assert_awaited_once_with(
+            where={"guardrail_name": guardrail_name}
+        )
     finally:
         IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(guardrail_id)
 
@@ -224,7 +307,7 @@ async def test_get_guardrail_with_read_through_returns_none_for_unknown_guardrai
     )
 
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 

@@ -116,15 +116,15 @@ class _DbAgentRow:
         self.object_permission = None
         self.spend = 0.0
 
-    def __iter__(self):
-        return iter(
-            {
-                "agent_id": self.agent_id,
-                "agent_name": self.agent_name,
-                "agent_card_params": {"name": self.agent_name, "url": "http://sibling-db-agent.example.com"},
-                "litellm_params": {},
-            }.items()
-        )
+    def model_dump(self):
+        return {
+            "agent_id": self.agent_id,
+            "agent_name": self.agent_name,
+            "agent_card_params": {"name": self.agent_name, "url": "http://sibling-db-agent.example.com"},
+            "litellm_params": {},
+            "object_permission": None,
+            "spend": self.spend,
+        }
 
 
 def _router_without_models():
@@ -149,8 +149,8 @@ async def test_route_a2a_model_read_through_recovers_agent_created_on_sibling_re
 
     agent_name = "a2a-sibling-replica-agent"
     prisma_client = Mock()
-    prisma_client.db.litellm_agentstable.find_many = AsyncMock(
-        return_value=[_DbAgentRow("a2a-sibling-replica-agent-id", agent_name)]
+    prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
+        side_effect=[None, _DbAgentRow("a2a-sibling-replica-agent-id", agent_name)]
     )
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
@@ -182,4 +182,4 @@ async def test_route_a2a_model_read_through_recovers_agent_created_on_sibling_re
     call_kwargs = mock_acompletion.call_args.kwargs
     assert call_kwargs["model"] == f"a2a/{agent_name}"
     assert call_kwargs["api_base"] == "http://sibling-db-agent.example.com"
-    prisma_client.db.litellm_agentstable.find_many.assert_awaited()
+    prisma_client.db.litellm_agentstable.find_unique.assert_awaited()

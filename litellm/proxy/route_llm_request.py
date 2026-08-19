@@ -458,7 +458,7 @@ async def route_request(
 
 
 async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited provider coroutines; the inferred union keeps route_request's callers typed
-    data: dict,  # noqa: LIT001  # request body is the proxy-wide mutable dict contract shared with route_request
+    data: dict,  # mutable-ok: request body is the proxy-wide mutable dict contract shared with route_request
     llm_router: LitellmRouter | None,
     user_model: str | None,
     route_type: RouteType,
