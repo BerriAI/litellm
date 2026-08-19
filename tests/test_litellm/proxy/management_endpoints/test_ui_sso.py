@@ -25,6 +25,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
     _setup_team_mappings,
+    _sync_sso_team_memberships,
     _sync_user_role_from_jwt_role_map,
     normalize_email,
     process_sso_jwt_access_token,
@@ -7161,6 +7162,152 @@ class TestSyncUserRoleFromJwtRoleMap:
         )
 
         prisma.db.litellm_usertable.update.assert_not_called()
+
+
+class TestSyncSsoTeamMemberships:
+    """Tests for _sync_sso_team_memberships (SSO login team removal sync)."""
+
+    @staticmethod
+    def _make_jwt_handler(sync_user_role_and_teams=True, fallback_to_db_teams=False):
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import LiteLLM_JWTAuth
+
+        handler = JWTHandler()
+        handler.update_environment(
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            litellm_jwtauth=LiteLLM_JWTAuth(
+                sync_user_role_and_teams=sync_user_role_and_teams,
+                fallback_to_db_teams=fallback_to_db_teams,
+            ),
+        )
+        return handler
+
+    @pytest.mark.asyncio
+    async def test_removes_stale_teams_when_sync_enabled(self):
+        from litellm.caching.caching import DualCache
+
+        user = LiteLLM_UserTable(user_id="testuser@example.com", teams=["team-a", "team-b"])
+
+        with patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+            new_callable=AsyncMock,
+        ) as mock_patch:
+            await _sync_sso_team_memberships(
+                jwt_handler=self._make_jwt_handler(),
+                sso_team_ids=["team-a"],
+                user_info=user,
+                user_api_key_cache=DualCache(),
+            )
+
+        mock_patch.assert_called_once_with(
+            user_id="testuser@example.com",
+            teams_ids_to_add_user_to=(),
+            teams_ids_to_remove_user_from=["team-b"],
+        )
+        assert user.teams == ["team-a"]
+
+    @pytest.mark.asyncio
+    async def test_no_removal_when_sync_disabled(self):
+        from litellm.caching.caching import DualCache
+
+        user = LiteLLM_UserTable(user_id="testuser@example.com", teams=["team-a", "team-b"])
+
+        with patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+            new_callable=AsyncMock,
+        ) as mock_patch:
+            await _sync_sso_team_memberships(
+                jwt_handler=self._make_jwt_handler(sync_user_role_and_teams=False),
+                sso_team_ids=["team-a"],
+                user_info=user,
+                user_api_key_cache=DualCache(),
+            )
+
+        mock_patch.assert_not_called()
+        assert user.teams == ["team-a", "team-b"]
+
+    @pytest.mark.asyncio
+    async def test_preserves_db_teams_when_no_sso_teams_and_fallback_enabled(self):
+        from litellm.caching.caching import DualCache
+
+        user = LiteLLM_UserTable(user_id="testuser@example.com", teams=["team-a"])
+
+        with patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+            new_callable=AsyncMock,
+        ) as mock_patch:
+            await _sync_sso_team_memberships(
+                jwt_handler=self._make_jwt_handler(fallback_to_db_teams=True),
+                sso_team_ids=[],
+                user_info=user,
+                user_api_key_cache=DualCache(),
+            )
+
+        mock_patch.assert_not_called()
+        assert user.teams == ["team-a"]
+
+    @pytest.mark.asyncio
+    async def test_removes_all_teams_when_no_sso_teams_and_no_fallback(self):
+        from litellm.caching.caching import DualCache
+
+        user = LiteLLM_UserTable(user_id="testuser@example.com", teams=["team-a"])
+
+        with patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+            new_callable=AsyncMock,
+        ) as mock_patch:
+            await _sync_sso_team_memberships(
+                jwt_handler=self._make_jwt_handler(),
+                sso_team_ids=[],
+                user_info=user,
+                user_api_key_cache=DualCache(),
+            )
+
+        mock_patch.assert_called_once_with(
+            user_id="testuser@example.com",
+            teams_ids_to_add_user_to=(),
+            teams_ids_to_remove_user_from=["team-a"],
+        )
+        assert user.teams == []
+
+    @pytest.mark.asyncio
+    async def test_noop_when_teams_match(self):
+        from litellm.caching.caching import DualCache
+
+        user = LiteLLM_UserTable(user_id="testuser@example.com", teams=["team-a"])
+
+        with patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+            new_callable=AsyncMock,
+        ) as mock_patch:
+            await _sync_sso_team_memberships(
+                jwt_handler=self._make_jwt_handler(),
+                sso_team_ids=["team-a"],
+                user_info=user,
+                user_api_key_cache=DualCache(),
+            )
+
+        mock_patch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_noop_when_jwt_handler_none(self):
+        from litellm.caching.caching import DualCache
+
+        user = LiteLLM_UserTable(user_id="testuser@example.com", teams=["team-a"])
+
+        with patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+            new_callable=AsyncMock,
+        ) as mock_patch:
+            await _sync_sso_team_memberships(
+                jwt_handler=None,
+                sso_team_ids=[],
+                user_info=user,
+                user_api_key_cache=DualCache(),
+            )
+
+        mock_patch.assert_not_called()
 
 
 # ── VERIA-34 regression: PKCE state-to-session-cookie binding ───────────────

@@ -1910,6 +1910,47 @@ async def _sync_user_role_from_jwt_role_map(
         )
 
 
+async def _sync_sso_team_memberships(
+    jwt_handler: JWTHandler | None,
+    sso_team_ids: Sequence[str],
+    user_info: LiteLLM_UserTable | NewUserResponse | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """
+    Remove stale team memberships during SSO login.
+
+    Mirrors JWTAuthManager.sync_user_role_and_teams so UI/SSO logins reconcile
+    team membership the same way API/JWT auth does: teams the IdP no longer
+    reports for the user are removed. Additions are handled separately by
+    add_user_to_teams_from_sso_response.
+    """
+    if jwt_handler is None or user_info is None or user_info.user_id is None:
+        return
+    if not jwt_handler.litellm_jwtauth.sync_user_role_and_teams:
+        return
+
+    sso_teams: Final = frozenset(sso_team_ids)
+    existing_teams: Final = frozenset(user_info.teams or ())
+    preserve_db_teams_without_claims: Final = jwt_handler.litellm_jwtauth.fallback_to_db_teams and not sso_teams
+    teams_to_remove: Final = frozenset() if preserve_db_teams_without_claims else existing_teams - sso_teams
+    if not teams_to_remove:
+        return
+
+    from litellm.proxy.management_endpoints.scim.scim_v2 import patch_team_membership
+
+    await patch_team_membership(
+        user_id=user_info.user_id,
+        teams_ids_to_add_user_to=(),
+        teams_ids_to_remove_user_from=sorted(teams_to_remove),
+    )
+    user_info.teams = sorted(sso_teams)
+    await user_api_key_cache.async_set_cache(
+        key=user_info.user_id,
+        value=user_info,
+        model_type=LiteLLM_UserTable,
+    )
+
+
 def apply_user_info_values_to_sso_user_defined_values(
     user_info: LiteLLM_UserTable | NewUserResponse | None,
     user_defined_values: SSOUserDefinedValues | None,
@@ -3530,6 +3571,13 @@ class SSOAuthenticationHandler:
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_defined_values=user_defined_values,
+        )
+
+        await _sync_sso_team_memberships(
+            jwt_handler=jwt_handler,
+            sso_team_ids=getattr(result, "team_ids", ()) or (),
+            user_info=user_info,
+            user_api_key_cache=user_api_key_cache,
         )
 
         user_defined_values = apply_user_info_values_to_sso_user_defined_values(

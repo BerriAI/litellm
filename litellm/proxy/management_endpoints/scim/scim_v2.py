@@ -1854,8 +1854,8 @@ def _is_user_not_in_team_error(exc: HTTPException) -> bool:
 
 async def patch_team_membership(
     user_id: str,
-    teams_ids_to_add_user_to: list[str],
-    teams_ids_to_remove_user_from: list[str],
+    teams_ids_to_add_user_to: Sequence[str],
+    teams_ids_to_remove_user_from: Sequence[str],
     raise_on_error: bool = False,
 ) -> bool:
     """
