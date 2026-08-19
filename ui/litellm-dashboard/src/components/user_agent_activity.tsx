@@ -485,11 +485,11 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
       <Card>
         <CardContent>
           <Tabs defaultValue="active-users">
-            <TabsList className="mb-6">
-              <TabsTrigger value="active-users" className="flex-none px-3">
+            <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+              <TabsTrigger value="active-users" className="flex-none rounded-none px-4 py-2">
                 DAU/WAU/MAU
               </TabsTrigger>
-              <TabsTrigger value="per-user" className="flex-none px-3">
+              <TabsTrigger value="per-user" className="flex-none rounded-none px-4 py-2">
                 Per User Usage (Last 30 Days)
               </TabsTrigger>
             </TabsList>
@@ -502,14 +502,14 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
               </div>
 
               <Tabs defaultValue="dau">
-                <TabsList className="mb-6">
-                  <TabsTrigger value="dau" className="flex-none px-3">
+                <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+                  <TabsTrigger value="dau" className="flex-none rounded-none px-4 py-2">
                     DAU
                   </TabsTrigger>
-                  <TabsTrigger value="wau" className="flex-none px-3">
+                  <TabsTrigger value="wau" className="flex-none rounded-none px-4 py-2">
                     WAU
                   </TabsTrigger>
-                  <TabsTrigger value="mau" className="flex-none px-3">
+                  <TabsTrigger value="mau" className="flex-none rounded-none px-4 py-2">
                     MAU
                   </TabsTrigger>
                 </TabsList>

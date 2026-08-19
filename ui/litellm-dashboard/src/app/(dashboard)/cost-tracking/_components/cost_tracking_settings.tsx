@@ -197,11 +197,15 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             />
             <CollapsibleContent className="px-0">
               <Tabs defaultValue="discounts">
-                <TabsList className="mx-6 mt-4">
-                  <TabsTrigger value="discounts">Discounts</TabsTrigger>
-                  <TabsTrigger value="test-it">Test It</TabsTrigger>
+                <TabsList variant="line" className="mx-6 mt-4 h-auto justify-start rounded-none border-b p-0">
+                  <TabsTrigger value="discounts" className="flex-none rounded-none px-4 py-2">
+                    Discounts
+                  </TabsTrigger>
+                  <TabsTrigger value="test-it" className="flex-none rounded-none px-4 py-2">
+                    Test It
+                  </TabsTrigger>
                 </TabsList>
-                <TabsContent value="discounts">
+                <TabsContent value="discounts" keepMounted>
                   <div className="p-6">
                     <div className="flex justify-end mb-4">
                       <Button onClick={() => setIsModalVisible(true)}>+ Add Provider Discount</Button>
@@ -237,7 +241,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                     )}
                   </div>
                 </TabsContent>
-                <TabsContent value="test-it">
+                <TabsContent value="test-it" keepMounted>
                   <div className="px-6 pb-4">
                     <HowItWorks />
                   </div>
