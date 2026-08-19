@@ -422,3 +422,18 @@ async def test_scan_runs_guardrails_only():
     await _scan(_jsonl(_record("a"), _record("b")), FlagCapturingLogging())
 
     assert flags == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_guardrail_that_returns_a_replacement_dict_is_detected():
+    """async_pre_call_hook may return a NEW dict instead of mutating; that result is the real input."""
+
+    class ReplacingLogging(FakeProxyLogging):
+        async def pre_call_hook(self, user_api_key_dict, data, call_type, guardrails_only=False):
+            replacement = json.loads(json.dumps(data))
+            replacement["messages"][0]["content"] = "***"
+            return replacement
+
+    failure = await _scan(_jsonl(_record("a", content="my secret is here")), ReplacingLogging())
+
+    assert failure == RedactionRequired(line_number=1, custom_id="a")

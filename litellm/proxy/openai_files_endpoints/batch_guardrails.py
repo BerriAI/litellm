@@ -208,15 +208,18 @@ async def _scan_record(
     scan_input.pop("metadata", None)
     scan_input[_SCAN_METADATA_KEY] = dict(scan_metadata)  # mutable-ok: guardrails write bookkeeping here
 
-    await proxy_logging_obj.pre_call_hook(
+    returned: Final = await proxy_logging_obj.pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         data=scan_input,
         call_type=call_type,
         guardrails_only=True,
     )
+    # A guardrail may return a replacement dict rather than mutating the one it was given; that
+    # replacement is what the request would have become, so it is what gets compared.
+    scanned: Final = returned if isinstance(returned, dict) else scan_input
 
-    compared: Final = (frozenset(body) | frozenset(scan_input)) - _INJECTED_KEYS
-    if _fingerprint(scan_input, compared) != _fingerprint(body, compared):
+    compared: Final = (frozenset(body) | frozenset(scanned)) - _INJECTED_KEYS
+    if _fingerprint(scanned, compared) != _fingerprint(body, compared):
         return RedactionRequired(line_number=record.line_number, custom_id=custom_id)
     return None
 
