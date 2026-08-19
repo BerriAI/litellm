@@ -27,9 +27,7 @@ ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_
 def is_audit_logging_enabled(store_audit_logs: bool | None = None) -> bool:
     from litellm.secret_managers.main import get_secret_bool
 
-    configured_value: Final[bool | None] = (
-        litellm.store_audit_logs if store_audit_logs is None else store_audit_logs
-    )
+    configured_value: Final[bool | None] = litellm.store_audit_logs if store_audit_logs is None else store_audit_logs
     if configured_value is not None:
         return configured_value
 
