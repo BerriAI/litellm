@@ -128,10 +128,15 @@ async def test_zero_token_reserve_charges_nothing():
 class _SingleKeyRedisFake:
     """Emulates the Redis script path one single-key call at a time, recording every call."""
 
-    def __init__(self, fail_reserve_keys: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        fail_reserve_keys: frozenset[str] = frozenset(),
+        fail_refund_keys: frozenset[str] = frozenset(),
+    ) -> None:
         self.script_calls: tuple[tuple[str, tuple[str, ...]], ...] = ()
         self.counters: Mapping[str, int] = MappingProxyType({})
         self.fail_reserve_keys = fail_reserve_keys
+        self.fail_refund_keys = fail_refund_keys
 
     def async_register_script(self, script: str):
         kind: Final = "reserve" if "INCRBY" in script else "refund" if "DECRBY" in script else "record"
@@ -153,6 +158,8 @@ class _SingleKeyRedisFake:
             self.counters = MappingProxyType({**self.counters, keys[0]: current + amount})
             return (1, current + amount)
         if kind == "refund":
+            if keys[0] in self.fail_refund_keys:
+                raise ConnectionError(f"simulated redis failure for {keys[0]}")
             remaining: Final = self.counters.get(keys[0], 0) - int(args[0])
             self.counters = MappingProxyType(
                 {key: value for key, value in self.counters.items() if key != keys[0]}
@@ -205,6 +212,44 @@ async def test_partial_redis_reserve_failure_rolls_back_and_grants_in_memory():
     refilled = await store.reserve(tokens=50, scopes=(team_scope,))
     assert isinstance(refilled, BatchEnqueuedTokenReservation)
     assert refilled.backend == "memory"
+
+
+@pytest.mark.asyncio
+async def test_memory_refund_skips_reservations_granted_by_another_worker():
+    store = _in_memory_store()
+    scope = _scope(limit=100)
+    reservation = await store.reserve(tokens=60, scopes=(scope,))
+    assert isinstance(reservation, BatchEnqueuedTokenReservation)
+    assert reservation.backend == "memory"
+    assert reservation.owner
+
+    foreign: Final = BatchEnqueuedTokenReservation(
+        tokens=60, scopes=reservation.scopes, backend="memory", owner="another-worker"
+    )
+    await store.refund(foreign)
+    assert await store.reserve(tokens=50, scopes=(scope,)) == BatchEnqueuedTokenOverLimit(scope=scope, enqueued=60)
+
+    await store.refund(reservation)
+    assert isinstance(await store.reserve(tokens=100, scopes=(scope,)), BatchEnqueuedTokenReservation)
+
+
+@pytest.mark.asyncio
+async def test_failed_redis_refund_leaves_local_counters_untouched():
+    scope = _scope(limit=100)
+    counter_key: Final = f"batch_enqueued_tokens:api_key:{scope.value}"
+    fake = _SingleKeyRedisFake(fail_refund_keys=frozenset({counter_key}))
+    store = BatchEnqueuedTokenStore(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=fake, default_in_memory_ttl=60))
+    )
+
+    reservation = await store.reserve(tokens=60, scopes=(scope,))
+    assert isinstance(reservation, BatchEnqueuedTokenReservation)
+    assert reservation.backend == "redis"
+    store.internal_usage_cache.dual_cache.in_memory_cache.set_cache(key=counter_key, value=45)
+
+    await store.refund(reservation)
+    assert store.internal_usage_cache.dual_cache.in_memory_cache.get_cache(key=counter_key) == 45
+    assert fake.counters == {counter_key: 60}
 
 
 @pytest.mark.asyncio
