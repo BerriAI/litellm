@@ -22,6 +22,11 @@ const SEVERITY_LABELS: Record<UserBannerSeverity, string> = {
   error: "Error",
 };
 
+const SEVERITY_ITEMS = (Object.keys(SEVERITY_LABELS) as UserBannerSeverity[]).map((severity) => ({
+  value: severity,
+  label: SEVERITY_LABELS[severity],
+}));
+
 const EMPTY_BANNER: UserBanner = { enabled: false, message: "", severity: "info", revision: "" };
 
 export default function UserBannerSettings() {
@@ -109,6 +114,7 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
             <div className="flex flex-col gap-2">
               <Label>Severity</Label>
               <Select
+                items={SEVERITY_ITEMS}
                 value={draft.severity}
                 onValueChange={(value: string | null) =>
                   setDraft({ ...draft, severity: (value ?? "info") as UserBannerSeverity })
@@ -118,9 +124,9 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
                   <SelectValue placeholder="Severity" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(Object.keys(SEVERITY_LABELS) as UserBannerSeverity[]).map((severity) => (
-                    <SelectItem key={severity} value={severity}>
-                      {SEVERITY_LABELS[severity]}
+                  {SEVERITY_ITEMS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

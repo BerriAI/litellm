@@ -177,12 +177,47 @@ def test_json_formatter_parses_embedded_python_dict_repr():
     # Python dict parsed and promoted to first-class properties
     assert obj["model_name"] == "text-embedding-3-large"
     assert "litellm_params" in obj
-    assert obj["litellm_params"]["api_key"] == "sk**********"
+    # Redacted, not passed through: SecretRedactionFilter already collapses this
+    # pair in the plain path before any formatter sees it, so the JSON path matching
+    # it is production parity. The key survives because redaction is per-value here.
+    assert obj["litellm_params"]["api_key"] == "REDACTED"
     assert obj["litellm_params"]["tpm"] == 1000000
     assert obj["litellm_params"]["use_in_pass_through"] is False
     assert "model_info" in obj
     assert obj["model_info"]["id"] == "a624b057aec64ada48311"
     assert obj["model_info"]["db_model"] is False
+
+
+def test_json_formatter_output_stays_parseable_when_a_secret_is_redacted():
+    """Redaction must collapse the value only, never the surrounding JSON member.
+
+    Redacting the serialized document turned '"api_key": "sk-..."' into a bare
+    REDACTED token, so the line stopped being valid JSON entirely.
+    """
+    formatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="calling deployment",
+        args=(),
+        exc_info=None,
+    )
+    record.deployment = {
+        "api_key": "sk-abcdefghijklmnopqrstuvwxyz0123456789",
+        "aws_secret_access_key": "wJalrXUtnFEMIQAfakeKEYbPxRfiCYEXAMPLEKEY",
+        "aws_region_name": "us-east-1",
+        "nested": {"tokens": ["Bearer abcdefghijklmnop", "keep-me"]},
+    }
+
+    obj = json.loads(formatter.format(record))
+
+    assert obj["deployment"]["api_key"] == "REDACTED"
+    assert obj["deployment"]["aws_secret_access_key"] == "REDACTED"
+    # Non-secret siblings stay legible so the logs remain useful
+    assert obj["deployment"]["aws_region_name"] == "us-east-1"
+    assert obj["deployment"]["nested"]["tokens"] == ["REDACTED", "keep-me"]
 
 
 def test_json_formatter_includes_component_field():

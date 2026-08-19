@@ -55,6 +55,14 @@ describe("AddAgentForm logos", () => {
     expect(selectionLogo).toHaveAttribute("src", expect.stringContaining("assets/logos/a2a_agent.png"));
   });
 
+  it("labels the agent type picker so the label points at the control", async () => {
+    renderForm();
+
+    await screen.findByAltText("A2A Agent logo");
+
+    expect(screen.getByLabelText("Agent Type")).toBe(screen.getByRole("combobox"));
+  });
+
   it("renders the option logo when the agent type dropdown is opened", async () => {
     renderForm();
 

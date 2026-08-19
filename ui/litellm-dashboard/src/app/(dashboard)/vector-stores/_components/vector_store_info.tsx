@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { CircleHelp } from "lucide-react";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { ArrowLeft, CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
 import {
   vectorStoreInfoCall,
@@ -17,7 +15,9 @@ import VectorStoreTester from "./VectorStoreTester";
 import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
-import { Button as ShadcnButton } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Combobox,
   ComboboxContent,
@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -183,13 +184,14 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   if (loadFailed) {
     return (
       <div className="p-4 max-w-full">
-        <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onClose}>
+        <Button variant="ghost" className="mb-4" onClick={onClose}>
+          <ArrowLeft />
           Back to Vector Stores
         </Button>
-        <Title>Vector store not found</Title>
-        <Text className="text-muted-foreground">
+        <h1 className="text-xl font-semibold">Vector store not found</h1>
+        <p className="text-sm text-muted-foreground">
           Vector store {vectorStoreId} could not be loaded. It may have been deleted.
-        </Text>
+        </p>
       </div>
     );
   }
@@ -202,31 +204,36 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onClose}>
+          <Button variant="ghost" className="mb-4" onClick={onClose}>
+            <ArrowLeft />
             Back to Vector Stores
           </Button>
-          <Title>Vector Store ID: {vectorStoreDetails.vector_store_id}</Title>
-          <Text className="text-muted-foreground">
+          <h1 className="text-xl font-semibold">Vector Store ID: {vectorStoreDetails.vector_store_id}</h1>
+          <p className="text-sm text-muted-foreground">
             {vectorStoreDetails.vector_store_description || "No description"}
-          </Text>
+          </p>
         </div>
         {is_admin && !isEditing && <Button onClick={startEditing}>Edit Vector Store</Button>}
       </div>
 
-      <TabGroup>
-        <TabList className="mb-6">
-          <Tab>Details</Tab>
-          <Tab>Test Vector Store</Tab>
-        </TabList>
+      <Tabs defaultValue="details">
+        <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
+          <TabsTrigger value="details" className="flex-none rounded-none px-4 py-2">
+            Details
+          </TabsTrigger>
+          <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
+            Test Vector Store
+          </TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
-          <TabPanel>
-            {isEditing ? (
-              <div>
-                <div className="flex justify-between items-center mb-4">
-                  <Title>Edit Vector Store</Title>
-                </div>
-                <Card>
+        <TabsContent value="details" keepMounted>
+          {isEditing ? (
+            <div>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Edit Vector Store</h3>
+              </div>
+              <Card>
+                <CardContent>
                   <TooltipProvider>
                     <form onSubmit={form.handleSubmit(handleSave)}>
                       <FieldGroup>
@@ -287,9 +294,9 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                           )}
                         </FormField>
 
-                        <Text className="text-sm text-muted-foreground">
+                        <p className="text-sm text-muted-foreground">
                           Either select existing credentials OR enter provider credentials below
-                        </Text>
+                        </p>
 
                         <FormField control={form.control} name="litellm_credential_name" label="Existing Credentials">
                           {({
@@ -352,37 +359,39 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       </FieldGroup>
 
                       <div className="mt-6 flex justify-end space-x-2">
-                        <ShadcnButton type="button" variant="outline" onClick={() => setIsEditing(false)}>
+                        <Button type="button" variant="outline" onClick={() => setIsEditing(false)}>
                           Cancel
-                        </ShadcnButton>
-                        <ShadcnButton type="submit">Save Changes</ShadcnButton>
+                        </Button>
+                        <Button type="submit">Save Changes</Button>
                       </div>
                     </form>
                   </TooltipProvider>
-                </Card>
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium">Vector Store Details</h3>
+                {is_admin && <Button onClick={startEditing}>Edit Vector Store</Button>}
               </div>
-            ) : (
-              <div>
-                <div className="flex justify-between items-center mb-4">
-                  <Title>Vector Store Details</Title>
-                  {is_admin && <Button onClick={startEditing}>Edit Vector Store</Button>}
-                </div>
-                <Card>
+              <Card>
+                <CardContent>
                   <div className="space-y-4">
                     <div>
-                      <Text className="font-medium">ID</Text>
-                      <Text>{vectorStoreDetails.vector_store_id}</Text>
+                      <p className="font-medium">ID</p>
+                      <p>{vectorStoreDetails.vector_store_id}</p>
                     </div>
                     <div>
-                      <Text className="font-medium">Name</Text>
-                      <Text>{vectorStoreDetails.vector_store_name || "-"}</Text>
+                      <p className="font-medium">Name</p>
+                      <p>{vectorStoreDetails.vector_store_name || "-"}</p>
                     </div>
                     <div>
-                      <Text className="font-medium">Description</Text>
-                      <Text>{vectorStoreDetails.vector_store_description || "-"}</Text>
+                      <p className="font-medium">Description</p>
+                      <p>{vectorStoreDetails.vector_store_description || "-"}</p>
                     </div>
                     <div>
-                      <Text className="font-medium">Provider</Text>
+                      <p className="font-medium">Provider</p>
                       <div className="flex items-center space-x-2 mt-1">
                         {(() => {
                           const provider = vectorStoreDetails.custom_llm_provider || "bedrock";
@@ -391,41 +400,41 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                           return (
                             <>
                               <Logo src={logo} label={displayName} className="w-5 h-5" />
-                              <Badge color="blue">{displayName}</Badge>
+                              <Badge variant="secondary">{displayName}</Badge>
                             </>
                           );
                         })()}
                       </div>
                     </div>
                     <div>
-                      <Text className="font-medium">Metadata</Text>
+                      <p className="font-medium">Metadata</p>
                       <div className="bg-muted p-3 rounded-sm mt-2 font-mono text-xs overflow-auto max-h-48">
                         <pre>{metadataString}</pre>
                       </div>
                     </div>
                     <div>
-                      <Text className="font-medium">Created</Text>
-                      <Text>
+                      <p className="font-medium">Created</p>
+                      <p>
                         {vectorStoreDetails.created_at ? new Date(vectorStoreDetails.created_at).toLocaleString() : "-"}
-                      </Text>
+                      </p>
                     </div>
                     <div>
-                      <Text className="font-medium">Last Updated</Text>
-                      <Text>
+                      <p className="font-medium">Last Updated</p>
+                      <p>
                         {vectorStoreDetails.updated_at ? new Date(vectorStoreDetails.updated_at).toLocaleString() : "-"}
-                      </Text>
+                      </p>
                     </div>
                   </div>
-                </Card>
-              </div>
-            )}
-          </TabPanel>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+        </TabsContent>
 
-          <TabPanel>
-            <VectorStoreTester vectorStoreId={vectorStoreDetails.vector_store_id} accessToken={accessToken || ""} />
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+        <TabsContent value="test" keepMounted>
+          <VectorStoreTester vectorStoreId={vectorStoreDetails.vector_store_id} accessToken={accessToken || ""} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

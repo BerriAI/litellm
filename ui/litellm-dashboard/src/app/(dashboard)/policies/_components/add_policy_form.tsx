@@ -546,7 +546,12 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             <Button type="button" variant="outline" onClick={handleClose}>
               Cancel
             </Button>
-            <Button type="button" onClick={form.handleSubmit(handleSubmit)} disabled={isSubmitting}>
+            <Button
+              type="button"
+              onClick={form.handleSubmit(handleSubmit)}
+              disabled={isSubmitting}
+              aria-busy={isSubmitting}
+            >
               {isSubmitting && <UiLoadingSpinner className="size-4" />}
               {isEditing ? "Update Policy" : "Create Policy"}
             </Button>

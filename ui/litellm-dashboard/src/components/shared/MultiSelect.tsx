@@ -21,6 +21,7 @@ export interface MultiSelectOption {
 }
 
 interface MultiSelectProps {
+  id?: string;
   options: MultiSelectOption[];
   value?: string[];
   onValueChange: (value: string[]) => void;
@@ -43,6 +44,7 @@ const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
 };
 
 export function MultiSelect({
+  id,
   options,
   value = [],
   onValueChange,
@@ -101,9 +103,10 @@ export function MultiSelect({
                 </ComboboxChip>
               ))}
               <ComboboxChipsInput
+                id={id}
                 placeholder={loading ? "Loading..." : placeholder}
                 className="min-w-24"
-                aria-label={placeholder}
+                aria-label={placeholder || undefined}
               />
             </>
           )}

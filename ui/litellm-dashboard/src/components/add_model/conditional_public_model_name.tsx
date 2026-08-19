@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Form, Table } from "antd";
-import { TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { Tooltip } from "../atoms/index";
 import { Providers } from "../provider_info_helpers";
 
@@ -126,7 +126,7 @@ const ConditionalPublicModelName: React.FC = () => {
       key: "public_name",
       render: (text: string, record: any, index: number) => {
         return (
-          <TextInput
+          <Input
             value={text}
             onChange={(e) => {
               const newValue = e.target.value;

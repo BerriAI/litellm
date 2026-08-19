@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Card, Text, Title, Button as TremorButton, Badge } from "@tremor/react";
 import { Tooltip, Button as AntdButton } from "antd";
 import { z } from "zod/v4";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
@@ -14,7 +13,9 @@ import BudgetDurationDropdown from "@/components/common_components/budget_durati
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { MultiSelect } from "@/components/shared/MultiSelect";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -220,11 +221,11 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <TremorButton onClick={onClose} className="mb-4">
+          <Button onClick={onClose} className="mb-4">
             ← Back to Tags
-          </TremorButton>
+          </Button>
           <div className="flex items-center gap-2">
-            <Text className="font-medium">Tag Name:</Text>
+            <span className="text-sm font-medium">Tag Name:</span>
             <span className="font-mono px-2 py-1 bg-muted rounded-sm text-sm border border-border">
               {tagDetails.name}
             </span>
@@ -240,91 +241,97 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               }`}
             />
           </div>
-          <Text className="text-muted-foreground">{tagDetails.description || "No description"}</Text>
+          <p className="text-sm text-muted-foreground">{tagDetails.description || "No description"}</p>
         </div>
-        {is_admin && !isEditing && <TremorButton onClick={() => setIsEditing(true)}>Edit Tag</TremorButton>}
+        {is_admin && !isEditing && <Button onClick={() => setIsEditing(true)}>Edit Tag</Button>}
       </div>
 
       {isEditing ? (
         <Card>
-          <TagEditForm
-            tag={tagDetails}
-            seedBudgetFields={editTag}
-            userModels={userModels}
-            onCancel={() => setIsEditing(false)}
-            onSave={handleSave}
-          />
+          <CardContent>
+            <TagEditForm
+              tag={tagDetails}
+              seedBudgetFields={editTag}
+              userModels={userModels}
+              onCancel={() => setIsEditing(false)}
+              onSave={handleSave}
+            />
+          </CardContent>
         </Card>
       ) : (
         <div className="space-y-6">
           <Card>
-            <Title>Tag Details</Title>
-            <div className="space-y-4 mt-4">
-              <div>
-                <Text className="font-medium">Name</Text>
-                <Text>{tagDetails.name}</Text>
-              </div>
-              <div>
-                <Text className="font-medium">Description</Text>
-                <Text>{tagDetails.description || "-"}</Text>
-              </div>
-              <div>
-                <Text className="font-medium">Allowed Models</Text>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {!tagDetails.models || tagDetails.models.length === 0 ? (
-                    <Badge color="red">All Models</Badge>
-                  ) : (
-                    tagDetails.models.map((modelId) => (
-                      <Badge key={modelId} color="blue">
-                        <Tooltip title={`ID: ${modelId}`}>{tagDetails.model_info?.[modelId] || modelId}</Tooltip>
-                      </Badge>
-                    ))
-                  )}
+            <CardContent>
+              <CardTitle>Tag Details</CardTitle>
+              <div className="space-y-4 mt-4">
+                <div>
+                  <p className="font-medium">Name</p>
+                  <p>{tagDetails.name}</p>
+                </div>
+                <div>
+                  <p className="font-medium">Description</p>
+                  <p>{tagDetails.description || "-"}</p>
+                </div>
+                <div>
+                  <p className="font-medium">Allowed Models</p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {!tagDetails.models || tagDetails.models.length === 0 ? (
+                      <Badge variant="secondary">All Models</Badge>
+                    ) : (
+                      tagDetails.models.map((modelId) => (
+                        <Badge key={modelId} variant="secondary">
+                          <Tooltip title={`ID: ${modelId}`}>{tagDetails.model_info?.[modelId] || modelId}</Tooltip>
+                        </Badge>
+                      ))
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <p className="font-medium">Created</p>
+                  <p>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</p>
+                </div>
+                <div>
+                  <p className="font-medium">Last Updated</p>
+                  <p>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</p>
                 </div>
               </div>
-              <div>
-                <Text className="font-medium">Created</Text>
-                <Text>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</Text>
-              </div>
-              <div>
-                <Text className="font-medium">Last Updated</Text>
-                <Text>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</Text>
-              </div>
-            </div>
+            </CardContent>
           </Card>
 
           {tagDetails.litellm_budget_table && (
             <Card>
-              <Title>Budget & Rate Limits</Title>
-              <div className="space-y-4 mt-4">
-                {tagDetails.litellm_budget_table.max_budget !== undefined &&
-                  tagDetails.litellm_budget_table.max_budget !== null && (
+              <CardContent>
+                <CardTitle>Budget & Rate Limits</CardTitle>
+                <div className="space-y-4 mt-4">
+                  {tagDetails.litellm_budget_table.max_budget !== undefined &&
+                    tagDetails.litellm_budget_table.max_budget !== null && (
+                      <div>
+                        <p className="font-medium">Max Budget</p>
+                        <p>${tagDetails.litellm_budget_table.max_budget}</p>
+                      </div>
+                    )}
+                  {tagDetails.litellm_budget_table.budget_duration && (
                     <div>
-                      <Text className="font-medium">Max Budget</Text>
-                      <Text>${tagDetails.litellm_budget_table.max_budget}</Text>
+                      <p className="font-medium">Budget Duration</p>
+                      <p>{tagDetails.litellm_budget_table.budget_duration}</p>
                     </div>
                   )}
-                {tagDetails.litellm_budget_table.budget_duration && (
-                  <div>
-                    <Text className="font-medium">Budget Duration</Text>
-                    <Text>{tagDetails.litellm_budget_table.budget_duration}</Text>
-                  </div>
-                )}
-                {tagDetails.litellm_budget_table.tpm_limit !== undefined &&
-                  tagDetails.litellm_budget_table.tpm_limit !== null && (
-                    <div>
-                      <Text className="font-medium">TPM Limit</Text>
-                      <Text>{tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}</Text>
-                    </div>
-                  )}
-                {tagDetails.litellm_budget_table.rpm_limit !== undefined &&
-                  tagDetails.litellm_budget_table.rpm_limit !== null && (
-                    <div>
-                      <Text className="font-medium">RPM Limit</Text>
-                      <Text>{tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}</Text>
-                    </div>
-                  )}
-              </div>
+                  {tagDetails.litellm_budget_table.tpm_limit !== undefined &&
+                    tagDetails.litellm_budget_table.tpm_limit !== null && (
+                      <div>
+                        <p className="font-medium">TPM Limit</p>
+                        <p>{tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}</p>
+                      </div>
+                    )}
+                  {tagDetails.litellm_budget_table.rpm_limit !== undefined &&
+                    tagDetails.litellm_budget_table.rpm_limit !== null && (
+                      <div>
+                        <p className="font-medium">RPM Limit</p>
+                        <p>{tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}</p>
+                      </div>
+                    )}
+                </div>
+              </CardContent>
             </Card>
           )}
         </div>
