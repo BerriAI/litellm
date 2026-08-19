@@ -137,7 +137,11 @@ async def anthropic_messages_with_mcp(
     )
 
     # Extract non-MCP tool names provided directly in the call by the client
-    client_tool_names = {t.get("name") for t in (other_tools or []) if isinstance(t, dict) and t.get("name")}
+    client_tool_names = {
+        t.get("name")  # kwargs-ok: standard dictionary lookup for non-MCP client tools
+        for t in (other_tools or [])
+        if isinstance(t, dict) and t.get("name")
+    }
 
     for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
         if _get_stop_reason(response) != "tool_use":
@@ -151,8 +155,10 @@ async def anthropic_messages_with_mcp(
         # 1. Tools explicitly passed in other_tools
         # 2. Tools missing from tool_server_map when server-side tools exist
         has_client_side_tool = any(
-            block.get("name") in client_tool_names
-            or (bool(tool_server_map) and block.get("name") not in tool_server_map)
+            block.get("name") in client_tool_names  # kwargs-ok: standard dictionary lookup
+            or (
+                bool(tool_server_map) and block.get("name") not in tool_server_map
+            )  # kwargs-ok: standard dictionary lookup
             for block in tool_use_blocks
         )
         if has_client_side_tool:
