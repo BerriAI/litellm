@@ -22,11 +22,11 @@ interface DynamicFormProps {
   alertingSettings: AlertingSetting[];
   handleInputChange: (fieldName: string, newValue: AlertingFieldValue) => void;
   handleResetField: (fieldName: string, index: number) => void;
-  handleSubmit: (formValues: Record<string, any>) => void;
+  handleSubmit: (formValues: AlertingFormValues) => void;
   premiumUser: boolean;
 }
 
-type AlertingFormValues = Record<string, string | boolean>;
+export type AlertingFormValues = Record<string, string | boolean>;
 
 const DynamicForm: React.FC<DynamicFormProps> = ({
   alertingSettings,

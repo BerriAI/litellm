@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from "react";
 
 import { alertingSettingsCall, updateConfigFieldSetting } from "../networking";
-import DynamicForm, { type AlertingFieldValue } from "./dynamic_form";
+import DynamicForm, { type AlertingFieldValue, type AlertingFormValues } from "./dynamic_form";
 import { toast } from "@/lib/toast";
 interface alertingSettingsItem {
   field_name: string;
@@ -43,7 +43,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     setAlertingSettings(updatedSettings);
   };
 
-  const handleSubmit = async (formValues: Record<string, any>) => {
+  const handleSubmit = async (formValues: AlertingFormValues) => {
     if (!accessToken) {
       return;
     }
