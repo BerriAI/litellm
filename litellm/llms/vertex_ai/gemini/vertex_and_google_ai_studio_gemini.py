@@ -281,11 +281,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         HIGH for it, while earlier 3.x-flash models (3.0, 3.1, 3.5, 3.6) still accept it.
         """
         lowered: Final = model.lower()
-        return (
-            "flash" in lowered
-            and "gemini-3" in lowered
-            and "gemini-3.7" not in lowered
-        )
+        return "flash" in lowered and "gemini-3" in lowered and "gemini-3.7" not in lowered
 
     @staticmethod
     def _forward_gemini_function_call_id(model: str) -> bool:
@@ -967,9 +963,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         params["thinkingLevel"] = (
-                            "minimal"
-                            if VertexGeminiConfig._is_gemini3_flash_supports_minimal(model)
-                            else "low"
+                            "minimal" if VertexGeminiConfig._is_gemini3_flash_supports_minimal(model) else "low"
                         )
             else:
                 # Thinking disabled
