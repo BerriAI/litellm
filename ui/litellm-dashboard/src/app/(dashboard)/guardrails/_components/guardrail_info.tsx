@@ -560,7 +560,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card className="block p-6">
                 <p>Mode</p>
                 <div className="mt-2">
-                  <h3 className="text-lg font-medium">{formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}</h3>
+                  <h3 className="text-lg font-medium">
+                    {formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}
+                  </h3>
                   <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
                     {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
                   </Badge>
