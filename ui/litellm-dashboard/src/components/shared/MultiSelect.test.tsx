@@ -92,4 +92,18 @@ describe("MultiSelect", () => {
     expect(screen.queryByText('Create "vs-typed"')).not.toBeInTheDocument();
     expect(await screen.findByText("No options found")).toBeInTheDocument();
   });
+
+  it("marks a disabled option as disabled and refuses to select it", async () => {
+    const { onValueChange, input } = renderMultiSelect({
+      options: [OPTIONS[0], { ...OPTIONS[1], disabled: true }],
+    });
+
+    await openPopup(input);
+    const disabledOption = screen.getByRole("option", { name: /beta-kb/ });
+    expect(disabledOption).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.click(disabledOption);
+
+    expect(onValueChange).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,4 @@
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Member } from "@/components/networking";
 import { StatusBadge } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
@@ -60,9 +60,9 @@ export default function MemberTable({
               {roleTooltip ? (
                 <span className="inline-flex items-center gap-2">
                   {roleColumnTitle}
-                  <Tooltip content={roleTooltip}>
+                  <SimpleTooltip content={roleTooltip}>
                     <Info className="size-3.5" />
-                  </Tooltip>
+                  </SimpleTooltip>
                 </span>
               ) : (
                 roleColumnTitle

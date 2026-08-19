@@ -18,6 +18,7 @@ export interface MultiSelectOption {
   label: string;
   value: string;
   description?: string;
+  disabled?: boolean;
 }
 
 interface MultiSelectProps {
@@ -116,7 +117,7 @@ export function MultiSelect({
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(option: MultiSelectOption) => (
-            <ComboboxItem key={option.value} value={option}>
+            <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
               <span className="min-w-0">
                 <span className="block truncate">{option.label}</span>
                 {option.description && (

@@ -1,6 +1,5 @@
 import React, { useState } from "react";
-// eslint-disable-next-line no-restricted-imports -- exercising KeyLifecycleSettings requires hosting it in a real antd Form (the component it's built on)
-import { Form } from "antd";
+import { Controller, useForm } from "react-hook-form";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
@@ -15,30 +14,37 @@ interface HarnessProps {
 }
 
 const Harness: React.FC<HarnessProps> = ({ isCreateMode = true, onFinish = () => {} }) => {
-  const [form] = Form.useForm();
+  const form = useForm<{ duration: string }>({ defaultValues: { duration: "" } });
   const [autoRotationEnabled, setAutoRotationEnabled] = useState(false);
   const [rotationInterval, setRotationInterval] = useState("");
   const [neverExpire, setNeverExpire] = useState(false);
 
   return (
-    <Form form={form} onFinish={onFinish}>
-      <Form.Item name="duration" initialValue="" noStyle>
-        <KeyLifecycleSettings
-          autoRotationEnabled={autoRotationEnabled}
-          onAutoRotationChange={setAutoRotationEnabled}
-          rotationInterval={rotationInterval}
-          onRotationIntervalChange={setRotationInterval}
-          isCreateMode={isCreateMode}
-          neverExpire={neverExpire}
-          onNeverExpireChange={setNeverExpire}
-        />
-      </Form.Item>
+    <form onSubmit={form.handleSubmit(onFinish)}>
+      <Controller
+        control={form.control}
+        name="duration"
+        render={({ field }) => (
+          <KeyLifecycleSettings
+            id={field.name}
+            value={field.value}
+            onChange={field.onChange}
+            autoRotationEnabled={autoRotationEnabled}
+            onAutoRotationChange={setAutoRotationEnabled}
+            rotationInterval={rotationInterval}
+            onRotationIntervalChange={setRotationInterval}
+            isCreateMode={isCreateMode}
+            neverExpire={neverExpire}
+            onNeverExpireChange={setNeverExpire}
+          />
+        )}
+      />
       <button type="submit">submit</button>
-      <button type="button" onClick={() => form.resetFields()}>
+      <button type="button" onClick={() => form.reset()}>
         reset
       </button>
       <span data-testid="rotation-interval-value">{rotationInterval}</span>
-    </Form>
+    </form>
   );
 };
 
@@ -169,7 +175,7 @@ describe("KeyLifecycleSettings", () => {
     });
 
     it("shows the custom interval input when Custom interval is selected, without propagating yet", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));
@@ -184,7 +190,7 @@ describe("KeyLifecycleSettings", () => {
     });
 
     it("propagates a typed custom interval to the parent", async () => {
-      const user = userEvent.setup();
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
       renderWithProviders(<Harness />);
 
       await user.click(screen.getByRole("switch"));

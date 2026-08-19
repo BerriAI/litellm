@@ -161,6 +161,26 @@ describe("UserSearchModal submit payload", () => {
     });
   });
 
+  it("commits the first match when the typed search is confirmed with Enter", async () => {
+    const { user, onSubmit } = setup();
+
+    const input = getEmailSearchInput();
+    await user.click(input);
+    await user.type(input, "pick");
+    await waitFor(() => expect(userFilterUICall).toHaveBeenCalled(), { timeout: 3000 });
+    await screen.findByRole("option", { name: "picked@example.com" });
+
+    await user.keyboard("{Enter}");
+    await user.click(save());
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toStrictEqual({
+      user_email: "picked@example.com",
+      user_id: "u-1",
+      role: "user",
+    });
+  });
+
   it("does not submit on Enter in any field, while the button still does", async () => {
     const { user, onSubmit } = setup();
 

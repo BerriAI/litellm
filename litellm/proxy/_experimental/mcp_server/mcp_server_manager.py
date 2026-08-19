@@ -1740,12 +1740,14 @@ class MCPServerManager:
             server: The MCP server whose OAuth metadata must be resolved.
 
         Returns:
-            The resolved server, or the registered server when no discovery is
-            pending.
+            The resolved server; the registered server when no discovery is
+            pending, or when discovery failed for a client-forwarded-token
+            server, whose session consumes no discovered endpoint.
 
         Raises:
             HTTPException: Status 503 when discovery times out or returns
-                incomplete metadata.
+                incomplete metadata for a server whose OAuth flow the gateway
+                runs itself.
         """
         acquisition: Final = self._get_or_start_oauth_discovery_task(server)
         if acquisition is None:
@@ -1764,6 +1766,8 @@ class MCPServerManager:
                 return await self.ensure_oauth_metadata_discovered(server)
             case _OAuthDiscoveryFailed(timed_out=timed_out):
                 current: Final = self._registered_server(server)
+                if current.is_client_forwarded_token:
+                    return current
                 server_ref: Final = current.alias or current.server_name or current.name or current.server_id
                 reason: Final = "timed out" if timed_out else "returned incomplete metadata"
                 raise HTTPException(
@@ -2321,22 +2325,29 @@ class MCPServerManager:
             openapi_key_prefix: Final = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
             global_mcp_tool_registry.unregister_tools_with_prefix(openapi_key_prefix)
 
-        owned_raw: Final[set[str]] = set()
-        for p in iter_known_server_prefixes(server):
-            if p:
-                owned_raw.add(p)
-        if server.name:
-            owned_raw.add(server.name)
+        owned_normalized: Final = self._owned_mapping_values(server)
 
-        owned_normalized: Final = {normalize_server_name(x) for x in owned_raw}
-
-        stale_mapping_keys: Final[list[str]] = []
-        for tool_name, mapped_server in list(self.tool_name_to_mcp_server_name_mapping.items()):
-            if mapped_server in owned_raw or normalize_server_name(str(mapped_server)) in owned_normalized:
-                stale_mapping_keys.append(tool_name)
+        stale_mapping_keys: Final = tuple(
+            tool_name
+            for tool_name, mapped_server in self.tool_name_to_mcp_server_name_mapping.items()
+            if normalize_server_name(str(mapped_server)) in owned_normalized
+        )
 
         for key in stale_mapping_keys:
             del self.tool_name_to_mcp_server_name_mapping[key]
+
+    def _owned_mapping_values(self, server: MCPServer) -> frozenset[str]:
+        return frozenset(
+            normalize_server_name(value) for value in (*iter_known_server_prefixes(server), server.name) if value
+        )
+
+    def _server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
+        owned: Final = self._owned_mapping_values(server)
+        mapped_owners: Final = (
+            self.tool_name_to_mcp_server_name_mapping.get(spelling)
+            for spelling in iter_known_tool_name_spellings(tool_name, server)
+        )
+        return any(owner is not None and normalize_server_name(owner) in owned for owner in mapped_owners)
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
@@ -5249,7 +5260,7 @@ class MCPServerManager:
                     user_api_key_auth=user_api_key_auth,
                 ):
                     extra_headers = _without_authorization(extra_headers)
-        elif mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate:
+        elif mcp_server.is_client_forwarded_token:
             extra_headers = _client_forwarded_authorization_headers(
                 mcp_server=mcp_server,
                 oauth2_headers=oauth2_headers,
@@ -5356,7 +5367,7 @@ class MCPServerManager:
             # Scoped to the two client-forwarded token modes this stack introduced; legacy
             # oauth2 + delegate_auth_to_upstream (is_oauth_passthrough) is being removed, so it is not
             # added here even though the list path still relays for it.
-            relays_upstream_auth: Final = mcp_server.is_true_passthrough or mcp_server.is_oauth_delegate
+            relays_upstream_auth: Final = mcp_server.is_client_forwarded_token
             server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
             async def _call_tool_via_client(client, params):
@@ -5463,13 +5474,8 @@ class MCPServerManager:
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
 
-        if resolved_by_server_name_only:
-            tool_known: Final = (
-                name in self.tool_name_to_mcp_server_name_mapping
-                or prefixed_tool_name in self.tool_name_to_mcp_server_name_mapping
-            )
-            if not tool_known:
-                raise ValueError(f"Tool {name} not found")
+        if resolved_by_server_name_only and not self._server_exposes_tool(mcp_server, name):
+            raise ValueError(f"Tool {name} not found")
 
         return mcp_server
 
@@ -5847,10 +5853,7 @@ class MCPServerManager:
         if matched is not None:
             matched_prefix, original_tool_name = matched
             matched_server: Final = prefix_to_server.get(matched_prefix)
-            if matched_server is not None and (
-                original_tool_name in self.tool_name_to_mcp_server_name_mapping
-                or tool_name in self.tool_name_to_mcp_server_name_mapping
-            ):
+            if matched_server is not None and self._server_exposes_tool(matched_server, original_tool_name):
                 return matched_server
 
         return None
