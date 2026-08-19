@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import ssl
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from types import ModuleType
@@ -49,13 +49,17 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
+from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
-from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.vector_store.transformation import (
+    BaseDirectVectorStoreConfig,
+    BaseVectorStoreConfig,
+)
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
@@ -69,6 +73,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
+    ProjectQuotaCallback,
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
@@ -250,6 +255,27 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
         if getattr(cb_func, "__func__", cb_func) is not getattr(base_func, "__func__", base_func):
             return True
     return False
+
+
+def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
+    """Duck-type discover proxy hooks exposing per-frame project ITPM/OTPM
+    enforcement, so the Responses WebSocket loop can charge every
+    ``response.create`` frame, not just the connection's first one.
+
+    Uses duck-typing on ``litellm.callbacks`` (rather than importing the
+    proxy hook directly) to avoid a layering violation (SDK importing from
+    the proxy layer).
+    """
+    import litellm as _litellm
+
+    callbacks: Final = cast(  # cast-ok: callback registry is inspected before protocol use
+        Sequence[object], _litellm.callbacks
+    )
+    return tuple(
+        cast(ProjectQuotaCallback, callback)  # cast-ok: required callback method is callable
+        for callback in callbacks
+        if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
+    )
 
 
 class BaseLLMHTTPHandler:
@@ -892,6 +918,7 @@ class BaseLLMHTTPHandler:
         )
         if provider_config is None:
             raise ValueError(f"Provider {custom_llm_provider} does not support embedding")
+        embedding_extra_body: Final[Mapping[str, object] | None] = optional_params.pop("extra_body", None)
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -916,6 +943,8 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             headers=headers,
         )
+        if embedding_extra_body:
+            data.update(embedding_extra_body)
 
         # Some providers (e.g. OCI) require request signing after the body is built.
         # The default BaseConfig.sign_request returns (headers, None) — a no-op for
@@ -1555,12 +1584,14 @@ class BaseLLMHTTPHandler:
         model: str,
         response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        optional_params: Mapping[str, object],
     ) -> OCRResponse:
         """Shared logic for transforming OCR responses."""
         return provider_config.transform_ocr_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     def ocr(
@@ -1636,6 +1667,7 @@ class BaseLLMHTTPHandler:
             model=model,
             response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def async_ocr(
@@ -1698,6 +1730,7 @@ class BaseLLMHTTPHandler:
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     def search(
@@ -5930,10 +5963,10 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -5963,10 +5996,10 @@ class BaseLLMHTTPHandler:
         self,
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        provider_config: Any | None = None,
+        provider_config: BaseRealtimeHTTPConfig | None = None,
         model: str | None = None,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -5992,7 +6025,7 @@ class BaseLLMHTTPHandler:
         endpoint: Literal["client_secrets", "transcription_sessions"],
         api_base: str,
         api_key: str,
-        request_data: dict[str, Any],
+        request_data: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
         provider_config: Any | None = None,
@@ -6168,6 +6201,8 @@ class BaseLLMHTTPHandler:
         - Uses ManagedResponsesWebSocketHandler which makes HTTP streaming calls
         - Forwards events over the websocket connection
         """
+        _ws_quota_callbacks: Final = _collect_ws_project_quota_callbacks()
+
         if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
             from litellm.responses.streaming_iterator import (
                 ManagedResponsesWebSocketHandler,
@@ -6184,6 +6219,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
+                quota_callbacks=_ws_quota_callbacks,
                 **kwargs,
             )
             await handler.run()
@@ -6304,6 +6340,7 @@ class BaseLLMHTTPHandler:
                     first_message=first_message,
                     guardrail_callbacks=_ws_guardrail_callbacks,
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
+                    quota_callbacks=_ws_quota_callbacks,
                     authorized_model=model,
                 )
                 await streaming.bidirectional_forward()
@@ -9396,6 +9433,27 @@ class BaseLLMHTTPHandler:
             )
 
     ###### VECTOR STORE HANDLER ######
+    @staticmethod
+    def _pre_call_direct_vector_store_search(
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str,
+        vector_store_id: str,
+        query: str | Sequence[str],
+    ) -> None:
+        """Direct providers have no HTTP request to echo, and an empty api_base makes the debug
+        logger fall back to dumping model_call_details, which holds stored provider credentials."""
+        endpoint: Final = f"{custom_llm_provider}://{vector_store_id}"
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
+                "query": query,
+                "vector_store_id": vector_store_id,
+                "api_base": endpoint,
+                "request_str": f"direct vector store search: {endpoint}",
+            },
+        )
+
     async def async_vector_store_search_handler(
         self,
         vector_store_id: str,
@@ -9411,6 +9469,22 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
     ) -> VectorStoreSearchResponse:
+        if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
+            self._pre_call_direct_vector_store_search(
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vector_store_id=vector_store_id,
+                query=query,
+            )
+            return await vector_store_provider_config.aexecute_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                timeout=timeout,
+            )
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -9522,6 +9596,22 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
+            )
+
+        if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
+            self._pre_call_direct_vector_store_search(
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vector_store_id=vector_store_id,
+                query=query,
+            )
+            return vector_store_provider_config.execute_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                timeout=timeout,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -11077,7 +11167,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
-        system_instruction: Any | None = None,
+        system_instruction: object | None = None,
     ) -> Any:
         """
         Handles Google GenAI generate content requests.
@@ -11208,7 +11298,7 @@ class BaseLLMHTTPHandler:
         client: AsyncHTTPHandler | None = None,
         stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
-        system_instruction: Any | None = None,
+        system_instruction: object | None = None,
     ) -> Any:
         """
         Async version of the generate content handler.

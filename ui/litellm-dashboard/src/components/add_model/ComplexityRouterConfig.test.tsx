@@ -2,6 +2,10 @@ import { fireEvent, renderWithProviders, screen, within } from "../../../tests/t
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
 const mockModelInfo = [
   { model_group: "gpt-4", mode: "chat" },
@@ -704,5 +708,138 @@ describe("ComplexityRouterConfig affinity panel", () => {
     fireEvent.click(screen.getByText("Advanced: Affinity"));
 
     expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).not.toBeChecked();
+  });
+});
+
+describe("ComplexityRouterConfig default model", () => {
+  const getDefaultModelSelect = () => screen.getByRole("combobox", { name: "Default model" });
+
+  it("shows what the tiers currently imply, so an untouched router still names its default", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.getByText("Derived from tiers: gpt-3.5-turbo")).toBeInTheDocument();
+  });
+
+  it("asks for a model rather than naming a derived one when no tier holds one", () => {
+    const noTiers: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={noTiers} />);
+    expect(screen.getByText("Add a model to the Simple or Medium tier")).toBeInTheDocument();
+  });
+
+  it("records a pinned model", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+
+    await user.click(getDefaultModelSelect());
+    await user.click((await screen.findAllByTitle("claude-3-opus")).slice(-1)[0]);
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ default_model: "claude-3-opus" }));
+  });
+
+  it("drops the key when the pin is cleared, so an emptied select reads as tier-tracking", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} onChange={onChange} />);
+
+    // eslint-disable-next-line local/no-antd-class-selectors -- antd marks the clear affordance aria-hidden, so no accessible query reaches it
+    await user.click(document.querySelector(".ant-select-clear") as HTMLElement);
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ default_model: undefined }));
+  });
+
+  it("shows a pinned model as the selection instead of the tier-derived one", () => {
+    const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} />);
+    expect(
+      // eslint-disable-next-line local/no-antd-class-selectors -- the tier selects show the same model as a tag, so the assertion has to scope to this select's root, which antd exposes only as a class
+      within(getDefaultModelSelect().closest(".ant-select") as HTMLElement).getByTitle("claude-3-opus"),
+    ).toBeInTheDocument();
+  });
+
+  it("unlocks the default model fallback on a pin alone, with no tier to derive from", () => {
+    const pinnedNoTiers: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+      tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+      default_model: "claude-3-opus",
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinnedNoTiers} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toBeEnabled();
+  });
+
+  it("names the resolved default on the fallback option, so the destination is not a guess", () => {
+    const pinned: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+      default_model: "claude-3-opus",
+    };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Route to the default model \(claude-3-opus\)/ })).toBeInTheDocument();
+  });
+});
+
+describe("plan-mode override", () => {
+  const openPanel = () => fireEvent.click(screen.getByText("Advanced: Plan-Mode Override"));
+  const switchName = "Route plan-mode requests to a minimum tier";
+
+  it("toggling on floors at the highest tier that has models", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    openPanel();
+    fireEvent.click(await screen.findByRole("switch", { name: switchName }));
+    expect(onChange.mock.calls.at(-1)?.[0].plan_mode_min_tier).toBe("REASONING");
+  });
+
+  it("toggling off drops the key entirely instead of storing an empty value", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, plan_mode_min_tier: "COMPLEX" }}
+        onChange={onChange}
+      />,
+    );
+    openPanel();
+    const control = await screen.findByRole("switch", { name: switchName });
+    expect(control).toBeChecked();
+    fireEvent.click(control);
+    const updated = onChange.mock.calls.at(-1)?.[0];
+    expect(updated.plan_mode_min_tier).toBeUndefined();
+  });
+
+  it("only offers tiers that have models, since the backend rejects a floor at an empty tier", async () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{
+          ...defaultValue,
+          tiers: { ...defaultValue.tiers, REASONING: [] },
+          plan_mode_min_tier: "COMPLEX",
+        }}
+      />,
+    );
+    openPanel();
+    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Plan-mode minimum tier" }));
+    expect(await screen.findByTitle("Medium")).toBeInTheDocument();
+    expect(screen.queryByTitle("Reasoning")).not.toBeInTheDocument();
+  });
+
+  it("disables the toggle until some tier has models", async () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] } }}
+      />,
+    );
+    openPanel();
+    expect(await screen.findByRole("switch", { name: switchName })).toBeDisabled();
   });
 });

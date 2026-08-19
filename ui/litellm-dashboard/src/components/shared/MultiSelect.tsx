@@ -18,9 +18,11 @@ export interface MultiSelectOption {
   label: string;
   value: string;
   description?: string;
+  disabled?: boolean;
 }
 
 interface MultiSelectProps {
+  id?: string;
   options: MultiSelectOption[];
   value?: string[];
   onValueChange: (value: string[]) => void;
@@ -43,6 +45,7 @@ const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
 };
 
 export function MultiSelect({
+  id,
   options,
   value = [],
   onValueChange,
@@ -101,9 +104,10 @@ export function MultiSelect({
                 </ComboboxChip>
               ))}
               <ComboboxChipsInput
+                id={id}
                 placeholder={loading ? "Loading..." : placeholder}
                 className="min-w-24"
-                aria-label={placeholder}
+                aria-label={placeholder || undefined}
               />
             </>
           )}
@@ -113,7 +117,7 @@ export function MultiSelect({
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(option: MultiSelectOption) => (
-            <ComboboxItem key={option.value} value={option}>
+            <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
               <span className="min-w-0">
                 <span className="block truncate">{option.label}</span>
                 {option.description && (

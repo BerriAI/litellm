@@ -10,7 +10,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
 
 const { Text } = Typography;
@@ -76,14 +76,14 @@ const RoutingGroups: React.FC = () => {
 
     try {
       await saveMutation.mutateAsync(next);
-      NotificationsManager.success(
+      toast.success(
         drawerMode === "create"
           ? `Created routing group "${incoming.group_name}"`
           : `Updated routing group "${incoming.group_name}"`,
       );
       setDrawerOpen(false);
     } catch (err) {
-      NotificationsManager.error(err instanceof Error ? err.message : "Failed to save routing group");
+      toast.error(err instanceof Error ? err.message : "Failed to save routing group");
     }
   };
 
@@ -92,10 +92,10 @@ const RoutingGroups: React.FC = () => {
     const next = groups.filter((g) => g.group_name !== deletingGroup.group_name);
     try {
       await saveMutation.mutateAsync(next);
-      NotificationsManager.success(`Deleted routing group "${deletingGroup.group_name}"`);
+      toast.success(`Deleted routing group "${deletingGroup.group_name}"`);
       setDeletingGroup(null);
     } catch (err) {
-      NotificationsManager.error(err instanceof Error ? err.message : "Failed to delete routing group");
+      toast.error(err instanceof Error ? err.message : "Failed to delete routing group");
     }
   };
 

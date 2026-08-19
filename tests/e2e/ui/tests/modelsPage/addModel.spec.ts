@@ -338,8 +338,8 @@ test.describe("Add Model", () => {
 
       await page.getByRole("button", { name: "Add Model" }).last().click();
 
-      // Scope to antd's notification container so a stale toast can't satisfy this.
-      await expect(page.locator(".ant-notification").getByText("created successfully").last()).toBeVisible({
+      // Scope to the toast container so a stale toast can't satisfy this.
+      await expect(page.locator("[data-sonner-toast]").getByText("created successfully").last()).toBeVisible({
         timeout: 15_000,
       });
 

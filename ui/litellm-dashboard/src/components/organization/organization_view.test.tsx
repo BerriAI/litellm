@@ -44,10 +44,6 @@ vi.mock("../object_permissions_view", () => ({
   __esModule: true,
   default: () => <div data-testid="object-permissions-view" />,
 }));
-vi.mock("../molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
 vi.mock("../team/edit_membership", () => ({
   __esModule: true,
   default: () => null,
@@ -124,9 +120,8 @@ test("renders organization view after loading data", async () => {
     />,
   );
 
-  await waitFor(() => {
-    expect(findAllByText("Acme Corp")).toBeTruthy();
-  });
+  const [orgName] = await findAllByText("Acme Corp");
+  expect(orgName).toBeInTheDocument();
 });
 
 test("should display empty state when organization has no members", async () => {

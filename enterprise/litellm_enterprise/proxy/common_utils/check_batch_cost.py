@@ -24,12 +24,16 @@ if TYPE_CHECKING:
 
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 
-TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
+PROVIDER_TERMINAL_BATCH_STATUSES: Final[Tuple[str, ...]] = (
     "completed",
     "complete",
     "failed",
     "expired",
     "cancelled",
+)
+
+TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
+    *PROVIDER_TERMINAL_BATCH_STATUSES,
     "stale_expired",
 )
 
@@ -287,6 +291,57 @@ class CheckBatchCost:
         return self.llm_router.get_deployment(model_id=model_id) is not None
 
     @staticmethod
+    def _is_output_file_gone_at_provider(error: Exception, output_file_id: Optional[str]) -> bool:
+        """A 404 naming the output file means there is nothing to fetch on this or any
+        later poll: providers like Vertex AI advertise an output path for every batch,
+        including terminal ones that never wrote it. Any other failure may be
+        transient, so it keeps retrying until the staleness sweep bounds it."""
+        import openai
+
+        from litellm.exceptions import NotFoundError
+
+        if not output_file_id:
+            return False
+        return isinstance(error, (NotFoundError, openai.NotFoundError)) and output_file_id in str(error)
+
+    async def _finalize_unbilled_terminal_job(
+        self, job: "LiteLLM_ManagedObjectTable", response: "LiteLLMBatch"
+    ) -> None:
+        """Persist a terminal batch that has nothing billable, converting any raw
+        provider file ids to managed ids, and take it out of the poll page."""
+        try:
+            from litellm.proxy.openai_files_endpoints.common_utils import (
+                _is_base64_encoded_unified_file_id,
+                ensure_batch_response_managed_file_ids,
+            )
+
+            response.id = job.unified_object_id
+            await ensure_batch_response_managed_file_ids(
+                response=response,
+                managed_files_obj=self.proxy_logging_obj.get_proxy_hook("managed_files"),
+                prisma_client=self.prisma_client,
+                verbose_proxy_logger=verbose_proxy_logger,
+                db_batch_object=job,
+                unified_batch_id=_is_base64_encoded_unified_file_id(job.unified_object_id),
+            )
+            update_data: Final[dict] = {
+                "status": response.status,
+                "file_object": response.model_dump_json(),
+                **({"batch_processed": True} if self._has_batch_processed_column else {}),
+            }
+            await self.prisma_client.db.litellm_managedobjecttable.update(
+                where={"id": job.id},
+                data=update_data,
+            )
+            verbose_proxy_logger.info(
+                f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: failed to mark job {job.id} as {response.status} in DB: {db_err}"
+            )
+
+    @staticmethod
     def _record_error(
         prom_logger: Optional["PrometheusLogger"], error_type: str
     ) -> None:
@@ -528,6 +583,7 @@ class CheckBatchCost:
         from litellm.files.main import afile_content
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+        from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
         from litellm.proxy.openai_files_endpoints.common_utils import (
             _is_base64_encoded_unified_file_id,
         )
@@ -648,15 +704,20 @@ class CheckBatchCost:
                             f"{_file_attr}={_raw_file_id!r}: {_e}"
                         )
 
-        # Pass deployment model_info so custom batch pricing
-        # (input_cost_per_token_batches etc.) is used for cost calc
-        deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
+        # Pass the deployment's router-registered pricing (litellm_params custom
+        # rates merged with the model's published rates) so custom batch pricing
+        # (input_cost_per_token_batches etc.) is used for cost calc, exactly as
+        # the inline retrieve path does.
+        deployment_model_info = deployment_pricing_model_info(
+            model_id=model_id,
+            deployment_model=litellm_model_name,
+        )
         batch_cost, batch_usage, batch_models = (
             await calculate_batch_cost_and_usage(
                 file_content_dictionary=file_content_as_dict,
                 custom_llm_provider=llm_provider,  # type: ignore
                 model_name=model_name,
-                model_info=deployment_model_info,  # type: ignore[arg-type]
+                model_info=deployment_model_info,
             )
         )
         logging_obj = LiteLLMLogging(
@@ -796,7 +857,7 @@ class CheckBatchCost:
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if (
-                response.status in ("completed", "complete", "expired")
+                response.status in PROVIDER_TERMINAL_BATCH_STATUSES
                 and response.output_file_id is not None
             ):
                 try:
@@ -808,6 +869,15 @@ class CheckBatchCost:
                         prom_logger=prom_logger,
                     )
                 except Exception as tracking_err:
+                    if self._is_output_file_gone_at_provider(
+                        tracking_err, response.output_file_id
+                    ) and self._batch_deployment_exists(model_id):
+                        verbose_proxy_logger.warning(
+                            f"CheckBatchCost: output file {response.output_file_id} of batch {batch_id} "
+                            f"does not exist at the provider; retiring job {job.id} unbilled"
+                        )
+                        await self._finalize_unbilled_terminal_job(job, response)
+                        continue
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to track cost for batch {batch_id} "
                         f"(job {job.id}); leaving it unprocessed so the next poll retries: {tracking_err}"
@@ -837,45 +907,8 @@ class CheckBatchCost:
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
 
-            elif response.status in (
-                "completed",
-                "complete",
-                "failed",
-                "expired",
-                "cancelled",
-            ):
-                try:
-                    from litellm.proxy.openai_files_endpoints.common_utils import (
-                        _is_base64_encoded_unified_file_id,
-                        ensure_batch_response_managed_file_ids,
-                    )
-
-                    response.id = job.unified_object_id
-                    await ensure_batch_response_managed_file_ids(
-                        response=response,
-                        managed_files_obj=self.proxy_logging_obj.get_proxy_hook("managed_files"),
-                        prisma_client=self.prisma_client,
-                        verbose_proxy_logger=verbose_proxy_logger,
-                        db_batch_object=job,
-                        unified_batch_id=_is_base64_encoded_unified_file_id(job.unified_object_id),
-                    )
-                    update_data = {
-                        "status": response.status,
-                        "file_object": response.model_dump_json(),
-                    }
-                    if self._has_batch_processed_column:
-                        update_data["batch_processed"] = True
-                    await self.prisma_client.db.litellm_managedobjecttable.update(
-                        where={"id": job.id},
-                        data=update_data,
-                    )
-                    verbose_proxy_logger.info(
-                        f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
-                    )
-                except Exception as db_err:
-                    verbose_proxy_logger.error(
-                        f"CheckBatchCost: failed to mark job {job.id} as {response.status} in DB: {db_err}"
-                    )
+            elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
+                await self._finalize_unbilled_terminal_job(job, response)
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:

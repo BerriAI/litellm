@@ -22,6 +22,9 @@ class RequestComplexityRouterConfig(ComplexityRouterConfig):
     """
 
     plugins: None = Field(default=None, description="Not settable over HTTP; routing plugins are runtime objects")
+    classifier_plugin: None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # narrowing to None is the point: runtime objects are not settable over HTTP
+        default=None, description="Not settable over HTTP; the classifier plugin is a runtime object"
+    )
 
 
 class AutoRouterRoutingTestRequest(BaseModel):
@@ -266,6 +269,14 @@ class ShadowEvalJobResponse(BaseModel):
 
     job_id: str = Field(validation_alias=AliasChoices("id", "job_id"))
     api_key_id: str = Field(description="The hashed virtual key whose traffic this job evaluates, and only that key's")
+    key_alias: str | None = Field(
+        default=None,
+        description="Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted",
+    )
+    key_name: str | None = Field(
+        default=None,
+        description="Masked display name (sk-...) of the shadowed key, resolved at read time like key_alias",
+    )
     router_name: str
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
