@@ -273,6 +273,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return False
 
     @staticmethod
+    def _is_gemini3_flash_supports_minimal(model: str) -> bool:
+        """
+        Whether a gemini-3.x-flash model accepts THINKING_LEVEL_MINIMAL.
+
+        gemini-3.7-flash dropped MINIMAL support: Vertex only accepts LOW, MEDIUM, and
+        HIGH for it, while earlier 3.x-flash models (3.0, 3.1, 3.5, 3.6) still accept it.
+        """
+        lowered: Final = model.lower()
+        return (
+            "flash" in lowered
+            and "gemini-3" in lowered
+            and "gemini-3.7" not in lowered
+        )
+
+    @staticmethod
     def _forward_gemini_function_call_id(model: str) -> bool:
         """
         Whether to include `id` on function_call / function_response parts.
@@ -856,10 +871,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
-        # Check if this is gemini-3-flash which supports MINIMAL thinking level
-        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview,
-        # gemini-3.5-flash, and any future 3.x-flash variants.
-        is_gemini3flash: Final = model and ("flash" in model.lower() and "gemini-3" in model.lower())
+        is_gemini3flash: Final = bool(model) and VertexGeminiConfig._is_gemini3_flash_supports_minimal(model)
+        is_gemini3_flash_family: Final = bool(model) and "flash" in model.lower() and "gemini-3" in model.lower()
         is_gemini31pro: Final = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
             if is_gemini3flash:
@@ -869,20 +882,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            if is_gemini31pro or is_gemini3flash:
+            if is_gemini31pro or is_gemini3_flash_family:
                 return {"thinkingLevel": "medium", "includeThoughts": True}
             else:
                 return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":
-            # Gemini 3 cannot fully disable thinking, so we use "minimal" for gemini-3-flash-preview, "low" for others
+            # Gemini 3 cannot fully disable thinking, so we use "minimal" for the models that accept it, "low" for others.
             if is_gemini3flash:
                 return {"thinkingLevel": "minimal", "includeThoughts": False}
             else:
                 return {"thinkingLevel": "low", "includeThoughts": False}
         elif reasoning_effort == "none":
-            # For gemini-3-flash-preview, use "minimal" instead of "low"
+            # Same as disable: "minimal" where accepted, "low" otherwise.
             if is_gemini3flash:
                 return {"thinkingLevel": "minimal", "includeThoughts": False}
             else:
@@ -953,8 +966,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = True
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
-                        is_gemini3flash: Final = "gemini-3" in model.lower() and "flash" in model.lower()
-                        params["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
+                        params["thinkingLevel"] = (
+                            "minimal"
+                            if VertexGeminiConfig._is_gemini3_flash_supports_minimal(model)
+                            else "low"
+                        )
             else:
                 # Thinking disabled
                 params["includeThoughts"] = False
