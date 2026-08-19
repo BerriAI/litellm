@@ -4958,3 +4958,80 @@ def test_pre_call_redacts_and_masks_raw_request(logging_obj):
     raw_api_base = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_api_base"]
     assert _GEMINI_KEY not in raw_api_base
     assert "key=*****" in raw_api_base
+
+
+def test_resolve_vertex_location_for_cost():
+    """Vertex requests resolve the serving location the way dispatch does; other providers get None."""
+    from litellm.litellm_core_utils.litellm_logging import (
+        _resolve_vertex_location_for_cost,
+    )
+
+    assert _resolve_vertex_location_for_cost("openai", {"vertex_location": "us-east5"}, "gpt-4o") is None
+    assert _resolve_vertex_location_for_cost(None, {}, "gemini-3.5-flash") is None
+    assert (
+        _resolve_vertex_location_for_cost("vertex_ai", {"vertex_location": "us-east5"}, "gemini-3.5-flash")
+        == "us-east5"
+    )
+    assert (
+        _resolve_vertex_location_for_cost("vertex_ai", {"vertex_location": "global"}, "gemini-3.5-flash") == "global"
+    )
+    assert (
+        _resolve_vertex_location_for_cost(
+            "vertex_ai_beta", {"vertex_ai_location": "europe-west1"}, "claude-haiku-4-5@20251001"
+        )
+        == "europe-west1"
+    )
+
+
+def test_resolve_vertex_location_for_cost_default_region(monkeypatch):
+    """With no location configured anywhere, resolution lands on the dispatch default us-central1."""
+    from litellm.litellm_core_utils.litellm_logging import (
+        _resolve_vertex_location_for_cost,
+    )
+
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    assert _resolve_vertex_location_for_cost("vertex_ai", {}, "gemini-3.5-flash") == "us-central1"
+    assert _resolve_vertex_location_for_cost("vertex_ai", None, "gemini-3.5-flash") == "us-central1"
+
+
+def test_set_cost_breakdown_stores_vertex_location():
+    """vertex_location is recorded in the pricing basis, None for non-vertex requests."""
+    from datetime import datetime
+
+    logging_obj = LitellmLogging(
+        model="vertex_ai/claude-haiku-4-5@20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="vertex-location-set",
+        function_id="f",
+    )
+    logging_obj.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        vertex_location="us-east5",
+    )
+    assert logging_obj.cost_breakdown["vertex_location"] == "us-east5"
+
+    no_location = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="vertex-location-absent",
+        function_id="f",
+    )
+    no_location.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    assert no_location.cost_breakdown.get("vertex_location") is None
