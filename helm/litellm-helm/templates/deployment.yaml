@@ -133,6 +133,14 @@ spec:
             - name: LITELLM_LOG
               value: {{ .Values.logLevel | quote }}
             {{- end }}
+            {{- /*
+              JSON_LOGS is truthy for any non-empty value, so it is injected only when
+              jsonLogs is on and omitted entirely otherwise.
+            */}}
+            {{- if and .Values.jsonLogs (not (hasKey (default dict .Values.envVars) "JSON_LOGS")) }}
+            - name: JSON_LOGS
+              value: "True"
+            {{- end }}
             {{- if .Values.envVars }}
             {{- range $key, $val := .Values.envVars }}
             - name: {{ $key }}

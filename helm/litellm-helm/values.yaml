@@ -466,6 +466,16 @@ migrationJob:
 # this injection entirely when envVars already defines LITELLM_LOG.
 logLevel: INFO
 
+# Emit logs as JSON instead of the default plain text (sets JSON_LOGS=True in the
+# deployment env), for centralized log systems that would otherwise need a custom
+# parser. Covers uvicorn's access and error logs as well as LiteLLM's own.
+#
+# JSON_LOGS is truthy for any non-empty value, so the variable is injected only
+# when this is true and left out entirely when it is false. Defining JSON_LOGS
+# inside `envVars:` below wins: the template skips this injection when envVars
+# already defines it.
+jsonLogs: false
+
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {}
 
