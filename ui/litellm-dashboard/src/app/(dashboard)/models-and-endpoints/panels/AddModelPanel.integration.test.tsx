@@ -361,4 +361,64 @@ describe("AddModelPanel validation gates", () => {
 
     expect(modelCreateCall).not.toHaveBeenCalled();
   });
+
+  it("blocks the submit when LiteLLM Params is not valid JSON", async () => {
+    mockPtuEnabled.mockReturnValue(false);
+    const { user, openAdvanced, fillRequired, submitExpectingRejection } = await setup();
+    await fillRequired();
+    await openAdvanced();
+    await user.type(screen.getByLabelText("LiteLLM Params"), "rpm: 7");
+    await submitExpectingRejection("Please enter valid JSON");
+
+    expect(modelCreateCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("AddModelPanel behaviours the removed Advanced Settings form instance never drove", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPtuEnabled.mockReturnValue(false);
+    mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  it("leaves LiteLLM Params untouched when pass through routes is switched on", async () => {
+    const { user, openAdvanced, fillRequired, submit } = await setup();
+    await fillRequired();
+    await openAdvanced();
+    await user.click(screen.getByLabelText("Use in pass through routes"));
+    expect(screen.getByLabelText("LiteLLM Params")).toHaveValue("");
+
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "gpt-4o",
+      litellm_params: { ...alwaysMounted, ...advancedOpenExtras, use_in_pass_through: true },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
+  it("keeps a typed cost when custom pricing is switched off and back on", async () => {
+    const { user, openAdvanced, fillRequired, submit } = await setup();
+    await fillRequired();
+    await openAdvanced();
+    await user.click(screen.getByLabelText("Custom Pricing"));
+    await user.type(await screen.findByLabelText("Input Cost (per 1M tokens)"), "3");
+    await user.click(screen.getByLabelText("Custom Pricing"));
+    await waitFor(() => expect(screen.queryByLabelText("Input Cost (per 1M tokens)")).not.toBeInTheDocument());
+    await user.click(screen.getByLabelText("Custom Pricing"));
+    expect(await screen.findByLabelText("Input Cost (per 1M tokens)")).toHaveValue("3");
+
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "gpt-4o",
+      litellm_params: {
+        ...alwaysMounted,
+        ...advancedOpenExtras,
+        input_cost_per_token: 0.000003,
+        cache_read_input_token_cost: 0.000003,
+      },
+      model_info: { ...baseModelInfo },
+    });
+  });
 });
