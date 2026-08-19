@@ -340,6 +340,35 @@ describe("AddModelForm", () => {
     });
   });
 
+  it("should allow searching providers by their LiteLLM provider slug", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    const mockUseProviderFields = vi.mocked(await import("@/app/(dashboard)/hooks/providers/useProviderFields"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+    mockUseProviderFields.useProviderFields.mockReturnValue({
+      data: [
+        {
+          provider: "ZAI",
+          provider_display_name: "Z.AI",
+          litellm_provider: "zai",
+          default_model_placeholder: "zai/glm-4.6",
+          credential_fields: [],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    const props = createTestProps();
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderWithProviders(<AddModelForm {...props} />);
+
+    const providerSelect = await screen.findByRole("combobox", { name: /provider/i });
+    await user.click(providerSelect);
+    await user.type(providerSelect, "zai");
+
+    expect(await screen.findByText("Z.AI")).toBeInTheDocument();
+  });
+
   describe("cache control bindings reach the parent form store", () => {
     const renderWithForm = async () => {
       const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
