@@ -8,7 +8,7 @@ import { MultiSelect } from "@/components/shared/MultiSelect";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { requiredUnlessSiblingSet, tagsControl, textControl } from "./mcpFieldRules";
+import { requiredUnlessSiblingSet, scopesControl, textControl } from "./mcpFieldRules";
 
 interface IdJagFormFieldsProps {
   isEditing?: boolean;
@@ -203,7 +203,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         label={<FieldLabel label="Scopes (optional)" tooltip="Scopes requested on leg 1 of the exchange." />}
         name={["credentials", "scopes"]}
       >
-        {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
+        {(control) => <MultiSelect {...scopesControl(control)} placeholder="Add scopes" className="rounded-lg" />}
       </MountedFormField>
     </>
   );

@@ -16,7 +16,7 @@ import {
   parsesAsJson,
   selectControl,
   selectTriggerControl,
-  tagsControl,
+  scopesControl,
   textControl,
 } from "./mcpFieldRules";
 
@@ -172,7 +172,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name={["credentials", "scopes"]}
           >
-            {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
+            {(control) => <MultiSelect {...scopesControl(control)} placeholder="Add scopes" className="rounded-lg" />}
           </MountedFormField>
           <UpstreamResourceField />
         </>
@@ -234,7 +234,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name={["credentials", "scopes"]}
           >
-            {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
+            {(control) => <MultiSelect {...scopesControl(control)} placeholder="Add scopes" className="rounded-lg" />}
           </MountedFormField>
           <UpstreamResourceField />
           <MountedFormField

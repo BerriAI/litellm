@@ -9,7 +9,7 @@ import { MountedFormField } from "@/components/common_components/MountedFormFiel
 import { antdRequired } from "@/components/common_components/antdFormRules";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
-import { selectControl, selectTriggerControl, tagsControl, textControl } from "./mcpFieldRules";
+import { selectControl, selectTriggerControl, scopesControl, textControl } from "./mcpFieldRules";
 
 interface TokenExchangeFormFieldsProps {
   isEditing?: boolean;
@@ -178,7 +178,7 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
       >
         {(control) => (
           <MultiSelect
-            {...tagsControl(control)}
+            {...scopesControl(control)}
             placeholder={isEntraObo ? "api://<app-id>/.default" : "Add scopes"}
             className="rounded-lg"
           />

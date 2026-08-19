@@ -27,30 +27,37 @@ export const selectControl = <TValue = unknown>(control: MountedFieldControlProp
 
 export const selectTriggerControl = (control: MountedFieldControlProps) => ariaOf(control);
 
-// Tag fields are backed by a list, but a single entry can still carry several tags: a stored value
-// arrives as the delimited string an OAuth server returns (RFC 6749 uses space-delimited scopes),
-// and the tag input commits whatever the admin typed as one custom value, so "read,write" would
-// otherwise be stored verbatim. Split and dedupe on the way in and on the way out.
-const toTags = (value: unknown): string[] => {
-  const entries = Array.isArray(value) ? value : [value];
-  return [
-    ...new Set(
-      entries.flatMap((entry) => (typeof entry === "string" ? entry.split(/[\s,]+/) : [])).filter((tag) => tag !== ""),
-    ),
-  ];
-};
+const asTagList = (value: unknown): string[] =>
+  (Array.isArray(value) ? value : [value]).filter((tag): tag is string => typeof tag === "string" && tag !== "");
 
-export const tagsControl = (control: MountedFieldControlProps) => {
-  const value = toTags(control.value);
+// A scope list is delimited on both sides of the field: it is stored as the single space-delimited
+// string RFC 6749 defines, and the tag input hands back whatever the admin typed as one custom
+// value, so "read,write" would otherwise round-trip as a single malformed scope.
+const splitScopes = (value: unknown): string[] => [
+  ...new Set(
+    asTagList(value)
+      .flatMap((entry) => entry.split(/[\s,]+/))
+      .filter((scope) => scope !== ""),
+  ),
+];
+
+const tagField = (control: MountedFieldControlProps, normalise: (value: unknown) => string[]) => {
+  const value = normalise(control.value);
   return {
     id: control.id,
     options: value.map((tag) => ({ label: tag, value: tag })),
     value,
-    onValueChange: (tags: readonly string[]) => control.onChange(toTags(tags)),
+    onValueChange: (tags: readonly string[]) => control.onChange(normalise(tags)),
     emptyText: "Type to add",
     allowCustomValues: true,
   };
 };
+
+// Tags that are opaque to us: a stdio arg or an access description item may legitimately contain
+// spaces and commas, so each entry is stored exactly as the admin typed it.
+export const tagsControl = (control: MountedFieldControlProps) => tagField(control, asTagList);
+
+export const scopesControl = (control: MountedFieldControlProps) => tagField(control, splitScopes);
 
 const toNumberOrNull = (raw: string, precision: number | undefined): number | null => {
   if (raw.trim() === "") return null;
