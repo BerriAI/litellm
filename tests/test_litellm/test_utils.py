@@ -4989,3 +4989,74 @@ def test_completion_does_not_leak_rust_flag_into_provider_request_body():
     create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
     assert "rust" not in create_kwargs
     assert "rust" not in (create_kwargs.get("extra_body") or {})
+
+
+class TestSupportsNativeStreamingBaseModelFallback:
+    def test_unknown_model_falls_back_to_streaming_base_model(self):
+        assert (
+            litellm.utils.supports_native_streaming(
+                model="azure/my-custom-ptu-deployment",
+                custom_llm_provider="azure",
+                base_model="gpt-4o",
+            )
+            is True
+        )
+
+    def test_unknown_model_falls_back_to_provider_qualified_base_model(self):
+        assert (
+            litellm.utils.supports_native_streaming(
+                model="azure/my-custom-ptu-deployment",
+                custom_llm_provider="azure",
+                base_model="azure/gpt-4o",
+            )
+            is True
+        )
+
+    def test_unknown_model_with_cross_provider_base_model_returns_false(self):
+        assert (
+            litellm.utils.supports_native_streaming(
+                model="azure/my-custom-ptu-deployment",
+                custom_llm_provider="azure",
+                base_model="gemini/gemini-2.5-flash",
+            )
+            is False
+        )
+
+    def test_unknown_model_falls_back_to_non_streaming_base_model(self):
+        assert (
+            litellm.utils.supports_native_streaming(
+                model="my-custom-o1-pro-deployment",
+                custom_llm_provider="openai",
+                base_model="o1-pro",
+            )
+            is False
+        )
+
+    def test_known_model_capability_wins_over_base_model(self):
+        assert (
+            litellm.utils.supports_native_streaming(
+                model="o1-pro",
+                custom_llm_provider="openai",
+                base_model="gpt-4o",
+            )
+            is False
+        )
+
+    def test_unknown_model_and_unknown_base_model_returns_false(self):
+        assert (
+            litellm.utils.supports_native_streaming(
+                model="azure/my-custom-ptu-deployment",
+                custom_llm_provider="azure",
+                base_model="my-equally-unknown-base-model",
+            )
+            is False
+        )
+
+    def test_unknown_model_without_base_model_returns_false(self):
+        assert (
+            litellm.utils.supports_native_streaming(
+                model="azure/my-custom-ptu-deployment",
+                custom_llm_provider="azure",
+            )
+            is False
+        )
