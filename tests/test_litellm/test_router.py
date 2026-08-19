@@ -518,7 +518,7 @@ async def test_async_router_acreate_file_does_not_fall_back_across_model_groups(
         fallbacks=[{"azure-gpt": ["openai-gpt"]}],
     )
 
-    def fail_azure(*args, **kwargs):
+    def fail_azure(*args: object, **kwargs: object) -> MagicMock:
         if kwargs.get("model") == "azure/my-azure-deployment":
             raise litellm.APIConnectionError(
                 message="Connection error.",
