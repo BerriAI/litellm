@@ -302,7 +302,28 @@ describe("ModelInfoView", () => {
     await user.click(testButton);
 
     await waitFor(() => {
-      expect(mockToast.error).toHaveBeenCalled();
+      expect(mockToast.fromError).toHaveBeenCalled();
+    });
+  });
+
+  it("should not truncate the connection test error message", async () => {
+    // Regression test: the error toast used to cut the message to 100 chars
+    // via truncateString, hiding the actual provider error from the user.
+    const user = userEvent.setup();
+    const longMessage = "Bedrock_mantleException - " + "x".repeat(150);
+    mockTestConnectionRequest.mockRejectedValue(new Error(longMessage));
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+
+    const testButton = screen.getByRole("button", { name: /test connection/i });
+    await user.click(testButton);
+
+    await waitFor(() => {
+      expect(mockToast.fromError).toHaveBeenCalledWith(expect.stringContaining(longMessage));
     });
   });
 

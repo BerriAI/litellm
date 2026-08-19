@@ -14,7 +14,6 @@ import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
-import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import { normalizeTierModels, resolveComplexityDefaultModel } from "./add_model/complexity_router_tiers";
@@ -530,11 +529,7 @@ export default function ModelInfoView({
         throw new Error(response?.result?.error || response?.message || "Unknown error");
       }
     } catch (error) {
-      if (error instanceof Error) {
-        toast.error("Error testing connection: " + truncateString(error.message, 100));
-      } else {
-        toast.error("Error testing connection: " + String(error));
-      }
+      toast.fromError("Error testing connection: " + (error instanceof Error ? error.message : String(error)));
     }
   };
 
