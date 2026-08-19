@@ -74,7 +74,7 @@ describe("UserSearchModal", () => {
     expect(notice).toHaveTextContent(/users that already exist/i);
     expect(notice).toHaveTextContent(/ask a proxy admin to create their account first/i);
     // info, not warning: a warning here would read as an error state on an empty form
-    expect(notice.className).toMatch(/ant-alert-info/);
+    expect(notice.className).toMatch(/text-info/);
   });
 });
 

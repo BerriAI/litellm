@@ -1,5 +1,7 @@
 import React from "react";
-import { Alert, Spin, Tag, Typography } from "antd";
+import { Spin, Tag, Typography } from "antd";
+import { CircleAlert, Info } from "lucide-react";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { MCPServer, MCPUserEnvVarsStatus, MCPUserEnvVarSpec } from "@/components/mcp_tools/types";
@@ -9,11 +11,11 @@ import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 interface UserEnvVarsModalProps {
   server: MCPServer | null;
@@ -128,22 +130,16 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
   const isSaving = saveMutation.isPending;
 
   return (
-    <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[520px]">
         <DialogHeader>
-          <DialogTitle>
-            <div>
-              <div className="flex items-center gap-2">
-                <Title level={5} style={{ margin: 0 }}>
-                  Set your credentials
-                </Title>
-                <Tag color="blue">Per-user</Tag>
-              </div>
-              <Text type="secondary" className="text-xs">
-                {displayName}
-              </Text>
-            </div>
-          </DialogTitle>
+          <div className="flex items-center gap-2">
+            <DialogTitle>Set your credentials</DialogTitle>
+            <Tag color="blue">Per-user</Tag>
+          </div>
+          <Text type="secondary" className="text-xs">
+            {displayName}
+          </Text>
         </DialogHeader>
         <div className="space-y-4 mt-2">
           {isLoading ? (
@@ -151,9 +147,15 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
               <Spin />
             </div>
           ) : isError ? (
-            <Alert type="error" showIcon message="Failed to load env vars" />
+            <Alert variant="error">
+              <CircleAlert />
+              <AlertTitle>Failed to load env vars</AlertTitle>
+            </Alert>
           ) : required.length === 0 ? (
-            <Alert type="info" showIcon message="No per-user fields configured for this server." />
+            <Alert variant="info">
+              <Info />
+              <AlertTitle>No per-user fields configured for this server.</AlertTitle>
+            </Alert>
           ) : (
             <>
               <Text className="text-sm text-muted-foreground block">

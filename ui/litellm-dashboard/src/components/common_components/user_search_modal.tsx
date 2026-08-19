@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Alert } from "antd";
+import { Info } from "lucide-react";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { UserAddOutlined } from "@ant-design/icons";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { useForm } from "react-hook-form";
@@ -16,10 +17,10 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface User {
   user_id: string;
@@ -207,13 +208,13 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
         </DialogHeader>
         <TooltipProvider>
           <form onSubmit={form.handleSubmit(handleSubmit)} noValidate>
-            <Alert
-              type="info"
-              showIcon
-              className="mb-4"
-              message="Search selects from users that already exist. To add someone new, ask a proxy admin to create their account first."
-              data-testid="member-existing-users-notice"
-            />
+            <Alert variant="info" className="mb-4" data-testid="member-existing-users-notice">
+              <Info />
+              <AlertTitle>
+                Search selects from users that already exist. To add someone new, ask a proxy admin to create their
+                account first.
+              </AlertTitle>
+            </Alert>
 
             <FieldGroup>
               <FormField control={form.control} name="user_email" label="Email">

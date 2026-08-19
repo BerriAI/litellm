@@ -1341,17 +1341,9 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/S3VectorsConfig.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/VectorStoreForm.tsx": {
     "no-nested-ternary": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/vector-stores/_components/index.tsx": {
@@ -1390,9 +1382,6 @@
     "local/no-complex-jsx-arrow": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1404,11 +1393,6 @@
   },
   "src/app/model_hub_table/page.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/onboarding/OnboardingFormBody.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1761,9 +1745,6 @@
   "src/components/add_pass_through.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/agent_management/AgentSelector.test.tsx": {
@@ -1900,11 +1881,6 @@
       "count": 1
     }
   },
-  "src/components/common_components/PassThroughGuardrailsSection.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/common_components/RateLimitTypeFormItem.test.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1951,9 +1927,6 @@
   },
   "src/components/common_components/user_search_modal.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2181,11 +2154,6 @@
     "local/filename-pascal-case": {
       "count": 1
     },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/organisms/RegenerateKeyModal.tsx": {
     "no-restricted-imports": {
       "count": 1
     }

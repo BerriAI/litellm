@@ -1,8 +1,9 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
-import { Alert } from "antd";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
-import { CircleHelp } from "lucide-react";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { CircleHelp, TriangleAlert } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -17,7 +18,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { calculateExpiryPreviewFromDuration, formatExpiresUtc, isKeyExpired } from "@/utils/keyExpiryUtils";
 import { buildRegenerateKeyPayload, type RegenerateKeyFormValues } from "./regenerateKeyPayload";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const DURATION_PATTERN = /^(\d+(s|m|h|d|w|mo))?$/;
 const DURATION_MESSAGE = "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo";
@@ -156,7 +156,10 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         </DialogHeader>
         {regeneratedKey ? (
           <div className="flex flex-col gap-4">
-            <Alert type="warning" showIcon message="Save it now, you will not see it again" />
+            <Alert variant="warning">
+              <TriangleAlert />
+              <AlertTitle>Save it now, you will not see it again</AlertTitle>
+            </Alert>
 
             <div className="flex flex-col gap-0.5">
               <span className="text-xs text-muted-foreground">Key Alias</span>

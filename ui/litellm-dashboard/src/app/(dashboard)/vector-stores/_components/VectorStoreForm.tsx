@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Alert } from "antd";
-import { CircleHelp, Eye, EyeOff } from "lucide-react";
+import { CircleHelp, Eye, EyeOff, Info } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useWatch } from "react-hook-form";
 import { z } from "zod/v4";
 import { CredentialItem, vectorStoreCreateCall } from "@/components/networking";
@@ -26,13 +26,13 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey"]);
 
@@ -315,147 +315,130 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
               </FormField>
 
               {selectedProvider === "pg_vector" && (
-                <Alert
-                  message="PG Vector Setup Required"
-                  description={
-                    <div>
-                      <p>LiteLLM provides a server to connect to PG Vector. To use this provider:</p>
-                      <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
-                        <li>
-                          Deploy the litellm-pgvector server from:{" "}
-                          <a
-                            href="https://github.com/BerriAI/litellm-pgvector"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            https://github.com/BerriAI/litellm-pgvector
-                          </a>
-                        </li>
-                        <li>Configure your PostgreSQL database with pgvector extension</li>
-                        <li>Start the server and note the API base URL and API key</li>
-                        <li>Enter those details in the fields below</li>
-                      </ol>
-                    </div>
-                  }
-                  type="info"
-                  showIcon
-                />
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>PG Vector Setup Required</AlertTitle>
+                  <AlertDescription>
+                    <p>LiteLLM provides a server to connect to PG Vector. To use this provider:</p>
+                    <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
+                      <li>
+                        Deploy the litellm-pgvector server from:{" "}
+                        <a href="https://github.com/BerriAI/litellm-pgvector" target="_blank" rel="noopener noreferrer">
+                          https://github.com/BerriAI/litellm-pgvector
+                        </a>
+                      </li>
+                      <li>Configure your PostgreSQL database with pgvector extension</li>
+                      <li>Start the server and note the API base URL and API key</li>
+                      <li>Enter those details in the fields below</li>
+                    </ol>
+                  </AlertDescription>
+                </Alert>
               )}
 
               {selectedProvider === "valkey" && (
-                <Alert
-                  message="Valkey Setup Required"
-                  description={
-                    <div>
-                      <p>
-                        LiteLLM searches documents you have already stored in Valkey. It does not create the index or
-                        upload documents for you. Before creating this vector store, make sure:
-                      </p>
-                      <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
-                        <li>
-                          Your Valkey server has vector search enabled (the valkey-search module, included in the
-                          valkey-bundle image and in AWS ElastiCache / MemoryDB for Valkey)
-                        </li>
-                        <li>
-                          You have already created a search index and loaded your documents and their embeddings into
-                          it. Enter that index name as the Vector Store ID
-                        </li>
-                        <li>
-                          You know which embedding model created those stored embeddings. That model must be added to
-                          this proxy under Models so you can pick it below. Using a different model returns wrong
-                          results
-                        </li>
-                        <li>
-                          You know the field names your documents use for their text and their embedding. If they are
-                          not &quot;text&quot; and &quot;embedding&quot;, set them below
-                        </li>
-                      </ol>
-                      <p style={{ marginTop: "8px" }}>
-                        When a query comes in, LiteLLM converts it to an embedding with the model below and returns the
-                        closest matching documents from your index.
-                      </p>
-                    </div>
-                  }
-                  type="info"
-                  showIcon
-                />
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>Valkey Setup Required</AlertTitle>
+                  <AlertDescription>
+                    <p>
+                      LiteLLM searches documents you have already stored in Valkey. It does not create the index or
+                      upload documents for you. Before creating this vector store, make sure:
+                    </p>
+                    <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
+                      <li>
+                        Your Valkey server has vector search enabled (the valkey-search module, included in the
+                        valkey-bundle image and in AWS ElastiCache / MemoryDB for Valkey)
+                      </li>
+                      <li>
+                        You have already created a search index and loaded your documents and their embeddings into it.
+                        Enter that index name as the Vector Store ID
+                      </li>
+                      <li>
+                        You know which embedding model created those stored embeddings. That model must be added to this
+                        proxy under Models so you can pick it below. Using a different model returns wrong results
+                      </li>
+                      <li>
+                        You know the field names your documents use for their text and their embedding. If they are not
+                        &quot;text&quot; and &quot;embedding&quot;, set them below
+                      </li>
+                    </ol>
+                    <p style={{ marginTop: "8px" }}>
+                      When a query comes in, LiteLLM converts it to an embedding with the model below and returns the
+                      closest matching documents from your index.
+                    </p>
+                  </AlertDescription>
+                </Alert>
               )}
 
               {selectedProvider === "vertex_rag_engine" && (
-                <Alert
-                  message="Vertex AI RAG Engine Setup"
-                  description={
-                    <div>
-                      <p>To use Vertex AI RAG Engine:</p>
-                      <p style={{ marginTop: "4px", fontStyle: "italic" }}>
-                        Note: Google Cloud has renamed this to &quot;RAG Engine&quot; in its console — the steps below
-                        still apply.
-                      </p>
-                      <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
-                        <li>
-                          Set up your Vertex AI RAG Engine corpus following the guide:{" "}
-                          <a
-                            href="https://cloud.google.com/vertex-ai/generative-ai/docs/rag-engine/rag-overview"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            Vertex AI RAG Engine Overview
-                          </a>
-                        </li>
-                        <li>Create a corpus in your Google Cloud project</li>
-                        <li>
-                          Note the corpus ID from the Vertex AI console (now labeled &quot;RAG Engine&quot; in Google
-                          Cloud)
-                        </li>
-                        <li>Enter the corpus ID in the Vector Store ID field below</li>
-                      </ol>
-                    </div>
-                  }
-                  type="info"
-                  showIcon
-                />
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>Vertex AI RAG Engine Setup</AlertTitle>
+                  <AlertDescription>
+                    <p>To use Vertex AI RAG Engine:</p>
+                    <p style={{ marginTop: "4px", fontStyle: "italic" }}>
+                      Note: Google Cloud has renamed this to &quot;RAG Engine&quot; in its console — the steps below
+                      still apply.
+                    </p>
+                    <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
+                      <li>
+                        Set up your Vertex AI RAG Engine corpus following the guide:{" "}
+                        <a
+                          href="https://cloud.google.com/vertex-ai/generative-ai/docs/rag-engine/rag-overview"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Vertex AI RAG Engine Overview
+                        </a>
+                      </li>
+                      <li>Create a corpus in your Google Cloud project</li>
+                      <li>
+                        Note the corpus ID from the Vertex AI console (now labeled &quot;RAG Engine&quot; in Google
+                        Cloud)
+                      </li>
+                      <li>Enter the corpus ID in the Vector Store ID field below</li>
+                    </ol>
+                  </AlertDescription>
+                </Alert>
               )}
 
               {selectedProvider === "vertex_ai/search_api" && (
-                <Alert
-                  message="Vertex AI Search Setup"
-                  description={
-                    <div>
-                      <p>To use Vertex AI Search (Discovery Engine):</p>
-                      <p style={{ marginTop: "4px", fontStyle: "italic" }}>
-                        Note: Google Cloud has renamed this to &quot;Agent Search&quot; in its console — the steps below
-                        still apply.
-                      </p>
-                      <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
-                        <li>
-                          Enable the Discovery Engine API on your Google Cloud project and create a data store following
-                          the guide:{" "}
-                          <a
-                            href="https://cloud.google.com/generative-ai-app-builder/docs/create-data-store-es"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ textDecoration: "underline" }}
-                          >
-                            Create a Vertex AI Search data store
-                          </a>
-                        </li>
-                        <li>Pick a supported location: global, us, or eu</li>
-                        <li>
-                          For most data store types (Cloud Storage, BigQuery, Media): copy the data store ID and enter
-                          it in the Vector Store ID field below.
-                        </li>
-                        <li>
-                          For website, healthcare, and connector-based sources (Drive, Gmail, Slack, Jira, etc.): create
-                          a search app on top of the data store, then copy the <strong>Engine ID</strong> and enter it
-                          in the Engine ID field. The Vector Store ID is still required as the LiteLLM-side name for
-                          this record, but it isn&apos;t used in the GCP URL when Engine ID is set.
-                        </li>
-                      </ol>
-                    </div>
-                  }
-                  type="info"
-                  showIcon
-                />
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>Vertex AI Search Setup</AlertTitle>
+                  <AlertDescription>
+                    <p>To use Vertex AI Search (Discovery Engine):</p>
+                    <p style={{ marginTop: "4px", fontStyle: "italic" }}>
+                      Note: Google Cloud has renamed this to &quot;Agent Search&quot; in its console — the steps below
+                      still apply.
+                    </p>
+                    <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
+                      <li>
+                        Enable the Discovery Engine API on your Google Cloud project and create a data store following
+                        the guide:{" "}
+                        <a
+                          href="https://cloud.google.com/generative-ai-app-builder/docs/create-data-store-es"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ textDecoration: "underline" }}
+                        >
+                          Create a Vertex AI Search data store
+                        </a>
+                      </li>
+                      <li>Pick a supported location: global, us, or eu</li>
+                      <li>
+                        For most data store types (Cloud Storage, BigQuery, Media): copy the data store ID and enter it
+                        in the Vector Store ID field below.
+                      </li>
+                      <li>
+                        For website, healthcare, and connector-based sources (Drive, Gmail, Slack, Jira, etc.): create a
+                        search app on top of the data store, then copy the <strong>Engine ID</strong> and enter it in
+                        the Engine ID field. The Vector Store ID is still required as the LiteLLM-side name for this
+                        record, but it isn&apos;t used in the GCP URL when Engine ID is set.
+                      </li>
+                    </ol>
+                  </AlertDescription>
+                </Alert>
               )}
 
               <FormField

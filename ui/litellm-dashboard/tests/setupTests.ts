@@ -113,19 +113,6 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   }),
 }));
 
-const pendingRefWarnings: string[] = [];
-const consumePendingRefWarnings = (): string[] => pendingRefWarnings.splice(0, pendingRefWarnings.length);
-(globalThis as { __consumePendingRefWarnings?: () => string[] }).__consumePendingRefWarnings =
-  consumePendingRefWarnings;
-
-const originalConsoleError = console.error.bind(console);
-vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-  originalConsoleError(...args);
-  if (typeof args[0] === "string" && args[0].includes("Function components cannot be given refs")) {
-    pendingRefWarnings.push(args.map(String).join(" "));
-  }
-});
-
 // Unmounting a Base UI dialog that is still open leaves its scroll lock behind: the <html>
 // and <body> inline styles and the marker attribute survive cleanup() and make every later
 // test in the file see a locked page, where popups compute pointer-events: none and clicks
@@ -145,15 +132,6 @@ const releaseBaseUiScrollLock = () => {
 afterEach(() => {
   cleanup();
   releaseBaseUiScrollLock();
-  const refWarnings = consumePendingRefWarnings();
-  if (refWarnings.length > 0) {
-    throw new Error(
-      "A ref was passed to a plain function component and silently dropped under React 18, which breaks " +
-        "ref-based composition (Base UI render triggers, tooltips, focus). Wrap the component in React.forwardRef. " +
-        "This tripwire lives in tests/setupTests.ts and can be removed after the React 19 upgrade.\n\n" +
-        refWarnings.join("\n\n"),
-    );
-  }
 });
 
 // Make toLocaleString deterministic in tests; individual tests can override

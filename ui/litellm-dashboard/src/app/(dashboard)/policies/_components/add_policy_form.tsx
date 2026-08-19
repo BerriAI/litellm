@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Alert, Tag } from "antd";
+import { Tag } from "antd";
 import { z } from "zod/v4";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "@/components/policies/types";
 import { Guardrail } from "@/components/guardrails/types";
@@ -19,8 +19,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, Info } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 
 interface AddPolicyFormProps {
   visible: boolean;
@@ -345,10 +346,13 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
           {selectedMode === "flow_builder" && (
             <Alert
-              message="You'll be redirected to the full-screen Flow Builder to design your policy logic visually."
-              type="info"
+              variant="info"
               className="mt-4 border border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950"
-            />
+            >
+              <AlertTitle>
+                You&apos;ll be redirected to the full-screen Flow Builder to design your policy logic visually.
+              </AlertTitle>
+            </Alert>
           )}
 
           <div className="mt-6 flex justify-end gap-2">
@@ -461,35 +465,34 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
               </FormField>
 
               {resolvedGuardrails.length > 0 && (
-                <Alert
-                  message="Resolved Guardrails"
-                  description={
-                    <div>
-                      <span className="mb-2 block text-muted-foreground">
-                        These are the final guardrails that will be applied (including inheritance):
-                      </span>
-                      <div className="flex flex-wrap gap-1">
-                        {resolvedGuardrails.map((g) => (
-                          <Tag key={g} color="blue">
-                            {g}
-                          </Tag>
-                        ))}
-                      </div>
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>Resolved Guardrails</AlertTitle>
+                  <AlertDescription>
+                    <span className="mb-2 block text-muted-foreground">
+                      These are the final guardrails that will be applied (including inheritance):
+                    </span>
+                    <div className="flex flex-wrap gap-1">
+                      {resolvedGuardrails.map((g) => (
+                        <Tag key={g} color="blue">
+                          {g}
+                        </Tag>
+                      ))}
                     </div>
-                  }
-                  type="info"
-                  showIcon
-                />
+                  </AlertDescription>
+                </Alert>
               )}
 
               <SectionHeading label="Conditions (Optional)" />
 
-              <Alert
-                message="Model Scope"
-                description="By default, this policy will run on all models. You can optionally restrict it to specific models below."
-                type="info"
-                showIcon
-              />
+              <Alert variant="info">
+                <Info />
+                <AlertTitle>Model Scope</AlertTitle>
+                <AlertDescription>
+                  By default, this policy will run on all models. You can optionally restrict it to specific models
+                  below.
+                </AlertDescription>
+              </Alert>
 
               <div role="group" className="flex w-full flex-col gap-3">
                 <span className="text-sm leading-snug font-medium text-foreground">Model Condition Type</span>
