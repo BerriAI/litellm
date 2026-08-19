@@ -63,8 +63,8 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route,
     get_request_route_template,
     iter_request_fallback_targets,
-    normalize_request_route,
     pre_db_read_auth_checks,
+    resolve_request_route_for_metrics,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -2696,7 +2696,7 @@ async def user_api_key_auth(
         user_api_key_auth_obj,
         model=request_data.get("model") if isinstance(request_data, dict) else None,
     )
-    user_api_key_auth_obj.request_route = normalize_request_route(route)
+    user_api_key_auth_obj.request_route = resolve_request_route_for_metrics(request, route)
 
     if body_parse_exception is not None:
         await _record_unparsable_body_failure(

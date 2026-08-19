@@ -425,7 +425,7 @@ def test_route_normalization_for_sub_routes():
 
 def test_route_normalization_preserves_static_routes():
     """Test that static routes are not affected by normalization"""
-    from litellm.proxy.auth.auth_utils import normalize_request_route
+    from litellm.proxy.auth.auth_utils import normalize_request_route, resolve_request_route_for_metrics
 
     static_routes = [
         "/chat/completions",
@@ -442,8 +442,24 @@ def test_route_normalization_preserves_static_routes():
         assert (
             normalized == route
         ), f"Static route should not be modified: {route} -> {normalized}"
+        assert (
+            resolve_request_route_for_metrics(None, route) == route
+        ), f"Static route should be preserved for metrics: {route}"
 
     print(f"✅ {len(static_routes)} static routes preserved")
+
+
+def test_unmatched_scanner_routes_collapse_for_metrics():
+    """Unknown paths must not create unbounded Prometheus route labels."""
+    from litellm.constants import UNMATCHED_REQUEST_ROUTE
+    from litellm.proxy.auth.auth_utils import resolve_request_route_for_metrics
+
+    scanner_paths = [
+        "/files/pRzAdaV1.php",
+        "/actuator/metrics",
+        "/scanner/path-1",
+    ]
+    assert all(resolve_request_route_for_metrics(None, p) == UNMATCHED_REQUEST_ROUTE for p in scanner_paths)
 
 
 def test_route_normalization_other_dynamic_apis():

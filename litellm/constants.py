@@ -1340,6 +1340,8 @@ LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
 
+UNMATCHED_REQUEST_ROUTE: Final = "/unmatched"
+
 # Standard headers that are always checked for customer/end-user ID (no configuration required)
 # These headers work out-of-the-box for tools like Claude Code that support custom headers
 STANDARD_CUSTOMER_ID_HEADERS: Final = [

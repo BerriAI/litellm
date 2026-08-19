@@ -2912,6 +2912,68 @@ class TestPricingInjectionBlocked:
         )
 
 
+class TestResolveRequestRouteForMetrics:
+    """resolve_request_route_for_metrics bounds Prometheus route label cardinality."""
+
+    def _request(self, scope):
+        req = MagicMock()
+        req.scope = scope
+        return req
+
+    def test_prefers_fastapi_route_template(self):
+        from litellm.proxy.auth.auth_utils import resolve_request_route_for_metrics
+
+        route = MagicMock()
+        route.path = "/v1/responses/{response_id}"
+        req = self._request({"route": route, "path": "/v1/responses/abc123"})
+        assert (
+            resolve_request_route_for_metrics(req, "/v1/responses/abc123")
+            == "/v1/responses/{response_id}"
+        )
+
+    def test_normalizes_known_dynamic_routes_without_template(self):
+        from litellm.proxy.auth.auth_utils import resolve_request_route_for_metrics
+
+        assert (
+            resolve_request_route_for_metrics(None, "/v1/responses/abc123")
+            == "/v1/responses/{response_id}"
+        )
+
+    def test_preserves_literal_static_routes(self):
+        from litellm.proxy.auth.auth_utils import resolve_request_route_for_metrics
+
+        for route in (
+            "/v1/chat/completions",
+            "/chat/completions",
+            "/health/liveliness",
+            "/metrics",
+        ):
+            assert resolve_request_route_for_metrics(None, route) == route
+
+    def test_collapses_unknown_paths_to_unmatched(self):
+        from litellm.constants import UNMATCHED_REQUEST_ROUTE
+        from litellm.proxy.auth.auth_utils import resolve_request_route_for_metrics
+
+        scanner_paths = [
+            "/files/pRzAdaV1.php",
+            "/files/J80racNN.php",
+            "/files/ldap.debug.txt",
+            "/api/v1/files/secret_key",
+            "/actuator/metrics",
+            "/solr/admin/metrics",
+            "/scanner/path-1",
+            "/scanner/path-2",
+        ]
+        normalized = {resolve_request_route_for_metrics(None, path) for path in scanner_paths}
+        assert normalized == {UNMATCHED_REQUEST_ROUTE}
+
+    def test_repeated_unknown_paths_do_not_increase_cardinality(self):
+        from litellm.proxy.auth.auth_utils import resolve_request_route_for_metrics
+
+        routes = [f"/scanner/random-{i}" for i in range(100)]
+        assert len({resolve_request_route_for_metrics(None, r) for r in routes}) == 1
+
+
 class TestGetRequestRouteTemplate:
     """get_request_route_template returns the low-cardinality FastAPI route
     template (e.g. /v1/threads/{thread_id}/runs) for http.route, distinct
