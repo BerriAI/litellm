@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from "react";
 import { ChevronDown } from "lucide-react";
-import { Modal } from "antd";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -24,6 +23,7 @@ import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const DOCS_LINKS = [
   { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
@@ -331,77 +331,61 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
         </AlertDialog>
       )}
 
-      <Modal
-        title={
-          <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-            <h2 className="text-xl font-semibold text-gray-900">Add Provider Discount</h2>
+      <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleModalCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px] top-8">
+          <DialogHeader>
+            <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+              <DialogTitle className="text-xl font-semibold text-gray-900">Add Provider Discount</DialogTitle>
+            </div>
+          </DialogHeader>
+          <div className="mt-6">
+            <p className="text-sm text-gray-600 mb-6">
+              Select a provider and set its discount percentage. Enter a value between 0% and 100% (e.g., 5 for a 5%
+              discount).
+            </p>
+            <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
+              <AddProviderForm
+                discountConfig={discountConfig}
+                selectedProvider={selectedProvider}
+                newDiscount={newDiscount}
+                onProviderChange={setSelectedProvider}
+                onDiscountChange={setNewDiscount}
+                onAddProvider={handleAddProvider}
+              />
+            </form>
           </div>
-        }
-        open={isModalVisible}
-        width={1000}
-        onCancel={handleModalCancel}
-        footer={null}
-        className="top-8"
-        styles={{
-          body: { padding: "24px" },
-          header: { padding: "24px 24px 0 24px", border: "none" },
-        }}
-      >
-        <div className="mt-6">
-          <p className="text-sm text-gray-600 mb-6">
-            Select a provider and set its discount percentage. Enter a value between 0% and 100% (e.g., 5 for a 5%
-            discount).
-          </p>
-          <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
-            <AddProviderForm
-              discountConfig={discountConfig}
-              selectedProvider={selectedProvider}
-              newDiscount={newDiscount}
-              onProviderChange={setSelectedProvider}
-              onDiscountChange={setNewDiscount}
-              onAddProvider={handleAddProvider}
-            />
-          </form>
-        </div>
-      </Modal>
+        </DialogContent>
+      </Dialog>
 
-      <Modal
-        title={
-          <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-            <h2 className="text-xl font-semibold text-gray-900">Add Provider Margin</h2>
+      <Dialog open={isMarginModalVisible} onOpenChange={(open) => !open && handleMarginModalCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px] top-8">
+          <DialogHeader>
+            <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+              <DialogTitle className="text-xl font-semibold text-gray-900">Add Provider Margin</DialogTitle>
+            </div>
+          </DialogHeader>
+          <div className="mt-6">
+            <p className="text-sm text-gray-600 mb-6">
+              Select a provider (or &quot;Global&quot; for all providers) and configure the margin. You can use
+              percentage-based or fixed amount.
+            </p>
+            <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
+              <AddMarginForm
+                marginConfig={marginConfig}
+                selectedProvider={selectedMarginProvider}
+                marginType={marginType}
+                percentageValue={percentageValue}
+                fixedAmountValue={fixedAmountValue}
+                onProviderChange={setSelectedMarginProvider}
+                onMarginTypeChange={setMarginType}
+                onPercentageChange={setPercentageValue}
+                onFixedAmountChange={setFixedAmountValue}
+                onAddProvider={handleAddMargin}
+              />
+            </form>
           </div>
-        }
-        open={isMarginModalVisible}
-        width={1000}
-        onCancel={handleMarginModalCancel}
-        footer={null}
-        className="top-8"
-        styles={{
-          body: { padding: "24px" },
-          header: { padding: "24px 24px 0 24px", border: "none" },
-        }}
-      >
-        <div className="mt-6">
-          <p className="text-sm text-gray-600 mb-6">
-            Select a provider (or &quot;Global&quot; for all providers) and configure the margin. You can use
-            percentage-based or fixed amount.
-          </p>
-          <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
-            <AddMarginForm
-              marginConfig={marginConfig}
-              selectedProvider={selectedMarginProvider}
-              marginType={marginType}
-              percentageValue={percentageValue}
-              fixedAmountValue={fixedAmountValue}
-              onProviderChange={setSelectedMarginProvider}
-              onMarginTypeChange={setMarginType}
-              onPercentageChange={setPercentageValue}
-              onFixedAmountChange={setFixedAmountValue}
-              onAddProvider={handleAddMargin}
-            />
-          </form>
-        </div>
-      </Modal>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

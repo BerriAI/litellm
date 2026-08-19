@@ -1,5 +1,5 @@
 import React from "react";
-import { Modal, Alert, Spin, Tag, Typography } from "antd";
+import { Alert, Spin, Tag, Typography } from "antd";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { MCPServer, MCPUserEnvVarsStatus, MCPUserEnvVarSpec } from "@/components/mcp_tools/types";
@@ -11,6 +11,7 @@ import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const { Text, Title } = Typography;
 
@@ -91,8 +92,6 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
  * description as the placeholder.
  */
 const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, accessToken, onClose, onSaved }) => {
-  const [formGeneration, setFormGeneration] = React.useState(0);
-
   const {
     data: status,
     isLoading,
@@ -129,56 +128,45 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
   const isSaving = saveMutation.isPending;
 
   return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      footer={null}
-      width={520}
-      destroyOnHidden
-      afterOpenChange={(opened) => {
-        if (opened) setFormGeneration((generation) => generation + 1);
-      }}
-      title={
-        <div>
-          <div className="flex items-center gap-2">
-            <Title level={5} style={{ margin: 0 }}>
-              Set your credentials
-            </Title>
-            <Tag color="blue">Per-user</Tag>
-          </div>
-          <Text type="secondary" className="text-xs">
-            {displayName}
-          </Text>
+    <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle>
+            <div>
+              <div className="flex items-center gap-2">
+                <Title level={5} style={{ margin: 0 }}>
+                  Set your credentials
+                </Title>
+                <Tag color="blue">Per-user</Tag>
+              </div>
+              <Text type="secondary" className="text-xs">
+                {displayName}
+              </Text>
+            </div>
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 mt-2">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Spin />
+            </div>
+          ) : isError ? (
+            <Alert type="error" showIcon message="Failed to load env vars" />
+          ) : required.length === 0 ? (
+            <Alert type="info" showIcon message="No per-user fields configured for this server." />
+          ) : (
+            <>
+              <Text className="text-sm text-muted-foreground block">
+                These values are private to you. Your admin configured this MCP server to require these per-user
+                credentials. Saved values are never shown back; leave an already-set field blank to keep it, or enter a
+                value to set or change it.
+              </Text>
+              <UserEnvVarsForm required={required} isSaving={isSaving} onCancel={onClose} onSubmit={handleSave} />
+            </>
+          )}
         </div>
-      }
-    >
-      <div className="space-y-4 mt-2">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Spin />
-          </div>
-        ) : isError ? (
-          <Alert type="error" showIcon message="Failed to load env vars" />
-        ) : required.length === 0 ? (
-          <Alert type="info" showIcon message="No per-user fields configured for this server." />
-        ) : (
-          <>
-            <Text className="text-sm text-muted-foreground block">
-              These values are private to you. Your admin configured this MCP server to require these per-user
-              credentials. Saved values are never shown back; leave an already-set field blank to keep it, or enter a
-              value to set or change it.
-            </Text>
-            <UserEnvVarsForm
-              key={formGeneration}
-              required={required}
-              isSaving={isSaving}
-              onCancel={onClose}
-              onSubmit={handleSave}
-            />
-          </>
-        )}
-      </div>
-    </Modal>
+      </DialogContent>
+    </Dialog>
   );
 };
 

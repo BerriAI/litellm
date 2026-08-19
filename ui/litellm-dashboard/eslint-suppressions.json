@@ -85,9 +85,6 @@
   "src/app/(dashboard)/budgets/_components/budget_modal.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/budgets/_components/budget_panel.tsx": {
@@ -97,9 +94,6 @@
   },
   "src/app/(dashboard)/budgets/_components/edit_budget_modal.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -153,9 +147,6 @@
     },
     "no-nested-ternary": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/cost-tracking/_components/how_it_works.tsx": {
@@ -1220,11 +1211,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/search-tools/_components/CreateSearchTools.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 2
@@ -1367,9 +1353,6 @@
   },
   "src/app/(dashboard)/users/_components/view_users/user_info_view.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -1594,11 +1577,6 @@
   },
   "src/components/Settings/RouterSettings/Fallbacks/AddFallbacks.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/RouterSettings/Fallbacks/AddFallbacksModal.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
