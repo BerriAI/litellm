@@ -2361,14 +2361,6 @@
       "count": 1
     }
   },
-  "src/components/organisms/create_key_button.test.tsx": {
-    "@typescript-eslint/no-require-imports": {
-      "count": 1
-    },
-    "react/display-name": {
-      "count": 8
-    }
-  },
   "src/components/organisms/create_key_button.tsx": {
     "local/filename-pascal-case": {
       "count": 1
