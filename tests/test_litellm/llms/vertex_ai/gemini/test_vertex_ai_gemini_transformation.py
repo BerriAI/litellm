@@ -1,3 +1,5 @@
+import base64
+
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
@@ -782,6 +784,119 @@ def test_dummy_signature_with_function_call_mode():
         "utf-8"
     )
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
+
+
+def _parallel_tool_calls(*signatures):
+    return [
+        {
+            "id": f"call_{idx}",
+            "type": "function",
+            "function": {
+                "name": f"tool_{idx}",
+                "arguments": '{"location": "Paris"}',
+                **(
+                    {"provider_specific_fields": {"thought_signature": signature}}
+                    if signature is not None
+                    else {}
+                ),
+            },
+            "index": idx,
+        }
+        for idx, signature in enumerate(signatures)
+    ]
+
+
+REAL_THOUGHT_SIGNATURE = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n"
+
+
+def test_dummy_signature_only_on_first_parallel_tool_call():
+    """Gemini only returns a thought signature on the first of N parallel function calls.
+
+    The sibling calls carry no signature, so replaying them must not fabricate one.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(None, None, None),
+        },
+        model="gemini-3-pro-preview",
+    )
+
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
+        "utf-8"
+    )
+    assert len(gemini_parts) == 3
+    assert gemini_parts[0]["thoughtSignature"] == expected_dummy
+    assert "thoughtSignature" not in gemini_parts[1]
+    assert "thoughtSignature" not in gemini_parts[2]
+
+
+def test_real_signature_on_first_parallel_tool_call_leaves_siblings_empty():
+    """The real signature from Gemini rides on the first call; siblings stay signature-free."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(REAL_THOUGHT_SIGNATURE, None, None),
+        },
+        model="gemini-3-pro-preview",
+    )
+
+    assert len(gemini_parts) == 3
+    assert gemini_parts[0]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
+    assert "thoughtSignature" not in gemini_parts[1]
+    assert "thoughtSignature" not in gemini_parts[2]
+
+
+def test_real_signature_on_later_parallel_tool_call_is_preserved():
+    """A signature attached to a non-first call is still forwarded as-is."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(None, REAL_THOUGHT_SIGNATURE),
+        },
+        model="gemini-3-pro-preview",
+    )
+
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
+        "utf-8"
+    )
+    assert len(gemini_parts) == 2
+    assert gemini_parts[0]["thoughtSignature"] == expected_dummy
+    assert gemini_parts[1]["thoughtSignature"] == REAL_THOUGHT_SIGNATURE
+
+
+def test_no_signatures_on_parallel_tool_calls_for_gemini_2_5():
+    """Non-gemini-3 models never get a placeholder signature, on any call."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    gemini_parts = convert_to_gemini_tool_call_invoke(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": _parallel_tool_calls(None, None),
+        },
+        model="gemini-2.5-flash",
+    )
+
+    assert len(gemini_parts) == 2
+    assert all("thoughtSignature" not in part for part in gemini_parts)
 
 
 # Tests for media_resolution (detail parameter) handling - Issue #17084
