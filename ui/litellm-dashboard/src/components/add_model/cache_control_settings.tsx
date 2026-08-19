@@ -4,6 +4,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import NumericalInput from "../shared/numerical_input";
 
@@ -14,6 +15,10 @@ export const CACHE_CONTROL_TOOLTIP =
 
 export const CACHE_CONTROL_DESCRIPTION =
   "Providers like Anthropic, Bedrock API require users to specify where to inject cache control checkpoints, litellm can automatically add them for you as a cost saving feature.";
+
+export const CACHE_CONTROL_ROLE_HINT = "LiteLLM will mark all messages of this role as cacheable";
+
+export const CACHE_CONTROL_INDEX_HINT = "(Optional) If set litellm will mark the message at this index as cacheable";
 
 export type CacheControlRole = "user" | "system" | "assistant";
 
@@ -72,7 +77,10 @@ const CacheControlInjectionPoints: React.FC<CacheControlInjectionPointsProps> = 
           </div>
 
           <div className="w-[180px] space-y-1">
-            <Label>Role</Label>
+            <div className="flex items-center">
+              <Label>Role</Label>
+              <SimpleTooltip content={CACHE_CONTROL_ROLE_HINT} />
+            </div>
             <Select
               items={ROLE_ITEMS}
               value={point.role ?? null}
@@ -95,7 +103,10 @@ const CacheControlInjectionPoints: React.FC<CacheControlInjectionPointsProps> = 
           </div>
 
           <div className="w-[180px] space-y-1">
-            <Label>Index</Label>
+            <div className="flex items-center">
+              <Label>Index</Label>
+              <SimpleTooltip content={CACHE_CONTROL_INDEX_HINT} />
+            </div>
             <NumericalInput
               type="number"
               placeholder="Optional"
