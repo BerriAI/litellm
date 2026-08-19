@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 _HOURS_PER_DAY: Final = 24
+_PRUNE_ID_CHUNK_SIZE: Final = 5_000
 _UPSERT_ATTEMPTS: Final = 3
 _UPSERT_RETRY_BACKOFF_SECONDS: Final = 0.5
 
@@ -358,10 +359,29 @@ async def _upsert_charge_with_retry(
     return False
 
 
-async def _load_ptu_models(prisma_client: "PrismaClient") -> tuple[PTUModel, ...]:
-    """Every model deployment currently carrying valid manual PTU config."""
+@dataclass(frozen=True, slots=True)
+class _LoadedDeployments:
+    """The deployments a run will price, and every deployment id it looked at.
+
+    The id set is deliberately wider than the priced set. A deployment whose PTU config
+    was removed produces no charge and still has to be prunable, so bounding the prune on
+    what priced would strand its old rows forever. It is also a guaranteed superset of the
+    priced set, or a run could write a charge that falls outside its own delete filter.
+    """
+
+    models: tuple[PTUModel, ...]
+    scanned_ids: frozenset[str]
+
+
+async def _load_ptu_models(prisma_client: "PrismaClient") -> _LoadedDeployments:
+    """Every deployment carrying valid manual PTU config, and every id the scan saw."""
     rows: Final = await prisma_client.db.litellm_proxymodeltable.find_many()
-    return tuple(parsed for parsed in (_parse_ptu_model(row) for row in rows) if parsed is not None)
+    models: Final = tuple(parsed for parsed in (_parse_ptu_model(row) for row in rows) if parsed is not None)
+    return _LoadedDeployments(
+        models=models,
+        scanned_ids=frozenset(model_id for row in rows if (model_id := str(getattr(row, "model_id", "") or "")))
+        | frozenset(model.model_id for model in models),
+    )
 
 
 async def run_ptu_flat_cost_rollup(
@@ -378,8 +398,10 @@ async def run_ptu_flat_cost_rollup(
     The prune predicate is ``updated_at < run_started`` rather than "not in the charge
     set I computed", which matters under concurrency: whether a row is garbage becomes a
     property of the row instead of one run's in-memory config snapshot, so a run can
-    never delete a row a concurrent run just wrote. It is still skipped when any charge
-    failed to write, since a row whose replacement never landed would look unrefreshed.
+    never delete a row a concurrent run just wrote. It is bounded to the deployments this
+    run looked at, so a row it cannot account for is out of reach either way. It is still
+    skipped when any charge failed to write, since a row whose replacement never landed
+    would look unrefreshed.
     """
     day: Final = target_date or (datetime.now(timezone.utc).date() - timedelta(days=1))
 
@@ -390,7 +412,8 @@ async def run_ptu_flat_cost_rollup(
     date_str: Final = day.isoformat()
     run_started: Final = datetime.now(timezone.utc)
 
-    ptu_models: Final = await _load_ptu_models(prisma_client)
+    loaded: Final = await _load_ptu_models(prisma_client)
+    ptu_models: Final = loaded.models
     charges: Final = _aggregate_charges(ptu_models, day)
 
     landed: Final = tuple(
@@ -415,7 +438,12 @@ async def run_ptu_flat_cost_rollup(
             date_str,
         )
     else:
-        await _prune_unrefreshed_sentinel_rows(prisma_client, date_str=date_str, run_started=run_started)
+        await _prune_unrefreshed_sentinel_rows(
+            prisma_client,
+            date_str=date_str,
+            run_started=run_started,
+            scanned_ids=loaded.scanned_ids,
+        )
 
     verbose_proxy_logger.info(
         "PTU rollup for %s: %d PTU models processed, %d rows written, %d rows failed",
@@ -524,7 +552,7 @@ async def run_ptu_flat_cost_backfill(
         verbose_proxy_logger.warning("PTU backfill: prisma_client is None, skipping")
         return BackfillResult(start=end, end=end, days_scanned=0, rows_written=0)
 
-    ptu_models: Final = await _load_ptu_models(prisma_client)
+    ptu_models: Final = (await _load_ptu_models(prisma_client)).models
     days: Final = _backfill_window(ptu_models, end)
 
     if not days:
@@ -707,26 +735,53 @@ async def _prune_unrefreshed_sentinel_rows(
     *,
     date_str: str,
     run_started: datetime,
+    scanned_ids: frozenset[str],
 ) -> None:
-    """Delete the day's PTU sentinel rows this run did not refresh.
+    """Delete the day's PTU sentinel rows this run looked at and did not refresh.
 
-    Every charge the run wrote bumps ``updated_at`` past ``run_started``, so anything
-    left below that mark is a (team, model) the current config no longer prices. The mark
-    is pulled back by ``PTU_PRUNE_SKEW_GRACE_SECONDS`` because the two timestamps come
-    from different hosts: a stale row is hours old, a concurrently written one is seconds
-    old, and the grace separates them without waiting on clocks agreeing. The
-    predicate reads only the row, never the caller's config snapshot, which is what
-    makes it safe to run twice, out of order, or beside another pod: a row written
-    after this run began is out of reach of its delete. Mirrors the retention predicate
-    ``SpendLogCleanup`` deletes by."""
+    Two conditions, and a row survives unless it meets both. It must be stale: every
+    charge the run wrote bumps ``updated_at`` past ``run_started``, so anything left below
+    that mark is a (team, model) the current config no longer prices. The mark is pulled
+    back by ``PTU_PRUNE_SKEW_GRACE_SECONDS`` because the two timestamps come from
+    different hosts, and the grace separates a row that is hours old from one written
+    seconds ago without waiting on clocks agreeing.
+
+    It must also name a deployment this run scanned. Staleness alone was sufficient while
+    every run derived its charges from the same table, because then any two runs computed
+    the same set. Once a run's charges depend on configuration only that host holds, a row
+    it never considered is not evidence of anything, and deleting it drops a charge some
+    other host is responsible for.
+
+    The ids go out in chunks because the whole set is one bind variable each and the
+    server rejects a statement carrying more than 32767 of them, which a proxy holding
+    that many deployments would otherwise hit every night with no handler above here.
+    """
     cutoff: Final = run_started - timedelta(seconds=PTU_PRUNE_SKEW_GRACE_SECONDS)
-    await prisma_client.db.litellm_dailyteamspend.delete_many(
-        where={  # mutable-ok: prisma delete filter
-            "date": date_str,
-            "api_key": PTU_SENTINEL_API_KEY,
-            "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
-        }
+    ordered: Final = tuple(sorted(scanned_ids))
+    chunks: Final = tuple(
+        ordered[start : start + _PRUNE_ID_CHUNK_SIZE] for start in range(0, len(ordered), _PRUNE_ID_CHUNK_SIZE)
     )
+    deletions: Final = tuple(
+        [
+            await prisma_client.db.litellm_dailyteamspend.delete_many(
+                where={  # mutable-ok: prisma delete filter
+                    "date": date_str,
+                    "api_key": PTU_SENTINEL_API_KEY,
+                    "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
+                    "model": {"in": chunk},  # mutable-ok: prisma membership filter
+                }
+            )
+            for chunk in chunks
+        ]
+    )
+    deleted: Final = sum(deletions)
+    if deleted:
+        verbose_proxy_logger.info(
+            "PTU rollup for %s: pruned %s stale sentinel row(s) across %d scanned deployment(s)",
+            date_str,
+            deleted,
+            len(scanned_ids),
+        )
 
 
 __all__ = (
