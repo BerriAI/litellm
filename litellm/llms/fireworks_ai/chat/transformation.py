@@ -481,9 +481,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         if not isinstance(schema, dict):
             return
         for key in list(schema):
-            if key in FireworksAIConfig._FIREWORKS_TOOL_SCHEMA_STRIP_KEYS or (
-                key == "default" and schema[key] is None
-            ):
+            if key in FireworksAIConfig._FIREWORKS_TOOL_SCHEMA_STRIP_KEYS or (key == "default" and schema[key] is None):
                 schema.pop(key, None)
             elif key == "properties" and isinstance(schema[key], dict):
                 for prop in schema[key].values():
