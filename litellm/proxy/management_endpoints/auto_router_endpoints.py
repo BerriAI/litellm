@@ -535,10 +535,10 @@ _ATTEMPT_AGG_BY_MODEL_SQL: Final = "SELECT COALESCE(real_model, 'unknown') AS gr
 _ATTEMPT_AGG_BY_LEG_SQL: Final = "SELECT job_id AS grp," + _ATTEMPT_AGG_SELECT
 
 _SWEEP_FINISHED_JOBS_SQL: Final = """
-UPDATE "LiteLLM_ShadowEvalJob" j SET stopped_at = NOW()
+UPDATE "LiteLLM_ShadowEvalJob" j SET stopped_at = (NOW() AT TIME ZONE 'utc')
 WHERE j.api_key_id = ANY($1::text[]) AND j.stopped_at IS NULL
   AND (
-    j.ends_at <= NOW()
+    j.ends_at <= (NOW() AT TIME ZONE 'utc')
     OR (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_turns
   )
 """
@@ -551,6 +551,22 @@ SELECT
 FROM "LiteLLM_ShadowEvalAttempt"
 WHERE job_id = ANY($1::text[])
 """
+
+_ATTEMPT_COUNTS_SQL: Final = """
+SELECT job_id, COUNT(*)::int AS attempt_count
+FROM "LiteLLM_ShadowEvalAttempt"
+WHERE job_id = ANY($1::text[])
+GROUP BY job_id
+"""
+
+
+class _AttemptCountRow(BaseModel):
+    job_id: str
+    attempt_count: int
+
+
+_ATTEMPT_COUNT_ROWS: Final = TypeAdapter(list[_AttemptCountRow])
+
 
 _LIST_GROUPS_SQL: Final = """
 SELECT group_id FROM "LiteLLM_ShadowEvalJob"
@@ -617,12 +633,27 @@ class _LegRow(BaseModel):
     created_at: datetime
     ends_at: datetime
     stopped_at: datetime | None = None
+    stopped_by: str | None = None
 
 
 _LEG_ROWS: Final = TypeAdapter(list[_LegRow])
 
 
-def _group_response(legs: Sequence[_LegRow]) -> ShadowEvalJobResponse:
+async def _leg_attempt_counts(prisma_client: "PrismaClient", legs: Sequence[_LegRow]) -> Mapping[str, int]:
+    """Each leg's total attempt count by leg id, judged and errored alike, in one grouped
+    read. It is the same count the sampler budgets against max_turns, so the derived
+    status flips to completed exactly when sampling actually ends; an operator's stop
+    outranks it via stopped_by, so it never reclassifies a stopped job."""
+    if not legs:
+        return MappingProxyType({})
+    rows: Final = _ATTEMPT_COUNT_ROWS.validate_python(
+        await prisma_client.db.query_raw(_ATTEMPT_COUNTS_SQL, [leg.id for leg in legs])  # mutable-ok: query param
+        or ()
+    )
+    return MappingProxyType({row.job_id: row.attempt_count for row in rows})
+
+
+def _group_response(legs: Sequence[_LegRow], attempt_counts: Mapping[str, int]) -> ShadowEvalJobResponse:
     """The one constructor of a job response from a group's legs; config is read off the
     first leg because every leg carries the same copy. No caller may serialize a raw row
     (that would leak a leg id as the job id)."""
@@ -630,7 +661,12 @@ def _group_response(legs: Sequence[_LegRow]) -> ShadowEvalJobResponse:
     return ShadowEvalJobResponse(
         job_id=first.group_id,
         keys=tuple(
-            ShadowEvalJobKeyResponse(api_key_id=leg.api_key_id, max_turns=leg.max_turns, stopped_at=leg.stopped_at)
+            ShadowEvalJobKeyResponse(
+                api_key_id=leg.api_key_id,
+                max_turns=leg.max_turns,
+                stopped_at=leg.stopped_at,
+                attempt_count=attempt_counts.get(leg.id, 0),
+            )
             for leg in sorted(legs, key=lambda leg: leg.api_key_id)
         ),
         router_name=first.router_name,
@@ -640,6 +676,7 @@ def _group_response(legs: Sequence[_LegRow]) -> ShadowEvalJobResponse:
         shadow_percentage=first.shadow_percentage,
         created_at=first.created_at,
         ends_at=first.ends_at,
+        stopped_by=next((leg.stopped_by for leg in legs if leg.stopped_by is not None), None),
     )
 
 
@@ -847,7 +884,8 @@ async def list_shadow_eval_jobs(
     ] = None,
     limit: Annotated[int, Query(ge=1, le=200, description="Newest jobs to return")] = 50,
 ) -> tuple[ShadowEvalJobResponse, ...]:
-    """List shadow eval jobs, newest first. Counts and results ride the detail endpoint only."""
+    """List shadow eval jobs, newest first, each key with its attempt count so status is
+    accurate. Judged counts, spend, and results ride the detail endpoint only."""
     from litellm.proxy.proxy_server import prisma_client
 
     _require_admin_viewer(user_api_key_dict, "view shadow evals")
@@ -875,7 +913,10 @@ async def list_shadow_eval_jobs(
             for group_id, group in groupby(sorted(legs, key=attrgetter("group_id")), key=attrgetter("group_id"))
         }
     )
-    return await _with_key_labels(prisma_client, tuple(_group_response(by_group[group_id]) for group_id in group_ids))
+    counts: Final = await _leg_attempt_counts(prisma_client, legs)
+    return await _with_key_labels(
+        prisma_client, tuple(_group_response(by_group[group_id], counts) for group_id in group_ids)
+    )
 
 
 @router.get(
@@ -910,7 +951,9 @@ async def get_shadow_eval_job(
         where={"job_id": {"in": leg_ids}, "outcome": "error"},  # mutable-ok: Prisma filter
         order={"created_at": "desc"},  # mutable-ok: Prisma order
     )
-    labeled: Final = await _with_key_labels(prisma_client, (_group_response(legs),))
+    labeled: Final = await _with_key_labels(
+        prisma_client, (_group_response(legs, await _leg_attempt_counts(prisma_client, legs)),)
+    )
     return labeled[0].model_copy(
         update={  # mutable-ok: pydantic update payload
             "judged_count": totals[0].judged_count if totals else 0,
@@ -948,19 +991,27 @@ async def stop_shadow_eval_job(
     )
     if not legs:
         raise HTTPException(status_code=404, detail=f"No shadow eval job {job_id}")
-    current: Final = _group_response(legs)
+    counts: Final = await _leg_attempt_counts(prisma_client, legs)
+    current: Final = _group_response(legs, counts)
     if current.status != "running":
         raise HTTPException(status_code=400, detail=f"Job {job_id} is already {current.status}")
     stamp: Final = datetime.now(timezone.utc)
+    operator: Final = user_api_key_dict.user_id or "operator"
+    await prisma_client.db.litellm_shadowevaljob.update_many(
+        where={"group_id": job_id},  # mutable-ok: Prisma filter
+        data={"stopped_by": operator},  # mutable-ok: Prisma payload
+    )
     await prisma_client.db.litellm_shadowevaljob.update_many(
         where={"group_id": job_id, "stopped_at": None},  # mutable-ok: Prisma filter
         data={"stopped_at": stamp},  # mutable-ok: Prisma payload
     )
     stopped: Final = tuple(
-        leg
-        if leg.stopped_at is not None
-        else leg.model_copy(update={"stopped_at": stamp})  # mutable-ok: pydantic update payload
+        (
+            leg
+            if leg.stopped_at is not None
+            else leg.model_copy(update={"stopped_at": stamp})  # mutable-ok: pydantic update payload
+        ).model_copy(update={"stopped_by": operator})  # mutable-ok: pydantic update payload
         for leg in legs
     )
-    labeled: Final = await _with_key_labels(prisma_client, (_group_response(stopped),))
+    labeled: Final = await _with_key_labels(prisma_client, (_group_response(stopped, counts),))
     return labeled[0]

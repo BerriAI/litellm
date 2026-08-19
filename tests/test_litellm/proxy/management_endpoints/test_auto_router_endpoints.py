@@ -523,6 +523,7 @@ def _leg_record(**overrides: object) -> MagicMock:
         "created_at": datetime(2026, 8, 11, tzinfo=timezone.utc),
         "ends_at": datetime.now(timezone.utc) + timedelta(days=7),
         "stopped_at": None,
+        "stopped_by": None,
     }
     fields = {**defaults, **overrides}
     record = MagicMock(spec=list(fields))
@@ -580,8 +581,11 @@ def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-ha
     prisma.db.litellm_shadowevaljob.create_many = AsyncMock(return_value=1)
     prisma.db.litellm_shadowevaljob.update_many = AsyncMock(return_value=1)
     prisma.db.litellm_shadowevalattempt.find_first = AsyncMock(return_value=None)
+    prisma.attempt_rows = []
 
     async def query_raw(sql: str, *params: object):
+        if "AS attempt_count" in sql:
+            return prisma.attempt_rows
         if "GROUP BY group_id" in sql:
             scoped = [row for row in stored if "api_key_id = $2" not in sql or row.api_key_id == params[1]]
             return newest_groups(scoped, params[0])
@@ -623,7 +627,8 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
 
     sweep_sql, sweep_keys = prisma.db.execute_raw.call_args.args
     assert "stopped_at IS NULL" in sweep_sql
-    assert "j.ends_at <= NOW()" in sweep_sql
+    assert "j.ends_at <= (NOW() AT TIME ZONE 'utc')" in sweep_sql
+    assert "SET stopped_at = (NOW() AT TIME ZONE 'utc')" in sweep_sql
     assert ">= j.max_turns" in sweep_sql
     assert "j.api_key_id = ANY($1::text[])" in sweep_sql
     assert sweep_keys == ["key-hash", "key-hash-2"]
@@ -924,7 +929,9 @@ async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monke
     head_sql, head_limit = prisma.db.query_raw.await_args_list[0].args
     assert "GROUP BY group_id ORDER BY MAX(created_at) DESC LIMIT $1::int" in head_sql
     assert head_limit == 50
-    assert prisma.db.query_raw.await_count == 1
+    counts_sql, _ = prisma.db.query_raw.await_args_list[1].args
+    assert "AS attempt_count" in counts_sql
+    assert prisma.db.query_raw.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -985,6 +992,75 @@ async def test_job_status_runs_until_every_key_stops_and_completed_outranks_stop
 
 
 @pytest.mark.asyncio
+async def test_list_reads_completed_once_every_key_spends_its_budget(monkeypatch: pytest.MonkeyPatch):
+    """A job whose keys all exhausted their turn budgets stopped sampling on its own, so
+    it must read completed on the very next list, before any sweep stamps its legs; one
+    key under budget keeps the whole job running. An operator starting an unrelated eval
+    must never look like it terminated a finished one."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(
+        legs=[
+            _leg_record(max_turns=5),
+            _leg_record(id="leg-2", api_key_id="key-hash-2", max_turns=5),
+            _leg_record(id="leg-3", group_id="job-2", api_key_id="key-hash", max_turns=5),
+            _leg_record(id="leg-4", group_id="job-2", api_key_id="key-hash-2", max_turns=5),
+        ]
+    )
+    prisma.attempt_rows = [
+        {"job_id": "leg-1", "attempt_count": 5},
+        {"job_id": "leg-2", "attempt_count": 6},
+        {"job_id": "leg-3", "attempt_count": 5},
+        {"job_id": "leg-4", "attempt_count": 3},
+    ]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+
+    by_id = {job.job_id: job for job in jobs}
+    assert by_id["job-1"].status == "completed"
+    assert all(key.stopped_at is None for key in by_id["job-1"].keys)
+    assert by_id["job-2"].status == "running"
+    assert {key.api_key_id: key.attempt_count for key in by_id["job-2"].keys} == {"key-hash": 5, "key-hash-2": 3}
+
+
+@pytest.mark.asyncio
+async def test_recorded_operator_stop_outranks_budget_arithmetic(monkeypatch: pytest.MonkeyPatch):
+    """A detached attempt can land around the stop and push the raw count past the
+    budget; the recorded stopped_by must keep the job reading stopped regardless."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    stamp = datetime.now(timezone.utc)
+    prisma = _shadow_prisma(
+        legs=[_leg_record(max_turns=5, stopped_at=stamp, stopped_by="admin")]
+    )
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 6}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+    assert jobs[0].status == "stopped"
+    assert jobs[0].stopped_by == "admin"
+
+    detail = await get_shadow_eval_job("job-1", VIEWER)
+    assert detail.status == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_stop_rejects_a_job_that_already_spent_its_budget(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record(max_turns=3)])
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 3}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(HTTPException) as exhausted:
+        await stop_shadow_eval_job("job-1", ADMIN)
+    assert exhausted.value.status_code == 400
+    assert "completed" in exhausted.value.detail
+    prisma.db.litellm_shadowevaljob.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_shadow_eval_responses_name_every_shadowed_key(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as proxy_server
 
@@ -1024,9 +1100,12 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
     stopped = await stop_shadow_eval_job("job-1", ADMIN)
 
     assert stopped.status == "stopped"
-    update = prisma.db.litellm_shadowevaljob.update_many.await_args.kwargs
-    assert update["where"] == {"group_id": "job-1", "stopped_at": None}
-    assert set(update["data"]) == {"stopped_at"}
+    assert stopped.stopped_by == "admin"
+    marker, stamp_update = (call.kwargs for call in prisma.db.litellm_shadowevaljob.update_many.await_args_list)
+    assert marker["where"] == {"group_id": "job-1"}
+    assert marker["data"] == {"stopped_by": "admin"}
+    assert stamp_update["where"] == {"group_id": "job-1", "stopped_at": None}
+    assert set(stamp_update["data"]) == {"stopped_at"}
     by_key = {key.api_key_id: key.stopped_at for key in stopped.keys}
     assert by_key["key-hash-2"] == earned
     assert by_key["key-hash"] is not None and by_key["key-hash"] != earned

@@ -816,7 +816,8 @@ export interface paths {
         };
         /**
          * List Shadow Eval Jobs
-         * @description List shadow eval jobs, newest first. Counts and results ride the detail endpoint only.
+         * @description List shadow eval jobs, newest first, each key with its attempt count so status is
+         *     accurate. Judged counts, spend, and results ride the detail endpoint only.
          */
         get: operations["list_shadow_eval_jobs_auto_router_shadow_eval_get"];
         put?: never;
@@ -33202,6 +33203,11 @@ export interface components {
              */
             api_key_id: string;
             /**
+             * Attempt Count
+             * @description This key's sampled attempts so far, judged and errored alike, the same count the sampler budgets against max_turns; populated on list and detail responses
+             */
+            attempt_count?: number | null;
+            /**
              * Key Alias
              * @description Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted
              */
@@ -33218,16 +33224,16 @@ export interface components {
             max_turns: number;
             /**
              * Stopped At
-             * @description When this key stopped sampling, whether its own budget ran out, the window closed, or an operator stopped the job. The key reads completed whenever the job does, otherwise stopped once this is set and running until then
+             * @description When this key's slot was stamped free, whether its own budget ran out, the window closed, or an operator stopped the job; status is derived, so a spent budget reads completed even while this is still unset
              */
             stopped_at?: string | null;
         };
         /**
          * ShadowEvalJobResponse
          * @description A shadow-eval job over one or more keys, each with its own budget and stop state;
-         *     status is derived from the keys' stopped_at and ends_at, never stored, so no writer
-         *     anywhere can produce an inconsistent one. Aggregate fields are populated by the
-         *     detail endpoint only and stay None on list responses.
+         *     status is derived from stopped_by, the keys' stop and budget state, and ends_at,
+         *     never stored, so no writer anywhere can produce an inconsistent one. Aggregate
+         *     fields are populated by the detail endpoint only and stay None on list responses.
          */
         ShadowEvalJobResponse: {
             /** Baseline Model */
@@ -33285,12 +33291,20 @@ export interface components {
             shadow_percentage: number;
             /**
              * Status
-             * @description A job whose window has passed reads completed even if a sweep stamped its keys
-             *     first; stopped means every key ended sampling before the window did. One key
-             *     exhausting its own budget leaves the job running while any sibling still samples.
+             * @description An operator's stop is a recorded fact, not an inference: a job with stopped_by
+             *     reads stopped permanently, and no attempt landing around the stop can reclassify
+             *     it as completed. Otherwise the job reads completed once its window passes or once
+             *     every key finished, whether or not a sweep stamped them yet; one key exhausting
+             *     its budget leaves the job running while any sibling still samples. A key stamped
+             *     under budget with no stopped_by predates the column and keeps reading stopped.
              * @enum {string}
              */
             readonly status: "running" | "completed" | "stopped";
+            /**
+             * Stopped By
+             * @description The operator who stopped the job early, recorded by the stop endpoint; None when the job ended on its own. Its presence is what makes a job read stopped rather than completed
+             */
+            stopped_by?: string | null;
         };
         /**
          * ShadowEvalResult

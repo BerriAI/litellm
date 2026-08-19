@@ -284,11 +284,28 @@ class ShadowEvalJobKeyResponse(BaseModel):
     stopped_at: datetime | None = Field(
         default=None,
         description=(
-            "When this key stopped sampling, whether its own budget ran out, the window closed, or an "
-            "operator stopped the job. The key reads completed whenever the job does, otherwise stopped "
-            "once this is set and running until then"
+            "When this key's slot was stamped free, whether its own budget ran out, the window closed, "
+            "or an operator stopped the job; status is derived, so a spent budget reads completed even "
+            "while this is still unset"
         ),
     )
+    attempt_count: int | None = Field(
+        default=None,
+        description=(
+            "This key's sampled attempts so far, judged and errored alike, the same count the sampler "
+            "budgets against max_turns; populated on list and detail responses"
+        ),
+    )
+
+    @property
+    def finished(self) -> bool:
+        """Whether this key's sampling has ended: its budget is spent or it was stamped."""
+        return self.stopped_at is not None or self.budget_spent
+
+    @property
+    def budget_spent(self) -> bool:
+        return self.attempt_count is not None and self.attempt_count >= self.max_turns
+
     key_alias: str | None = Field(
         default=None,
         description="Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted",
@@ -301,9 +318,9 @@ class ShadowEvalJobKeyResponse(BaseModel):
 
 class ShadowEvalJobResponse(BaseModel):
     """A shadow-eval job over one or more keys, each with its own budget and stop state;
-    status is derived from the keys' stopped_at and ends_at, never stored, so no writer
-    anywhere can produce an inconsistent one. Aggregate fields are populated by the
-    detail endpoint only and stay None on list responses."""
+    status is derived from stopped_by, the keys' stop and budget state, and ends_at,
+    never stored, so no writer anywhere can produce an inconsistent one. Aggregate
+    fields are populated by the detail endpoint only and stay None on list responses."""
 
     job_id: str
     keys: tuple[ShadowEvalJobKeyResponse, ...] = Field(
@@ -317,6 +334,13 @@ class ShadowEvalJobResponse(BaseModel):
     shadow_percentage: float
     created_at: datetime
     ends_at: datetime
+    stopped_by: str | None = Field(
+        default=None,
+        description=(
+            "The operator who stopped the job early, recorded by the stop endpoint; None when the job "
+            "ended on its own. Its presence is what makes a job read stopped rather than completed"
+        ),
+    )
 
     judged_count: int | None = Field(default=None, description="Verdicts recorded; detail endpoint only")
     error_count: int | None = Field(default=None, description="Sampled attempts that errored; detail endpoint only")
@@ -327,13 +351,20 @@ class ShadowEvalJobResponse(BaseModel):
     @computed_field
     @property
     def status(self) -> ShadowEvalStatus:
-        """A job whose window has passed reads completed even if a sweep stamped its keys
-        first; stopped means every key ended sampling before the window did. One key
-        exhausting its own budget leaves the job running while any sibling still samples."""
+        """An operator's stop is a recorded fact, not an inference: a job with stopped_by
+        reads stopped permanently, and no attempt landing around the stop can reclassify
+        it as completed. Otherwise the job reads completed once its window passes or once
+        every key finished, whether or not a sweep stamped them yet; one key exhausting
+        its budget leaves the job running while any sibling still samples. A key stamped
+        under budget with no stopped_by predates the column and keeps reading stopped."""
+        if self.stopped_by is not None:
+            return "stopped"
         if datetime.now(timezone.utc) >= (
             self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
         ):
             return "completed"
-        if all(key.stopped_at is not None for key in self.keys):
+        if not all(key.finished for key in self.keys):
+            return "running"
+        if any(key.stopped_at is not None and not key.budget_spent for key in self.keys):
             return "stopped"
-        return "running"
+        return "completed"
