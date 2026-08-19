@@ -1020,13 +1020,14 @@ class ComplexityRouter(CustomLogger):
         weights: Final = self.config.dimension_weights
         weighted_score: Final = sum(d.score * weights.get(d.name, 0) for d in dimensions)
 
-        # Check for reasoning override (2+ reasoning markers)
+        boundaries: Final = self._effective_tier_boundaries()
+        clears_override_floor: Final = weighted_score >= self._effective_reasoning_override_min_score()
+
         # Reuse match count from _score_keyword_match to avoid scanning twice
-        if reasoning_match_count >= 2:
+        if reasoning_match_count >= 2 and clears_override_floor:
             return ComplexityTier.REASONING, weighted_score, tuple(signals), "reasoning_override"
 
         # Map score to tier
-        boundaries: Final = self._effective_tier_boundaries()
         if weighted_score < boundaries["simple_medium"]:
             tier = ComplexityTier.SIMPLE
         elif weighted_score < boundaries["medium_complex"]:
@@ -1037,6 +1038,18 @@ class ComplexityRouter(CustomLogger):
             tier = ComplexityTier.REASONING
 
         return tier, weighted_score, tuple(signals), "heuristic_scorer"
+
+    def _effective_reasoning_override_min_score(self) -> float:
+        """The score a request must reach before the reasoning-marker override may promote it.
+
+        Unset tracks the SIMPLE/MEDIUM boundary, so moving that boundary moves this floor with it
+        and the override still cannot rescue a request the mapping would call SIMPLE. An explicit
+        0 is a real floor, not an absent one, so the comparison is against None.
+        """
+        configured: Final = self.config.reasoning_override_min_score
+        if configured is None:
+            return self._effective_tier_boundaries()["simple_medium"]
+        return configured
 
     def _effective_tier_boundaries(self) -> StandardLoggingRoutingDecisionTierBoundaries:
         """The tier boundaries in effect, with the documented defaults filled in.
@@ -1094,6 +1107,7 @@ class ComplexityRouter(CustomLogger):
         if score is not None:
             decision["score"] = score
             decision["tier_boundaries"] = self._effective_tier_boundaries()
+            decision["reasoning_override_min_score"] = self._effective_reasoning_override_min_score()
         if signals:
             # Stored as a list because this record is serialized to JSON for the spend
             # log and read back as an array by the dashboard; a sequence type that only

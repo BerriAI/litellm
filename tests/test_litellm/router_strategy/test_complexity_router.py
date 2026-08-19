@@ -267,6 +267,91 @@ class TestReasoningMarkerScoring:
         # 2+ reasoning markers should force REASONING tier
         assert tier == ComplexityTier.REASONING
 
+    def test_reasoning_override_does_not_rescue_a_simple_score(self, complexity_router):
+        """Reasoning markers on an otherwise trivial prompt must not reach REASONING."""
+        prompt = "hi, step by step, pros and cons"
+        tier, score, signals = complexity_router.classify(prompt)
+        assert score < complexity_router.config.tier_boundaries["simple_medium"]
+        assert any("step by step" in s and "pros and cons" in s for s in signals)
+        assert tier == ComplexityTier.SIMPLE
+
+    def test_reasoning_override_applies_at_the_simple_medium_boundary(self, complexity_router):
+        """A score sitting exactly on simple_medium is not SIMPLE, so the override still promotes it."""
+        prompt = (
+            "Give me the pros and cons, step by step, of moving our checkout service "
+            "to an event-driven architecture."
+        )
+        tier, score, signals = complexity_router.classify(prompt)
+        assert score == complexity_router.config.tier_boundaries["simple_medium"]
+        assert tier == ComplexityTier.REASONING
+
+    def test_explicit_zero_floor_restores_the_unconditional_override(self, mock_router_instance, basic_config):
+        """0 is a real floor, not an absent one, so the markers alone promote again."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "reasoning_override_min_score": 0.0},
+        )
+        tier, score, _ = router.classify("hi, step by step, pros and cons")
+        assert score < router.config.tier_boundaries["simple_medium"]
+        assert tier == ComplexityTier.REASONING
+
+    def test_floor_defaults_to_simple_medium_and_follows_it(self, mock_router_instance, basic_config):
+        """Unset tracks simple_medium, so moving that boundary moves the floor with it."""
+        prompt = (
+            "Give me the pros and cons, step by step, of moving our checkout service "
+            "to an event-driven architecture."
+        )
+        low = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_boundaries": {"simple_medium": 0.20}},
+        )
+        high = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_boundaries": {"simple_medium": 0.30}},
+        )
+        assert low._effective_reasoning_override_min_score() == 0.20
+        assert high._effective_reasoning_override_min_score() == 0.30
+        assert low.classify(prompt)[0] == ComplexityTier.REASONING
+        assert high.classify(prompt)[0] != ComplexityTier.REASONING
+
+    def test_explicit_floor_overrides_the_boundary(self, mock_router_instance, basic_config):
+        """A configured floor decides the override, not simple_medium."""
+        prompt = (
+            "Give me the pros and cons, step by step, of moving our checkout service "
+            "to an event-driven architecture."
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "tier_boundaries": {"simple_medium": 0.10},
+                "reasoning_override_min_score": 0.90,
+            },
+        )
+        tier, score, _ = router.classify(prompt)
+        assert score > router.config.tier_boundaries["simple_medium"]
+        assert router._effective_reasoning_override_min_score() == 0.90
+        assert tier != ComplexityTier.REASONING
+
+    def test_configured_floor_is_applied_with_greater_or_equal(self, mock_router_instance, basic_config):
+        """A score landing exactly on the configured floor still promotes."""
+        prompt = (
+            "Give me the pros and cons, step by step, of moving our checkout service "
+            "to an event-driven architecture."
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "reasoning_override_min_score": 0.25},
+        )
+        tier, score, _ = router.classify(prompt)
+        assert score == 0.25
+        assert tier == ComplexityTier.REASONING
+
     def test_system_prompt_reasoning_not_counted(self, complexity_router):
         """Reasoning markers in system prompt should not count for override."""
         user_prompt = "What is 2+2?"

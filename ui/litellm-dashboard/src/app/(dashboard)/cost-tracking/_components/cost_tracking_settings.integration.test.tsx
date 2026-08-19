@@ -72,7 +72,7 @@ describe("CostTrackingSettings submit paths", () => {
     const header = screen.getByText("Provider Discounts").closest("button");
     if (header) await user.click(header);
     await user.click(await screen.findByRole("button", { name: /add provider discount/i }));
-    await screen.findByText("Add Provider Discount", { selector: "h2" });
+    await screen.findByRole("dialog", { name: "Add Provider Discount" });
   };
 
   const submitDiscount = () =>
@@ -101,7 +101,7 @@ describe("CostTrackingSettings submit paths", () => {
     const header = screen.getByText("Fee/Price Margin").closest("button");
     if (header) await user.click(header);
     await user.click(await screen.findByRole("button", { name: /add provider margin/i }));
-    await screen.findByText("Add Provider Margin", { selector: "h2" });
+    await screen.findByRole("dialog", { name: "Add Provider Margin" });
 
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click((await screen.findAllByRole("option"))[0]);
@@ -136,7 +136,7 @@ describe("CostTrackingSettings submit paths", () => {
     const header = screen.getByText("Fee/Price Margin").closest("button");
     if (header) await user.click(header);
     await user.click(await screen.findByRole("button", { name: /add provider margin/i }));
-    await screen.findByText("Add Provider Margin", { selector: "h2" });
+    await screen.findByRole("dialog", { name: "Add Provider Margin" });
 
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click((await screen.findAllByRole("option"))[0]);

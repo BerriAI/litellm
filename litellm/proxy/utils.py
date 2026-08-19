@@ -30,7 +30,6 @@ from litellm.constants import (
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
 )
 from litellm.proxy._types import (
-    DB_RETRY_SAFE_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
@@ -5960,15 +5959,14 @@ class ProxyUpdateSpend:
                             )
 
                 break
-            except DB_RETRY_SAFE_ERROR_TYPES as e:
-                if i >= n_retry_times:  # If we've reached the maximum number of retries
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
-                    )
-                # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
             except Exception as e:
-                _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
+                await DBSpendUpdateWriter._handle_spend_update_failure(
+                    e=e,
+                    attempt=i,
+                    n_retry_times=n_retry_times,
+                    start_time=start_time,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
 
     @staticmethod
     async def update_spend_logs(
