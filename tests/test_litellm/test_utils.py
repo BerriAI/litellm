@@ -29,7 +29,8 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import all_litellm_params, bedrock_batch_litellm_params
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
@@ -868,6 +869,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "container",
                         "image_edit",
                         "embedding",
+                        "guardrail",
                         "image_generation",
                         "video_generation",
                         "moderation",
@@ -975,6 +977,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "type": "string",
                     },
                 },
+                "guardrail_cost_per_unit": {
+                    "type": "object",
+                    "additionalProperties": {"type": "number"},
+                },
                 "search_context_cost_per_query": {
                     "type": "object",
                     "properties": {
@@ -1021,6 +1027,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "input_cost_per_token": {"type": "number"},
                             "output_cost_per_token": {"type": "number"},
                             "cache_read_input_token_cost": {"type": "number"},
+                            "cache_creation_input_token_cost": {"type": "number"},
                             "output_cost_per_reasoning_token": {"type": "number"},
                             "max_results_range": {
                                 "type": "array",
@@ -3759,6 +3766,20 @@ class TestValidateAndFixThinkingParam:
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
 
+    def test_bool_true_maps_to_enabled_with_default_budget(self):
+        from litellm.constants import DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=True) == {
+            "type": "enabled",
+            "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+        }
+
+    def test_bool_false_returns_none(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=False) is None
+
 
 def test_deepseek_v4_models_in_cost_map():
     """
@@ -3766,8 +3787,8 @@ def test_deepseek_v4_models_in_cost_map():
     configured in model_prices_and_context_window.json.
 
     Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
-    - deepseek-v4-flash: $0.14/M input, $0.28/M output
-    - deepseek-v4-pro:   $0.435/M input, $0.87/M output (75% discounted active price)
+    - deepseek-v4-flash: $0.44/M input, $1.32/M output
+    - deepseek-v4-pro:   $1.32/M input, $3.96/M output
 
     Closes https://github.com/BerriAI/litellm/issues/26709
     """
@@ -3780,8 +3801,8 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -3796,8 +3817,8 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from model_prices_and_context_window.json"
@@ -3824,8 +3845,8 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -3838,8 +3859,8 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
-        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
         assert info is not None, f"{key} missing from backup JSON"
@@ -4751,3 +4772,109 @@ def test_websearch_interception_control_fields_never_reach_the_provider():
         f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
     )
     assert set(WEBSEARCH_INTERNAL_CONTROL_FIELDS) <= set(all_litellm_params)
+
+
+def test_bedrock_batch_params_never_reach_the_provider():
+    """A Bedrock managed-batch deployment carries aws_batch_role_arn / s3_* /
+    bedrock_tags in its litellm_params, and the same deployment also serves chat.
+    Anything the param builder does not recognize is swept into extra_body, so
+    Bedrock rejects the whole call: `aws_batch_role_arn: Extra inputs are not
+    permitted` (Anthropic models) or `extraneous key [aws_batch_role_arn] is not
+    permitted` (Nova/Llama/Titan), turning every non-batch request to that
+    deployment into a 400.
+
+    The batch path is unaffected by registering them, because GenericLiteLLMParams
+    is extra="allow" and preserves them into litellm_params for the batch and files
+    transformations that read them.
+    """
+    configured = {
+        field: ([{"key": "team", "value": "configured-value"}] if field == "bedrock_tags" else "configured-value")
+        for field in bedrock_batch_litellm_params
+    }
+    kwargs = {"a_real_provider_specific_param": 1, **configured}
+
+    non_default = get_non_default_completion_params(dict(kwargs))
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "bedrock batch params leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+    assert set(bedrock_batch_litellm_params) <= set(all_litellm_params)
+
+    batch_params = dict(GenericLiteLLMParams(**kwargs))
+    assert all(batch_params.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
+        "registering these must not strip them from the batch path: "
+        f"{sorted(f for f in bedrock_batch_litellm_params if batch_params.get(f) != configured[f])}"
+    )
+
+    normalized = CredentialLiteLLMParams.model_validate(
+        GenericLiteLLMParams(**kwargs).model_dump(exclude_none=True)
+    ).model_dump(exclude_none=True)
+    assert all(normalized.get(field) == configured[field] for field in bedrock_batch_litellm_params), (
+        "credential normalization dropped batch params before the transformation: "
+        f"{sorted(f for f in bedrock_batch_litellm_params if normalized.get(f) != configured[f])}"
+    )
+
+
+def test_client_side_timeout_marker_never_reaches_the_provider():
+    """The proxy stamps kwargs["client_side_timeout"] = True whenever a request carries
+    a caller-supplied timeout (body timeout / request_timeout / stream_timeout or the
+    x-litellm-timeout headers) so the router can skip cooldowns on the resulting 408s.
+    The marker is only meaningful to the router, so it must be filtered out of the
+    provider params: swept into extra_body / additionalModelRequestFields it turns every
+    timed-out request into a provider 400 (`client_side_timeout: Extra inputs are not
+    permitted`)."""
+    kwargs = {"a_real_provider_specific_param": 1, "client_side_timeout": True}
+
+    non_default = get_non_default_completion_params(kwargs)
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "client_side_timeout leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+
+
+def test_rust_flag_not_forwarded_as_provider_param():
+    forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
+    assert "rust" not in forwarded
+
+
+def test_completion_does_not_leak_rust_flag_into_provider_request_body():
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    mock_raw_response = MagicMock()
+    mock_raw_response.headers = {}
+    mock_raw_response.parse.return_value = mock_response
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
+
+    litellm.completion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        rust=True,
+        api_key="sk-test",
+        client=mock_client,
+    )
+
+    create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
+    assert "rust" not in create_kwargs
+    assert "rust" not in (create_kwargs.get("extra_body") or {})

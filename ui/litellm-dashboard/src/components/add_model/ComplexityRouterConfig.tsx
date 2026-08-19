@@ -1,12 +1,17 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, Collapse, Divider, Input, Space, Switch, Tooltip, Typography } from "antd";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Select as AntdSelect, Card, Collapse, Divider, Input, Space, Switch, Typography } from "antd";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import { resolveComplexityDefaultModel, tierOptions } from "./complexity_router_tiers";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
+import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+
+export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
 const { Text } = Typography;
 
@@ -82,6 +87,24 @@ export interface AdaptiveRouterWeights {
 
 export const DEFAULT_ADAPTIVE_WEIGHTS: AdaptiveRouterWeights = { quality: 0.3, cost: 0.7 };
 
+export type HeuristicScoringRole = "decides" | "fallback_only" | "never";
+
+/**
+ * Whether the heuristic scorer runs on this router at all, which is what gates its knobs. An LLM
+ * classifier still falls back to the scorer unless the fallback is the default model, so the gate cannot be
+ * a plain classifier_type check.
+ */
+export const heuristicScoringRoleFor = (
+  classifierType: ClassifierType,
+  classifierFallback: ClassifierFallback | undefined,
+): HeuristicScoringRole => {
+  if (classifierType === "heuristic") return "decides";
+  return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
+};
+
+export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
+  heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+
 export type AdaptiveEligible = "all" | "classified_tier";
 
 export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
@@ -89,6 +112,8 @@ export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
   tier_labels?: ComplexityTierLabels;
+  /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
+  default_model?: string;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
@@ -97,11 +122,20 @@ export interface ComplexityRouterConfigValue {
   classifier_fallback?: ClassifierFallback;
   session_affinity?: boolean;
   deployment_affinity?: boolean;
+  /** Tier floor for coding-agent plan-mode requests. Unset means detection is off, matching the backend. */
+  plan_mode_min_tier?: string;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  /**
+   * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
+   * payload so the router tracks the backend defaults rather than freezing today's numbers.
+   */
+  tier_boundaries?: TierBoundaries;
+  token_thresholds?: TokenThresholds;
+  dimension_weights?: DimensionWeights;
 }
 
 interface ComplexityRouterConfigProps {
@@ -156,6 +190,10 @@ export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof Complexit
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
+/** Tiers the plan-mode floor may name: the backend rejects a floor whose tier has no models. */
+export const planModeEligibleTiers = (tiers: ComplexityTiers): Array<keyof ComplexityTiers> =>
+  TIER_KEYS.filter((tier) => (tiers[tier] ?? []).length > 0);
+
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
   value,
@@ -174,11 +212,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
-  // The deployment's default model is derived from the tiers on submit, mirroring the order
-  // add_auto_router_tab uses, so the fallback option is offered exactly when one will exist.
-  const hasDefaultModel = Boolean(
-    value.tiers.MEDIUM[0] || value.tiers.SIMPLE[0] || value.tiers.COMPLEX[0] || value.tiers.REASONING[0],
-  );
+  const planModeTiers = planModeEligibleTiers(value.tiers);
+  const derivedDefaultModel = resolveComplexityDefaultModel(value.tiers);
+  const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
@@ -195,6 +231,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     });
   };
 
+  // Clearing the select drops the key entirely rather than storing "", so an emptied pin reads as
+  // "track the tiers" everywhere downstream instead of as a blank model name.
+  const handleDefaultModelChange = (model: string | undefined) => {
+    onChange({ ...value, default_model: model || undefined });
+  };
+
   const handleTierLabelChange = (tier: keyof ComplexityTiers, label: string) => {
     onChange({
       ...value,
@@ -208,9 +250,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         <Typography.Title level={4} style={{ margin: 0 }}>
           Complexity Tier Configuration
         </Typography.Title>
-        <Tooltip title="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
+        <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
           <InfoCircleOutlined className="text-gray-400" />
-        </Tooltip>
+        </SimpleTooltip>
       </Space>
 
       <Text type="secondary" style={{ display: "block", marginBottom: 24 }}>
@@ -238,9 +280,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <Text strong style={{ fontSize: 16 }}>
                     {label} Tier
                   </Text>
-                  <Tooltip title={tierInfo.description}>
+                  <SimpleTooltip content={tierInfo.description}>
                     <InfoCircleOutlined className="text-gray-400" />
-                  </Tooltip>
+                  </SimpleTooltip>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
                   </Text>
@@ -281,6 +323,36 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             </div>
           );
         })}
+        <Divider style={{ margin: "16px 0" }} />
+
+        <div className="mb-2">
+          <div className="flex items-center gap-2 mb-2">
+            <Text strong style={{ fontSize: 16 }}>
+              Default Model
+            </Text>
+            <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
+              <InfoCircleOutlined className="text-gray-400" />
+            </SimpleTooltip>
+          </div>
+          <AntdSelect
+            value={value.default_model || undefined}
+            onChange={handleDefaultModelChange}
+            placeholder={
+              derivedDefaultModel
+                ? `Derived from tiers: ${derivedDefaultModel}`
+                : "Add a model to the Simple or Medium tier"
+            }
+            aria-label="Default model"
+            showSearch
+            allowClear
+            style={{ width: "100%" }}
+            options={modelOptions}
+          />
+          <Text type="secondary" style={{ display: "block", marginTop: 4, fontSize: 12 }}>
+            Used when the tier the request lands in has no model, and when the classifier fails with &quot;Route to the
+            default model&quot; selected.
+          </Text>
+        </div>
       </Card>
 
       <Divider />
@@ -304,7 +376,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}
-                hasDefaultModel={hasDefaultModel}
+                defaultModel={defaultModel}
               />
             ),
           },
@@ -350,6 +422,47 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   Keeps a session on its first turn&apos;s model instead of re-classifying each turn. Also pins the
                   deployment.
                 </Text>
+              </>
+            ),
+          },
+          {
+            key: "plan-mode",
+            label: (
+              <Text strong style={{ color: "#374151" }}>
+                Advanced: Plan-Mode Override
+              </Text>
+            ),
+            children: (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <Switch
+                    checked={value.plan_mode_min_tier !== undefined}
+                    disabled={planModeTiers.length === 0}
+                    onChange={(enabled) =>
+                      onChange({ ...value, plan_mode_min_tier: enabled ? planModeTiers.at(-1) : undefined })
+                    }
+                    aria-label="Route plan-mode requests to a minimum tier"
+                  />
+                  <Text strong>Route plan-mode requests to a minimum tier</Text>
+                </div>
+                <Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 12 }}>
+                  Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier.
+                  The classifier still wins when it picks higher, and the override only lasts while plan mode is active.
+                  {planModeTiers.length === 0 && " Add models to a tier to enable this."}
+                </Text>
+                {value.plan_mode_min_tier !== undefined && (
+                  <div style={{ maxWidth: 320 }}>
+                    <AntdSelect
+                      aria-label="Plan-mode minimum tier"
+                      style={{ width: "100%" }}
+                      value={value.plan_mode_min_tier}
+                      options={tierOptions(value.tier_labels).filter((option) =>
+                        (planModeTiers as string[]).includes(option.value),
+                      )}
+                      onChange={(tier: string) => onChange({ ...value, plan_mode_min_tier: tier })}
+                    />
+                  </div>
+                )}
               </>
             ),
           },

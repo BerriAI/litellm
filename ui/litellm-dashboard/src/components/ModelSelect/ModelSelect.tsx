@@ -15,6 +15,7 @@ import {
   ComboboxLabel,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -39,6 +40,7 @@ export const MODEL_SENTINEL_OPTIONS = [
 const MAX_VISIBLE_MODEL_CHIPS = 5;
 
 export interface ModelSelectProps {
+  id?: string;
   teamID?: string;
   organizationID?: string;
   options?: {
@@ -120,7 +122,8 @@ const filterModels = (
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
-  const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
+  const anchor = useComboboxAnchor();
+  const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
   const { data: team, isLoading: isLoadingTeam } = useTeam(teamID);
@@ -234,7 +237,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
         isItemEqualToValue={(option: ModelOption, selected: ModelOption) => option.value === selected.value}
         itemToStringLabel={(option: ModelOption) => option.label}
       >
-        <ComboboxChips data-testid={dataTestId} style={style} className="w-full">
+        <ComboboxChips render={<div ref={anchor} />} data-testid={dataTestId} style={style} className="w-full">
           <ComboboxValue>
             {(selected: ModelOption[]) => (
               <>
@@ -254,13 +257,9 @@ export const ModelSelect = (props: ModelSelectProps) => {
               </>
             )}
           </ComboboxValue>
-          <ComboboxChipsInput
-            placeholder="Select Models"
-            aria-label="Select Models"
-            className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
-          />
+          <ComboboxChipsInput id={id} placeholder="Select Models" aria-label="Select Models" className="min-w-24" />
         </ComboboxChips>
-        <ComboboxContent>
+        <ComboboxContent anchor={anchor}>
           <ComboboxEmpty>No models found</ComboboxEmpty>
           <ComboboxList>
             {(group: ModelOptionGroup) => (

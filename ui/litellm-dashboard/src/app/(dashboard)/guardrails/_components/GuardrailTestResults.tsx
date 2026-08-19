@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Check, ChevronDown, ChevronRight, Clock, Copy } from "lucide-react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -102,9 +102,9 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                         onClick={async () => {
                           const success = await copyToClipboard(result.response_text);
                           if (success) {
-                            NotificationsManager.success("Result copied to clipboard");
+                            toast.success("Result copied to clipboard");
                           } else {
-                            NotificationsManager.fromBackend("Failed to copy result");
+                            toast.fromError("Failed to copy result");
                           }
                         }}
                       >

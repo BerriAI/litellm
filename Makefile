@@ -4,11 +4,11 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	info lint lint-dev lint-checks format \
+	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
-	install-helm-unittest check-circular-imports check-import-safety check pre-commit \
+	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
 	lint-install lint-fetch-base bootstrap
 
 # Default target
@@ -52,9 +52,16 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
+	@echo ""
+	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
+	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
 
 UV := uv
 UV_RUN := $(UV) run --no-sync
+
+# Machine-wide slot queue for the heavy targets below; python3 + stdlib only, so
+# it runs before any venv exists. See scripts/gate_slot_lock.py.
+GATE_SLOT_LOCK := python3 scripts/gate_slot_lock.py
 
 LINT_DEP_INSTALL ?= install-dev
 LINT_E2E_DEP_INSTALL ?= lint-install
@@ -73,6 +80,8 @@ info:
 install-dev:
 	$(UV) sync --inexact --frozen
 
+# Deliberately unqueued: provisioning is I/O bound, so it doesn't need one of the
+# machine-wide slots the CPU-bound gates below share.
 bootstrap:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
@@ -229,7 +238,10 @@ check-import-safety: $(LINT_DEP_INSTALL)
 # does (merge-base with origin/litellm_internal_staging). Setup (env sync, Prisma client,
 # base fetch) runs once up front; the checks themselves are independent, so a sub-make
 # fans them out with -j and the fast ones finish under basedpyright's shadow.
-lint: lint-install lint-fetch-base
+lint:
+	@$(GATE_SLOT_LOCK) $(MAKE) lint-inner
+
+lint-inner: lint-install lint-fetch-base
 	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
 lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
@@ -244,7 +256,10 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
 # check-ui-api-types.yml (API-type drift), skipping any whose files aren't in scope.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
-check: bootstrap
+check:
+	@$(GATE_SLOT_LOCK) $(MAKE) check-inner
+
+check-inner: bootstrap
 	./scripts/pre_commit_lint.sh
 
 pre-commit:

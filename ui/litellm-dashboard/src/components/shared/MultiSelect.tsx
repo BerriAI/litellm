@@ -11,15 +11,18 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 
 export interface MultiSelectOption {
   label: string;
   value: string;
   description?: string;
+  disabled?: boolean;
 }
 
 interface MultiSelectProps {
+  id?: string;
   options: MultiSelectOption[];
   value?: string[];
   onValueChange: (value: string[]) => void;
@@ -42,6 +45,7 @@ const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
 };
 
 export function MultiSelect({
+  id,
   options,
   value = [],
   onValueChange,
@@ -52,6 +56,7 @@ export function MultiSelect({
   allowCustomValues = false,
   className,
 }: MultiSelectProps) {
+  const anchor = useComboboxAnchor();
   const [query, setQuery] = useState("");
   const safeOptions = options.filter(
     (option): option is MultiSelectOption =>
@@ -89,27 +94,30 @@ export function MultiSelect({
       filter={matchesQuery}
       disabled={disabled || loading}
     >
-      <ComboboxChips className={`min-h-8 py-1 text-sm ${className ?? ""}`}>
+      <ComboboxChips render={<div ref={anchor} />} className={`min-h-8 py-1 text-sm ${className ?? ""}`}>
         <ComboboxValue>
-          {(selected: MultiSelectOption[]) =>
-            selected.map((option) => (
-              <ComboboxChip key={option.value} aria-label={option.label}>
-                {option.label}
-              </ComboboxChip>
-            ))
-          }
+          {(selected: MultiSelectOption[]) => (
+            <>
+              {selected.map((option) => (
+                <ComboboxChip key={option.value} aria-label={option.label}>
+                  {option.label}
+                </ComboboxChip>
+              ))}
+              <ComboboxChipsInput
+                id={id}
+                placeholder={loading ? "Loading..." : placeholder}
+                className="min-w-24"
+                aria-label={placeholder || undefined}
+              />
+            </>
+          )}
         </ComboboxValue>
-        <ComboboxChipsInput
-          placeholder={loading ? "Loading..." : placeholder}
-          className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
-          aria-label={placeholder}
-        />
       </ComboboxChips>
-      <ComboboxContent>
+      <ComboboxContent anchor={anchor}>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(option: MultiSelectOption) => (
-            <ComboboxItem key={option.value} value={option}>
+            <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
               <span className="min-w-0">
                 <span className="block truncate">{option.label}</span>
                 {option.description && (

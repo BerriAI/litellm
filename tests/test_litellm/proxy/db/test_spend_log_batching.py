@@ -6,6 +6,7 @@ exceeds the byte budget while every row is still written exactly once.
 
 Symbols pinned here:
   - ``spend_log_write_batches``
+  - ``spend_log_queue_within_budget``
   - ``_row_payload_bytes``
 """
 
@@ -14,6 +15,7 @@ from typing import Any, Dict, List
 
 from litellm.proxy.db.spend_log_batching import (
     _row_payload_bytes,
+    spend_log_queue_within_budget,
     spend_log_write_batches,
 )
 
@@ -138,6 +140,31 @@ def test_json_escaping_growth_is_counted() -> None:
     # the escaping is counted, so the split is what proves the escaping is measured.
     budget = 2 * characters + 200
     assert [len(batch) for batch in spend_log_write_batches([row, row], max_bytes=budget)] == [1, 1]
+
+
+def test_queue_within_budget_drops_the_oldest_rows_and_reports_what_is_left() -> None:
+    """Trimming has to free enough bytes to get under the budget while keeping
+    the newest rows, and hand back the kept total so a queue tracking it across
+    appends never re-measures the rows it kept."""
+    rows = [{"request_id": f"r{i}", "messages": "x" * 1000} for i in range(4)]
+    row_bytes = _row_payload_bytes(rows[0])
+
+    kept, kept_bytes = spend_log_queue_within_budget(rows, 4 * row_bytes, 2 * row_bytes)
+
+    assert [row["request_id"] for row in kept] == ["r2", "r3"]
+    assert kept_bytes == 2 * row_bytes
+
+
+def test_queue_within_budget_keeps_a_row_larger_than_the_whole_budget() -> None:
+    """A row over budget on its own is kept rather than dropped, the same call
+    the write batcher makes: the budget guards memory, and trading a spend
+    record for RSS is the worse failure."""
+    row = {"request_id": "r", "messages": "x" * 10_000}
+
+    kept, kept_bytes = spend_log_queue_within_budget([row], _row_payload_bytes(row), 100)
+
+    assert list(kept) == [row]
+    assert kept_bytes == _row_payload_bytes(row)
 
 
 def test_unserialized_list_payloads_are_measured_not_ignored() -> None:
