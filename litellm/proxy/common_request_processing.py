@@ -3440,8 +3440,7 @@ class ProxyBaseLLMRequestProcessing:
         Args:
             chunk: The streaming chunk (dict, str, bytes, or bytearray)
             model_name: Model name for cost calculation
-            litellm_logging_obj: The call's logging object, used to price the chunk with
-                the same custom/deployment pricing as the logging callback
+            litellm_logging_obj: The call's logging object, used for pricing
 
         Returns:
             The processed chunk with cost information injected if applicable
@@ -3538,14 +3537,8 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _stream_usage_for_event(obj: Mapping[str, object], usage: Mapping[str, Any]) -> Usage | None:
-        """
-        Build the ``Usage`` to price a streamed usage event.
-
-        Anthropic goes through ``AnthropicConfig.calculate_usage``, the same transformation
-        the non-streaming path uses, so ``prompt_tokens`` is the full input total and the
-        cache read plus 5m/1h cache creation split land in ``prompt_tokens_details`` where
-        the pricer looks for them.
-        """
+        # Anthropic reports input_tokens excluding cache tokens, so reuse the non-streaming
+        # transformation to total the prompt and keep the 5m/1h cache creation split
         if obj.get("type") == "message_delta":
             return AnthropicConfig().calculate_usage(usage_object=usage, reasoning_content=None)
         if obj.get("object") == "chat.completion.chunk":
@@ -3580,12 +3573,8 @@ class ProxyBaseLLMRequestProcessing:
         service_tier: str | None,
         litellm_logging_obj: LiteLLMLoggingObj | None,
     ) -> float | None:
-        """
-        Price a streamed usage response through the call's logging object when there is one,
-        so the streamed cost picks up the same custom/deployment pricing (``custom_pricing``,
-        ``custom_llm_provider``, ``base_model``, ``router_model_id``) as the logging callback
-        rather than the model's sticker price; fall back to ``completion_cost`` by model name.
-        """
+        # Pricing via the logging object inherits the deployment's custom pricing, so the
+        # streamed cost matches what the logging callback records instead of sticker price
         cost_from_logging_obj: Final = (
             ProxyBaseLLMRequestProcessing._logging_obj_cost_or_none(model_response, litellm_logging_obj)
             if litellm_logging_obj is not None
@@ -3606,8 +3595,7 @@ class ProxyBaseLLMRequestProcessing:
         Args:
             obj: Dictionary containing the SSE event data
             model_name: Model name for cost calculation
-            litellm_logging_obj: The call's logging object, used so the injected cost
-                matches the cost the logging callback records
+            litellm_logging_obj: The call's logging object, used for pricing
 
         Returns:
             Modified dictionary with cost injected, or None if no modification needed
