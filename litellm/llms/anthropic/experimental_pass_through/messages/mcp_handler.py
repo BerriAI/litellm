@@ -146,10 +146,7 @@ async def anthropic_messages_with_mcp(
 
         # If any requested tool is not owned by server-side MCP (e.g. client-native tools like Read/Bash),
         # do not auto-execute server-side. Pass the full response back to the client.
-        has_client_side_tool = any(
-            block.get("name") not in tool_server_map
-            for block in tool_use_blocks
-        )
+        has_client_side_tool = any(block.get("name") not in tool_server_map for block in tool_use_blocks)
         if has_client_side_tool:
             break
 
