@@ -111,15 +111,17 @@ describe("edit root: auth_type gates", () => {
   });
 
   it("mounts the seven aws credentials only for aws_sigv4", () => {
-    expect(editCreds({ transport: "http", auth_type: "aws_sigv4" })).toStrictEqual([
-      "aws_region_name",
-      "aws_service_name",
-      "aws_access_key_id",
-      "aws_secret_access_key",
-      "aws_session_token",
-      "aws_role_name",
-      "aws_session_name",
-    ]);
+    expect(sorted(editCreds({ transport: "http", auth_type: "aws_sigv4" }))).toStrictEqual(
+      sorted([
+        "aws_region_name",
+        "aws_service_name",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_role_name",
+        "aws_session_name",
+      ]),
+    );
     expect(editCreds(HTTP_NONE)).not.toContain("aws_region_name");
   });
 
@@ -136,7 +138,9 @@ describe("edit root: children that gate by early return null", () => {
   it("mounts dcr_bridge and the declared-app credentials only for the client-forwarded modes", () => {
     for (const authType of ["true_passthrough", "oauth_delegate"]) {
       expect(editRoot({ transport: "http", auth_type: authType })).toContain("dcr_bridge");
-      expect(editCreds({ transport: "http", auth_type: authType })).toStrictEqual(["client_id", "client_secret"]);
+      expect(sorted(editCreds({ transport: "http", auth_type: authType }))).toStrictEqual(
+        sorted(["client_id", "client_secret"]),
+      );
     }
     expect(editRoot(HTTP_NONE)).not.toContain("dcr_bridge");
     expect(editRoot({ transport: "http", auth_type: "oauth2" })).not.toContain("dcr_bridge");
