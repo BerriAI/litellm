@@ -98,6 +98,25 @@ async def test_async_pre_call_hook_batch_retrieve():
 
 
 @pytest.mark.asyncio
+async def test_list_user_batches_limit_zero_returns_empty_page_without_db_query():
+    """OpenAI parity for GET /v1/batches?limit=0: an empty page, never the
+    default page of 20 (issue #37149). `min(limit or 20, 100)` treated 0 as
+    unset before this regression guard existed."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prisma_client = MagicMock()
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
+
+    page = await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="123"),
+        limit=0,
+    )
+
+    assert page == {"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False}
+    prisma_client.db.litellm_managedobjecttable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_async_pre_call_deployment_hook_resolves_model_id_from_litellm_metadata():
     """
     For batch operations the router stores model_info under
@@ -3045,3 +3064,145 @@ async def test_same_user_different_keys_can_access_batch():
     assert "batch_id" in result2
     # Both keys should get the same result
     assert result1["batch_id"] == result2["batch_id"]
+
+
+@pytest.mark.asyncio
+async def test_file_list_cursors_are_scoped_to_the_caller():
+    """A non-owner must not learn other callers' file ids through the page cursors."""
+    from openai.pagination import AsyncCursorPage
+    from openai.types import FileObject
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    owner_file = FileObject(
+        id="file-owner-1",
+        bytes=100,
+        created_at=1,
+        filename="owner.jsonl",
+        object="file",
+        purpose="batch",
+        status="processed",
+    )
+    upstream_page = AsyncCursorPage[FileObject].construct(
+        data=[owner_file],
+        has_more=True,
+        first_id=owner_file.id,
+        last_id=owner_file.id,
+        object="list",
+    )
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.find_many.return_value = []
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    response = await proxy_managed_files.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="other-user", team_id="other-team", parent_otel_span=MagicMock()
+        ),
+        response=upstream_page,
+    )
+
+    assert response.data == []
+    assert response.first_id is None
+    assert response.last_id is None
+    assert response.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_file_list_cursors_follow_the_owner_scoped_page():
+    from openai.pagination import AsyncCursorPage
+    from openai.types import FileObject
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    def _raw_file(file_id: str) -> FileObject:
+        return FileObject(
+            id=file_id,
+            bytes=100,
+            created_at=1,
+            filename=f"{file_id}.jsonl",
+            object="file",
+            purpose="batch",
+            status="processed",
+        )
+
+    upstream_page = AsyncCursorPage[FileObject].construct(
+        data=[_raw_file("file-someone-else"), _raw_file("file-mine")],
+        has_more=True,
+        first_id="file-someone-else",
+        last_id="file-mine",
+        object="list",
+    )
+
+    managed_row = MagicMock()
+    managed_row.unified_file_id = "litellm_proxy:mine"
+    managed_row.file_object = {
+        "id": "file-mine",
+        "bytes": 100,
+        "created_at": 1,
+        "filename": "mine.jsonl",
+        "object": "file",
+        "purpose": "batch",
+        "status": "processed",
+    }
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.find_many.return_value = [managed_row]
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    response = await proxy_managed_files.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="mine-user", parent_otel_span=MagicMock()
+        ),
+        response=upstream_page,
+    )
+
+    assert [file_object.id for file_object in response.data] == ["litellm_proxy:mine"]
+    assert response.first_id == "litellm_proxy:mine"
+    assert response.last_id == "litellm_proxy:mine"
+    assert response.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_list_user_batches_provider_filter_rejected_with_400():
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await proxy_managed_files.list_user_batches(
+            user_api_key_dict=UserAPIKeyAuth(user_id="123"),
+            provider="openai",
+        )
+
+    assert exc.value.code == "400"
+    assert exc.value.type == "invalid_request_error"
+    assert exc.value.param == "provider"
+    assert exc.value.message == "Filtering by 'provider' is not supported when using managed batches."
+
+
+@pytest.mark.asyncio
+async def test_list_user_batches_target_model_names_filter_rejected_with_400():
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await proxy_managed_files.list_user_batches(
+            user_api_key_dict=UserAPIKeyAuth(user_id="123"),
+            target_model_names="gpt-4o",
+        )
+
+    assert exc.value.code == "400"
+    assert exc.value.type == "invalid_request_error"
+    assert exc.value.param == "target_model_names"
+    assert exc.value.message == "Filtering by 'target_model_names' is not supported when using managed batches."

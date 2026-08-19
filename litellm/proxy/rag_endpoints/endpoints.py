@@ -7,7 +7,8 @@ Provides:
 """
 
 import base64
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -30,6 +31,9 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
@@ -58,7 +62,7 @@ def _append_payload_to_scan_stack(
         payload_stack.append((value, next_depth))
 
 
-def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
+def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
     vector_store_ids: Final[set[str]] = set()
     payload_stack: Final = [(payload, 0)]
 
@@ -95,7 +99,7 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
 
 
 async def _authorize_nested_vector_store_ids(
-    payload: Any,
+    payload: object,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     for vector_store_id in sorted(_collect_vector_store_ids_from_payload(payload)):
@@ -109,7 +113,7 @@ def _build_file_metadata_entry(
     response: Any,
     file_data: tuple[str, bytes, str] | None = None,
     file_url: str | None = None,
-) -> dict[str, Any]:
+) -> Mapping[str, str | int | None]:
     """
     Build a file metadata entry for storing in vector_store_metadata.
 
@@ -159,8 +163,8 @@ def _build_file_metadata_entry(
 
 async def _save_vector_store_to_db_from_rag_ingest(
     response: Any,
-    ingest_options: dict[str, Any],
-    prisma_client,
+    ingest_options: Mapping[str, dict[str, str | None]],
+    prisma_client: "PrismaClient",
     user_api_key_dict: UserAPIKeyAuth,
     file_data: tuple[str, bytes, str] | None = None,
     file_url: str | None = None,
@@ -299,9 +303,9 @@ async def parse_rag_ingest_request(
     headers: Final = _safe_get_request_headers(request)
     content_type = headers.get("content-type", "")
 
-    file_data = None
-    file_url = None
-    file_id = None
+    file_data: tuple[str, bytes, str] | None = None
+    file_url: str | None = None
+    file_id: str | None = None
     ingest_options: dict[str, Any] = {}
 
     if "multipart/form-data" in content_type:
@@ -315,7 +319,7 @@ async def parse_rag_ingest_request(
             file_data = (file_obj.filename, file_content, file_obj.content_type)
 
         # Parse JSON from 'request' form field (contains full request body as JSON)
-        request_json_str: Final = form_data.get("request")
+        request_json_str: Final[str | bytes | None] = form_data.get("request")
         if request_json_str:
             request_data: Final = orjson.loads(request_json_str)
             ingest_options = request_data.get("ingest_options", {})
@@ -382,7 +386,7 @@ async def parse_rag_ingest_request(
         "api_key",
         "api_base",
     }
-    vector_store_opts: Final = ingest_options.get("vector_store", {})
+    vector_store_opts: Final[object] = ingest_options.get("vector_store", {})
     if isinstance(vector_store_opts, dict):
         for field in _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS:
             if field in vector_store_opts:
@@ -658,7 +662,7 @@ async def rag_query(
         )
 
         # Add litellm data
-        request_data: dict[str, Any] = {}
+        request_data: dict[str, object] = {}
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,

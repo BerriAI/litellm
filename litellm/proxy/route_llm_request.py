@@ -6,7 +6,7 @@ import httpx
 from fastapi import HTTPException, status
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import _is_proxy_admin_request
 
 # Client-supplied params that make the router or the call path fabricate a
@@ -141,6 +141,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "aget_run": "/evals/{eval_id}/runs/{run_id}",
     "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
     "adelete_run": "/evals/{eval_id}/runs/{run_id}",
+    "acreate_batch": "/batches",
 }
 
 
@@ -152,27 +153,33 @@ class ProxyModelNotFoundError(HTTPException):
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
-REQUIRED_BODY_PARAM_BY_ROUTE: Final[Mapping[str, str]] = {
-    "acompletion": "messages",
-    "aembedding": "input",
+REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
+    "acompletion": ("messages",),
+    "aembedding": ("input",),
+    "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
 }
 
 
-class ProxyMissingRequiredParamError(HTTPException):
+class ProxyMissingRequiredParamError(ProxyException):
     def __init__(self, route: str, param: str):
-        detail: Final = {"error": f"{route}: Missing required parameter: '{param}'."}
-        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
-        self.type = "invalid_request_error"
-        self.param = param
+        super().__init__(
+            message=f"{route}: Missing required parameter: '{param}'.",
+            type="invalid_request_error",
+            param=param,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    required_param: Final = REQUIRED_BODY_PARAM_BY_ROUTE.get(route_type)
-    if required_param is None or data.get(required_param) is not None:
+    missing_param: Final = next(
+        (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),
+        None,
+    )
+    if missing_param is None:
         return
     raise ProxyMissingRequiredParamError(
         route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
-        param=required_param,
+        param=missing_param,
     )
 
 
@@ -625,16 +632,10 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif (
-            (
-                is_proxy_admin_without_team
-                and data["model"] not in router_model_names
-                and data["model"] in llm_router.team_public_model_names
-            )
-            or data["model"] in router_model_names
-            or llm_router.has_model_id(data["model"])
-            or llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
-        ):
+            is_proxy_admin_without_team
+            and data["model"] not in router_model_names
+            and data["model"] in llm_router.team_public_model_names
+        ) or llm_router.is_recognized_model(data["model"]):
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:

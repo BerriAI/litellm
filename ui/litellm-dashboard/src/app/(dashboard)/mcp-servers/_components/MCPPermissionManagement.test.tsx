@@ -48,7 +48,7 @@ describe("MCPPermissionManagement", () => {
     // The first switch in the component is for allow_all_keys
     const switches = screen.getAllByRole("switch");
     const toggle = switches[0];
-    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).not.toBeChecked();
   });
 
   const renderWithInitialValues = (initialValues: Record<string, unknown>, props = {}) => {
@@ -122,9 +122,9 @@ describe("MCPPermissionManagement", () => {
     // The first switch in the component is for allow_all_keys
     const switches = screen.getAllByRole("switch");
     const toggle = switches[0];
-    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(toggle).toBeChecked();
 
     await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).not.toBeChecked();
   });
 });
