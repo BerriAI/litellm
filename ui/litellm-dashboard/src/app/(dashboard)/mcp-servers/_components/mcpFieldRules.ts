@@ -27,8 +27,21 @@ export const selectControl = <TValue = unknown>(control: MountedFieldControlProp
 
 export const selectTriggerControl = (control: MountedFieldControlProps) => ariaOf(control);
 
+// Tag fields are backed by a list, but a stored value can still arrive as the delimited string an
+// OAuth server returns (RFC 6749 uses space-delimited scopes) or as the empty string a cleared
+// antd field left behind, so normalise before the tag list renders.
+const toTags = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.filter((tag): tag is string => typeof tag === "string" && tag !== "");
+  }
+  if (typeof value === "string") {
+    return value.split(/[\s,]+/).filter((tag) => tag !== "");
+  }
+  return [];
+};
+
 export const tagsControl = (control: MountedFieldControlProps) => {
-  const value = (control.value as string[] | undefined) ?? [];
+  const value = toTags(control.value);
   return {
     id: control.id,
     options: value.map((tag) => ({ label: tag, value: tag })),

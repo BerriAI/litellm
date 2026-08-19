@@ -6,7 +6,7 @@ import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { setSecureItem } from "@/utils/secureStorage";
 import * as networking from "@/components/networking";
 import { toast } from "@/lib/toast";
-import { selectAntOption } from "./testUtils";
+import { selectOption } from "./testUtils";
 
 vi.mock("@/components/networking", () => ({
   updateMCPServer: vi.fn(),
@@ -370,7 +370,7 @@ describe("MCPServerEdit (true passthrough warning)", () => {
       />,
     );
 
-    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await selectOption("Authentication", "True Passthrough (no LiteLLM auth)");
 
     await waitFor(() => {
       expect(mockOauth.getTemporaryPayload).toBeTruthy();
@@ -407,7 +407,7 @@ describe("MCPServerEdit (auth type switch)", () => {
       />,
     );
 
-    await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+    await selectOption("Authentication", "OAuth Token Exchange (OBO)");
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -484,7 +484,7 @@ describe("MCPServerEdit OAuth token invalidation", () => {
     });
     mockOauth.reset.mockClear();
 
-    await selectAntOption("Transport Type", "Standard Input/Output (stdio)");
+    await selectOption("Transport Type", "Standard Input/Output (stdio)");
 
     await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
     expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", undefined);
@@ -602,7 +602,7 @@ describe("MCPServerEdit OAuth token invalidation", () => {
     });
     mockOauth.reset.mockClear();
 
-    await selectAntOption("Transport Type", "Server-Sent Events (SSE)");
+    await selectOption("Transport Type", "Server-Sent Events (SSE)");
 
     expect(mockOauth.reset).not.toHaveBeenCalled();
     expect(mockRemoveToken).not.toHaveBeenCalled();
@@ -861,7 +861,7 @@ describe("MCPServerEdit (interactive OAuth)", () => {
       expect(screen.getByText("Token Endpoint Auth Method (optional)")).toBeInTheDocument();
     });
 
-    await selectAntOption("Token Endpoint Auth Method (optional)", "Client Secret Basic");
+    await selectOption("Token Endpoint Auth Method (optional)", "Client Secret Basic");
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -1695,9 +1695,9 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
       />,
     );
 
-    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await selectOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
     mockOauth.tokenResponse = { access_token: "fresh-tok", token_type: "bearer" };
-    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await selectOption("Authentication", "True Passthrough (no LiteLLM auth)");
 
     await waitFor(() => {
       const withHeaders = vi
@@ -1838,7 +1838,7 @@ describe("MCPServerEdit oauth2_flow selector", () => {
       />,
     );
 
-    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+    await selectOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -1870,7 +1870,7 @@ describe("MCPServerEdit oauth2_flow selector", () => {
       />,
     );
 
-    await selectAntOption("OAuth Flow Type", "Interactive (PKCE)");
+    await selectOption("OAuth Flow Type", "Interactive (PKCE)");
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -1968,7 +1968,7 @@ describe("MCPServerEdit OAuth flow prefill display", () => {
 
     expect(screen.getByText("This server has no OAuth flow set")).toBeInTheDocument();
 
-    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+    await selectOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
 
     await waitFor(() => {
       expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
@@ -2184,7 +2184,7 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
       expect(getDcrToggle()).toBeInTheDocument();
     });
 
-    await selectAntOption("Authentication", "API Key");
+    await selectOption("Authentication", "API Key");
     await waitFor(() => {
       expect(getDcrToggle()).not.toBeInTheDocument();
     });
@@ -2210,7 +2210,7 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
 
     // The field stays mounted across the two client-forwarded modes, so the live toggle value is
     // preserved rather than forced false by the switch.
-    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await selectOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
     await waitFor(() => {
       expect(getDcrToggle()).toBeInTheDocument();
     });

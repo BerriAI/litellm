@@ -165,7 +165,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
   const [toolsError, setToolsError] = useState<string | null>(null);
-  const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [removeStoredApp, setRemoveStoredApp] = useState(false);
   // Set when the upstream identity (url/endpoints) changed while a declared app is present, so the
@@ -227,7 +226,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           costConfig,
           allowedTools,
           hasToolAllowlistInteraction,
-          searchValue,
           aliasManuallyEdited,
         }),
       );
@@ -411,9 +409,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
       if (typeof parsed.hasToolAllowlistInteraction === "boolean") {
         setHasToolAllowlistInteraction(parsed.hasToolAllowlistInteraction);
-      }
-      if (parsed.searchValue) {
-        setSearchValue(parsed.searchValue);
       }
       if (typeof parsed.aliasManuallyEdited === "boolean") {
         setAliasManuallyEdited(parsed.aliasManuallyEdited);
@@ -662,6 +657,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   };
 
+  const handleTransportSelected =
+    (onChange: (value: string) => void) =>
+    (value: string | null): void => {
+      if (value === null) return;
+      onChange(value);
+      handleTransportChange(value);
+    };
+
   const valuesChangeRef = React.useRef(handleFormValuesChange);
   valuesChangeRef.current = handleFormValuesChange;
 
@@ -815,11 +818,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     <Select
                       items={TRANSPORT_ITEMS}
                       value={(control.value as string | undefined) ?? null}
-                      onValueChange={(value: string | null) => {
-                        if (value === null) return;
-                        control.onChange(value);
-                        handleTransportChange(value);
-                      }}
+                      onValueChange={handleTransportSelected(control.onChange)}
                     >
                       <SelectTrigger {...selectTriggerControl(control)} className="w-full">
                         <SelectValue />
