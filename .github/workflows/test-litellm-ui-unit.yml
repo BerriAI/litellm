@@ -39,12 +39,7 @@ jobs:
 
       - run: npm ci
 
-      - name: Type tests
-        env:
-          CI: "true"
-        run: npm run test:types
-
-      - name: Unit, component and integration tiers
+      - name: Unit, component, integration and type tiers
         env:
           CI: "true"
         run: |

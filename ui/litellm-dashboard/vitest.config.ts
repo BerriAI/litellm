@@ -73,6 +73,18 @@ const config: ViteUserConfig = {
           hookTimeout: 30_000,
         },
       },
+      {
+        ...sharedViteConfig,
+        test: {
+          name: "types",
+          include: [],
+          typecheck: {
+            enabled: true,
+            include: ["src/**/*.test-d.ts", "src/**/*.test-d.tsx"],
+            ignoreSourceErrors: true,
+          },
+        },
+      },
     ],
     silent: process.env.CI ? "passed-only" : false,
     retry: 0,
@@ -95,10 +107,6 @@ const config: ViteUserConfig = {
         "tailwind.config.*",
         "next.config.*",
       ],
-    },
-    typecheck: {
-      include: ["src/**/*.test-d.ts", "src/**/*.test-d.tsx"],
-      ignoreSourceErrors: true,
     },
   },
 };

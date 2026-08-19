@@ -14,7 +14,7 @@
     "test:integration": "vitest run --project integration",
     "test:budgets": "node scripts/check-test-budgets.mjs test-budgets.json",
     "test:dot": "vitest --reporter=dot",
-    "test:types": "vitest --run --typecheck.only",
+    "test:types": "vitest run --project types",
     "test:watch": "vitest -w",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
