@@ -645,10 +645,9 @@ def _collect_tool_call_thought_signatures(
     the text part as well would send two copies and double-bill the previous
     turn's reasoning tokens on gemini-3 and newer models.
 
-    Detection deliberately calls _get_thought_signature_from_tool without the
-    model argument: with a gemini-3 model that helper synthesizes a dummy
-    signature for unsigned tool calls, which must not suppress a real
-    text-part signature (e.g. replaying gemini-2.5 history to a newer model).
+    Only real signatures count here; a synthesized placeholder must not
+    suppress a genuine text-part signature (e.g. replaying gemini-2.5 history
+    to a newer model).
     """
     signatures: tuple[str, ...] = ()
 
