@@ -390,7 +390,7 @@ def _to_entry(plan: _PlannedBudget, spend: float | None) -> KeyBudgetEntry:
     )
     return KeyBudgetEntry(
         scope=plan.scope,
-        entity_type=_ENTITY_TYPE_BY_SCOPE[plan.scope].value,
+        entity_type=_ENTITY_TYPE_BY_SCOPE[plan.scope],
         entity_id=plan.entity_id,
         entity_label=plan.entity_label,
         enforcement=plan.enforcement,

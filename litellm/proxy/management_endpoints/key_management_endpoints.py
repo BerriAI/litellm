@@ -3753,6 +3753,15 @@ async def info_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+def _key_not_found_error() -> ProxyException:
+    return ProxyException(
+        message="Key not found in database",
+        type=ProxyErrorTypes.not_found_error,
+        param="key",
+        code=status.HTTP_404_NOT_FOUND,
+    )
+
+
 @router.get(
     "/key/{key_id}/budgets",
     tags=("key management",),
@@ -3798,8 +3807,8 @@ async def key_budgets_fn(
     - budgets: list - One entry per applicable budget
         - scope: str - `proxy`, `key`, `key_window`, `key_model`, `team`, `team_window`,
           `team_member`, `user`, `organization`, `project`, `tag`, `end_user` or `end_user_model`
-        - entity_type: str - The `Litellm_EntityType` a `BudgetExceededError` from this scope
-          carries, so a denial message maps back to a row here
+        - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
+          names, so a denial message maps back to a row here
         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
         - enforcement: str - `hard` blocks the request, `soft` only raises an alert
         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
@@ -3839,17 +3848,13 @@ async def key_budgets_fn(
             )
 
         key: Final = key_id or user_api_key_dict.api_key
-        hashed_key: Final = _hash_token_if_needed(token=key) if key is not None else None
-        key_info: Final = (
-            await VerificationTokenRepository(prisma_client).find_by_id(hashed_key) if hashed_key is not None else None
-        )
+        if key is None:
+            raise _key_not_found_error()
+
+        hashed_key: Final = _hash_token_if_needed(token=key)
+        key_info: Final = await VerificationTokenRepository(prisma_client).find_by_id(hashed_key)
         if key_info is None:
-            raise ProxyException(
-                message="Key not found in database",
-                type=ProxyErrorTypes.not_found_error,
-                param="key",
-                code=status.HTTP_404_NOT_FOUND,
-            )
+            raise _key_not_found_error()
 
         if (
             await _can_user_query_key_info(

@@ -3,6 +3,8 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from litellm.proxy._types import Litellm_EntityType
+
 
 class BulkUpdateKeyRequestItem(BaseModel):
     """Individual key update request item"""
@@ -135,7 +137,7 @@ class KeyBudgetEntry(BaseModel):
     """One budget that can gate requests made with a key, with its live spend."""
 
     scope: BudgetScope
-    entity_type: str
+    entity_type: Litellm_EntityType
     entity_id: str | None = None
     entity_label: str | None = None
     enforcement: BudgetEnforcement
@@ -154,5 +156,5 @@ class KeyBudgetEntry(BaseModel):
 class KeyBudgetsResponse(BaseModel):
     """Every budget that applies to one key, including the ones left unconfigured."""
 
-    key: str | None = None
+    key: str
     budgets: tuple[KeyBudgetEntry, ...]
