@@ -1,6 +1,6 @@
 /* eslint-disable react/no-unescaped-entities */
 import React from "react";
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Select, Divider } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button } from "@/components/ui/button";
@@ -192,9 +192,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
         <div className="flex items-center space-x-2">
           <BanIcon className="w-5 h-5 text-destructive" />
           <span className="text-base font-semibold text-foreground">Disabled Callbacks</span>
-          <Tooltip content="Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.">
+          <SimpleTooltip content="Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.">
             <InfoCircleOutlined className="text-muted-foreground cursor-help" />
-          </Tooltip>
+          </SimpleTooltip>
         </div>
 
         <div className="space-y-2">
@@ -211,7 +211,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
               const description = callbackInfo[callbackName]?.description;
               return (
                 <Option key={callbackName} value={callbackName} label={callbackName}>
-                  <Tooltip content={description} side="right">
+                  <SimpleTooltip content={description} side="right">
                     <div className="flex items-center space-x-2">
                       <Logo
                         src={callbackInfo[callbackName]?.logo}
@@ -220,7 +220,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                       />
                       <span>{callbackName}</span>
                     </div>
-                  </Tooltip>
+                  </SimpleTooltip>
                 </Option>
               );
             })}
@@ -238,9 +238,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
         <div className="flex items-center space-x-2">
           <CogIcon className="w-5 h-5 text-foreground" />
           <span className="text-base font-semibold text-foreground">Logging Integrations</span>
-          <Tooltip content="Configure callback logging integrations for this team.">
+          <SimpleTooltip content="Configure callback logging integrations for this team.">
             <InfoCircleOutlined className="text-muted-foreground cursor-help" />
-          </Tooltip>
+          </SimpleTooltip>
         </div>
         <Button variant="secondary" onClick={addLoggingConfig} size="sm" type="button">
           <Plus />
@@ -296,7 +296,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                         const description = callbackInfo[callbackName]?.description;
                         return (
                           <Option key={callbackName} value={callbackName} label={callbackName}>
-                            <Tooltip content={description} side="right">
+                            <SimpleTooltip content={description} side="right">
                               <div className="flex items-center space-x-2">
                                 <Logo
                                   src={callbackInfo[callbackName]?.logo}
@@ -305,7 +305,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                                 />
                                 <span>{callbackName}</span>
                               </div>
-                            </Tooltip>
+                            </SimpleTooltip>
                           </Option>
                         );
                       })}

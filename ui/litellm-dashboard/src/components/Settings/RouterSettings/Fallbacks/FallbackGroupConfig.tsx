@@ -3,7 +3,7 @@
  * Handles primary model selection and fallback chain configuration
  */
 
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Select } from "antd";
 import { AlertCircle, ArrowDown, X } from "lucide-react";
 import React from "react";
@@ -143,9 +143,9 @@ export function FallbackGroupConfig({
               }}
               maxTagCount="responsive"
               maxTagPlaceholder={(omittedValues) => (
-                <Tooltip content={omittedValues.map(({ value }) => value).join(", ")}>
+                <SimpleTooltip content={omittedValues.map(({ value }) => value).join(", ")}>
                   <span>+{omittedValues.length} more</span>
-                </Tooltip>
+                </SimpleTooltip>
               )}
               showSearch
               filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}

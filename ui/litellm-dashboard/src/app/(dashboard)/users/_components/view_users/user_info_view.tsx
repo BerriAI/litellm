@@ -17,7 +17,7 @@ import {
   teamMemberDeleteCall,
   Member,
 } from "@/components/networking";
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Button as AntdButton, Modal } from "antd";
 import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
 import {
@@ -748,10 +748,10 @@ export default function UserInfoView({
                 <SelectContent>
                   {MEMBER_ROLE_OPTIONS.map((option) => (
                     <SelectItem key={option.value} value={option.value} title={option.value}>
-                      <Tooltip content={option.hint}>
+                      <SimpleTooltip content={option.hint}>
                         <span className="font-medium">{option.value}</span>
                         <span className="ml-2 text-muted-foreground text-sm">- {option.hint}</span>
-                      </Tooltip>
+                      </SimpleTooltip>
                     </SelectItem>
                   ))}
                 </SelectContent>

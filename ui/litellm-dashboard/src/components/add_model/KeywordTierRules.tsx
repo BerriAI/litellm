@@ -1,5 +1,5 @@
 import { DeleteOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Button, Card, Empty, Select as AntdSelect, Typography } from "antd";
 import React from "react";
 
@@ -71,9 +71,9 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
           <Typography.Title level={4} style={{ margin: 0 }}>
             Keyword Tier Overrides
           </Typography.Title>
-          <Tooltip content="Match known terms and force the request straight to a chosen complexity tier, bypassing rule-based scoring.">
+          <SimpleTooltip content="Match known terms and force the request straight to a chosen complexity tier, bypassing rule-based scoring.">
             <InfoCircleOutlined className="text-gray-400" />
-          </Tooltip>
+          </SimpleTooltip>
         </div>
         <Button icon={<PlusOutlined />} onClick={addRule}>
           Add keyword rule

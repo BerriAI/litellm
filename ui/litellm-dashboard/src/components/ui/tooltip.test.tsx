@@ -1,19 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Tooltip } from "./Tooltip";
+import { SimpleTooltip } from "./tooltip";
 
-describe("Tooltip", () => {
+describe("SimpleTooltip", () => {
   it("should render", () => {
-    render(<Tooltip content="Help text" />);
+    render(<SimpleTooltip content="Help text" />);
     expect(screen.getByLabelText("question-circle")).toBeInTheDocument();
   });
 
   it("should render children instead of the default icon when provided", () => {
     render(
-      <Tooltip content="Help text">
+      <SimpleTooltip content="Help text">
         <button>Info</button>
-      </Tooltip>,
+      </SimpleTooltip>,
     );
     expect(screen.getByRole("button", { name: /info/i })).toBeInTheDocument();
     expect(screen.queryByLabelText("question-circle")).not.toBeInTheDocument();
@@ -21,7 +21,7 @@ describe("Tooltip", () => {
 
   it("should show tooltip content on mouse enter", async () => {
     const user = userEvent.setup();
-    render(<Tooltip content="Help text" />);
+    render(<SimpleTooltip content="Help text" />);
 
     await user.hover(screen.getByLabelText("question-circle"));
 
@@ -30,7 +30,7 @@ describe("Tooltip", () => {
 
   it("should hide tooltip content on mouse leave", async () => {
     const user = userEvent.setup();
-    render(<Tooltip content="Help text" />);
+    render(<SimpleTooltip content="Help text" />);
 
     await user.hover(screen.getByLabelText("question-circle"));
     expect(screen.getByText("Help text")).toBeInTheDocument();
@@ -40,16 +40,16 @@ describe("Tooltip", () => {
   });
 
   it("should not show tooltip content before hovering", () => {
-    render(<Tooltip content="Help text" />);
+    render(<SimpleTooltip content="Help text" />);
     expect(screen.queryByText("Help text")).not.toBeInTheDocument();
   });
 
   it("should keep rendering children when there is no content to show", async () => {
     const user = userEvent.setup();
     render(
-      <Tooltip content={undefined}>
+      <SimpleTooltip content={undefined}>
         <button>Pick a rubric</button>
-      </Tooltip>,
+      </SimpleTooltip>,
     );
 
     const trigger = screen.getByRole("button", { name: /pick a rubric/i });
@@ -61,7 +61,7 @@ describe("Tooltip", () => {
 
   it("should place the tooltip on the requested side", async () => {
     const user = userEvent.setup();
-    render(<Tooltip content="Help text" side="right" />);
+    render(<SimpleTooltip content="Help text" side="right" />);
 
     await user.hover(screen.getByLabelText("question-circle"));
 
