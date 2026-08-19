@@ -416,34 +416,23 @@ class LiteLLMAnthropicMessagesAdapter:
                                 # image becomes a structured image_url part
                                 if len(content_items) == 1:
                                     c = content_items[0]
-                                    if isinstance(c, str):
+                                    if isinstance(c, dict) and c.get("type") == "image":
+                                        image_part = self._tool_result_image_part(c.get("source"))
                                         tool_result = ChatCompletionToolMessage(
                                             role="tool",
                                             tool_call_id=content.get("tool_use_id", ""),
-                                            content=c,
+                                            content=[image_part]  # mutable-ok: content must be a json list
+                                            if image_part
+                                            else "",
                                         )
-                                        self._add_cache_control_if_applicable(content, tool_result, model)
-                                        tool_message_list.append(tool_result)
-                                    elif isinstance(c, dict):
-                                        if c.get("type") == "text":
-                                            tool_result = ChatCompletionToolMessage(
-                                                role="tool",
-                                                tool_call_id=content.get("tool_use_id", ""),
-                                                content=c.get("text", ""),
-                                            )
-                                            self._add_cache_control_if_applicable(content, tool_result, model)
-                                            tool_message_list.append(tool_result)
-                                        elif c.get("type") == "image":
-                                            image_part = self._tool_result_image_part(c.get("source"))
-                                            tool_result = ChatCompletionToolMessage(
-                                                role="tool",
-                                                tool_call_id=content.get("tool_use_id", ""),
-                                                content=[image_part]  # mutable-ok: content must be a json list
-                                                if image_part
-                                                else "",
-                                            )
-                                            self._add_cache_control_if_applicable(content, tool_result, model)
-                                            tool_message_list.append(tool_result)
+                                    else:
+                                        tool_result = ChatCompletionToolMessage(
+                                            role="tool",
+                                            tool_call_id=content.get("tool_use_id", ""),
+                                            content=self._tool_result_block_text(c),
+                                        )
+                                    self._add_cache_control_if_applicable(content, tool_result, model)
+                                    tool_message_list.append(tool_result)
                                 else:
                                     # For multiple content items, combine into a single tool message
                                     # with list content to preserve all items while having one tool_use_id
@@ -451,29 +440,26 @@ class LiteLLMAnthropicMessagesAdapter:
                                         ChatCompletionTextObject | ChatCompletionImageObject
                                     ] = []
                                     for c in content_items:
-                                        if isinstance(c, str):
-                                            combined_content_parts.append(ChatCompletionTextObject(type="text", text=c))
-                                        elif isinstance(c, dict):
-                                            if c.get("type") == "text":
-                                                combined_content_parts.append(
-                                                    ChatCompletionTextObject(
-                                                        type="text",
-                                                        text=c.get("text", ""),
-                                                    )
+                                        if isinstance(c, dict) and c.get("type") == "image":
+                                            image_part = self._tool_result_image_part(c.get("source"))
+                                            if image_part:
+                                                combined_content_parts.append(image_part)
+                                        else:
+                                            combined_content_parts.append(
+                                                ChatCompletionTextObject(
+                                                    type="text",
+                                                    text=self._tool_result_block_text(c),
                                                 )
-                                            elif c.get("type") == "image":
-                                                image_part = self._tool_result_image_part(c.get("source"))
-                                                if image_part:
-                                                    combined_content_parts.append(image_part)
-                                    # Create a single tool message with combined content
-                                    if combined_content_parts:
-                                        tool_result = ChatCompletionToolMessage(
-                                            role="tool",
-                                            tool_call_id=content.get("tool_use_id", ""),
-                                            content=combined_content_parts,
-                                        )
-                                        self._add_cache_control_if_applicable(content, tool_result, model)
-                                        tool_message_list.append(tool_result)
+                                            )
+                                    # Always emit the tool message, even when nothing rendered: a
+                                    # tool_call with no tool result is rejected upstream.
+                                    tool_result = ChatCompletionToolMessage(
+                                        role="tool",
+                                        tool_call_id=content.get("tool_use_id", ""),
+                                        content=combined_content_parts or "",
+                                    )
+                                    self._add_cache_control_if_applicable(content, tool_result, model)
+                                    tool_message_list.append(tool_result)
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
@@ -1170,6 +1156,28 @@ class LiteLLMAnthropicMessagesAdapter:
         if not openai_image_url:
             return None
         return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
+
+    @staticmethod
+    def _tool_result_block_text(block: object) -> str:
+        """Render a non-image `tool_result` content block as text.
+
+        Every tool_result must yield a tool message, including ones whose blocks we do
+        not model - e.g. the `tool_reference` blocks Claude Code's deferred tool loading
+        returns. Dropping one leaves a tool call with no result, which providers reject
+        (Gemini: "Please ensure that the number of function response parts is equal to
+        the number of function call parts of the function call turn.").
+        """
+        if isinstance(block, str):
+            return block
+        if not isinstance(block, dict):
+            return str(block)
+        block_type = block.get("type")
+        if block_type == "text":
+            return str(block.get("text", ""))
+        if block_type == "tool_reference":
+            return f"[Loaded tool: {block.get('tool_name', '')}]"
+        # Placeholder, not a serialisation: unknown blocks may carry base64 payloads.
+        return f"[{block_type or 'unknown'} block]"
 
     def _translate_openai_content_to_anthropic(
         self,

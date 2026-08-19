@@ -1479,6 +1479,138 @@ def test_translate_anthropic_messages_to_openai_tool_result_single_item_backward
     assert tool_message["content"] == "72°F and sunny"
 
 
+@pytest.mark.parametrize(
+    "tool_result_content, expected_content",
+    [
+        ([{"type": "tool_reference", "tool_name": "Read"}], "[Loaded tool: Read]"),
+        ([], ""),
+        ([{"type": "future_block"}], "[future_block block]"),
+    ],
+)
+def test_translate_anthropic_messages_to_openai_tool_result_without_text_still_emits_tool_message(
+    tool_result_content, expected_content
+):
+    """
+    A tool_result whose content renders to no text must still produce a tool message.
+
+    Claude Code's deferred tool loading (ToolSearch) returns `tool_reference` blocks.
+    Dropping the tool message leaves a tool_call with no result, which providers reject
+    - Gemini with "Please ensure that the number of function response parts is equal to
+    the number of function call parts of the function call turn."
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Search for a tool"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_search",
+                    "name": "ToolSearch",
+                    "input": {"query": "read"},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_search",
+                    "content": tool_result_content,
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_messages = [
+        msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"
+    ]
+
+    assert len(tool_messages) == 1, (
+        f"Every tool_use needs exactly one tool result, got {len(tool_messages)} "
+        f"for content {tool_result_content}"
+    )
+    assert tool_messages[0]["tool_call_id"] == "toolu_search"
+    assert tool_messages[0]["content"] == expected_content
+
+
+def test_translate_anthropic_messages_to_openai_parallel_tool_results_keep_pairing():
+    """
+    Two parallel tool_use blocks, one answered by tool_reference blocks, must still
+    produce two tool messages - the shape that 400s on vertex_ai/gemini.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Search and read"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_search",
+                    "name": "ToolSearch",
+                    "input": {"query": "read"},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_weather",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                },
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_search",
+                    "content": [
+                        {"type": "tool_reference", "tool_name": "Read"},
+                        {"type": "tool_reference", "tool_name": "Edit"},
+                    ],
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_weather",
+                    "content": "72°F and sunny",
+                },
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_call_ids = [
+        msg["tool_call_id"]
+        for msg in result
+        if isinstance(msg, dict) and msg.get("role") == "tool"
+    ]
+
+    assert tool_call_ids == ["toolu_search", "toolu_weather"]
+    search_message = next(
+        msg
+        for msg in result
+        if isinstance(msg, dict) and msg.get("tool_call_id") == "toolu_search"
+    )
+    assert search_message["content"] == [
+        {"type": "text", "text": "[Loaded tool: Read]"},
+        {"type": "text", "text": "[Loaded tool: Edit]"},
+    ]
+
+
 def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
     """
     When a streaming choice contains both text content and tool_calls,
