@@ -6,8 +6,9 @@ replicaCount: 1
 # numWorkers: 2
 
 image:
-  # Use "ghcr.io/berriai/litellm-database" for optimized image with database
-  repository: ghcr.io/berriai/litellm-database
+  # Bundles the prisma CLI and engines, which is what lets the migrations job
+  # and the proxy's own schema check run without network access.
+  repository: ghcr.io/berriai/litellm
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   # tag: "latest"
