@@ -470,9 +470,8 @@ def test_cost_from_content_completion_cost_path(monkeypatch):
 
 
 def test_empty_body_line_does_not_zero_whole_batch():
-    # Regression: a status-200 row with an empty body made the real
-    # litellm.completion_cost raise ValueError, aborting the aggregation so the
-    # entire batch was booked at $0. The bad line must be skipped instead.
+    """A status-200 row with an empty body makes litellm.completion_cost raise;
+    that line must be skipped instead of zeroing the whole batch."""
     rows = [
         _success_row(usage=_usage(10, 5)),
         {
