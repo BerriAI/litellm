@@ -2152,7 +2152,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def calculate_usage(
         self,
-        usage_object: dict,
+        usage_object: Mapping[str, Any],
         reasoning_content: str | None,
         completion_response: dict | None = None,
         speed: str | None = None,
