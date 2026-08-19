@@ -1,7 +1,9 @@
 import json
+import shlex
 import shutil
 import stat
 import sys
+import time
 from unittest.mock import patch
 
 import click
@@ -201,17 +203,37 @@ class TestResolveApiKeyHelper:
     def test_returns_helper_command_bound_to_the_selected_proxy(self, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/lite")
         helper = resolve_api_key_helper("http://localhost:4000")
-        assert helper == "/usr/local/bin/lite auth print-token --base-url http://localhost:4000"
+        assert helper == "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"
 
     def test_quotes_a_base_url_containing_shell_metacharacters(self, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/lite")
         helper = resolve_api_key_helper("http://example.com/path; rm -rf /")
-        assert helper == "/usr/local/bin/lite auth print-token --base-url 'http://example.com/path; rm -rf /'"
+        assert helper == "/usr/local/bin/lite --base-url 'http://example.com/path; rm -rf /' auth print-token"
 
     def test_raises_when_lite_not_on_path(self, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda name: None)
         with pytest.raises(UpError, match="Could not find `lite`"):
             resolve_api_key_helper("http://localhost:4000")
+
+    def test_generated_helper_command_is_runnable_and_prints_the_token(self, monkeypatch):
+        """Claude Code runs this command verbatim, so the argv `up` writes has to parse: `--base-url`
+        belongs to the `lite` group, and putting it after `auth print-token` made every request fail
+        with `No such option: --base-url`."""
+        from litellm.proxy.client.cli import cli
+
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/lite")
+        helper = resolve_api_key_helper("http://localhost:4000")
+        token_data = {
+            "key": "sk-issued-for-this-proxy",
+            "base_url": "http://localhost:4000",
+            "timestamp": time.time(),
+        }
+
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+            result = CliRunner().invoke(cli, shlex.split(helper)[1:])
+
+        assert result.exit_code == 0, result.output
+        assert result.output.strip() == "sk-issued-for-this-proxy"
 
 
 def _make_ctx(base_url):
