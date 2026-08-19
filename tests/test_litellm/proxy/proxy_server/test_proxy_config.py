@@ -27,6 +27,8 @@ from litellm.proxy.proxy_server import (
     resolve_routing_plugins,
 )
 
+from litellm.types.secret_managers.main import KeyManagementSettings
+
 from .conftest import normalize
 
 # ---------------------------------------------------------------------------
@@ -756,6 +758,94 @@ async def test_ProxyConfig_get_config_loads_from_file(tmp_path, monkeypatch):
         "model_list": [],
         "general_settings": {},
         "litellm_settings": {},
+    }
+
+
+CUSTOM_SECRET_MANAGER_MODULE = """
+from typing import Optional, Union
+
+import httpx
+
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+
+
+class InMemorySecretManager(CustomSecretManager):
+    def __init__(self):
+        super().__init__(secret_manager_name="in_memory")
+        self.secrets = {
+            "LITELLM_MASTER_KEY": "sk-from-secret-manager",
+            "MY_AZURE_KEY": "azure-key-from-secret-manager",
+        }
+
+    async def async_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
+        return self.secrets.get(secret_name)
+
+    def sync_read_secret(
+        self,
+        secret_name: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Optional[str]:
+        return self.secrets.get(secret_name)
+
+    async def async_write_secret(self, *args, **kwargs):
+        raise NotImplementedError
+
+    async def async_delete_secret(self, *args, **kwargs):
+        raise NotImplementedError
+
+    async def async_rotate_secret(self, *args, **kwargs):
+        raise NotImplementedError
+"""
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_resolves_secret_manager_keys_without_the_cli(tmp_path, monkeypatch):
+    """get_config() must initialize the configured secret manager before resolving `os.environ/...`.
+
+    Entrypoints that uvicorn the app directly (the split gateway/backend images) never run
+    proxy_cli.py, so without this the keys that only live in the secret manager resolve to None.
+    """
+    (tmp_path / "my_secret_manager.py").write_text(CUSTOM_SECRET_MANAGER_MODULE)
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_list:\n"
+        "  - model_name: gpt-4.1\n"
+        "    litellm_params:\n"
+        "      model: azure/gpt-4.1\n"
+        "      api_key: os.environ/MY_AZURE_KEY\n"
+        "general_settings:\n"
+        "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+        "  key_management_system: custom\n"
+        "  key_management_settings:\n"
+        "    access_mode: read_only\n"
+        "    custom_secret_manager: my_secret_manager.InMemorySecretManager\n"
+        "    hosted_keys:\n"
+        "      - LITELLM_MASTER_KEY\n"
+        "      - MY_AZURE_KEY\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("MY_AZURE_KEY", raising=False)
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+    monkeypatch.setattr(litellm, "_key_management_system", None)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings())
+
+    cfg = await ProxyConfig().get_config(config_file_path=str(config_file))
+
+    assert {
+        "master_key": cfg["general_settings"]["master_key"],
+        "api_key": cfg["model_list"][0]["litellm_params"]["api_key"],
+    } == {
+        "master_key": "sk-from-secret-manager",
+        "api_key": "azure-key-from-secret-manager",
     }
 
 
