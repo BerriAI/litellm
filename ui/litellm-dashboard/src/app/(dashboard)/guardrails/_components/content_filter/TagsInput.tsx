@@ -28,6 +28,7 @@ interface TagsInputProps {
   emptyText?: string;
   tokenSeparators?: string[];
   loading?: boolean;
+  disabled?: boolean;
   id?: string;
 }
 
@@ -48,6 +49,7 @@ export const TagsInput = ({
   emptyText = "No matching options",
   tokenSeparators = [],
   loading = false,
+  disabled = false,
   id,
 }: TagsInputProps) => {
   const anchor = useComboboxAnchor();
@@ -103,6 +105,7 @@ export const TagsInput = ({
       itemToStringLabel={(option: TagsInputOption) => option.label}
       filter={matchesQuery}
       openOnInputClick
+      disabled={disabled || loading}
     >
       <ComboboxChips render={<div ref={anchor} />} className="min-h-8 py-1 text-sm">
         <ComboboxValue>
