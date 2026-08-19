@@ -59,7 +59,6 @@ const PTU_EDIT_FIELDS: PtuEditField[] = [
   { name: PTU_END_FIELD, label: "PTU Effective To (UTC)", input: "datetime" },
 ];
 
-/** The four names whose payload branch antd gated on `form.isFieldTouched`. */
 export type TouchedPricingField = "input_cost" | "output_cost" | "cache_read_cost" | "cache_write_cost";
 
 const PRICING_FIELDS: readonly TouchedPricingField[] = [
@@ -152,11 +151,6 @@ const isJson = (value: string): boolean => {
   }
 };
 
-/**
- * Mirrors the antd rules `Form.Item` applied to the same fields. The predicates stay on
- * `utils/ptuValidation` because `advanced_settings` still feeds the antd wrappers to its own
- * form, so the two surfaces cannot drift apart on what the backend accepts.
- */
 const buildSchema = (ptuEnabled: boolean, isFieldTouched: (field: TouchedPricingField) => boolean) =>
   z.object(modelEditShape).superRefine((values, ctx) => {
     const reject = (path: ModelEditFieldName, message: string) =>
@@ -194,9 +188,6 @@ const buildSchema = (ptuEnabled: boolean, isFieldTouched: (field: TouchedPricing
       reject("ptu_effective_to", message);
     }
 
-    // A cost the operator never typed was echoed back from /model/info, which for an unpriced
-    // deployment is the public cost map. Refusing it would block putting an existing deployment
-    // on PTU, and the save omits an untouched cost anyway.
     for (const field of PRICING_FIELDS) {
       const value = values[field];
       if (
@@ -215,10 +206,6 @@ const perMillionTokens = (...rates: (number | null | undefined)[]): number | nul
   return rate == null ? null : rate * 1_000_000;
 };
 
-/**
- * The named counterpart of the antd `initialValues` block: it lists every bound field rather than
- * spreading the loaded record, so server-only keys never reach the payload.
- */
 export const toModelEditFormValues = (localModelData: any, isWildcardModel: boolean): ModelEditFormValues => ({
   model_name: localModelData.model_name,
   litellm_model_name: localModelData.litellm_model_name,
@@ -262,8 +249,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
       ? localModelData.litellm_params.vector_store_ids
       : undefined,
   tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
-  // antd never mounted this field for a non-wildcard model, so its key never reached the
-  // payload. RHF submits the whole store, so the key has to be absent rather than null.
+  // antd never mounted this field for a non-wildcard model, so the key must be absent, not null.
   ...(isWildcardModel ? { health_check_model: localModelData.model_info?.health_check_model } : {}),
   litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
   litellm_extra_params: JSON.stringify(
@@ -285,7 +271,7 @@ const displayCost = (localModelData: any, field: TouchedPricingField): string =>
 
 interface ModelInfoEditFormProps {
   localModelData: any;
-  modelData: any;
+  modelData: { model_info: { team_id?: string | null } & Record<string, unknown> };
   accessToken: string | null;
   isEditing: boolean;
   isSaving: boolean;
@@ -364,17 +350,14 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   credentialsList,
   healthCheckModelOptions,
 }) => {
-  // antd marks a field touched on CHANGE and never clears it. RHF's touchedFields is blur-based
-  // and dirtyFields resets when a value returns to its default, so neither reproduces the branch
-  // `handleModelUpdate` takes; this tracks first change the way rc-field-form does.
+  // Neither RHF's blur-based touchedFields nor its resettable dirtyFields matches antd's touched-on-change.
   const touchedRef = React.useRef<ReadonlySet<string>>(new Set<string>());
   const isFieldTouched = React.useCallback((field: TouchedPricingField) => touchedRef.current.has(field), []);
   const markTouched = (field: string) => {
     touchedRef.current = new Set([...touchedRef.current, field]);
   };
 
-  // react-hook-form refreshes control._options on every render, so a resolver rebuilt here is the
-  // one that runs on the next submit; the PTU flag needs no ref to stay current.
+  // react-hook-form refreshes control._options every render, so this rebuild is what the next submit runs.
   const resolver: Resolver<ModelEditFormValues> = (values, context, options) =>
     zodResolver(buildSchema(ptuCostAttributionEnabled, isFieldTouched))(values, context, options);
 
