@@ -1991,7 +1991,7 @@ class ManagedResponsesWebSocketHandler:
         model: str,
         logging_obj: LiteLLMLoggingObj,
         user_api_key_dict: UserAPIKeyAuth | None = None,
-        litellm_metadata: Mapping[str, object] | None = None,
+        litellm_metadata: dict[str, Any] | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | None = None,
@@ -2004,11 +2004,10 @@ class ManagedResponsesWebSocketHandler:
         self.model = model
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.litellm_metadata: Mapping[str, object] = litellm_metadata or {}
-        _model_group: Final = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
+        self.litellm_metadata: dict[str, Any] = litellm_metadata or {}
+        self.model_group: str | None = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
             "deployment_model_name"
         )
-        self.model_group: str | None = _model_group if isinstance(_model_group, str) else None
         self.api_key = api_key
         self.api_base = api_base
         self.timeout = timeout
@@ -2220,7 +2219,7 @@ class ManagedResponsesWebSocketHandler:
             await self.websocket.send_text(serialized)
 
     @staticmethod
-    def _build_base_call_kwargs(msg_obj: dict[str, object]) -> dict[str, object]:
+    def _build_base_call_kwargs(msg_obj: dict[str, object]) -> dict[str, Any]:
         """
         Extract Responses API params from the event, handling both wire formats:
           Nested: {"type": "response.create", "response": {"input": [...], ...}}
@@ -2436,16 +2435,12 @@ class ManagedResponsesWebSocketHandler:
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        popped_model: Final = call_kwargs.pop("model", None)
-        requested_model: Final[str | None] = popped_model if isinstance(popped_model, str) else None
+        requested_model: Final[str | None] = call_kwargs.pop("model", None)
         model: Final[str] = (
             self.model if requested_model is None or requested_model == self.model_group else requested_model
         )
 
-        popped_previous_response_id: Final = call_kwargs.pop("previous_response_id", None)
-        previous_response_id: Final[str | None] = (
-            popped_previous_response_id if isinstance(popped_previous_response_id, str) else None
-        )
+        previous_response_id: Final[str | None] = call_kwargs.pop("previous_response_id", None)
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history
