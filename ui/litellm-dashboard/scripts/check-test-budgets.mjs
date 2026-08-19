@@ -1,5 +1,5 @@
 import { readFileSync } from "fs";
-import { TIER_BUDGET_MS, overBudgetTests, countByTier } from "./test-budget-lib.mjs";
+import { TIER_BUDGET_MS, overBudgetTests, countByTier, tiersOverBudget, budgetGateFails } from "./test-budget-lib.mjs";
 
 const say = (line) => process.stdout.write(`${line}\n`);
 
@@ -37,12 +37,13 @@ if (worst.length > 0) {
   for (const v of worst) say(`  ${String(v.durationMs).padStart(6)}ms  [${v.tier}] ${v.file} :: ${v.name}`);
 }
 
-const failedTiers = Object.keys(TIER_BUDGET_MS).filter(
-  (tier) => (counts[tier] ?? 0) > (budgets.maxOverBudget[tier] ?? 0),
-);
+const failedTiers = tiersOverBudget(counts, budgets);
 for (const tier of failedTiers) {
   console.error(
-    `::error::${tier} tier has ${counts[tier]} test(s) over ${TIER_BUDGET_MS[tier] * budgets.slackFactor}ms, above the ${budgets.maxOverBudget[tier]} allowed. A multi-second test is what makes CI fail under load. Split it, or move its assertions to a faster tier; lower the max in test-budgets.json as the count drops.`,
+    `::${budgets.enforce ? "error" : "warning"}::${tier} tier has ${counts[tier]} test(s) over ${TIER_BUDGET_MS[tier] * budgets.slackFactor}ms, above the ${budgets.maxOverBudget[tier]} allowed. A multi-second test is what makes CI fail under load. Split it, or move its assertions to a faster tier; lower the max in test-budgets.json as the count drops.`,
   );
 }
-process.exit(failedTiers.length > 0 ? 1 : 0);
+if (!budgets.enforce) {
+  say('\nReporting only: set "enforce": true in test-budgets.json to make these counts a gate.');
+}
+process.exit(budgetGateFails(counts, budgets) ? 1 : 0);

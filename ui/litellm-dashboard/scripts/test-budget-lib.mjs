@@ -34,3 +34,9 @@ export const overBudgetTests = (report, { repoRoot, slackFactor = 1 }) =>
 
 export const countByTier = (violations) =>
   violations.reduce((counts, v) => ({ ...counts, [v.tier]: (counts[v.tier] ?? 0) + 1 }), {});
+
+export const tiersOverBudget = (counts, budgets) =>
+  Object.keys(TIER_BUDGET_MS).filter((tier) => (counts[tier] ?? 0) > (budgets.maxOverBudget[tier] ?? 0));
+
+export const budgetGateFails = (counts, budgets) =>
+  Boolean(budgets.enforce) && tiersOverBudget(counts, budgets).length > 0;

@@ -129,7 +129,6 @@ jobs:
   budgets:
     needs: [unit, component, integration]
     if: always()
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

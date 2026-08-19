@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { TIER_BUDGET_MS, countByTier, overBudgetTests, tierForTestFile } from "../scripts/test-budget-lib.mjs";
+import {
+  TIER_BUDGET_MS,
+  budgetGateFails,
+  countByTier,
+  overBudgetTests,
+  tierForTestFile,
+  tiersOverBudget,
+} from "../scripts/test-budget-lib.mjs";
 
 const report = (files: { name: string; tests: { title: string; duration: number }[] }[]) => ({
   testResults: files.map((f) => ({
@@ -89,5 +96,25 @@ describe("countByTier", () => {
       component: 2,
       unit: 1,
     });
+  });
+});
+
+describe("budgetGateFails", () => {
+  const budgets = { enforce: true, slackFactor: 1, maxOverBudget: { unit: 5, component: 10, integration: 2 } };
+
+  it("names every tier whose count passed its max", () => {
+    expect(tiersOverBudget({ unit: 6, component: 3, integration: 9 }, budgets)).toEqual(["unit", "integration"]);
+  });
+
+  it("fails the gate when an enforcing budget is exceeded", () => {
+    expect(budgetGateFails({ unit: 6 }, budgets)).toBe(true);
+  });
+
+  it("reports without failing while enforce is off, so a stale ceiling cannot block a PR", () => {
+    expect(budgetGateFails({ unit: 6 }, { ...budgets, enforce: false })).toBe(false);
+  });
+
+  it("passes an enforcing gate when every tier sits at its max", () => {
+    expect(budgetGateFails({ unit: 5, component: 10, integration: 2 }, budgets)).toBe(false);
   });
 });

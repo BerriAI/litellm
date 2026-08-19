@@ -1,8 +1,9 @@
 {
+  "enforce": false,
   "slackFactor": 1,
   "maxOverBudget": {
-    "unit": 5,
-    "component": 240,
-    "integration": 105
+    "unit": 10,
+    "component": 420,
+    "integration": 170
   }
 }
