@@ -81,3 +81,19 @@ _SECRET_RE: Final = _build_secret_patterns()
 def redact_string(value: str) -> str:
     """Scrub known secret/credential patterns from *value* and return the result."""
     return _SECRET_RE.sub(_REDACTED, value)
+
+
+def redact_structured_value(key: str | None, value: str) -> str:
+    """Scrub *value* as it appeared under *key* inside a structured record.
+
+    redact_string() replaces a whole ``key: value`` span with REDACTED, which is
+    fine inside free text but destroys the surrounding syntax when the span is a
+    JSON member rather than message content. This renders the pair the way a dict
+    repr would, so the key-name patterns still fire, but collapses only the value
+    so the caller's structure survives.
+    """
+    scrubbed: Final = redact_string(value)
+    if scrubbed != value or key is None:
+        return scrubbed
+    rendered: Final = f"'{key}': '{value}'"
+    return _REDACTED if redact_string(rendered) != rendered else value
