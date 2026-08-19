@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Modal } from "antd";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
 import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
@@ -47,6 +46,7 @@ import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -833,13 +833,19 @@ export default function ModelInfoView({
           setIsCredentialModalOpen={setIsCredentialModalOpen}
         />
       ) : (
-        <Modal
-          open={isCredentialModalOpen}
-          onCancel={() => setIsCredentialModalOpen(false)}
-          title="Using Existing Credential"
-        >
-          <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
-        </Modal>
+        <Dialog open={isCredentialModalOpen} onOpenChange={(open) => !open && setIsCredentialModalOpen(false)}>
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Using Existing Credential</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
+                Cancel
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {isUpdateCredentialsModalOpen && accessToken && (
@@ -864,21 +870,25 @@ export default function ModelInfoView({
         userRole={userRole || ""}
       />
 
-      <Modal
-        title="Connection Test Results"
-        open={isAutoRouterTestModalOpen}
-        onCancel={() => setIsAutoRouterTestModalOpen(false)}
-        footer={[
-          <Button key="close" variant="outline" onClick={() => setIsAutoRouterTestModalOpen(false)}>
-            Close
-          </Button>,
-        ]}
-        width={700}
-      >
-        {isAutoRouterTestModalOpen && accessToken && (
-          <AutoRouterConnectionTest key={autoRouterTestId} accessToken={accessToken} targets={autoRouterTestTargets} />
-        )}
-      </Modal>
+      <Dialog open={isAutoRouterTestModalOpen} onOpenChange={(open) => !open && setIsAutoRouterTestModalOpen(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+          <DialogHeader>
+            <DialogTitle>Connection Test Results</DialogTitle>
+          </DialogHeader>
+          {isAutoRouterTestModalOpen && accessToken && (
+            <AutoRouterConnectionTest
+              key={autoRouterTestId}
+              accessToken={accessToken}
+              targets={autoRouterTestTargets}
+            />
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAutoRouterTestModalOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
