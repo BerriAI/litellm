@@ -875,4 +875,70 @@ describe("CreateKey", () => {
       expect(screen.queryByRole("button", { name: /Optional Settings/i })).not.toBeInTheDocument();
     });
   });
+
+  describe("writers outside the submit path", () => {
+    it("lets the selected user win over the search text typed into the same field", async () => {
+      vi.mocked(userFilterUICall).mockResolvedValue([
+        { user_id: "u-77", user_email: "alice@example.com" },
+      ] as unknown as Awaited<ReturnType<typeof userFilterUICall>>);
+
+      await openModal();
+      await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
+      await nameTheKey();
+
+      await userEvent.type(antdSearchInput(await screen.findByText("Type email to search for users")), "alice");
+      await userEvent.click(await screen.findByText("alice@example.com (u-77)"));
+      await submit();
+
+      expect((await createdPayload()).user_id).toBe("u-77");
+    });
+
+    it("surfaces the required message on a field that carries no help text", async () => {
+      await openModal();
+      await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
+      await nameTheKey();
+      await submit();
+
+      expect(
+        await screen.findByText("Please input the user ID of the user you are assigning the key to"),
+      ).toBeInTheDocument();
+      expect(vi.mocked(keyCreateCall)).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("validation follows the mounted set", () => {
+    it("submits an over-ceiling budget typed into a section the user closed again, omitting the key", async () => {
+      await openModal({ team: { team_id: "team-1", max_budget: 10 } as unknown as Team });
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await userEvent.type(await screen.findByLabelText(/Max Budget \(USD\)/), "50");
+      await openSection(/Optional Settings/i);
+      await submit();
+
+      const payload = await createdPayload();
+      expect(payload).not.toHaveProperty("max_budget");
+      expect(payload.key_alias).toBe("contract-key");
+    });
+  });
+
+  describe("submit gestures", () => {
+    it("creates the key when Enter is pressed inside a text field", async () => {
+      await openModal();
+      await userEvent.type(await screen.findByLabelText(/Key Name/), "enter-key{Enter}");
+
+      expect((await createdPayload()).key_alias).toBe("enter-key");
+    });
+  });
+
+  describe("switch coercion", () => {
+    it("sends enable_prompt_caching as a boolean once the switch is on", async () => {
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await userEvent.click(await screen.findByLabelText("Enable Prompt Caching"));
+      await submit();
+
+      expect((await createdPayload()).enable_prompt_caching).toBe(true);
+    });
+  });
 });
