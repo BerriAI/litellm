@@ -12,7 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/labelWithHint";
+import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { Layout, Modal, Tabs, theme } from "antd";

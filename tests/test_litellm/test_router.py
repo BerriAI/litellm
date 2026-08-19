@@ -7795,6 +7795,21 @@ class TestTaggedAutoRouterOnSharedModelName:
         assert response.model == "gemini-flash"
 
     @pytest.mark.asyncio
+    async def test_request_level_tag_filtering_from_key_settings_bypasses_the_marker(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=False)
+
+        assert await self._hook_response(router, {"enable_tag_filtering": True}) is None
+
+    @pytest.mark.asyncio
+    async def test_globally_disabled_filtering_still_lets_the_marker_capture_untagged_requests(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=False)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
     async def test_marker_only_alias_still_captures_untagged_requests(self):
         router = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
 

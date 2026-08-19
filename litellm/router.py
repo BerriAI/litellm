@@ -11463,8 +11463,10 @@ class Router:
         deployment the strategy was registered from via its (model_name, tags)
         pair.
 
-        With tag filtering enabled, strategies that all carry real tags matching
-        none of the request's do not capture it when the name also has plain
+        With tag filtering enabled, router-wide or by the request's
+        enable_tag_filtering (which the proxy sets from key/team
+        router_settings), strategies that all carry real tags matching none of
+        the request's do not capture it when the name also has plain
         deployments: returning None hands the request to ordinary tag-aware
         deployment selection.
         """
@@ -11487,8 +11489,9 @@ class Router:
         for tagged in candidates:
             if "default" in tagged.tags:
                 return tagged
+        request_scoped_filtering: Final = request_kwargs.get("enable_tag_filtering") is True
         if (
-            self.enable_tag_filtering
+            (self.enable_tag_filtering or request_scoped_filtering)
             and all(tagged.tags for tagged in candidates)
             and self._model_name_has_plain_deployments(model)
         ):

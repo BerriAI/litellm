@@ -594,13 +594,16 @@ def _build_aggregated_where_clause(
     sql_params.append(adjusted_end)
     p += 1
 
-    # Optional entity filter
+    # Optional entity filter; an empty list must match nothing, not everything
     if entity_id is not None:
         if isinstance(entity_id, list):
-            placeholders = ", ".join(f"${p + i}" for i in range(len(entity_id)))
-            sql_conditions.append(f'"{entity_id_field}" IN ({placeholders})')
-            sql_params.extend(entity_id)
-            p += len(entity_id)
+            if entity_id:
+                placeholders = ", ".join(f"${p + i}" for i in range(len(entity_id)))
+                sql_conditions.append(f'"{entity_id_field}" IN ({placeholders})')
+                sql_params.extend(entity_id)
+                p += len(entity_id)
+            else:
+                sql_conditions.append("FALSE")
         else:
             sql_conditions.append(f'"{entity_id_field}" = ${p}')
             sql_params.append(entity_id)

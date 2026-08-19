@@ -34,7 +34,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
-import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/labelWithHint";
+import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -72,13 +72,7 @@ import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
-import {
-  ESTIMATE_PER_MODEL_MESSAGE,
-  ESTIMATE_POSITIVE_MESSAGE,
-  estimateTooltips,
-  isValidEstimate,
-  isValidPerModelEstimates,
-} from "../templates/estimatedOutputTokens";
+import { estimateChecks, estimateTooltips } from "../templates/estimatedOutputTokens";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -234,11 +228,14 @@ const teamUpdateFieldsSchema = z.object({
         }
       });
     }),
-  default_estimated_output_tokens: numericInputSchema.refine(isValidEstimate, ESTIMATE_POSITIVE_MESSAGE),
+  default_estimated_output_tokens: numericInputSchema.refine(
+    estimateChecks.positive.isValid,
+    estimateChecks.positive.message,
+  ),
   default_estimated_output_tokens_per_model: z
     .string()
     .optional()
-    .refine(isValidPerModelEstimates, ESTIMATE_PER_MODEL_MESSAGE),
+    .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message),
   guardrails: z.array(z.string()).optional(),
   disable_global_guardrails: z.boolean().optional(),
   policies: z.array(z.string()).optional(),
@@ -1167,7 +1164,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <div className="p-4">Loading...</div>
                 ) : isEditing ? (
                   <TooltipProvider>
-                    <form onSubmit={form.handleSubmit(onTeamUpdateSubmit)}>
+                    <form onSubmit={(event) => void form.handleSubmit(onTeamUpdateSubmit)(event)}>
                       <FieldGroup>
                         <FormField control={form.control} name="team_alias" label="Team Name">
                           {({ ref, value, ...field }) => <UIInput {...field} ref={ref} value={value ?? ""} />}

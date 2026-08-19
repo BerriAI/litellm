@@ -44,32 +44,26 @@ export const estimateTooltips = (canEdit: boolean, entity: "key" | "team" = "key
     : ADMIN_ONLY_TOOLTIP,
 });
 
-export const ESTIMATE_POSITIVE_MESSAGE = "Enter a positive integer";
-export const ESTIMATE_PER_MODEL_MESSAGE = INVALID_PER_MODEL_MESSAGE;
-
-export const isValidEstimate = (value: unknown): boolean =>
-  value === "" || value === null || value === undefined || isPositiveInteger(Number(value));
-
-export const isValidPerModelEstimates = (value: unknown): boolean =>
-  typeof value !== "string" || value.trim() === "" || parsePerModelEstimates(value) !== null;
-
-export const estimateRules = {
+export const estimateChecks = {
   perModel: {
-    validator: (_: unknown, value: unknown) => {
-      if (typeof value !== "string" || value.trim() === "") return Promise.resolve();
-      return parsePerModelEstimates(value) === null
-        ? Promise.reject(new Error(INVALID_PER_MODEL_MESSAGE))
-        : Promise.resolve();
-    },
+    isValid: (value: unknown): boolean =>
+      typeof value !== "string" || value.trim() === "" ? true : parsePerModelEstimates(value) !== null,
+    message: INVALID_PER_MODEL_MESSAGE,
   },
   positive: {
-    validator: (_: unknown, value: unknown) => {
-      if (value === "" || value === null || value === undefined) return Promise.resolve();
-      return isPositiveInteger(Number(value))
-        ? Promise.resolve()
-        : Promise.reject(new Error("Enter a positive integer"));
-    },
+    isValid: (value: unknown): boolean =>
+      value === "" || value === null || value === undefined ? true : isPositiveInteger(Number(value)),
+    message: "Enter a positive integer",
   },
+};
+
+const asAntdRule = ({ isValid, message }: { isValid: (value: unknown) => boolean; message: string }) => ({
+  validator: (_: unknown, value: unknown) => (isValid(value) ? Promise.resolve() : Promise.reject(new Error(message))),
+});
+
+export const estimateRules = {
+  perModel: asAntdRule(estimateChecks.perModel),
+  positive: asAntdRule(estimateChecks.positive),
 };
 
 export const withNormalizedEstimates = <T extends FormValues>(values: T): FormValues => {
