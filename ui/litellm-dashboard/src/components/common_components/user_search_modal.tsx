@@ -165,6 +165,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
         <Combobox
           items={items}
           value={selected}
+          autoHighlight="always"
           filter={null}
           onValueChange={(option: UserOption | null) => {
             controlProps.onChange(option?.value);
