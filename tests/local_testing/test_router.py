@@ -120,7 +120,7 @@ async def test_router_provider_wildcard_routing():
     print("response 2 = ", response2)
 
     response3 = await router.acompletion(
-        model="groq/llama-3.1-8b-instant",
+        model="groq/openai/gpt-oss-120b",
         messages=[{"role": "user", "content": "hello"}],
     )
 
