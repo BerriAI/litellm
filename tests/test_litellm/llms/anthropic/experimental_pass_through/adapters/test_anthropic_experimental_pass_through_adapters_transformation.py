@@ -3786,7 +3786,24 @@ def test_tool_result_unknown_block_degrades_to_placeholder():
     assert tool_messages[0]["content"] == "[custom_data block]"
 
 
-def test_tool_result_single_document_preserves_payload():
+@pytest.mark.parametrize(
+    ("source", "expected_url"),
+    [
+        (
+            {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": "JVBERi0xLjQK",
+            },
+            "data:application/pdf;base64,JVBERi0xLjQK",
+        ),
+        (
+            {"type": "url", "url": "https://example.com/invoice.pdf"},
+            "https://example.com/invoice.pdf",
+        ),
+    ],
+)
+def test_tool_result_single_document_preserves_payload(source, expected_url):
     adapter = LiteLLMAnthropicMessagesAdapter()
     messages = [
         {
@@ -3802,11 +3819,7 @@ def test_tool_result_single_document_preserves_payload():
                     "content": [
                         {
                             "type": "document",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "application/pdf",
-                                "data": "JVBERi0xLjQK",
-                            },
+                            "source": source,
                         }
                     ],
                 }
@@ -3820,7 +3833,7 @@ def test_tool_result_single_document_preserves_payload():
     assert tool_messages[0]["content"] == [
         {
             "type": "image_url",
-            "image_url": {"url": "data:application/pdf;base64,JVBERi0xLjQK"},
+            "image_url": {"url": expected_url},
         }
     ]
 
