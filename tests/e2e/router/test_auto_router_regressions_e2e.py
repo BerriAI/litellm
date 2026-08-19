@@ -69,6 +69,7 @@ PLAIN_MODEL = "anthropic/claude-sonnet-5"
 CHEAP_MODEL = "anthropic/claude-haiku-4-5"
 STRONG_MODEL = "openai/gpt-5.6"
 MAX_TOKENS = 16
+TAG_DENIAL_MESSAGE = "Not allowed to access model due to tags configuration"
 PLAIN_SERVED = frozenset({PLAIN_MODEL, "claude-sonnet-5"})
 CHEAP_SERVED = frozenset({CHEAP_MODEL, "claude-haiku-4-5"})
 EMBEDDING_MODEL = "openai/text-embedding-3-small"
@@ -441,6 +442,9 @@ class TestUntaggedTierDeployments:
         result: Final = proxy.chat(key, _hello_chat_body(split.tier_b, tags=[split.tag_b]))
         assert isinstance(result, UnauthorizedError), (
             f"expected the tagged direct call to an untagged deployment to be denied with 401, got {result}"
+        )
+        assert TAG_DENIAL_MESSAGE in result.body, (
+            f"expected the denial to come from tag routing, got a 401 reading {result.body[:300]}"
         )
 
 
