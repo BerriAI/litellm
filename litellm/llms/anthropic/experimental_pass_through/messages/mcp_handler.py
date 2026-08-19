@@ -89,7 +89,7 @@ async def anthropic_messages_with_mcp(
             max_tokens=max_tokens,
             messages=list(messages),
             model=model,
-            tools=list(tools) if tools else None,
+            tools=list(lists) if tools else None,  # kwargs-ok: param pass-through
             _skip_mcp_handler=True,
             **kwargs,
         )
@@ -136,12 +136,11 @@ async def anthropic_messages_with_mcp(
         messages=list(working_messages), stream=False, **base_call_args
     )
 
-    # Extract non-MCP tool names provided directly in the call by the client
-    client_tool_names = {
-        t.get("name")  # kwargs-ok: standard dictionary lookup for non-MCP client tools
-        for t in (other_tools or [])
-        if isinstance(t, dict) and t.get("name")
-    }
+    client_tool_names = set()
+    if other_tools:
+        for tool_item in other_tools:
+            if isinstance(tool_item, dict) and "name" in tool_item:
+                client_tool_names.add(tool_item["name"])  # kwargs-ok: extract client tool name
 
     for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
         if _get_stop_reason(response) != "tool_use":
@@ -151,16 +150,13 @@ async def anthropic_messages_with_mcp(
         if not tool_use_blocks:
             break
 
-        # Stop server-side auto-execution if the response contains client-native tools:
-        # 1. Tools explicitly passed in other_tools
-        # 2. Tools missing from tool_server_map when server-side tools exist
-        has_client_side_tool = any(
-            block.get("name") in client_tool_names  # kwargs-ok: standard dictionary lookup
-            or (
-                bool(tool_server_map) and block.get("name") not in tool_server_map
-            )  # kwargs-ok: standard dictionary lookup
-            for block in tool_use_blocks
-        )
+        has_client_side_tool = False
+        for block in tool_use_blocks:
+            tool_name = block.get("name")  # kwargs-ok: extract block tool name
+            if tool_name in client_tool_names or (bool(tool_server_map) and tool_name not in tool_server_map):
+                has_client_side_tool = True
+                break
+
         if has_client_side_tool:
             break
 
