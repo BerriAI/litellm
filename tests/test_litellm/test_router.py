@@ -7699,8 +7699,6 @@ class TestUpsertDeploymentRollback:
         assert router.model_list == []
 
     def test_restore_re_adds_popped_deployment(self):
-        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
-
         router = litellm.Router(
             model_list=[
                 {
