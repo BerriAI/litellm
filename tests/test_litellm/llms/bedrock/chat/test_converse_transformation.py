@@ -6133,3 +6133,34 @@ def test_update_optional_params_with_thinking_tokens_bool_thinking_does_not_cras
         non_default_params={"thinking": True}, optional_params=optional_params
     )
     assert "maxTokens" not in optional_params
+
+
+
+@pytest.mark.parametrize(
+    "model, expected_dropped",
+    [
+        ("anthropic.claude-fable-5", True),
+        ("us.anthropic.claude-fable-5", True),
+        ("us.anthropic.claude-opus-4-8", False),
+    ],
+)
+def test_disabled_thinking_omitted_for_always_on_models_converse(
+    local_model_cost_map, model, expected_dropped
+):
+    """Bedrock Converse: ``thinking={"type": "disabled"}`` is omitted for always-on-thinking
+    models and forwarded verbatim for models that accept it."""
+    config = AmazonConverseConfig()
+
+    result = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"maxTokens": 64, "thinking": {"type": "disabled"}},
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    if expected_dropped:
+        assert "thinking" not in additional
+    else:
+        assert additional.get("thinking") == {"type": "disabled"}
