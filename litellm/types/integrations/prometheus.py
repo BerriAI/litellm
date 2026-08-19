@@ -8,6 +8,18 @@ from typing import Any, ClassVar, Final, Literal
 import litellm
 
 
+class LockAttemptResult(str, Enum):
+    """Closed set of outcomes for one cron-job lock attempt, so the `result`
+    label stays bounded and the metric documentation cannot drift from it."""
+
+    ACQUIRED = "acquired"
+    NOT_ACQUIRED = "not_acquired"
+    # No Redis is configured, so no pod can ever be elected.
+    NO_REDIS = "no_redis"
+    # The attempt itself failed, rather than losing the election.
+    ERROR = "error"
+
+
 def _sanitize_prometheus_label_name(label: str) -> str:
     """
     Sanitize a label name to comply with Prometheus label name requirements.

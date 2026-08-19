@@ -7,6 +7,7 @@ from litellm._uuid import uuid
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
+from litellm.types.integrations.prometheus import LockAttemptResult
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -15,7 +16,7 @@ else:
     ProxyLogging = Any
 
 
-def _record_lock_attempt(cronjob_id: str, result: str) -> None:
+def _record_lock_attempt(cronjob_id: str, result: LockAttemptResult) -> None:
     """Publish the outcome of one single-owner lock attempt.
 
     Each result is a distinct operational state: no Redis means no pod can ever
@@ -70,15 +71,15 @@ end
         """
         if self.redis_cache is None:
             verbose_proxy_logger.debug("redis_cache is None, skipping acquire_lock")
-            _record_lock_attempt(cronjob_id, "no_redis")
+            _record_lock_attempt(cronjob_id, LockAttemptResult.NO_REDIS)
             return None
         try:
             acquired: Final = await self._attempt_acquire_lock(cronjob_id, ttl=ttl, allow_reentrant=allow_reentrant)
         except Exception as e:
             verbose_proxy_logger.error("Error acquiring Redis lock for %s: %s", cronjob_id, e)
-            _record_lock_attempt(cronjob_id, "error")
+            _record_lock_attempt(cronjob_id, LockAttemptResult.ERROR)
             return False
-        _record_lock_attempt(cronjob_id, "acquired" if acquired else "not_acquired")
+        _record_lock_attempt(cronjob_id, LockAttemptResult.ACQUIRED if acquired else LockAttemptResult.NOT_ACQUIRED)
         return acquired
 
     async def _attempt_acquire_lock(

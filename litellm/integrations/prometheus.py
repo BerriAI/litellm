@@ -756,8 +756,10 @@ class PrometheusLogger(CustomLogger):
             self.litellm_cronjob_lock_acquisitions_total = self._counter_factory(
                 name="litellm_cronjob_lock_acquisitions_total",
                 documentation=(
-                    "Attempts to take the single-owner lock for a cron job. result is one of acquired, "
-                    "not_acquired, no_redis; no_redis means no Redis is configured, so no pod can be elected"
+                    "Attempts to take the single-owner lock for a cron job. result is one of "
+                    f"{', '.join(r.value for r in LockAttemptResult)}; no_redis means no Redis is "
+                    "configured, so no pod can be elected, and error means the attempt itself failed "
+                    "rather than losing the election"
                 ),
                 labelnames=("cronjob_id", "result"),
             )
@@ -3211,9 +3213,9 @@ class PrometheusLogger(CustomLogger):
         if run.items_processed:
             self.litellm_scheduled_job_items_processed_total.labels(job_name=run.job_name).inc(run.items_processed)
 
-    def record_cronjob_lock_attempt(self, cronjob_id: str, result: str) -> None:
+    def record_cronjob_lock_attempt(self, cronjob_id: str, result: LockAttemptResult) -> None:
         """Publish the outcome of one single-owner lock attempt."""
-        self.litellm_cronjob_lock_acquisitions_total.labels(cronjob_id=cronjob_id, result=result).inc()
+        self.litellm_cronjob_lock_acquisitions_total.labels(cronjob_id=cronjob_id, result=result.value).inc()
 
     def record_db_pool_sample(self, update: DBPoolMetricsUpdate) -> None:
         """Publish one reading of this worker's Prisma connection pool."""
