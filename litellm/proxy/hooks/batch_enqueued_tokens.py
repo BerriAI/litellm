@@ -38,27 +38,20 @@ ScopeKey: TypeAlias = Literal["api_key", "team"]
 RESERVE_ENQUEUED_TOKENS_SCRIPT: Final = """
 local amount = tonumber(ARGV[1])
 local ttl = tonumber(ARGV[2])
-for i = 1, #KEYS do
-    local limit = tonumber(ARGV[2 + i])
-    local current = tonumber(redis.call('GET', KEYS[i]) or '0')
-    if current + amount > limit then
-        return {0, i - 1, current}
-    end
+local limit = tonumber(ARGV[3])
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+if current + amount > limit then
+    return {0, current}
 end
-for i = 1, #KEYS do
-    redis.call('INCRBY', KEYS[i], amount)
-    redis.call('EXPIRE', KEYS[i], ttl)
-end
-return {1, -1, 0}
+local updated = redis.call('INCRBY', KEYS[1], amount)
+redis.call('EXPIRE', KEYS[1], ttl)
+return {1, updated}
 """
 
 REFUND_ENQUEUED_TOKENS_SCRIPT: Final = """
-local amount = tonumber(ARGV[1])
-for i = 1, #KEYS do
-    local updated = redis.call('DECRBY', KEYS[i], amount)
-    if updated <= 0 then
-        redis.call('DEL', KEYS[i])
-    end
+local updated = redis.call('DECRBY', KEYS[1], tonumber(ARGV[1]))
+if updated <= 0 then
+    redis.call('DEL', KEYS[1])
 end
 return 1
 """
@@ -99,7 +92,7 @@ class BatchEnqueuedTokenOverLimit:
 BatchEnqueuedTokenOutcome: TypeAlias = BatchEnqueuedTokenReservation | BatchEnqueuedTokenOverLimit
 
 _LIMIT_ADAPTER: Final = TypeAdapter(Annotated[int, Field(gt=0)])
-_RESERVE_RESULT_ADAPTER: Final = TypeAdapter(tuple[int, int, int])
+_RESERVE_RESULT_ADAPTER: Final = TypeAdapter(tuple[int, int])
 _POPPED_VALUE_ADAPTER: Final = TypeAdapter(str | bytes | None)
 _STORED_COUNTER_ADAPTER: Final = TypeAdapter(int | None)
 _RESERVATION_ADAPTER: Final = TypeAdapter(BatchEnqueuedTokenReservation)
@@ -175,9 +168,11 @@ def batch_response_view(response: object) -> _BatchResponseView | None:
 class BatchEnqueuedTokenStore:
     """Tracks enqueued batch tokens per scope, plus per-batch reservation records for refunds.
 
-    Counters and records live in Redis (via atomic Lua scripts) when Redis is
-    configured; otherwise a single-process in-memory fallback guarded by one
-    asyncio lock is used. Everything expires after
+    Counters and records live in Redis when Redis is configured, through
+    single-key Lua scripts issued one scope at a time (Redis Cluster safe: no
+    cross-slot commands), with an over-limit scope rolling back the scopes
+    reserved before it; otherwise a single-process in-memory fallback guarded
+    by one asyncio lock is used. Everything expires after
     ``BATCH_ENQUEUED_TOKEN_TTL_SECONDS`` so a crash between submission and the
     terminal-state refund can never leak tokens forever.
     """
@@ -215,21 +210,43 @@ class BatchEnqueuedTokenStore:
     ) -> BatchEnqueuedTokenOutcome:
         if tokens <= 0 or not scopes:
             return BatchEnqueuedTokenReservation(tokens=max(tokens, 0), scopes=scopes)
-        if self._reserve_script is not None:
+        reserve_script: Final = self._reserve_script
+        refund_script: Final = self._refund_script
+        if reserve_script is not None and refund_script is not None:
             try:
-                raw_result = await self._reserve_script(
-                    tuple(self._counter_key(scope) for scope in scopes),
-                    (tokens, BATCH_ENQUEUED_TOKEN_TTL_SECONDS, *(scope.limit for scope in scopes)),
-                )
-                result = _RESERVE_RESULT_ADAPTER.validate_python(raw_result)
-                if result[0] == 1:
-                    return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes)
-                return BatchEnqueuedTokenOverLimit(scope=scopes[result[1]], enqueued=result[2])
+                return await self._reserve_via_redis(reserve_script, refund_script, tokens=tokens, scopes=scopes)
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory counters
                 verbose_proxy_logger.warning(
                     "Redis enqueued-token reserve failed, falling back to in-memory: %s", str(e)
                 )
         return await self._reserve_in_memory(tokens=tokens, scopes=scopes, span=litellm_parent_otel_span)
+
+    async def _reserve_via_redis(
+        self,
+        reserve_script: _ScriptRunner,
+        refund_script: _ScriptRunner,
+        tokens: int,
+        scopes: tuple[BatchEnqueuedTokenScope, ...],
+    ) -> BatchEnqueuedTokenOutcome:
+        for index, scope in enumerate(scopes):
+            raw_result = await reserve_script(
+                (self._counter_key(scope),),
+                (tokens, BATCH_ENQUEUED_TOKEN_TTL_SECONDS, scope.limit),
+            )
+            result = _RESERVE_RESULT_ADAPTER.validate_python(raw_result)
+            if result[0] != 1:
+                await self._refund_via_redis(refund_script, tokens=tokens, scopes=scopes[:index])
+                return BatchEnqueuedTokenOverLimit(scope=scope, enqueued=result[1])
+        return BatchEnqueuedTokenReservation(tokens=tokens, scopes=scopes)
+
+    async def _refund_via_redis(
+        self,
+        refund_script: _ScriptRunner,
+        tokens: int,
+        scopes: tuple[BatchEnqueuedTokenScope, ...],
+    ) -> None:
+        for scope in scopes:
+            await refund_script((self._counter_key(scope),), (tokens,))
 
     async def _reserve_in_memory(
         self,
@@ -253,12 +270,10 @@ class BatchEnqueuedTokenStore:
     ) -> None:
         if reservation.tokens <= 0 or not reservation.scopes:
             return
-        if self._refund_script is not None:
+        refund_script: Final = self._refund_script
+        if refund_script is not None:
             try:
-                await self._refund_script(
-                    tuple(self._counter_key(scope) for scope in reservation.scopes),
-                    (reservation.tokens,),
-                )
+                await self._refund_via_redis(refund_script, tokens=reservation.tokens, scopes=reservation.scopes)
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory counters
                 verbose_proxy_logger.warning(
                     "Redis enqueued-token refund failed, falling back to in-memory: %s", str(e)
