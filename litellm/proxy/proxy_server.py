@@ -384,6 +384,10 @@ from litellm.proxy.db.gateway_request_tracking import (
     GatewayRequestAccumulator,
     flush_gateway_requests,
 )
+from litellm.proxy.db.proxy_worker_heartbeat import (
+    PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
+    ProxyWorkerHeartbeat,
+)
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
@@ -874,9 +878,11 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
-async def proxy_shutdown_event() -> None:
+async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    if worker_heartbeat is not None and prisma_client:
+        await worker_heartbeat.deregister()
     if prisma_client:
         # Drain the SGR fold first: it lives in memory, so an un-drained interval
         # is lost, and a write attempted after disconnect raises
@@ -1210,7 +1216,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
-    if prisma_client is not None:
+    worker_heartbeat: Final = (
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings=general_settings,
             prisma_client=prisma_client,
@@ -1219,7 +1225,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
         )
-
+        if prisma_client is not None
+        else None
+    )
+    if prisma_client is not None:
         await ProxyStartupEvent._update_default_team_member_budget()
 
         ## SYNC UI SETTINGS ##
@@ -1290,7 +1299,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await proxy_config.stop_auth_cache_invalidation_subscriber()
 
-    await proxy_shutdown_event()
+    await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
@@ -6316,6 +6325,9 @@ class ProxyConfig:
         if "global_max_parallel_requests" in _general_settings:
             general_settings["global_max_parallel_requests"] = _general_settings["global_max_parallel_requests"]
 
+        if "max_batch_file_size_mb" not in self._yaml_general_settings_keys:
+            general_settings["max_batch_file_size_mb"] = _general_settings.get("max_batch_file_size_mb")
+
         ## ALERTING ARGS ##
         if "alerting_args" in _general_settings:
             general_settings["alerting_args"] = _general_settings["alerting_args"]
@@ -8733,7 +8745,7 @@ class ProxyStartupEvent:
         proxy_budget_rescheduler_max_time: int,
         proxy_batch_write_at: int,
         proxy_logging_obj: ProxyLogging,
-    ):
+    ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
         global store_model_in_db, scheduler
 
@@ -8777,6 +8789,18 @@ class ProxyStartupEvent:
 
         # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
         batch_writing_interval: Final = proxy_batch_write_at + random.randint(0, 5)
+
+        ### PROXY WORKER HEARTBEAT ###
+        worker_heartbeat: Final = ProxyWorkerHeartbeat(prisma_client=prisma_client)
+        await worker_heartbeat.beat()
+        scheduler.add_job(
+            worker_heartbeat.beat,
+            "interval",
+            seconds=PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
+            id="proxy_worker_heartbeat_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
 
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
@@ -9117,6 +9141,7 @@ class ProxyStartupEvent:
             "APScheduler started with memory leak prevention settings: removed jitter, increased intervals, misfire_grace_time=%s",
             APSCHEDULER_MISFIRE_GRACE_TIME,
         )
+        return worker_heartbeat
 
     @classmethod
     async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler):
@@ -15689,6 +15714,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
         "max_request_size_mb": "Integer",
+        "max_batch_file_size_mb": "Integer",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",

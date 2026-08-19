@@ -1883,15 +1883,15 @@ describe("CreateMCPServer", () => {
       // Parent dismisses the modal without routing through Cancel or create.
       rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
 
-      // Stale tools are cleared even though neither handler ran.
       await waitFor(() => {
-        expect(toolCount()).toBe("0");
+        expect(screen.queryByTestId("mcp-connection-status")).not.toBeInTheDocument();
       });
 
-      // Reopening starts clean: the URL the prior server left in the Ant form store is gone.
+      // Reopening starts clean: neither the prior server's URL nor its tool list survives.
       rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
       const reopenedUrlInput = screen.getByPlaceholderText("https://your-mcp-server.com") as HTMLInputElement;
       expect(reopenedUrlInput.value).toBe("");
+      expect(toolCount()).toBe("0");
     });
 
     it("does not reset an in-flight OAuth resume when mounted with the modal closed (post-redirect restore)", () => {

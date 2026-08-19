@@ -5,7 +5,9 @@ import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { modelCreationScope } from "@/utils/modelPermissions";
 import { Switch } from "@/components/ui/switch";
 import { Field, FieldLabel } from "@/components/shared/form/field";
-import { Select as AntdSelect, Card, Col, Modal, Row, Tooltip, Typography, Alert } from "antd";
+import { Select as AntdSelect, Card, Col, Row, Tooltip, Typography } from "antd";
+import { Info } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import type { UploadProps } from "antd/es/upload";
 import React, { useEffect, useMemo, useState } from "react";
@@ -30,6 +32,7 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
 import { TEST_MODES } from "./add_model_modes";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddModelFormProps {
   form: UseFormReturn<MountedFormValues>; // For the Add Model tab
@@ -168,13 +171,13 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                       )}
                     </MountedFormField>
                     {!teamAdminSelectedTeam && (
-                      <Alert
-                        message="Team Selection Required"
-                        description="As a team admin, you need to select your team first before adding models."
-                        type="info"
-                        showIcon
-                        className="mb-4"
-                      />
+                      <Alert variant="info" className="mb-4">
+                        <Info />
+                        <AlertTitle>Team Selection Required</AlertTitle>
+                        <AlertDescription>
+                          As a team admin, you need to select your team first before adding models.
+                        </AlertDescription>
+                      </Alert>
                     )}
                   </>
                 )}
@@ -440,44 +443,50 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
       </Card>
 
       {/* Test Connection Results Modal */}
-      <Modal
-        title="Connection Test Results"
+      <Dialog
         open={isResultModalVisible}
-        onCancel={() => {
-          setIsResultModalVisible(false);
-          setIsTestingConnection(false);
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsResultModalVisible(false);
+            setIsTestingConnection(false);
+          }
         }}
-        footer={[
-          <Button
-            key="close"
-            variant="outline"
-            onClick={() => {
-              setIsResultModalVisible(false);
-              setIsTestingConnection(false);
-            }}
-          >
-            Close
-          </Button>,
-        ]}
-        width={700}
       >
-        {/* Only render the ConnectionErrorDisplay when modal is visible and we have a test ID */}
-        {isResultModalVisible && (
-          <ConnectionErrorDisplay
-            // The key prop tells React to create a fresh component instance when it changes
-            key={connectionTestId}
-            formValues={mountedValues()}
-            accessToken={accessToken}
-            testMode={testMode}
-            modelName={connectionTestModelName(form.getValues())}
-            onClose={() => {
-              setIsResultModalVisible(false);
-              setIsTestingConnection(false);
-            }}
-            onTestComplete={() => setIsTestingConnection(false)}
-          />
-        )}
-      </Modal>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+          <DialogHeader>
+            <DialogTitle>Connection Test Results</DialogTitle>
+          </DialogHeader>
+          {/* Only render the ConnectionErrorDisplay when modal is visible and we have a test ID */}
+          {isResultModalVisible && (
+            <ConnectionErrorDisplay
+              // The key prop tells React to create a fresh component instance when it changes
+              key={connectionTestId}
+              formValues={mountedValues()}
+              accessToken={accessToken}
+              testMode={testMode}
+              modelName={connectionTestModelName(form.getValues())}
+              onClose={() => {
+                setIsResultModalVisible(false);
+                setIsTestingConnection(false);
+              }}
+              onTestComplete={() => setIsTestingConnection(false)}
+            />
+          )}
+          <DialogFooter>
+            {" "}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsResultModalVisible(false);
+                setIsTestingConnection(false);
+              }}
+            >
+              Close
+            </Button>
+            , ]
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

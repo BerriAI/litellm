@@ -63,17 +63,32 @@ const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
 const boundaryRanges = (
   shipped: Record<string, number> | undefined,
   overrides: Record<string, number> | undefined,
-): { simpleMedium: string; mediumComplex: string; complexReasoning: string } | null => {
+  reasoningOverrideMinScore: number | undefined,
+): {
+  simpleMedium: string;
+  mediumComplex: string;
+  complexReasoning: string;
+  reasoningOverrideFloor: string;
+} | null => {
   const effective: Record<string, number> = { ...shipped, ...overrides };
   const [low, mid, high] = [effective.simple_medium, effective.medium_complex, effective.complex_reasoning];
   if (low === undefined || mid === undefined || high === undefined) return null;
-  return { simpleMedium: low.toFixed(2), mediumComplex: mid.toFixed(2), complexReasoning: high.toFixed(2) };
+  return {
+    simpleMedium: low.toFixed(2),
+    mediumComplex: mid.toFixed(2),
+    complexReasoning: high.toFixed(2),
+    reasoningOverrideFloor: (reasoningOverrideMinScore ?? low).toFixed(2),
+  };
 };
 
 const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => {
   // The shipped boundaries come from the proxy, so this card cannot state ranges the router stopped using.
   const { data: scorerDefaults, isError } = useComplexityScorerDefaults();
-  const ranges = boundaryRanges(scorerDefaults?.tier_boundaries, value.tier_boundaries);
+  const ranges = boundaryRanges(
+    scorerDefaults?.tier_boundaries,
+    value.tier_boundaries,
+    value.reasoning_override_min_score,
+  );
 
   return (
     <Card className="bg-gray-50 mt-4">
@@ -95,7 +110,8 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
             </li>
             <li>
               <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>: Score &gt;{" "}
-              {ranges.complexReasoning} (or 2+ reasoning markers)
+              {ranges.complexReasoning} (or 2+ reasoning markers with a score of at least{" "}
+              {ranges.reasoningOverrideFloor})
             </li>
           </ul>
         )}

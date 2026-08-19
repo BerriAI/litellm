@@ -9077,6 +9077,7 @@ class ProviderConfigManager:
         from litellm.llms.apiserpent.search.transformation import (
             APISerpentSearchConfig,
         )
+        from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
@@ -9115,6 +9116,7 @@ class ProviderConfigManager:
             SearchProviders.YOU_COM: YouComSearchConfig,
             SearchProviders.APISERPENT: APISerpentSearchConfig,
             SearchProviders.TINYFISH: TinyfishSearchConfig,
+            SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)

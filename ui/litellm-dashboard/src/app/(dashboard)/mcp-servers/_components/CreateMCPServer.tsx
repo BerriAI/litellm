@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Tooltip, Select, Input as AntdInput, InputNumber, Collapse } from "antd";
+import { Tooltip, Select, Input as AntdInput, InputNumber, Collapse } from "antd";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button } from "@/components/ui/button";
@@ -61,6 +61,7 @@ import { antdRequired, antdRules } from "@/components/common_components/antdForm
 import { allFieldsValue, mountedPaths, resetFields, setFieldsValue, singleBranchChange } from "./mcpFormStore";
 import { numberControl, notOnlyWhitespace, selectControl, textControl } from "./mcpFieldRules";
 import mcpLogo from "../../../../../public/assets/logos/mcp_logo.png";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export const mcpLogoImg = mcpLogo.src;
 
@@ -643,411 +644,404 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   // rendering
   return (
-    <Modal
-      title={
-        <div className="flex items-center pb-4 border-b border-gray-100" style={{ gap: 12 }}>
-          {onBackToDiscovery && (
-            <button
-              onClick={onBackToDiscovery}
-              className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none"
-              style={{ flexShrink: 0 }}
-            >
-              &#8592;
-            </button>
-          )}
-          <img
-            src={mcpLogoImg}
-            alt="MCP Logo"
-            className="w-8 h-8 object-contain"
-            style={{
-              height: "20px",
-              width: "20px",
-              objectFit: "contain",
-            }}
-          />
-          <h2 className="text-xl font-semibold text-gray-900">
-            {isAdmin ? "Add New MCP Server" : "Submit MCP Server for Review"}
-          </h2>
-        </div>
-      }
-      open={isModalVisible}
-      width={1000}
-      onCancel={handleCancel}
-      footer={null}
-      forceRender
-      className="top-8"
-      styles={{
-        body: { padding: "24px" },
-        header: { padding: "24px 24px 0 24px", border: "none" },
-      }}
-    >
-      <div className="mt-6">
-        <FormProvider {...form}>
-          <MountedFormProvider value={{ control: form.control, registry }}>
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {!isAdmin && (
-                <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-                  Your submission will be sent for admin review. Once approved, the server will appear in your MCP
-                  Servers list. The request must be made with a team-scoped API key.
-                </div>
-              )}
-              <div className="grid grid-cols-1 gap-6">
-                <MountedFormField
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      MCP Server Name
-                      <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="server_name"
-                  rules={{ validate: antdRules({ validator: (_, value) => validateMCPServerName(value) }) }}
-                >
-                  {(control) => (
-                    <Input
-                      {...textControl(control)}
-                      placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
-                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                    />
-                  )}
-                </MountedFormField>
-
-                <MountedFormField
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Alias
-                      <Tooltip title="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="alias"
-                  rules={{ validate: antdRules({ validator: (_, value) => validateMCPServerName(value) }) }}
-                >
-                  {(control) => (
-                    <Input
-                      {...textControl(control)}
-                      placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
-                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                      onChange={(event) => {
-                        control.onChange(event);
-                        setAliasManuallyEdited(true);
-                      }}
-                    />
-                  )}
-                </MountedFormField>
-
-                <MountedFormField
-                  label={<span className="text-sm font-medium text-gray-700">Description</span>}
-                  name="description"
-                >
-                  {(control) => (
-                    <Input
-                      {...textControl(control)}
-                      placeholder="Brief description of what this server does"
-                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                    />
-                  )}
-                </MountedFormField>
-
-                <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
-
-                <MountedFormField
-                  label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
-                  name="source_url"
-                >
-                  {(control) => (
-                    <Input
-                      {...textControl(control)}
-                      placeholder="https://github.com/org/mcp-server"
-                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                    />
-                  )}
-                </MountedFormField>
-
-                <MountedFormField
-                  label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
-                  name="transport"
-                  required
-                  rules={{ validate: { required: antdRequired("Please select a transport type") } }}
-                >
-                  {(control) => (
-                    <Select
-                      {...selectControl<string>(control)}
-                      placeholder="Select transport"
-                      className="rounded-lg"
-                      size="large"
-                      onChange={(value: string) => {
-                        control.onChange(value);
-                        handleTransportChange(value);
-                      }}
-                    >
-                      <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
-                      <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
-                      <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
-                      <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
-                    </Select>
-                  )}
-                </MountedFormField>
-
-                {/* URL field - only show for HTTP and SSE */}
-                {(transportType === "http" || transportType === "sse") && (
+    <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[1000px]">
+        <DialogHeader>
+          <div className="flex items-center pb-4 border-b border-gray-100" style={{ gap: 12 }}>
+            {onBackToDiscovery && (
+              <button
+                onClick={onBackToDiscovery}
+                className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none"
+                style={{ flexShrink: 0 }}
+              >
+                &#8592;
+              </button>
+            )}
+            <img
+              src={mcpLogoImg}
+              alt="MCP Logo"
+              className="w-8 h-8 object-contain"
+              style={{
+                height: "20px",
+                width: "20px",
+                objectFit: "contain",
+              }}
+            />
+            <DialogTitle className="text-xl font-semibold text-gray-900">
+              {isAdmin ? "Add New MCP Server" : "Submit MCP Server for Review"}
+            </DialogTitle>
+          </div>
+        </DialogHeader>
+        <div className="mt-6">
+          <FormProvider {...form}>
+            <MountedFormProvider value={{ control: form.control, registry }}>
+              <form onSubmit={handleSubmit} className="space-y-6">
+                {!isAdmin && (
+                  <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+                    Your submission will be sent for admin review. Once approved, the server will appear in your MCP
+                    Servers list. The request must be made with a team-scoped API key.
+                  </div>
+                )}
+                <div className="grid grid-cols-1 gap-6">
                   <MountedFormField
-                    label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
-                    name="url"
-                    required
-                    rules={{
-                      validate: {
-                        required: antdRequired("Please enter a server URL"),
-                        ...antdRules({ validator: (_, value) => validateMCPServerUrl(value) }),
-                      },
-                    }}
+                    label={
+                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                        MCP Server Name
+                        <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
+                          <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="server_name"
+                    rules={{ validate: antdRules({ validator: (_, value) => validateMCPServerName(value) }) }}
                   >
                     {(control) => (
-                      <AntdInput
+                      <Input
                         {...textControl(control)}
-                        placeholder="https://your-mcp-server.com"
+                        placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
                         className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                       />
                     )}
                   </MountedFormField>
-                )}
 
-                {/* OpenAPI: logo picker + spec URL input */}
-                {transportType === TRANSPORT.OPENAPI && (
-                  <OpenAPIFormSection
-                    form={form}
-                    accessToken={isModalVisible ? accessToken : null}
-                    onValuesChange={(updates) =>
-                      handleFormValuesChange(updates, { ...allFieldsValue(form), ...updates })
+                  <MountedFormField
+                    label={
+                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                        Alias
+                        <Tooltip title="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
+                          <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                        </Tooltip>
+                      </span>
                     }
-                    onKeyToolsChange={setKeyTools}
-                    onLogoUrlChange={setLogoUrl}
-                    onOAuthDocsUrlChange={setOauthDocsUrl}
-                  />
-                )}
+                    name="alias"
+                    rules={{ validate: antdRules({ validator: (_, value) => validateMCPServerName(value) }) }}
+                  >
+                    {(control) => (
+                      <Input
+                        {...textControl(control)}
+                        placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
+                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        onChange={(event) => {
+                          control.onChange(event);
+                          setAliasManuallyEdited(true);
+                        }}
+                      />
+                    )}
+                  </MountedFormField>
 
-                {/* BYOK toggle - only for OpenAPI */}
-                {transportType === TRANSPORT.OPENAPI && <OpenApiByokFields />}
+                  <MountedFormField
+                    label={<span className="text-sm font-medium text-gray-700">Description</span>}
+                    name="description"
+                  >
+                    {(control) => (
+                      <Input
+                        {...textControl(control)}
+                        placeholder="Brief description of what this server does"
+                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    )}
+                  </MountedFormField>
 
-                <MountedFormField
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Max Concurrent Requests (optional)
-                      <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="max_concurrent_requests"
-                >
-                  {(control) => (
-                    <InputNumber
-                      {...numberControl(control)}
-                      min={1}
-                      precision={0}
-                      placeholder="e.g. 10"
-                      style={{ width: "100%" }}
-                      className="rounded-lg"
+                  <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
+
+                  <MountedFormField
+                    label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
+                    name="source_url"
+                  >
+                    {(control) => (
+                      <Input
+                        {...textControl(control)}
+                        placeholder="https://github.com/org/mcp-server"
+                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    )}
+                  </MountedFormField>
+
+                  <MountedFormField
+                    label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
+                    name="transport"
+                    required
+                    rules={{ validate: { required: antdRequired("Please select a transport type") } }}
+                  >
+                    {(control) => (
+                      <Select
+                        {...selectControl<string>(control)}
+                        placeholder="Select transport"
+                        className="rounded-lg"
+                        size="large"
+                        onChange={(value: string) => {
+                          control.onChange(value);
+                          handleTransportChange(value);
+                        }}
+                      >
+                        <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
+                        <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
+                        <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
+                        <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
+                      </Select>
+                    )}
+                  </MountedFormField>
+
+                  {/* URL field - only show for HTTP and SSE */}
+                  {(transportType === "http" || transportType === "sse") && (
+                    <MountedFormField
+                      label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
+                      name="url"
+                      required
+                      rules={{
+                        validate: {
+                          required: antdRequired("Please enter a server URL"),
+                          ...antdRules({ validator: (_, value) => validateMCPServerUrl(value) }),
+                        },
+                      }}
+                    >
+                      {(control) => (
+                        <AntdInput
+                          {...textControl(control)}
+                          placeholder="https://your-mcp-server.com"
+                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        />
+                      )}
+                    </MountedFormField>
+                  )}
+
+                  {/* OpenAPI: logo picker + spec URL input */}
+                  {transportType === TRANSPORT.OPENAPI && (
+                    <OpenAPIFormSection
+                      form={form}
+                      accessToken={isModalVisible ? accessToken : null}
+                      onValuesChange={(updates) =>
+                        handleFormValuesChange(updates, { ...allFieldsValue(form), ...updates })
+                      }
+                      onKeyToolsChange={setKeyTools}
+                      onLogoUrlChange={setLogoUrl}
+                      onOAuthDocsUrlChange={setOauthDocsUrl}
                     />
                   )}
-                </MountedFormField>
 
-                {/* Authentication - show for HTTP, SSE, and OpenAPI */}
-                {transportType !== "stdio" && transportType !== "" && (
-                  <Collapse
-                    defaultActiveKey={["auth"]}
-                    className="mb-4"
-                    items={[
-                      {
-                        key: "auth",
-                        label: <span className="text-sm font-semibold text-gray-700">Authentication</span>,
-                        children: (
-                          <>
-                            <MountedFormField
-                              name="auth_type"
-                              required
-                              rules={{ validate: { required: antdRequired("Please select an auth type") } }}
-                            >
-                              {(control) => (
-                                <Select
-                                  {...selectControl<string>(control)}
-                                  placeholder="Select auth type"
-                                  className="rounded-lg"
-                                  size="large"
-                                  virtual={false}
-                                >
-                                  <Select.Option value="none">None</Select.Option>
-                                  <Select.Option value="api_key">API Key</Select.Option>
-                                  <Select.Option value="bearer_token">Bearer Token</Select.Option>
-                                  <Select.Option value="token">Token</Select.Option>
-                                  <Select.Option value="basic">Basic Auth</Select.Option>
-                                  <Select.Option value="oauth2">OAuth</Select.Option>
-                                  <Select.Option value="oauth2_token_exchange">
-                                    OAuth Token Exchange (OBO)
-                                  </Select.Option>
-                                  <Select.Option value="oauth2_id_jag">ID-JAG (Okta Cross App Access)</Select.Option>
-                                  <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
-                                  <Select.Option value="true_passthrough">
-                                    True Passthrough (no LiteLLM auth)
-                                  </Select.Option>
-                                  <Select.Option value="oauth_delegate">
-                                    OAuth Delegate (client-supplied upstream token)
-                                  </Select.Option>
-                                </Select>
-                              )}
-                            </MountedFormField>
+                  {/* BYOK toggle - only for OpenAPI */}
+                  {transportType === TRANSPORT.OPENAPI && <OpenApiByokFields />}
 
-                            <TruePassthroughWarning authType={authType} />
+                  <MountedFormField
+                    label={
+                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                        Max Concurrent Requests (optional)
+                        <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
+                          <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="max_concurrent_requests"
+                  >
+                    {(control) => (
+                      <InputNumber
+                        {...numberControl(control)}
+                        min={1}
+                        precision={0}
+                        placeholder="e.g. 10"
+                        style={{ width: "100%" }}
+                        className="rounded-lg"
+                      />
+                    )}
+                  </MountedFormField>
 
-                            <PassthroughAuthorizeSection
-                              authType={authType}
-                              dcrBridgeInitialChecked
-                              oauthFlow={{
-                                startOAuthFlow,
-                                status: oauthStatus,
-                                error: oauthError,
-                                tokenResponse: oauthTokenResponse,
-                              }}
-                              appMayNotMatchUpstream={appMayNotMatchUpstream}
-                            />
-
-                            {shouldShowAuthValueField && (
+                  {/* Authentication - show for HTTP, SSE, and OpenAPI */}
+                  {transportType !== "stdio" && transportType !== "" && (
+                    <Collapse
+                      defaultActiveKey={["auth"]}
+                      className="mb-4"
+                      items={[
+                        {
+                          key: "auth",
+                          label: <span className="text-sm font-semibold text-gray-700">Authentication</span>,
+                          children: (
+                            <>
                               <MountedFormField
-                                label={
-                                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                                    Authentication Value
-                                    <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
-                                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                                    </Tooltip>
-                                  </span>
-                                }
-                                name={["credentials", "auth_value"]}
-                                rules={{
-                                  validate: {
-                                    notWhitespace: notOnlyWhitespace("Authentication value cannot be empty whitespace"),
-                                  },
-                                }}
+                                name="auth_type"
+                                required
+                                rules={{ validate: { required: antdRequired("Please select an auth type") } }}
                               >
                                 {(control) => (
-                                  <AntdInput.Password
-                                    {...textControl(control)}
-                                    placeholder="Enter token or secret"
-                                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                                  />
+                                  <Select
+                                    {...selectControl<string>(control)}
+                                    placeholder="Select auth type"
+                                    className="rounded-lg"
+                                    size="large"
+                                    virtual={false}
+                                  >
+                                    <Select.Option value="none">None</Select.Option>
+                                    <Select.Option value="api_key">API Key</Select.Option>
+                                    <Select.Option value="bearer_token">Bearer Token</Select.Option>
+                                    <Select.Option value="token">Token</Select.Option>
+                                    <Select.Option value="basic">Basic Auth</Select.Option>
+                                    <Select.Option value="oauth2">OAuth</Select.Option>
+                                    <Select.Option value="oauth2_token_exchange">
+                                      OAuth Token Exchange (OBO)
+                                    </Select.Option>
+                                    <Select.Option value="oauth2_id_jag">ID-JAG (Okta Cross App Access)</Select.Option>
+                                    <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
+                                    <Select.Option value="true_passthrough">
+                                      True Passthrough (no LiteLLM auth)
+                                    </Select.Option>
+                                    <Select.Option value="oauth_delegate">
+                                      OAuth Delegate (client-supplied upstream token)
+                                    </Select.Option>
+                                  </Select>
                                 )}
                               </MountedFormField>
-                            )}
 
-                            {isOAuthAuthType && (
-                              <OAuthFormFields
-                                isM2M={isM2MFlow}
-                                initialFlowType={OAUTH_FLOW.INTERACTIVE}
-                                docsUrl={oauthDocsUrl}
+                              <TruePassthroughWarning authType={authType} />
+
+                              <PassthroughAuthorizeSection
+                                authType={authType}
+                                dcrBridgeInitialChecked
                                 oauthFlow={{
                                   startOAuthFlow,
                                   status: oauthStatus,
                                   error: oauthError,
                                   tokenResponse: oauthTokenResponse,
                                 }}
+                                appMayNotMatchUpstream={appMayNotMatchUpstream}
                               />
-                            )}
 
-                            {isTokenExchangeAuthType && <TokenExchangeFormFields />}
+                              {shouldShowAuthValueField && (
+                                <MountedFormField
+                                  label={
+                                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                                      Authentication Value
+                                      <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
+                                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                                      </Tooltip>
+                                    </span>
+                                  }
+                                  name={["credentials", "auth_value"]}
+                                  rules={{
+                                    validate: {
+                                      notWhitespace: notOnlyWhitespace(
+                                        "Authentication value cannot be empty whitespace",
+                                      ),
+                                    },
+                                  }}
+                                >
+                                  {(control) => (
+                                    <AntdInput.Password
+                                      {...textControl(control)}
+                                      placeholder="Enter token or secret"
+                                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                                    />
+                                  )}
+                                </MountedFormField>
+                              )}
 
-                            {isIdJagAuthType && <IdJagFormFields />}
-                          </>
-                        ),
-                      },
-                    ]}
+                              {isOAuthAuthType && (
+                                <OAuthFormFields
+                                  isM2M={isM2MFlow}
+                                  initialFlowType={OAUTH_FLOW.INTERACTIVE}
+                                  docsUrl={oauthDocsUrl}
+                                  oauthFlow={{
+                                    startOAuthFlow,
+                                    status: oauthStatus,
+                                    error: oauthError,
+                                    tokenResponse: oauthTokenResponse,
+                                  }}
+                                />
+                              )}
+
+                              {isTokenExchangeAuthType && <TokenExchangeFormFields />}
+
+                              {isIdJagAuthType && <IdJagFormFields />}
+                            </>
+                          ),
+                        },
+                      ]}
+                    />
+                  )}
+
+                  {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
+
+                  {/* Stdio Configuration - only show for stdio transport */}
+                  <StdioConfiguration isVisible={transportType === "stdio"} />
+                </div>
+
+                {/* Environment Variables Section */}
+                <div className="mt-8">
+                  <EnvVarsSection />
+                </div>
+
+                {/* Permission Management / Access Control Section */}
+                <div className="mt-8">
+                  <MCPPermissionManagement
+                    availableAccessGroups={availableAccessGroups}
+                    mcpServer={null}
+                    mountedAuthType={authSectionMounted ? watchedAuthType : undefined}
+                    searchValue={searchValue}
+                    setSearchValue={setSearchValue}
+                    getAccessGroupOptions={getAccessGroupOptions}
                   />
-                )}
+                </div>
 
-                {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
+                {/* Connection Status Section */}
+                <div className="mt-8 pt-6 border-t border-gray-200">
+                  <MCPConnectionStatus
+                    formValues={formValues}
+                    tools={tools}
+                    isLoadingTools={isLoadingTools}
+                    toolsError={toolsError}
+                    toolsErrorStatus={toolsErrorStatus}
+                    toolsErrorStackTrace={toolsErrorStackTrace}
+                    canFetchTools={canFetchTools}
+                    fetchTools={fetchTools}
+                  />
+                </div>
 
-                {/* Stdio Configuration - only show for stdio transport */}
-                <StdioConfiguration isVisible={transportType === "stdio"} />
-              </div>
+                {/* Tool Configuration Section */}
+                <div className="mt-6">
+                  <MCPToolConfiguration
+                    accessToken={accessToken}
+                    formValues={formValues}
+                    allowedTools={allowedTools}
+                    existingAllowedTools={null}
+                    onAllowedToolsChange={setAllowedTools}
+                    hasToolAllowlistInteraction={hasToolAllowlistInteraction}
+                    onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
+                    toolNameToDisplayName={toolNameToDisplayName}
+                    toolNameToDescription={toolNameToDescription}
+                    onToolNameToDisplayNameChange={setToolNameToDisplayName}
+                    onToolNameToDescriptionChange={setToolNameToDescription}
+                    keyTools={keyTools}
+                    externalTools={tools}
+                    externalIsLoading={isLoadingTools}
+                    externalError={toolsError}
+                    externalErrorStatus={toolsErrorStatus}
+                    externalCanFetch={canFetchTools}
+                  />
+                </div>
 
-              {/* Environment Variables Section */}
-              <div className="mt-8">
-                <EnvVarsSection />
-              </div>
+                {/* Cost Configuration Section */}
+                <div className="mt-6">
+                  <MCPServerCostConfig
+                    value={costConfig}
+                    onChange={setCostConfig}
+                    tools={tools.filter((tool) => allowedTools.includes(tool.name))}
+                    disabled={false}
+                  />
+                </div>
 
-              {/* Permission Management / Access Control Section */}
-              <div className="mt-8">
-                <MCPPermissionManagement
-                  availableAccessGroups={availableAccessGroups}
-                  mcpServer={null}
-                  mountedAuthType={authSectionMounted ? watchedAuthType : undefined}
-                  searchValue={searchValue}
-                  setSearchValue={setSearchValue}
-                  getAccessGroupOptions={getAccessGroupOptions}
-                />
-              </div>
-
-              {/* Connection Status Section */}
-              <div className="mt-8 pt-6 border-t border-gray-200">
-                <MCPConnectionStatus
-                  formValues={formValues}
-                  tools={tools}
-                  isLoadingTools={isLoadingTools}
-                  toolsError={toolsError}
-                  toolsErrorStatus={toolsErrorStatus}
-                  toolsErrorStackTrace={toolsErrorStackTrace}
-                  canFetchTools={canFetchTools}
-                  fetchTools={fetchTools}
-                />
-              </div>
-
-              {/* Tool Configuration Section */}
-              <div className="mt-6">
-                <MCPToolConfiguration
-                  accessToken={accessToken}
-                  formValues={formValues}
-                  allowedTools={allowedTools}
-                  existingAllowedTools={null}
-                  onAllowedToolsChange={setAllowedTools}
-                  hasToolAllowlistInteraction={hasToolAllowlistInteraction}
-                  onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
-                  toolNameToDisplayName={toolNameToDisplayName}
-                  toolNameToDescription={toolNameToDescription}
-                  onToolNameToDisplayNameChange={setToolNameToDisplayName}
-                  onToolNameToDescriptionChange={setToolNameToDescription}
-                  keyTools={keyTools}
-                  externalTools={tools}
-                  externalIsLoading={isLoadingTools}
-                  externalError={toolsError}
-                  externalErrorStatus={toolsErrorStatus}
-                  externalCanFetch={canFetchTools}
-                />
-              </div>
-
-              {/* Cost Configuration Section */}
-              <div className="mt-6">
-                <MCPServerCostConfig
-                  value={costConfig}
-                  onChange={setCostConfig}
-                  tools={tools.filter((tool) => allowedTools.includes(tool.name))}
-                  disabled={false}
-                />
-              </div>
-
-              <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
-                <Button variant="secondary" onClick={handleCancel}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={isLoading} aria-busy={isLoading}>
-                  {isLoading && <UiLoadingSpinner className="size-4" />}
-                  {isLoading ? "Creating..." : "Add MCP Server"}
-                </Button>
-              </div>
-            </form>
-          </MountedFormProvider>
-        </FormProvider>
-      </div>
-    </Modal>
+                <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
+                  <Button variant="secondary" onClick={handleCancel}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={isLoading} aria-busy={isLoading}>
+                    {isLoading && <UiLoadingSpinner className="size-4" />}
+                    {isLoading ? "Creating..." : "Add MCP Server"}
+                  </Button>
+                </div>
+              </form>
+            </MountedFormProvider>
+          </FormProvider>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 
