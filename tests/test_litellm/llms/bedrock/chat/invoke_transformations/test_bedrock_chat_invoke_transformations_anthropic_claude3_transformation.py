@@ -545,3 +545,33 @@ def test_output_format_removed_from_bedrock_invoke_request():
     assert (
         "output_format" not in result
     ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        pytest.param("us.anthropic.claude-sonnet-5-v99:9", True, id="sonnet_5"),
+        pytest.param("us.anthropic.claude-opus-5-v99:9", True, id="opus_5"),
+        pytest.param("us.anthropic.claude-opus-4-8-v99:9", True, id="opus_4_8"),
+        pytest.param("us.anthropic.claude-haiku-4-5-v99:9", True, id="haiku_4_5"),
+        pytest.param("us.anthropic.claude-opus-4-1-v99:9", False, id="opus_4_1_unsupported"),
+    ],
+)
+def test_bedrock_chat_invoke_tool_search_beta_header(model, expected):
+    """The chat Invoke path previously hardcoded an ``opus-4`` name check, which
+    both missed tool-search capable families (Haiku 4.5, Sonnet 5, Opus 5) and
+    wrongly sent the beta for Opus 4.1, which Anthropic documents as
+    unsupported. It now shares ``supports_tool_search_on_bedrock`` with the
+    /v1/messages path."""
+    config = AmazonAnthropicClaudeConfig()
+
+    betas = config._compute_bedrock_invoke_beta_headers(
+        model=model,
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={
+            "tools": [{"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}],
+        },
+        headers={},
+    )
+
+    assert ("tool-search-tool-2025-10-19" in betas) is expected

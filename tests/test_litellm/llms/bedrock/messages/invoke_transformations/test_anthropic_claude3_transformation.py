@@ -2714,6 +2714,9 @@ def test_filter_and_transform_beta_headers_passes_context_management_for_bedrock
         "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "us.anthropic.claude-opus-4-7",
+        "us.anthropic.claude-opus-4-8",
+        "us.anthropic.claude-opus-5",
+        "us.anthropic.claude-sonnet-5",
     ],
 )
 def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config, model):
@@ -2726,6 +2729,9 @@ def test_bedrock_messages_tool_search_adds_beta_header(local_beta_headers_config
     Opus 4.7, so the beta was silently dropped for those models and every
     tool-search request failed. Verified live 2026-08-11: Bedrock returns 200
     with ``server_tool_use`` for all three models once the beta is sent.
+    Opus 4.8, Opus 5, and Sonnet 5 verified live 2026-08-19: Bedrock
+    InvokeModel returns 200 with ``server_tool_use`` and
+    ``tool_search_tool_result`` blocks.
     """
     from litellm.types.router import GenericLiteLLMParams
 
@@ -2782,6 +2788,9 @@ def test_bedrock_messages_tool_search_model_map_flag_is_authoritative(local_mode
     "model, expected",
     [
         pytest.param("us.anthropic.claude-opus-4-6-v99:9", True, id="unmapped_id_falls_back_to_patterns"),
+        pytest.param("us.anthropic.claude-opus-5-v99:9", True, id="unmapped_opus_5_falls_back_to_patterns"),
+        pytest.param("us.anthropic.claude-sonnet-5-v99:9", True, id="unmapped_sonnet_5_falls_back_to_patterns"),
+        pytest.param("us.anthropic.claude-opus-4-8-v99:9", True, id="unmapped_opus_4_8_falls_back_to_patterns"),
         pytest.param("anthropic.claude-3-5-sonnet-20240620-v1:0", False, id="mapped_entry_without_flag_no_pattern"),
     ],
 )

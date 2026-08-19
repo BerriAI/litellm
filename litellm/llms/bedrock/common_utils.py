@@ -21,6 +21,7 @@ import httpx
 
 import litellm
 from litellm import verbose_logger
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -740,6 +741,61 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
         (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
         for candidate in (model, get_bedrock_base_model(model))
     )
+
+
+_BEDROCK_TOOL_SEARCH_MODEL_PATTERNS: Final = (
+    "opus-4.5",
+    "opus_4.5",
+    "opus-4-5",
+    "opus_4_5",
+    "sonnet-4.5",
+    "sonnet_4.5",
+    "sonnet-4-5",
+    "sonnet_4_5",
+    "opus-4.6",
+    "opus_4.6",
+    "opus-4-6",
+    "opus_4_6",
+    "sonnet-4.6",
+    "sonnet_4.6",
+    "sonnet-4-6",
+    "sonnet_4_6",
+    "opus-4.7",
+    "opus_4.7",
+    "opus-4-7",
+    "opus_4_7",
+    "opus-4.8",
+    "opus_4.8",
+    "opus-4-8",
+    "opus_4_8",
+    "opus-5",
+    "opus_5",
+    "sonnet-5",
+    "sonnet_5",
+    "haiku-4.5",
+    "haiku_4.5",
+    "haiku-4-5",
+    "haiku_4_5",
+)
+
+
+def supports_tool_search_on_bedrock(model: str) -> bool:
+    """
+    Whether Bedrock InvokeModel accepts the ``tool-search-tool-2025-10-19``
+    beta for ``model``.
+
+    The model map's ``supports_tool_search`` flag is authoritative when
+    ``model`` resolves to an entry that sets it; the name patterns cover ids
+    the map cannot resolve (ARNs, unlisted regional variants).
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
+    """
+    catalog: Final = AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock")
+    if catalog is not None:
+        return catalog
+
+    model_lower: Final = model.lower()
+    return any(pattern in model_lower for pattern in _BEDROCK_TOOL_SEARCH_MODEL_PATTERNS)
 
 
 _BEDROCK_MODEL_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
