@@ -76,22 +76,24 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, provider
         <Info />
         <AlertTitle>AWS S3 Vectors Setup</AlertTitle>
         <AlertDescription>
-          <p>AWS S3 Vectors allows you to store and query vector embeddings directly in S3:</p>
-          <ul style={{ marginLeft: "16px", marginTop: "8px" }}>
-            <li>Vector buckets and indexes will be automatically created if they don&apos;t exist</li>
-            <li>Vector dimensions are auto-detected from your selected embedding model</li>
-            <li>Ensure your AWS credentials have permissions for S3 Vectors operations</li>
-            <li>
-              Learn more:{" "}
-              <a
-                href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vector-buckets.html"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                AWS S3 Vectors Documentation
-              </a>
-            </li>
-          </ul>
+          <div>
+            <p>AWS S3 Vectors allows you to store and query vector embeddings directly in S3:</p>
+            <ul style={{ marginLeft: "16px", marginTop: "8px" }}>
+              <li>Vector buckets and indexes will be automatically created if they don&apos;t exist</li>
+              <li>Vector dimensions are auto-detected from your selected embedding model</li>
+              <li>Ensure your AWS credentials have permissions for S3 Vectors operations</li>
+              <li>
+                Learn more:{" "}
+                <a
+                  href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vector-buckets.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  AWS S3 Vectors Documentation
+                </a>
+              </li>
+            </ul>
+          </div>
         </AlertDescription>
       </Alert>
 

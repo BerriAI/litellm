@@ -33,7 +33,7 @@ describe("PluginSettings config payload", () => {
     const user = userEvent.setup();
     getConfigFieldSettingMock.mockResolvedValue({ field_value: [] });
     render(<PluginSettings />);
-    expect(await screen.findAllByText("No data")).not.toHaveLength(0);
+    expect(await screen.findByText("No data", { ignore: "title" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /add plugin/i }));
     fireEvent.change(await screen.findByLabelText(/Name \(identifier\)/), { target: { value: "beta" } });

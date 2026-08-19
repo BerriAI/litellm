@@ -2,10 +2,10 @@
 
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ColumnDef } from "@tanstack/react-table";
-import { Popover, Typography } from "antd";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
 import { inheritedBudgetGates } from "@/components/shared/InheritedBudgetHint";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
@@ -78,9 +78,7 @@ const UserPopoverCell = ({
         <div key={label} className="flex flex-col min-w-0">
           <span className="text-gray-400">{label}</span>
           {value ? (
-            <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
-              {value}
-            </Typography.Text>
+            <IdCell value={value} variant="plain" copyable className="max-w-full" />
           ) : (
             <span className="font-mono">-</span>
           )}
@@ -91,29 +89,39 @@ const UserPopoverCell = ({
 
   if (isDefaultAdmin && !userAlias && !userEmail) {
     return (
-      <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-        <span className="cursor-default">
+      <HoverCard>
+        <HoverCardTrigger render={<span className="cursor-default" />}>
           <DefaultProxyAdminTag userId={userId} />
-        </span>
-      </Popover>
+        </HoverCardTrigger>
+        <HoverCardContent align="start">{popoverContent}</HoverCardContent>
+      </HoverCard>
     );
   }
 
   return (
-    <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-      <span className="font-mono text-xs truncate block cursor-default" style={{ maxWidth: width, overflow: "hidden" }}>
+    <HoverCard>
+      <HoverCardTrigger
+        render={
+          <span
+            className="font-mono text-xs truncate block cursor-default"
+            style={{ maxWidth: width, overflow: "hidden" }}
+          />
+        }
+      >
         {displayValue || "-"}
-      </span>
-    </Popover>
+      </HoverCardTrigger>
+      <HoverCardContent align="start">{popoverContent}</HoverCardContent>
+    </HoverCard>
   );
 };
 
 const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (
   <span className="flex items-center gap-1">
     {label}
-    <Popover content={tooltip} trigger="hover">
-      <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
-    </Popover>
+    <HoverCard>
+      <HoverCardTrigger render={<InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />} />
+      <HoverCardContent className="w-auto">{tooltip}</HoverCardContent>
+    </HoverCard>
   </span>
 );
 
