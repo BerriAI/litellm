@@ -196,12 +196,10 @@ describe("AgentCardDiscovery", () => {
     );
 
     expect(
-      (
-        screen.getByRole("button", {
-          name: /discover/i,
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+      screen.getByRole("button", {
+        name: /discover/i,
+      }),
+    ).toBeDisabled();
     expect(mockDiscover).not.toHaveBeenCalled();
   });
 

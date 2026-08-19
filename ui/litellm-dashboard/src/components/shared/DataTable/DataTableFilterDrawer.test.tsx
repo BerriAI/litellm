@@ -68,7 +68,7 @@ describe("DataTableFilterDrawer", () => {
     await user.type(await screen.findByTestId("draft-name"), "Bob");
 
     expect(names()).toEqual(["Alice", "Bob", "Carol"]);
-    expect(screen.queryByTestId("filter-chip-name")).toBeNull();
+    expect(screen.queryByTestId("filter-chip-name")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("filter-drawer-apply"));
     expect(names()).toEqual(["Bob"]);
@@ -92,7 +92,7 @@ describe("DataTableFilterDrawer", () => {
     await user.click(await screen.findByTestId("filter-drawer-reset"));
 
     expect(names()).toEqual(["Alice", "Bob", "Carol"]);
-    expect(screen.queryByTestId("filter-chip-name")).toBeNull();
+    expect(screen.queryByTestId("filter-chip-name")).not.toBeInTheDocument();
     expect(screen.getByTestId("draft-name")).toHaveValue("");
   });
 });

@@ -84,6 +84,7 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
+    AnthropicThinkingParam,
     AppliedEdit,
     ContentBlockDelta,
     ContentJsonBlockDelta,
@@ -305,7 +306,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 target["cache_control"] = cache_control
             else:
                 # Fallback for non-dict objects (shouldn't happen in practice)
-                cast(dict[str, Any], target)["cache_control"] = cache_control
+                cast(dict[str, object], target)["cache_control"] = cache_control
 
     def translatable_anthropic_params(self) -> list[str]:
         """
@@ -323,7 +324,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "stop_sequences",
         ]
 
-    def _is_web_search_tool(self, tool: dict[str, Any]) -> bool:
+    def _is_web_search_tool(self, tool: Mapping[str, object]) -> bool:
         """
         Check if a tool is an Anthropic web search tool.
 
@@ -498,7 +499,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             assistant_message_str = str(content)
                         elif isinstance(content, dict):
                             if content.get("type") == "text":
-                                text_block: dict[str, Any] = {
+                                text_block: dict[str, object] = {
                                     "type": "text",
                                     "text": content.get("text", ""),
                                 }
@@ -513,10 +514,12 @@ class LiteLLMAnthropicMessagesAdapter:
                                     "name": tool_name,
                                     "arguments": json.dumps(content.get("input", {})),
                                 }
-                                signature = self._extract_signature_from_tool_use_content(cast(dict[str, Any], content))
+                                signature = self._extract_signature_from_tool_use_content(
+                                    cast(dict[str, object], content)
+                                )
 
                                 if signature:
-                                    provider_specific_fields: dict[str, Any] = (
+                                    provider_specific_fields: dict[str, object] = (
                                         function_chunk.get("provider_specific_fields") or {}
                                     )
                                     provider_specific_fields["thought_signature"] = signature
@@ -575,7 +578,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def translate_anthropic_thinking_to_reasoning_effort(
-        thinking: dict[str, Any],
+        thinking: AnthropicThinkingParam,
     ) -> str | None:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
@@ -632,9 +635,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def translate_thinking_for_model(
-        thinking: dict[str, Any],
+        thinking: AnthropicThinkingParam,
         model: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Translate Anthropic thinking parameter based on the target model.
 
@@ -670,7 +673,7 @@ class LiteLLMAnthropicMessagesAdapter:
     @staticmethod
     def _apply_reasoning_summary_wrapping(
         reasoning_effort: str,
-        thinking: dict[str, Any],
+        thinking: Mapping[str, object],
     ) -> Any:
         """
         Apply the reasoning_effort/summary wrapping rules shared by every
@@ -731,6 +734,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "input_schema",
             "description",
             "cache_control",
+            "strict",
             "type",
         ]
 
@@ -760,6 +764,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 function_chunk["parameters"] = tool["input_schema"]
             if "description" in tool:
                 function_chunk["description"] = tool["description"]
+            if "strict" in tool:
+                function_chunk["strict"] = bool(tool["strict"])
 
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
@@ -770,7 +776,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return new_tools, tool_name_mapping
 
-    def translate_anthropic_output_format_to_openai(self, output_format: Any) -> dict[str, Any] | None:
+    def translate_anthropic_output_format_to_openai(self, output_format: Any) -> dict[str, object] | None:
         """
         Translate Anthropic's output_format to OpenAI's response_format.
 
@@ -889,7 +895,7 @@ class LiteLLMAnthropicMessagesAdapter:
             model_name: Final = anthropic_message_request.get("model", "")
             for block in system_content:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    text_block: dict[str, Any] = {
+                    text_block: dict[str, object] = {
                         "type": "text",
                         "text": block.get("text", ""),
                     }
@@ -959,7 +965,7 @@ class LiteLLMAnthropicMessagesAdapter:
         web_search_tools: Final[list[AllAnthropicToolsValues]] = []
         regular_tools: Final[list[AllAnthropicToolsValues]] = []
         for tool in tools:
-            cast_tool = cast(dict[str, Any], tool)
+            cast_tool = cast(dict[str, object], tool)
             if self._is_web_search_tool(cast_tool):
                 web_search_tools.append(cast(AllAnthropicToolsValues, tool))
             else:
@@ -1007,7 +1013,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         new_kwargs["output_config"] = effort_config  # rebind-ok: out-param store like thinking above
             return
 
-        reasoning_effort = self.translate_anthropic_thinking_to_reasoning_effort(cast(dict[str, Any], thinking))
+        reasoning_effort = self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking))
         if not reasoning_effort:
             return
 
@@ -1020,7 +1026,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 reasoning_effort = output_config["effort"]
 
         new_kwargs["reasoning_effort"] = self._apply_reasoning_summary_wrapping(
-            reasoning_effort, cast(dict[str, Any], thinking)
+            reasoning_effort, cast(dict[str, object], thinking)
         )
 
     def _translate_output_format_to_openai(
@@ -1040,7 +1046,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
         ``output_format`` takes precedence when both are provided.
         """
-        output_format: Any = anthropic_message_request.get("output_format")
+        output_format: object = anthropic_message_request.get("output_format")
         if not output_format:
             output_config: Final = anthropic_message_request.get("output_config")
             if isinstance(output_config, dict):
@@ -1407,7 +1413,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
                     parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
                     thought_sig = parts[1] if len(parts) > 1 else None
-                tool_block: dict[str, Any] = {
+                tool_block: dict[str, object] = {
                     "type": "tool_use",
                     "id": normalize_anthropic_tool_use_id(raw_id),
                     "name": tool_name,

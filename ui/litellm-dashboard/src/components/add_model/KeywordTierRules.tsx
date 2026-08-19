@@ -1,8 +1,10 @@
 import { DeleteOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Card, Empty, Select as AntdSelect, Tooltip, Typography } from "antd";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Button, Card, Empty, Select as AntdSelect, Typography } from "antd";
 import React from "react";
 
 import { emptyKeywordTierRuleIndexes } from "./complexity_router_keywords";
+import { tierOptions } from "./complexity_router_tiers";
 
 const { Text } = Typography;
 
@@ -19,20 +21,6 @@ interface KeywordTierRulesProps {
   onChange: (rules: KeywordTierRule[]) => void;
   tierLabels?: Partial<Record<ComplexityTier, string>>;
 }
-
-const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
-  SIMPLE: "Simple",
-  MEDIUM: "Medium",
-  COMPLEX: "Complex",
-  REASONING: "Reasoning",
-};
-
-const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
-
-export const tierOptions = (
-  tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
-): { value: ComplexityTier; label: string }[] =>
-  TIER_ORDER.map((tier) => ({ value: tier, label: tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier] }));
 
 // A row exists only because the caller asked for it, so it reports its own gap straight away
 // rather than waiting for a submit; the submit button is disabled while one is outstanding, so
@@ -83,9 +71,9 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
           <Typography.Title level={4} style={{ margin: 0 }}>
             Keyword Tier Overrides
           </Typography.Title>
-          <Tooltip title="Match known terms and force the request straight to a chosen complexity tier, bypassing rule-based scoring.">
+          <SimpleTooltip content="Match known terms and force the request straight to a chosen complexity tier, bypassing rule-based scoring.">
             <InfoCircleOutlined className="text-gray-400" />
-          </Tooltip>
+          </SimpleTooltip>
         </div>
         <Button icon={<PlusOutlined />} onClick={addRule}>
           Add keyword rule

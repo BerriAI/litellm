@@ -70,4 +70,18 @@ describe("UsageExportHeader", () => {
     );
     expect(screen.getByText("Team")).toBeInTheDocument();
   });
+
+  it("should render a caller-supplied filter and its label without any built-in options", () => {
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        filterLabel="Filter by user"
+        filterSlot={<div data-testid="custom-filter" />}
+      />,
+    );
+
+    expect(screen.getByText("Filter by user")).toBeInTheDocument();
+    expect(screen.getByTestId("custom-filter")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
 });

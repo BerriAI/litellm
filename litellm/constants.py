@@ -1,5 +1,6 @@
 import os
 import sys
+from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
@@ -1487,6 +1488,7 @@ WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
 PROMETHEUS_FALLBACK_STATS_JOB_ID: Final = "prometheus_fallback_stats_job"
 SLACK_DAILY_REPORT_LOCK_ID: Final = "slack_daily_report"
+SLACK_MODEL_DEPRECATION_LOCK_ID: Final = "slack_model_deprecation_warning"
 SPEND_LOG_RUN_LOOPS: Final = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE: Final = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(os.getenv("SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3))
@@ -1593,6 +1595,13 @@ DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL: Final = 10
 # in a single ``/{name1,name2,...}/mcp`` URL. Bounds the per-request DB / cache
 # fan-out an authenticated caller can trigger by stuffing the path with tokens.
 DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
+# Ceilings on the cached auth registries; larger tables fall back to per-row lookups
+# instead of holding an unbounded id set in every worker.
+TAG_REGISTRY_MAX_SIZE: Final = 5000
+END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
+# How long a failed registry load is remembered as "unusable", so a degraded Postgres
+# is not re-scanned on every request on top of the per-id lookups it falls back to.
+REGISTRY_ERROR_NEGATIVE_CACHE_TTL: Final = 30
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST: Final = [
@@ -1756,3 +1765,7 @@ PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
 # one run delete a charge another just wrote. A stale row is hours old and a concurrent
 # one is seconds old, so a few minutes separates them.
 PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300
+
+# Shared read-only empty mapping, for defaulting optional Mapping parameters without
+# constructing a fresh mutable dict at each call site.
+EMPTY_MAPPING: Final = MappingProxyType({})

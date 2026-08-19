@@ -11,13 +11,15 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, TypeVar, Union, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeVar, Union, cast, overload
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
@@ -170,7 +172,9 @@ from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from opentelemetry.trace import Span as _Span
+    from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
+    from prisma.models import LiteLLM_DeprecatedVerificationToken
     from prisma.types import HttpConfig
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -183,6 +187,24 @@ else:
     Span = Any
 
 _T: Final = TypeVar("_T")
+
+
+class _ViewCountRow(TypedDict):
+    view_count: ReadOnly[int]
+    view_names: ReadOnly[Sequence[str] | None]
+
+
+class _RelTuplesRow(TypedDict):
+    reltuples: ReadOnly[int]
+
+
+class _EndUserBatchTable(Protocol):
+    def upsert(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
+
+
+class _EndUserSpendBatch(Protocol):
+    @property
+    def litellm_endusertable(self) -> _EndUserBatchTable: ...
 
 
 unified_guardrail: Final = UnifiedLLMGuardrails()
@@ -363,10 +385,10 @@ def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: 
     detail: Final = getattr(exc, "detail", None)
     if not isinstance(detail, dict):
         return
-    guardrail_name: Final = getattr(callback, "guardrail_name", None)
+    guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
     if guardrail_name:
         detail.setdefault("guardrail_name", guardrail_name)
-    event_hook: Final = getattr(callback, "event_hook", None)
+    event_hook: Final[object] = getattr(callback, "event_hook", None)
     if event_hook:
         detail.setdefault("guardrail_mode", event_hook)
 
@@ -453,6 +475,7 @@ class ProxyLogging:
         # Guard flags to prevent duplicate background tasks
         self.daily_report_started: bool = False
         self.hanging_requests_check_started: bool = False
+        self.deprecation_check_started: bool = False
 
     def startup_event(
         self,
@@ -495,6 +518,25 @@ class ProxyLogging:
             )  # RUN HANGING REQUEST CHECK (if user wants to alert on hanging requests)
             self.hanging_requests_check_started = True
 
+        self._ensure_deprecation_check_scheduled()
+
+    def _ensure_deprecation_check_scheduled(self) -> None:
+        """Alerting can be configured at startup or by a later config reload, so schedule from either path"""
+        if self.alerting is None or self.deprecation_check_started:
+            return
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        asyncio.create_task(
+            self.slack_alerting_instance.run_scheduled_deprecation_check(
+                pod_lock_manager=self.db_spend_update_writer.pod_lock_manager
+            )
+        )
+        self.deprecation_check_started = True
+
     def update_values(
         self,
         alerting: list | None = None,
@@ -522,6 +564,7 @@ class ProxyLogging:
             updated_slack_alerting = True
 
         if updated_slack_alerting is True:
+            self._ensure_deprecation_check_scheduled()
             self.slack_alerting_instance.update_values(
                 alerting=self.alerting,
                 alerting_threshold=self.alerting_threshold,
@@ -981,7 +1024,9 @@ class ProxyLogging:
             Result from the guardrail execution
         """
         # Use unified_guardrail if callback has apply_guardrail method
-        has_apply_guardrail: Final = "apply_guardrail" in type(callback).__dict__
+        has_apply_guardrail: Final = "apply_guardrail" in type(callback).__dict__ and not getattr(
+            callback, "use_native_lifecycle_hooks", False
+        )
         use_unified: Final = has_apply_guardrail and not (
             hook_type == "during_call" and getattr(callback, "use_native_during_call_hook", False)
         )
@@ -1043,7 +1088,7 @@ class ProxyLogging:
         # Select guardrail using router's load balancing
         selected_guardrail: Final = llm_router.get_available_guardrail(guardrail_name=guardrail_name)
 
-        callback: Final = selected_guardrail.get("callback")
+        callback: Final[CustomGuardrail | None] = selected_guardrail.get("callback")
         if callback is None:
             raise ValueError(f"No callback found for guardrail: {guardrail_name}")
 
@@ -1734,7 +1779,7 @@ class ProxyLogging:
             if "async_post_call_streaming_iterator_hook" in cls_attrs:
                 has_iterator_override = True
                 iterator_overrides.append((resolved, "override"))
-            elif "apply_guardrail" in cls_attrs:
+            elif "apply_guardrail" in cls_attrs and not getattr(resolved, "use_native_lifecycle_hooks", False):
                 iterator_overrides.append((resolved, "apply_guardrail"))
             # Walk the MRO for ``async_post_call_streaming_hook`` rather than
             # using the leaf-class ``__dict__`` check used by the other flags:
@@ -1868,6 +1913,7 @@ class ProxyLogging:
                 # Add task to list for parallel execution
                 if (
                     "apply_guardrail" in type(callback).__dict__
+                    and not callback.use_native_lifecycle_hooks
                     and user_api_key_dict is not None
                     and not getattr(callback, "use_native_during_call_hook", False)
                 ):
@@ -2107,7 +2153,7 @@ class ProxyLogging:
 
             Related issue - https://github.com/BerriAI/litellm/issues/3395
             """
-            litellm_debug_info: Final = getattr(original_exception, "litellm_debug_info", None)
+            litellm_debug_info: Final[str | None] = getattr(original_exception, "litellm_debug_info", None)
             exception_str = str(original_exception)
             if litellm_debug_info is not None:
                 exception_str += litellm_debug_info
@@ -2391,7 +2437,7 @@ class ProxyLogging:
 
                 guardrail_response: Any | None = None
 
-                if "apply_guardrail" in type(callback).__dict__:
+                if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
                     data["guardrail_to_apply"] = callback
                     guardrail_response = await self._run_guardrail_with_metrics(
                         callback,
@@ -2429,7 +2475,7 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
-                callback_response = await callback.async_post_call_success_hook(
+                callback_response: LLMResponseTypes | None = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )
                 if callback_response is not None:
@@ -2464,7 +2510,7 @@ class ProxyLogging:
         async def _run_one(callback: CustomGuardrail) -> None:
             if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
                 return
-            if "apply_guardrail" in type(callback).__dict__:
+            if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
                 data["guardrail_to_apply"] = callback
                 await self._run_guardrail_with_metrics(
                     callback,
@@ -2530,7 +2576,7 @@ class ProxyLogging:
         for callback in caps.resolved_callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue
-            if "apply_guardrail" not in type(callback).__dict__:
+            if "apply_guardrail" not in type(callback).__dict__ or callback.use_native_lifecycle_hooks:
                 continue
             if (
                 callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call)
@@ -2707,6 +2753,9 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
+                        callback_response: (
+                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
+                        )
                         callback_response = await _callback.async_post_call_streaming_hook(
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,
@@ -2764,6 +2813,7 @@ class ProxyLogging:
                     and stream_needs_translation
                     and isinstance(resolved_callback, CustomGuardrail)
                     and resolved_callback.uses_apply_guardrail_interface()
+                    and getattr(resolved_callback, "use_native_lifecycle_hooks", False) is not True
                     and not resolved_callback.mask_response_content
                 )
                 else kind
@@ -2813,8 +2863,10 @@ class ProxyLogging:
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if logging_obj is None:
             return
-        _deferred_cb: Final = getattr(logging_obj, "_on_deferred_stream_complete", None)
-        _args: Final = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
+            logging_obj, "_on_deferred_stream_complete", None
+        )
+        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
         if _deferred_cb is not None and _args is not None:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
@@ -2908,7 +2960,10 @@ async def _lookup_deprecated_key(
         _deprecated_key_cache.pop(hashed_token, None)
 
     try:
-        deprecated_row: Final = await db.litellm_deprecatedverificationtoken.find_first(
+        deprecated_keys_table: Final[
+            LiteLLM_DeprecatedVerificationTokenActions[LiteLLM_DeprecatedVerificationToken]
+        ] = db.litellm_deprecatedverificationtoken
+        deprecated_row: Final = await deprecated_keys_table.find_first(
             where={
                 "token": hashed_token,
                 "revoke_at": {"gt": now},
@@ -3337,7 +3392,7 @@ class PrismaClient:
             required_view: Final = "LiteLLM_VerificationTokenView"
             expected_views_str: Final = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema: Final = os.getenv("DATABASE_SCHEMA", "public")
-            ret: Final = await self.db.query_raw(f"""
+            ret: Final[Sequence[_ViewCountRow]] = await self.db.query_raw(f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -4345,7 +4400,9 @@ class PrismaClient:
                 else:
                     filter_query = {"token": {"in": hashed_tokens}}
 
-                deleted_tokens: Final = await VerificationTokenRepository(self).table.delete_many(where=filter_query)
+                deleted_tokens: Final[int] = await VerificationTokenRepository(self).table.delete_many(
+                    where=filter_query
+                )
                 verbose_proxy_logger.debug("deleted_tokens: %s", deleted_tokens)
                 return {"deleted_keys": deleted_tokens}
             elif table_name == "team" and team_id_list is not None and isinstance(team_id_list, list):
@@ -4450,7 +4507,7 @@ class PrismaClient:
             engine: Final = prisma_obj._engine
             process: Final = getattr(engine, "process", None) if engine is not None else None
             if process is not None:
-                pid: Final = process.pid
+                pid: Final[object] = process.pid
                 if isinstance(pid, int):
                     return pid
         except (AttributeError, TypeError):
@@ -5257,7 +5314,7 @@ class PrismaClient:
         about to check, and attribute the failure to the wrong replacement.
         """
         sql_query: Final = "SELECT 1"
-        response: Final = await wrapper.query_raw(sql_query)
+        response: Final[object] = await wrapper.query_raw(sql_query)
         return response
 
     async def _probe_answers_now(self, wrapper: PrismaWrapper) -> bool:
@@ -5383,7 +5440,7 @@ class PrismaClient:
             FROM pg_class
             WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
             """
-            result: Final = await self.db.query_raw(query=sql_query)
+            result: Final[Sequence[_RelTuplesRow]] = await self.db.query_raw(query=sql_query)
             return result[0]["reltuples"]
 
         try:
@@ -5540,7 +5597,7 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
         if user_row is not None:
             print_verbose(f"User Row: {user_row}, type = {type(user_row)}")
             if hasattr(user_row, "model_dump_json") and callable(getattr(user_row, "model_dump_json")):
-                cache_value: Final = user_row.model_dump_json()
+                cache_value: Final[str] = user_row.model_dump_json()
                 cache.set_cache(key=cache_key, value=cache_value, ttl=600)  # store for 10 minutes
 
 
@@ -5766,6 +5823,7 @@ class ProxyUpdateSpend:
             start_time = time.time()
             try:
                 async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                    batcher: _EndUserSpendBatch
                     async with transaction.batch_() as batcher:
                         # Sort by end_user_id for consistent lock ordering across pods to prevent deadlocks.
                         for end_user_id, response_cost in sorted(end_user_list_transactions.items()):
@@ -6400,7 +6458,7 @@ def _check_and_merge_model_level_guardrails(
     # Medium on #29654).
     team_id: Final = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
 
-    model_level_guardrails: list | None = None
+    model_level_guardrails: list[object] | None = None
     if model_id is not None:
         deployment: Final = llm_router.get_deployment(model_id=model_id)
         if deployment is None:
@@ -6449,7 +6507,7 @@ def _check_and_merge_model_level_guardrails(
     return _merge_guardrails_with_existing(data, model_level_guardrails)
 
 
-def _merge_guardrails_with_existing(data: dict, model_level_guardrails: Any) -> dict:
+def _merge_guardrails_with_existing(data: dict, model_level_guardrails: object) -> dict:
     """
     Merge model-level guardrails with any existing guardrails in the request data.
 

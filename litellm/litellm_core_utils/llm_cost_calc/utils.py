@@ -42,14 +42,18 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 # Pre-resolved service-tier cost-key suffixes (e.g. "_priority"). Used per
 # request in the cost-calc path, so the f-strings are built once here instead
-# of being rebuilt for every model_info key on every call.
-_SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(f"_{st.value}" for st in ServiceTier)
+# of being rebuilt for every model_info key on every call. Longest-first so a
+# substring match resolves "_ultrafast" before "_fast".
+_SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(
+    sorted((f"_{st.value}" for st in ServiceTier), key=len, reverse=True)
+)
 
 _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
     {
         ServiceTier.FLEX.value: ServiceTier.FLEX.value,
         ServiceTier.PRIORITY.value: ServiceTier.PRIORITY.value,
         ServiceTier.FAST.value: ServiceTier.PRIORITY.value,
+        ServiceTier.ULTRAFAST.value: ServiceTier.ULTRAFAST.value,
     }
 )
 
@@ -191,7 +195,7 @@ def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
 
     Args:
         base_key: The base cost key (e.g., "input_cost_per_token")
-        service_tier: The service tier ("flex", "priority", "fast", or None for standard)
+        service_tier: The service tier ("flex", "priority", "fast", "ultrafast", or None for standard)
 
     Returns:
         str: The cost key to use (e.g., "input_cost_per_token_flex" or "input_cost_per_token")

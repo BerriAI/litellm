@@ -9,16 +9,29 @@ import useCan from "@/app/(dashboard)/hooks/useCan";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
-import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
+import {
+  Button as Button2,
+  Form,
+  Input as AntdInput,
+  Modal,
+  Radio,
+  Select,
+  Switch,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import { ChevronDown } from "lucide-react";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import React, { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
-import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import ModelAliasManager from "../common_components/ModelAliasManager";
@@ -32,7 +45,7 @@ import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
-import { TagRateLimitEditor, TagRateLimitEntry, tagRowsToLimits } from "../key_team_helpers/TagRateLimitEditor";
+import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 import {
   excludeProxyWideSentinel,
   getModelDisplayName,
@@ -42,7 +55,7 @@ import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   getAgentsList,
   getGuardrailsList,
@@ -58,9 +71,14 @@ import {
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
 import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
+
+const SECTION_HEADER_CLASS = "group/section flex w-full items-center justify-between px-4 py-3 text-left";
+const SECTION_CHEVRON_CLASS =
+  "size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180";
 
 /**
  * Interface for pre-filling the create key form from URL parameters
@@ -360,198 +378,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
-      const newKeyAlias = formValues?.key_alias ?? "";
-      const newKeyTeamId = formValues?.team_id ?? null;
-
-      const existingKeyAliases = data?.filter((k) => k.team_id === newKeyTeamId).map((k) => k.key_alias) ?? [];
-
-      if (existingKeyAliases.includes(newKeyAlias)) {
+      const input: KeyCreateInput = {
+        formValues,
+        existingKeys: data,
+        keyOwner,
+        userID,
+        selectedAgentId,
+        loggingSettings,
+        disabledCallbacks,
+        autoRotationEnabled,
+        rotationInterval,
+        modelAliases,
+        routerSettings,
+        budgetLimits,
+        tagRateLimits,
+        budgetFallbacks,
+      };
+      const built = buildKeyCreatePayload(input);
+      if (built.kind === "duplicate_alias") {
         throw new Error(
-          `Key alias ${newKeyAlias} already exists for team with ID ${newKeyTeamId}, please provide another key alias`,
+          `Key alias ${built.alias} already exists for team with ID ${built.teamId}, please provide another key alias`,
         );
       }
 
-      NotificationsManager.info("Making API Call");
+      toast.info("Making API Call");
       setIsModalVisible(true);
 
-      if (keyOwner === "you") {
-        formValues.user_id = userID;
-      } else if (keyOwner === "agent") {
-        if (!selectedAgentId) {
-          NotificationsManager.fromBackend("Please select an agent");
-          return;
-        }
-        formValues.agent_id = selectedAgentId;
+      if (built.kind === "agent_not_selected") {
+        toast.fromError("Please select an agent");
+        return;
       }
+      const { payload, endpoint } = built;
 
-      // Handle metadata for all key types
-      let metadata: Record<string, any> = {};
-      try {
-        metadata = JSON.parse(formValues.metadata || "{}");
-      } catch (error) {
-        console.error("Error parsing metadata:", error);
-      }
-
-      // If it's a service account, add the service_account_id to the metadata
-      if (keyOwner === "service_account") {
-        metadata["service_account_id"] = formValues.key_alias;
-      }
-
-      // Add logging settings to the metadata
-      if (loggingSettings.length > 0) {
-        metadata = {
-          ...metadata,
-          logging: loggingSettings.filter((config) => config.callback_name),
-        };
-      }
-
-      // Add disabled callbacks to the metadata
-      if (disabledCallbacks.length > 0) {
-        // Map display names to internal callback values
-        const mappedDisabledCallbacks = mapDisplayToInternalNames(disabledCallbacks);
-        metadata = {
-          ...metadata,
-          litellm_disabled_callbacks: mappedDisabledCallbacks,
-        };
-      }
-
-      // Add auto-rotation settings as top-level fields
-      if (autoRotationEnabled) {
-        formValues.auto_rotate = true;
-        formValues.rotation_interval = rotationInterval;
-      }
-
-      // Handle duration field for key expiry - convert empty string to null
-      if (!formValues.duration || formValues.duration.trim() === "") {
-        formValues.duration = null;
-      }
-
-      // Update the formValues with the final metadata
-      formValues.metadata = JSON.stringify(metadata);
-
-      // disable_global_guardrails is premium-gated server-side; only send it when enabled
-      // so non-premium key creation isn't blocked by that gate.
-      if (!formValues.disable_global_guardrails) {
-        delete formValues.disable_global_guardrails;
-      }
-
-      // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission format
-      if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
-        formValues.object_permission = {
-          vector_stores: formValues.allowed_vector_store_ids,
-        };
-        // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_vector_store_ids;
-      }
-
-      // Transform allowed_mcp_servers_and_groups into object_permission format
-      if (
-        formValues.allowed_mcp_servers_and_groups &&
-        (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
-          formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
-          formValues.allowed_mcp_servers_and_groups.toolsets?.length > 0)
-      ) {
-        if (!formValues.object_permission) {
-          formValues.object_permission = {};
-        }
-        const { servers, accessGroups, toolsets } = formValues.allowed_mcp_servers_and_groups;
-        if (servers && servers.length > 0) {
-          formValues.object_permission.mcp_servers = servers;
-        }
-        if (accessGroups && accessGroups.length > 0) {
-          formValues.object_permission.mcp_access_groups = accessGroups;
-        }
-        if (toolsets && toolsets.length > 0) {
-          formValues.object_permission.mcp_toolsets = toolsets;
-        }
-        // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_mcp_servers_and_groups;
-      }
-
-      // Add MCP tool permissions to object_permission
-      const mcpToolPermissions = formValues.mcp_tool_permissions || {};
-      if (Object.keys(mcpToolPermissions).length > 0) {
-        if (!formValues.object_permission) {
-          formValues.object_permission = {};
-        }
-        formValues.object_permission.mcp_tool_permissions = mcpToolPermissions;
-      }
-      delete formValues.mcp_tool_permissions;
-
-      // Transform allowed_mcp_access_groups into object_permission format
-      if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
-        if (!formValues.object_permission) {
-          formValues.object_permission = {};
-        }
-        formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
-        // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_mcp_access_groups;
-      }
-
-      // Transform allowed_agents_and_groups into object_permission format
-      if (
-        formValues.allowed_agents_and_groups &&
-        (formValues.allowed_agents_and_groups.agents?.length > 0 ||
-          formValues.allowed_agents_and_groups.accessGroups?.length > 0)
-      ) {
-        if (!formValues.object_permission) {
-          formValues.object_permission = {};
-        }
-        const { agents, accessGroups } = formValues.allowed_agents_and_groups;
-        if (agents && agents.length > 0) {
-          formValues.object_permission.agents = agents;
-        }
-        if (accessGroups && accessGroups.length > 0) {
-          formValues.object_permission.agent_access_groups = accessGroups;
-        }
-        // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_agents_and_groups;
-      }
-
-      // Add model_aliases if any are defined
-      if (Object.keys(modelAliases).length > 0) {
-        formValues.aliases = JSON.stringify(modelAliases);
-      }
-
-      // Add router_settings if any are defined
-      if (routerSettings?.router_settings) {
-        // Only include router_settings if it has at least one non-null value
-        const hasValues = Object.values(routerSettings.router_settings).some(
-          (value) => value !== null && value !== undefined && value !== "",
-        );
-        if (hasValues) {
-          formValues.router_settings = routerSettings.router_settings;
-        }
-      }
-
-      // Add multi-window budget limits (filter out incomplete entries)
-      const validWindows = budgetLimits.filter(
-        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
-      );
-      if (validWindows.length > 0) {
-        formValues.budget_limits = validWindows;
-      }
-
-      // Add per-tag rate limits (only when at least one row is configured)
-      const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
-      if (Object.keys(tag_rpm_limit).length > 0) {
-        formValues.tag_rpm_limit = tag_rpm_limit;
-      }
-
-      if (Object.keys(budgetFallbacks).length > 0) {
-        formValues.budget_fallbacks = budgetFallbacks;
-      }
-
-      if (formValues.budget_duration === NEVER_RESETS_BUDGET_DURATION) {
-        formValues.budget_duration = null;
-      }
-
-      let response;
-      if (keyOwner === "service_account") {
-        response = await keyCreateServiceAccountCall(accessToken, formValues);
-      } else {
-        response = await keyCreateCall(accessToken, userID, formValues);
-      }
+      const response =
+        endpoint === "service_account"
+          ? await keyCreateServiceAccountCall(accessToken, payload)
+          : await keyCreateCall(accessToken, userID, payload);
 
       // Add the data to the state in the parent component
       // Also directly update the keys list in VirtualKeysTable without an API call
@@ -562,7 +424,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
 
       setApiKey(response["key"]);
-      NotificationsManager.success("Virtual Key Created");
+      toast.success("Virtual Key Created");
       form.resetFields();
       setBudgetLimits([]);
       setTagRateLimits([]);
@@ -571,7 +433,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       const simplifiedError = simplifyKeyGenerateError(error);
-      NotificationsManager.fromBackend(simplifiedError);
+      toast.fromError(simplifiedError);
     }
   };
 
@@ -665,7 +527,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setUserOptions(options);
     } catch (error) {
       console.error("Error fetching users:", error);
-      NotificationsManager.fromBackend("Failed to search for users");
+      toast.fromError("Failed to search for users");
     } finally {
       setUserSearchLoading(false);
     }
@@ -691,7 +553,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           {/* Section 1: Key Ownership */}
           <div className="mb-8">
-            <Title className="mb-4">Key Ownership</Title>
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Key Ownership</h3>
             <Form.Item
               label={
                 <span>
@@ -878,17 +740,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
           {/* Show message when team selection is required */}
           {isFormDisabled && (
             <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
-              <Text className="text-blue-800 text-sm">
+              <p className="text-blue-800 text-sm">
                 Please select a team to continue configuring your Virtual Key. If you do not see any teams, please
                 contact your Proxy Admin to either provide you with access to models or to add you to a team.
-              </Text>
+              </p>
             </div>
           )}
 
           {/* Section 2: Key Details */}
           {!isFormDisabled && (
             <div className="mb-8">
-              <Title className="mb-4">Key Details</Title>
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Key Details</h3>
               <Form.Item
                 label={
                   <span>
@@ -913,7 +775,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                 ]}
                 help="required"
               >
-                <TextInput placeholder="" />
+                <Input />
               </Form.Item>
 
               <Form.Item
@@ -1023,11 +885,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
           {/* Section 3: Optional Settings */}
           {!isFormDisabled && (
             <div className="mb-8">
-              <Accordion className="mt-4 mb-4">
-                <AccordionHeader>
-                  <Title className="m-0">Optional Settings</Title>
-                </AccordionHeader>
-                <AccordionBody>
+              <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                <h3 className="m-0 text-lg font-medium text-gray-900">
+                  <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
+                    Optional Settings
+                    <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                  </CollapsibleTrigger>
+                </h3>
+                <CollapsibleContent className="px-4 pb-3">
                   <Form.Item
                     className="mt-4"
                     label={
@@ -1128,14 +993,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
-                  <RateLimitTypeFormItem
-                    type="tpm"
-                    name="tpm_limit_type"
-                    className="mt-4"
-                    initialValue={null}
-                    form={form}
-                    showDetailedDescriptions={true}
-                  />
+                  <Form.Item name="tpm_limit_type" initialValue={null} noStyle>
+                    <RateLimitTypeFormItem type="tpm" name="tpm_limit_type" className="mt-4" showDetailedDescriptions />
+                  </Form.Item>
                   <Form.Item
                     className="mt-4"
                     label={
@@ -1160,14 +1020,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   >
                     <NumericalInput step={1} width={400} />
                   </Form.Item>
-                  <RateLimitTypeFormItem
-                    type="rpm"
-                    name="rpm_limit_type"
-                    className="mt-4"
-                    initialValue={null}
-                    form={form}
-                    showDetailedDescriptions={true}
-                  />
+                  <Form.Item name="rpm_limit_type" initialValue={null} noStyle>
+                    <RateLimitTypeFormItem type="rpm" name="rpm_limit_type" className="mt-4" showDetailedDescriptions />
+                  </Form.Item>
                   <Form.Item
                     className="mt-4"
                     label={
@@ -1428,7 +1283,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     name="metadata"
                     className="mt-4"
                   >
-                    <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+                    <AntdInput.TextArea rows={4} placeholder="Enter metadata as JSON" />
                   </Form.Item>
                   <Form.Item
                     label={
@@ -1451,11 +1306,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       options={tagOptions}
                     />
                   </Form.Item>
-                  <Accordion className="mt-4 mb-4">
-                    <AccordionHeader>
+                  <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>MCP Settings</b>
-                    </AccordionHeader>
-                    <AccordionBody>
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="px-4 pb-3">
                       <Form.Item
                         label={
                           <span>
@@ -1480,7 +1336,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
                       {/* Hidden field to register mcp_tool_permissions with the form */}
                       <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
-                        <Input type="hidden" />
+                        <AntdInput type="hidden" />
                       </Form.Item>
 
                       <Form.Item
@@ -1503,14 +1359,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           </div>
                         )}
                       </Form.Item>
-                    </AccordionBody>
-                  </Accordion>
+                    </CollapsibleContent>
+                  </Collapsible>
 
-                  <Accordion className="mt-4 mb-4">
-                    <AccordionHeader>
+                  <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>Agent Settings</b>
-                    </AccordionHeader>
-                    <AccordionBody>
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="px-4 pb-3">
                       <Form.Item
                         label={
                           <span>
@@ -1530,15 +1387,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           placeholder="Select agents or access groups (optional)"
                         />
                       </Form.Item>
-                    </AccordionBody>
-                  </Accordion>
+                    </CollapsibleContent>
+                  </Collapsible>
 
                   {premiumUser ? (
-                    <Accordion className="mt-4 mb-4">
-                      <AccordionHeader>
+                    <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                      <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                         <b>Logging Settings</b>
-                      </AccordionHeader>
-                      <AccordionBody>
+                        <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="px-4 pb-3">
                         <div className="mt-4">
                           <PremiumLoggingSettings
                             value={loggingSettings}
@@ -1548,8 +1406,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             onDisabledCallbacksChange={setDisabledCallbacks}
                           />
                         </div>
-                      </AccordionBody>
-                    </Accordion>
+                      </CollapsibleContent>
+                    </Collapsible>
                   ) : (
                     <Tooltip
                       title={
@@ -1564,11 +1422,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     >
                       <div style={{ position: "relative" }}>
                         <div style={{ opacity: 0.5 }}>
-                          <Accordion className="mt-4 mb-4">
-                            <AccordionHeader>
+                          <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                            <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                               <b>Logging Settings</b>
-                            </AccordionHeader>
-                            <AccordionBody>
+                              <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                            </CollapsibleTrigger>
+                            <CollapsibleContent className="px-4 pb-3">
                               <div className="mt-4">
                                 <PremiumLoggingSettings
                                   value={loggingSettings}
@@ -1578,19 +1437,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                   onDisabledCallbacksChange={setDisabledCallbacks}
                                 />
                               </div>
-                            </AccordionBody>
-                          </Accordion>
+                            </CollapsibleContent>
+                          </Collapsible>
                         </div>
                         <div style={{ position: "absolute", inset: 0, cursor: "not-allowed" }} />
                       </div>
                     </Tooltip>
                   )}
 
-                  <Accordion key={`router-settings-accordion-${routerSettingsKey}`} className="mt-4 mb-4">
-                    <AccordionHeader>
+                  <Collapsible
+                    key={`router-settings-accordion-${routerSettingsKey}`}
+                    className="mt-4 mb-4 overflow-hidden rounded-lg border"
+                  >
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>Router Settings</b>
-                    </AccordionHeader>
-                    <AccordionBody>
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="px-4 pb-3">
                       <div className="mt-4 w-full">
                         <RouterSettingsAccordion
                           key={routerSettingsKey}
@@ -1604,19 +1467,20 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           }
                         />
                       </div>
-                    </AccordionBody>
-                  </Accordion>
+                    </CollapsibleContent>
+                  </Collapsible>
 
-                  <Accordion className="mt-4 mb-4">
-                    <AccordionHeader>
+                  <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>Model Aliases</b>
-                    </AccordionHeader>
-                    <AccordionBody>
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="px-4 pb-3">
                       <div className="mt-4">
-                        <Text className="text-sm text-gray-600 mb-4">
+                        <p className="text-sm text-gray-600 mb-4">
                           Create custom aliases for models that can be used in API calls. This allows you to create
                           shortcuts for specific models.
-                        </Text>
+                        </p>
                         <ModelAliasManager
                           accessToken={accessToken}
                           initialModelAliases={modelAliases}
@@ -1624,28 +1488,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           showExampleConfig={false}
                         />
                       </div>
-                    </AccordionBody>
-                  </Accordion>
+                    </CollapsibleContent>
+                  </Collapsible>
 
-                  <Accordion className="mt-4 mb-4">
-                    <AccordionHeader>
+                  <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <b>Key Lifecycle</b>
-                    </AccordionHeader>
-                    <AccordionBody>
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="px-4 pb-3">
                       <div className="mt-4">
-                        <KeyLifecycleSettings
-                          form={form}
-                          autoRotationEnabled={autoRotationEnabled}
-                          onAutoRotationChange={setAutoRotationEnabled}
-                          rotationInterval={rotationInterval}
-                          onRotationIntervalChange={setRotationInterval}
-                          isCreateMode={true}
-                        />
+                        <Form.Item name="duration" initialValue="" noStyle>
+                          <KeyLifecycleSettings
+                            autoRotationEnabled={autoRotationEnabled}
+                            onAutoRotationChange={setAutoRotationEnabled}
+                            rotationInterval={rotationInterval}
+                            onRotationIntervalChange={setRotationInterval}
+                            isCreateMode={true}
+                          />
+                        </Form.Item>
                       </div>
-                    </AccordionBody>
-                  </Accordion>
-                  <Accordion className="mt-4 mb-4">
-                    <AccordionHeader>
+                    </CollapsibleContent>
+                  </Collapsible>
+                  <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                    <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
                       <div className="flex items-center gap-2">
                         <b>Advanced Settings</b>
                         <Tooltip
@@ -1670,8 +1536,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
                         </Tooltip>
                       </div>
-                    </AccordionHeader>
-                    <AccordionBody>
+                      <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="px-4 pb-3">
                       <SchemaFormFields
                         schemaComponent="GenerateKeyRequest"
                         form={form}
@@ -1691,10 +1558,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           ...(disableCustomApiKeys ? ["key"] : []),
                         ]}
                       />
-                    </AccordionBody>
-                  </Accordion>
-                </AccordionBody>
-              </Accordion>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </CollapsibleContent>
+              </Collapsible>
             </div>
           )}
 
@@ -1718,7 +1585,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
           <CreateUserButton
             userID={userID}
             accessToken={accessToken}
-            teams={teams}
             possibleUIRoles={possibleUIRoles}
             onUserCreated={handleUserCreated}
             isEmbedded={true}
@@ -1728,16 +1594,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       {apiKey && (
         <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
-          <Grid numItems={1} className="gap-2 w-full">
-            <Title>Save your Key</Title>
-            <Col numColSpan={1}>
-              {apiKey != null ? (
-                <CreatedKeyDisplay apiKey={apiKey} />
-              ) : (
-                <Text>Key being created, this might take 30s</Text>
-              )}
-            </Col>
-          </Grid>
+          <div className="grid grid-cols-1 gap-2 w-full">
+            <h3 className="text-lg font-medium text-gray-900">Save your Key</h3>
+            {apiKey != null ? (
+              <CreatedKeyDisplay apiKey={apiKey} />
+            ) : (
+              <p className="text-sm">Key being created, this might take 30s</p>
+            )}
+          </div>
         </Modal>
       )}
     </div>

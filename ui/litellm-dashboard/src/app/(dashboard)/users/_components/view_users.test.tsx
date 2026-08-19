@@ -51,14 +51,6 @@ vi.mock("./default-user-settings/DefaultUserSettingsForm", () => ({
   },
 }));
 
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const makeUser = (userId: string, email: string) => ({
   user_id: userId,
   user_email: email,
@@ -148,12 +140,25 @@ describe("ViewUserDashboard", () => {
     expect(screen.getByRole("textbox", { name: "Default setting" })).toHaveValue("unsaved change");
   });
 
+  it("renders invite and bulk invite as toolbar actions alongside the other admin controls", async () => {
+    renderDashboard();
+
+    const inviteButton = await screen.findByRole("button", { name: /\+ invite user/i });
+    const bulkInviteButton = screen.getByRole("button", { name: /\+ bulk invite users/i });
+    const toolbar = screen.getByTestId("toggle-user-selection").parentElement;
+
+    expect(inviteButton.parentElement).toBe(toolbar);
+    expect(bulkInviteButton.parentElement).toBe(toolbar);
+  });
+
   it("shows the users table without admin controls for non-proxy admins", async () => {
     renderDashboard({ userRole: "Internal User" });
 
     expect(await screen.findByText("test@example.com")).toBeInTheDocument();
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
     expect(screen.queryByTestId("toggle-user-selection")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ invite user/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ bulk invite users/i })).not.toBeInTheDocument();
   });
 
   it("keeps actions unavailable while the user list is loading", () => {
@@ -260,7 +265,7 @@ describe("ViewUserDashboard", () => {
 
       await user.click(screen.getByTestId("datatable-select-row-user-2"));
       expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (1 selected)");
-      expect(screen.getByTestId("bulk-edit-users")).not.toBeDisabled();
+      expect(screen.getByTestId("bulk-edit-users")).toBeEnabled();
 
       await user.click(screen.getByTestId("datatable-select-all"));
       expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (2 selected)");
