@@ -863,6 +863,38 @@ describe("CreateKey", () => {
       expect(screen.queryByTitle("alice.jones@example.com (u-jones)")).not.toBeInTheDocument();
       expect(screen.getByText("No users found")).toBeInTheDocument();
     });
+
+    it("keeps searching while a newer search is still in flight", async () => {
+      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          new Promise((resolve) => {
+            answers.set(params.get("user_email") ?? "", resolve);
+          }) as never,
+      );
+
+      const user = userEvent.setup();
+      renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
+      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+
+      await user.type(search, "ali");
+      await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+
+      await user.type(search, "ce.smith@example.com");
+      await waitFor(() => expect(answers.has("alice.smith@example.com")).toBe(true), { timeout: 3000 });
+
+      await act(async () => {
+        answers.get("ali")?.([]);
+      });
+
+      expect(screen.getByText("Searching...")).toBeInTheDocument();
+      expect(screen.queryByText("No users found")).not.toBeInTheDocument();
+
+      await act(async () => {
+        answers.get("alice.smith@example.com")?.([{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
+      });
+      await screen.findByTitle("alice.smith@example.com (u-smith)");
+    });
   });
 
   describe("created key display", () => {

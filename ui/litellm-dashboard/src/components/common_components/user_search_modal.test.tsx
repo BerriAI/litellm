@@ -271,4 +271,25 @@ describe("UserSearchModal out-of-order search results", () => {
     expect(screen.queryByRole("option")).not.toBeInTheDocument();
     expect(screen.getByText("No results")).toBeInTheDocument();
   });
+
+  it("keeps loading while a newer search is still in flight", async () => {
+    const user = userEvent.setup();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={vi.fn()} accessToken="sk-test" />);
+
+    const input = getEmailSearchInput();
+    await user.click(input);
+    await user.type(input, "ali");
+    await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+
+    await user.type(input, "ce.smith@example.com");
+    await waitFor(() => expect(answers.has("alice.smith@example.com")).toBe(true), { timeout: 3000 });
+
+    await answerFor("ali", []);
+
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+    expect(screen.queryByText("No results")).not.toBeInTheDocument();
+
+    await answerFor("alice.smith@example.com", [{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
+    await screen.findByRole("option", { name: "alice.smith@example.com" });
+  });
 });
