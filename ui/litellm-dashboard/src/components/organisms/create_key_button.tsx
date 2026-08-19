@@ -30,9 +30,8 @@ import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import React, { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
-import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import ModelAliasManager from "../common_components/ModelAliasManager";
@@ -46,7 +45,7 @@ import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
-import { TagRateLimitEditor, TagRateLimitEntry, tagRowsToLimits } from "../key_team_helpers/TagRateLimitEditor";
+import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 import {
   excludeProxyWideSentinel,
   getModelDisplayName,
@@ -72,6 +71,7 @@ import {
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
 import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
@@ -378,198 +378,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
-      const newKeyAlias = formValues?.key_alias ?? "";
-      const newKeyTeamId = formValues?.team_id ?? null;
-
-      const existingKeyAliases = data?.filter((k) => k.team_id === newKeyTeamId).map((k) => k.key_alias) ?? [];
-
-      if (existingKeyAliases.includes(newKeyAlias)) {
+      const input: KeyCreateInput = {
+        formValues,
+        existingKeys: data,
+        keyOwner,
+        userID,
+        selectedAgentId,
+        loggingSettings,
+        disabledCallbacks,
+        autoRotationEnabled,
+        rotationInterval,
+        modelAliases,
+        routerSettings,
+        budgetLimits,
+        tagRateLimits,
+        budgetFallbacks,
+      };
+      const built = buildKeyCreatePayload(input);
+      if (built.kind === "duplicate_alias") {
         throw new Error(
-          `Key alias ${newKeyAlias} already exists for team with ID ${newKeyTeamId}, please provide another key alias`,
+          `Key alias ${built.alias} already exists for team with ID ${built.teamId}, please provide another key alias`,
         );
       }
 
       toast.info("Making API Call");
       setIsModalVisible(true);
 
-      if (keyOwner === "you") {
-        formValues.user_id = userID;
-      } else if (keyOwner === "agent") {
-        if (!selectedAgentId) {
-          toast.fromError("Please select an agent");
-          return;
-        }
-        formValues.agent_id = selectedAgentId;
+      if (built.kind === "agent_not_selected") {
+        toast.fromError("Please select an agent");
+        return;
       }
+      const { payload, endpoint } = built;
 
-      // Handle metadata for all key types
-      let metadata: Record<string, any> = {};
-      try {
-        metadata = JSON.parse(formValues.metadata || "{}");
-      } catch (error) {
-        console.error("Error parsing metadata:", error);
-      }
-
-      // If it's a service account, add the service_account_id to the metadata
-      if (keyOwner === "service_account") {
-        metadata["service_account_id"] = formValues.key_alias;
-      }
-
-      // Add logging settings to the metadata
-      if (loggingSettings.length > 0) {
-        metadata = {
-          ...metadata,
-          logging: loggingSettings.filter((config) => config.callback_name),
-        };
-      }
-
-      // Add disabled callbacks to the metadata
-      if (disabledCallbacks.length > 0) {
-        // Map display names to internal callback values
-        const mappedDisabledCallbacks = mapDisplayToInternalNames(disabledCallbacks);
-        metadata = {
-          ...metadata,
-          litellm_disabled_callbacks: mappedDisabledCallbacks,
-        };
-      }
-
-      // Add auto-rotation settings as top-level fields
-      if (autoRotationEnabled) {
-        formValues.auto_rotate = true;
-        formValues.rotation_interval = rotationInterval;
-      }
-
-      // Handle duration field for key expiry - convert empty string to null
-      if (!formValues.duration || formValues.duration.trim() === "") {
-        formValues.duration = null;
-      }
-
-      // Update the formValues with the final metadata
-      formValues.metadata = JSON.stringify(metadata);
-
-      // disable_global_guardrails is premium-gated server-side; only send it when enabled
-      // so non-premium key creation isn't blocked by that gate.
-      if (!formValues.disable_global_guardrails) {
-        delete formValues.disable_global_guardrails;
-      }
-
-      // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission format
-      if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
-        formValues.object_permission = {
-          vector_stores: formValues.allowed_vector_store_ids,
-        };
-        // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_vector_store_ids;
-      }
-
-      // Transform allowed_mcp_servers_and_groups into object_permission format
-      if (
-        formValues.allowed_mcp_servers_and_groups &&
-        (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
-          formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
-          formValues.allowed_mcp_servers_and_groups.toolsets?.length > 0)
-      ) {
-        if (!formValues.object_permission) {
-          formValues.object_permission = {};
-        }
-        const { servers, accessGroups, toolsets } = formValues.allowed_mcp_servers_and_groups;
-        if (servers && servers.length > 0) {
-          formValues.object_permission.mcp_servers = servers;
-        }
-        if (accessGroups && accessGroups.length > 0) {
-          formValues.object_permission.mcp_access_groups = accessGroups;
-        }
-        if (toolsets && toolsets.length > 0) {
-          formValues.object_permission.mcp_toolsets = toolsets;
-        }
-        // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_mcp_servers_and_groups;
-      }
-
-      // Add MCP tool permissions to object_permission
-      const mcpToolPermissions = formValues.mcp_tool_permissions || {};
-      if (Object.keys(mcpToolPermissions).length > 0) {
-        if (!formValues.object_permission) {
-          formValues.object_permission = {};
-        }
-        formValues.object_permission.mcp_tool_permissions = mcpToolPermissions;
-      }
-      delete formValues.mcp_tool_permissions;
-
-      // Transform allowed_mcp_access_groups into object_permission format
-      if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
-        if (!formValues.object_permission) {
-          formValues.object_permission = {};
-        }
-        formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
-        // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_mcp_access_groups;
-      }
-
-      // Transform allowed_agents_and_groups into object_permission format
-      if (
-        formValues.allowed_agents_and_groups &&
-        (formValues.allowed_agents_and_groups.agents?.length > 0 ||
-          formValues.allowed_agents_and_groups.accessGroups?.length > 0)
-      ) {
-        if (!formValues.object_permission) {
-          formValues.object_permission = {};
-        }
-        const { agents, accessGroups } = formValues.allowed_agents_and_groups;
-        if (agents && agents.length > 0) {
-          formValues.object_permission.agents = agents;
-        }
-        if (accessGroups && accessGroups.length > 0) {
-          formValues.object_permission.agent_access_groups = accessGroups;
-        }
-        // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_agents_and_groups;
-      }
-
-      // Add model_aliases if any are defined
-      if (Object.keys(modelAliases).length > 0) {
-        formValues.aliases = JSON.stringify(modelAliases);
-      }
-
-      // Add router_settings if any are defined
-      if (routerSettings?.router_settings) {
-        // Only include router_settings if it has at least one non-null value
-        const hasValues = Object.values(routerSettings.router_settings).some(
-          (value) => value !== null && value !== undefined && value !== "",
-        );
-        if (hasValues) {
-          formValues.router_settings = routerSettings.router_settings;
-        }
-      }
-
-      // Add multi-window budget limits (filter out incomplete entries)
-      const validWindows = budgetLimits.filter(
-        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
-      );
-      if (validWindows.length > 0) {
-        formValues.budget_limits = validWindows;
-      }
-
-      // Add per-tag rate limits (only when at least one row is configured)
-      const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
-      if (Object.keys(tag_rpm_limit).length > 0) {
-        formValues.tag_rpm_limit = tag_rpm_limit;
-      }
-
-      if (Object.keys(budgetFallbacks).length > 0) {
-        formValues.budget_fallbacks = budgetFallbacks;
-      }
-
-      if (formValues.budget_duration === NEVER_RESETS_BUDGET_DURATION) {
-        formValues.budget_duration = null;
-      }
-
-      let response;
-      if (keyOwner === "service_account") {
-        response = await keyCreateServiceAccountCall(accessToken, formValues);
-      } else {
-        response = await keyCreateCall(accessToken, userID, formValues);
-      }
+      const response =
+        endpoint === "service_account"
+          ? await keyCreateServiceAccountCall(accessToken, payload)
+          : await keyCreateCall(accessToken, userID, payload);
 
       // Add the data to the state in the parent component
       // Also directly update the keys list in VirtualKeysTable without an API call
