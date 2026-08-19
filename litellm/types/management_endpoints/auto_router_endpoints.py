@@ -293,7 +293,8 @@ class ShadowEvalJobKeyResponse(BaseModel):
         default=None,
         description=(
             "This key's sampled attempts so far, judged and errored alike, the same count the sampler "
-            "budgets against max_turns; populated on list and detail responses"
+            "budgets against max_turns; populated on list and detail responses. Frozen at stopped_at "
+            "once the key is stamped, so in-flight attempts landing after a stop never reclassify it"
         ),
     )
 

@@ -895,7 +895,8 @@ export interface paths {
          * Stop Shadow Eval Job
          * @description Stop an active shadow eval job, every key it scopes at once. Attempts are kept;
          *     sampling halts within ~10s. Keys that already stopped on their own budget keep the
-         *     stopped_at they earned.
+         *     stopped_at they earned. One statement stamps stopped_by and every missing stopped_at
+         *     together, so a half-applied stop can never read stopped while legs keep sampling.
          */
         post: operations["stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post"];
         delete?: never;
@@ -33204,7 +33205,7 @@ export interface components {
             api_key_id: string;
             /**
              * Attempt Count
-             * @description This key's sampled attempts so far, judged and errored alike, the same count the sampler budgets against max_turns; populated on list and detail responses
+             * @description This key's sampled attempts so far, judged and errored alike, the same count the sampler budgets against max_turns; populated on list and detail responses. Frozen at stopped_at once the key is stamped, so in-flight attempts landing after a stop never reclassify it
              */
             attempt_count?: number | null;
             /**

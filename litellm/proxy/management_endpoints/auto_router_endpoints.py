@@ -553,10 +553,17 @@ WHERE job_id = ANY($1::text[])
 """
 
 _ATTEMPT_COUNTS_SQL: Final = """
-SELECT job_id, COUNT(*)::int AS attempt_count
-FROM "LiteLLM_ShadowEvalAttempt"
-WHERE job_id = ANY($1::text[])
-GROUP BY job_id
+SELECT a.job_id, COUNT(*)::int AS attempt_count
+FROM "LiteLLM_ShadowEvalAttempt" a
+JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
+WHERE a.job_id = ANY($1::text[]) AND (j.stopped_at IS NULL OR a.created_at <= j.stopped_at)
+GROUP BY a.job_id
+"""
+
+_STOP_JOB_SQL: Final = """
+UPDATE "LiteLLM_ShadowEvalJob"
+SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamptz)
+WHERE group_id = $1
 """
 
 
@@ -640,10 +647,11 @@ _LEG_ROWS: Final = TypeAdapter(list[_LegRow])
 
 
 async def _leg_attempt_counts(prisma_client: "PrismaClient", legs: Sequence[_LegRow]) -> Mapping[str, int]:
-    """Each leg's total attempt count by leg id, judged and errored alike, in one grouped
-    read. It is the same count the sampler budgets against max_turns, so the derived
-    status flips to completed exactly when sampling actually ends; an operator's stop
-    outranks it via stopped_by, so it never reclassifies a stopped job."""
+    """Each leg's attempt count by leg id, judged and errored alike, in one grouped read.
+    It is the same count the sampler budgets against max_turns, so the derived status
+    flips to completed exactly when sampling actually ends. A stamped leg's count freezes
+    at its stopped_at: in-flight attempts that land after the stamp are excluded, so they
+    can never reclassify a leg that was stopped under budget as budget-spent."""
     if not legs:
         return MappingProxyType({})
     rows: Final = _ATTEMPT_COUNT_ROWS.validate_python(
@@ -977,7 +985,8 @@ async def stop_shadow_eval_job(
 ) -> ShadowEvalJobResponse:
     """Stop an active shadow eval job, every key it scopes at once. Attempts are kept;
     sampling halts within ~10s. Keys that already stopped on their own budget keep the
-    stopped_at they earned."""
+    stopped_at they earned. One statement stamps stopped_by and every missing stopped_at
+    together, so a half-applied stop can never read stopped while legs keep sampling."""
     from litellm.proxy.proxy_server import prisma_client
 
     _require_admin_writer(user_api_key_dict, "stop a shadow eval")
@@ -997,14 +1006,7 @@ async def stop_shadow_eval_job(
         raise HTTPException(status_code=400, detail=f"Job {job_id} is already {current.status}")
     stamp: Final = datetime.now(timezone.utc)
     operator: Final = user_api_key_dict.user_id or "operator"
-    await prisma_client.db.litellm_shadowevaljob.update_many(
-        where={"group_id": job_id},  # mutable-ok: Prisma filter
-        data={"stopped_by": operator},  # mutable-ok: Prisma payload
-    )
-    await prisma_client.db.litellm_shadowevaljob.update_many(
-        where={"group_id": job_id, "stopped_at": None},  # mutable-ok: Prisma filter
-        data={"stopped_at": stamp},  # mutable-ok: Prisma payload
-    )
+    await prisma_client.db.execute_raw(_STOP_JOB_SQL, job_id, operator, stamp.isoformat())
     stopped: Final = tuple(
         (
             leg

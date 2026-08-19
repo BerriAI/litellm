@@ -931,6 +931,7 @@ async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monke
     assert head_limit == 50
     counts_sql, _ = prisma.db.query_raw.await_args_list[1].args
     assert "AS attempt_count" in counts_sql
+    assert "j.stopped_at IS NULL OR a.created_at <= j.stopped_at" in counts_sql
     assert prisma.db.query_raw.await_count == 2
 
 
@@ -1101,11 +1102,12 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
 
     assert stopped.status == "stopped"
     assert stopped.stopped_by == "admin"
-    marker, stamp_update = (call.kwargs for call in prisma.db.litellm_shadowevaljob.update_many.await_args_list)
-    assert marker["where"] == {"group_id": "job-1"}
-    assert marker["data"] == {"stopped_by": "admin"}
-    assert stamp_update["where"] == {"group_id": "job-1", "stopped_at": None}
-    assert set(stamp_update["data"]) == {"stopped_at"}
+    stop_sql, stop_group, stop_operator, stop_stamp = prisma.db.execute_raw.call_args.args
+    assert "SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamptz)" in stop_sql
+    assert (stop_group, stop_operator) == ("job-1", "admin")
+    assert datetime.fromisoformat(stop_stamp).tzinfo is not None
+    assert prisma.db.execute_raw.await_count == 1
+    prisma.db.litellm_shadowevaljob.update_many.assert_not_called()
     by_key = {key.api_key_id: key.stopped_at for key in stopped.keys}
     assert by_key["key-hash-2"] == earned
     assert by_key["key-hash"] is not None and by_key["key-hash"] != earned
@@ -1115,7 +1117,7 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
     with pytest.raises(HTTPException) as exc:
         await stop_shadow_eval_job("job-1", ADMIN)
     assert exc.value.status_code == 400
-    prisma_done.db.litellm_shadowevaljob.update_many.assert_not_called()
+    prisma_done.db.execute_raw.assert_not_called()
 
     with pytest.raises(HTTPException) as forbidden:
         await stop_shadow_eval_job("job-1", VIEWER)
