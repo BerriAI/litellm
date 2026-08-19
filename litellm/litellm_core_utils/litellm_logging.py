@@ -982,22 +982,36 @@ class Logging(LiteLLMLoggingBaseClass):
             if auto_detected_logger is not None:
                 return auto_detected_logger
 
-        # Then check for any registered CustomPromptManagement loggers (fallback)
-        prompt_management_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
-            callback_type=CustomPromptManagement
-        )
-
-        if prompt_management_loggers:
-            logger: Final = prompt_management_loggers[0]
-            self.model_call_details["prompt_integration"] = logger.__class__.__name__
-            return logger
-
+        # Check Anthropic cache control hook before fallback prompt management loggers
         if (
             anthropic_cache_control_logger
             := AnthropicCacheControlHook.get_custom_logger_for_anthropic_cache_control_hook(non_default_params)
         ):
             self.model_call_details["prompt_integration"] = anthropic_cache_control_logger.__class__.__name__
             return anthropic_cache_control_logger
+
+        # Then check for any registered CustomPromptManagement loggers (fallback)
+        prompt_management_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
+            callback_type=CustomPromptManagement
+        )
+
+        if prompt_management_loggers:
+            if prompt_id is not None:
+                logger: Final = prompt_management_loggers[0]
+                self.model_call_details["prompt_integration"] = logger.__class__.__name__
+                return logger
+            for logger in prompt_management_loggers:
+                if hasattr(logger, "should_run_prompt_management"):
+                    try:
+                        if logger.should_run_prompt_management(
+                            prompt_id=prompt_id,
+                            prompt_spec=prompt_spec,
+                            dynamic_callback_params=dynamic_callback_params or self.standard_callback_dynamic_params,
+                        ):
+                            self.model_call_details["prompt_integration"] = logger.__class__.__name__
+                            return logger
+                    except Exception:
+                        continue
 
         #########################################################
         # Vector Store / Knowledge Base hooks

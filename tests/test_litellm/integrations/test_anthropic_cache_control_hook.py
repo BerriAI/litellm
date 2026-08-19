@@ -1996,3 +1996,56 @@ class TestAnthropicPromptCachingEnvVars:
         """An unparseable TTL must fall back to Anthropic's 5m default, never reach the provider verbatim."""
         _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
         assert ttl is None
+
+
+def test_cache_control_injection_points_precedence_over_generic_prompt_management():
+    """
+    Regression test for issue #37469:
+    Ensure cache_control_injection_points prioritizes AnthropicCacheControlHook
+    and does not fail with ValueError when a CustomPromptManagement logger is registered.
+    """
+    from litellm.integrations.custom_prompt_management import CustomPromptManagement
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import CallTypes
+    import time
+    import uuid
+
+    class DummyPromptManagement(CustomPromptManagement):
+        def should_run_prompt_management(self, prompt_id, prompt_spec, dynamic_callback_params):
+            return prompt_id is not None
+
+        def get_chat_completion_prompt(self, *args, **kwargs):
+            if not kwargs.get("prompt_id"):
+                raise ValueError("prompt_id is required for Prompt Management Base class")
+            return "model", [], {}
+
+    dummy_pm = DummyPromptManagement()
+    litellm.callbacks = [dummy_pm]
+    litellm.logging_callback_manager.add_litellm_callback(dummy_pm)
+
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-opus-4.8",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type=CallTypes.completion,
+        start_time=time.time(),
+        litellm_call_id=str(uuid.uuid4()),
+        function_id=str(uuid.uuid4()),
+    )
+
+    non_default_params = {
+        "cache_control_injection_points": [
+            {"role": "system", "location": "message"}
+        ]
+    }
+
+    logger = logging_obj.get_custom_logger_for_prompt_management(
+        model="claude-opus-4.8",
+        non_default_params=non_default_params,
+        prompt_id=None,
+        dynamic_callback_params=StandardCallbackDynamicParams(),
+    )
+
+    assert logger is not None
+    assert logger.__class__.__name__ == "AnthropicCacheControlHook"
+
