@@ -1,6 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
+import { act, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import type { Team } from "../key_team_helpers/key_list";
 import { keyCreateCall, keyCreateServiceAccountCall, modelAvailableCall, userFilterUICall } from "../networking";
 import CreateKey from "./create_key_button";
@@ -802,6 +802,38 @@ describe("CreateKey", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("keeps the current search's users when an abandoned search answers last", async () => {
+      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          new Promise((resolve) => {
+            answers.set(params.get("user_email") ?? "", resolve);
+          }) as never,
+      );
+
+      const user = userEvent.setup();
+      renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
+      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+
+      await user.type(search, "ali");
+      await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+
+      await user.type(search, "ce.smith@example.com");
+      await waitFor(() => expect(answers.has("alice.smith@example.com")).toBe(true), { timeout: 3000 });
+
+      await act(async () => {
+        answers.get("alice.smith@example.com")?.([{ user_id: "u-smith", user_email: "alice.smith@example.com" }]);
+      });
+      await screen.findByTitle("alice.smith@example.com (u-smith)");
+
+      await act(async () => {
+        answers.get("ali")?.([{ user_id: "u-jones", user_email: "alice.jones@example.com" }]);
+      });
+
+      expect(screen.queryByTitle("alice.jones@example.com (u-jones)")).not.toBeInTheDocument();
+      expect(screen.getByTitle("alice.smith@example.com (u-smith)")).toBeInTheDocument();
     });
   });
 
