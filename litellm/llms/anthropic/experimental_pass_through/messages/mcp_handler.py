@@ -64,14 +64,12 @@ def _has_client_side_tool(
     tool_use_blocks: Sequence[Mapping[str, object]],
     other_tools: Sequence[Mapping[str, object]] | None,
     tool_server_map: Mapping[str, str],
-) -> bool:  # kwargs-ok: helper inspecting tool blocks for client passthrough
-    client_tool_names = {
-        t.get("name")  # kwargs-ok: extract client tool name from dictionary
-        for t in (other_tools or ())
-        if isinstance(t, dict) and t.get("name")  # kwargs-ok: extract client tool name
-    }
+) -> bool:
+    client_tool_names: Final = tuple(
+        t.get("name") for t in (other_tools or ()) if isinstance(t, dict) and isinstance(t.get("name"), str)
+    )  # kwargs-ok: extract client tool names tuple
     for block in tool_use_blocks:
-        name = block.get("name")  # kwargs-ok: extract block tool name from dictionary
+        name = block.get("name")  # kwargs-ok: extract block tool name
         if name in client_tool_names or (
             bool(tool_server_map) and name not in tool_server_map
         ):  # kwargs-ok: map membership test
@@ -104,12 +102,11 @@ async def anthropic_messages_with_mcp(
     mcp_references, other_tools = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
 
     if not mcp_references:
-        formatted_tools: Final = list(tools) if tools is not None else None
         return await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
             max_tokens=max_tokens,
             messages=list(messages),
             model=model,
-            tools=formatted_tools,
+            tools=list(tools) if tools else None,  # kwargs-ok: pass tools list
             _skip_mcp_handler=True,
             **kwargs,
         )
