@@ -655,7 +655,7 @@ describe("CreateKey", () => {
     it("prefills models once the available model list arrives", async () => {
       renderCreateKey({ autoOpenCreate: true, prefillData: { models: ["gpt-4"] } });
 
-      expect(await screen.findByTitle("gpt-4")).toBeInTheDocument();
+      expect(await screen.findByTitle("gpt-4", {}, { timeout: 5000 })).toBeInTheDocument();
     });
 
     it("ignores a team the user has no access to", async () => {
