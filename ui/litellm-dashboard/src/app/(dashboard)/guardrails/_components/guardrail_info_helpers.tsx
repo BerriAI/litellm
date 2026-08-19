@@ -110,8 +110,6 @@ export const toModeArray = (raw: unknown): string[] => {
   return [];
 };
 
-// Turns a guardrail mode into a renderable string. A mode is a single mode, a list of modes, or a
-// tag-based `{ tags, default }` object, which React refuses to render as a child
 export const formatGuardrailMode = (raw: unknown): string => {
   const flat: string[] = toModeArray(raw);
   if (flat.length > 0) return flat.join(", ");
