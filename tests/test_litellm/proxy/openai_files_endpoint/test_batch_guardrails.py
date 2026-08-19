@@ -296,12 +296,47 @@ async def test_supported_urls_scan_under_the_matching_call_type(url, expected_ca
 
 
 @pytest.mark.asyncio
-async def test_url_that_cannot_be_scanned_is_rejected_rather_than_skipped():
-    source = _jsonl(_record("img", url="/v1/images/generations"))
+async def test_unrecognized_url_falls_back_to_the_body_shape():
+    """A record we can still read is a record we can still scan, so the url alone must not reject it."""
+    logging_obj = FakeProxyLogging()
+
+    assert await _scan(_jsonl(_record("img", url="/v1/images/generations")), logging_obj) is None
+    assert logging_obj.seen[0][0] == "acompletion"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    ["/chat/completions", "/v1/chat/completions/", "https://api.openai.com/v1/chat/completions"],
+)
+async def test_url_variants_callers_actually_write_are_accepted(url):
+    logging_obj = FakeProxyLogging()
+
+    assert await _scan(_jsonl(_record("v", url=url)), logging_obj) is None
+    assert logging_obj.seen[0][0] == "acompletion"
+
+
+@pytest.mark.asyncio
+async def test_query_string_on_a_known_url_does_not_change_the_call_type():
+    """The body carries `messages`, so only stripping the query string can yield aembedding."""
+    logging_obj = FakeProxyLogging()
+    record = {
+        "custom_id": "q",
+        "url": "/v1/embeddings?api-version=1",
+        "body": {"model": "m", "input": "x", "messages": [{"role": "user", "content": "y"}]},
+    }
+
+    assert await _scan(_jsonl(record), logging_obj) is None
+    assert logging_obj.seen[0][0] == "aembedding"
+
+
+@pytest.mark.asyncio
+async def test_record_whose_body_cannot_be_read_is_rejected():
+    source = _jsonl({"custom_id": "opaque", "url": "/v1/rerank", "body": {"model": "m", "documents": ["a"]}})
 
     failure = await _scan(source, FakeProxyLogging())
 
-    assert failure == UnscannableRecord(line_number=1, custom_id="img", url="/v1/images/generations")
+    assert failure == UnscannableRecord(line_number=1, custom_id="opaque", url="/v1/rerank")
 
 
 @pytest.mark.asyncio

@@ -255,3 +255,34 @@ def test_has_pre_call_guardrails_is_true_for_a_configured_pipeline(proxy_logging
     monkeypatch.setattr(litellm, "callbacks", [])
 
     assert proxy_logging.has_pre_call_guardrails({"_guardrail_pipelines": ["p1"]}) is True
+
+
+@pytest.mark.asyncio
+async def test_default_path_still_arms_the_hanging_request_alert(proxy_logging, make_user_api_key_auth, monkeypatch):
+    """Pins the other side of the gate: without the flag, the alert must still fire."""
+    monkeypatch.setattr(litellm, "callbacks", [])
+    alerting = MagicMock(alerting=True)
+    alerting.response_taking_too_long = AsyncMock()
+    proxy_logging.slack_alerting_instance = alerting
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"x": "input"}], "model": "m"},
+        call_type="completion",
+    )
+    alerting.response_taking_too_long.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_default_path_still_applies_prompt_templates(proxy_logging, make_user_api_key_auth, monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    process = AsyncMock()
+    monkeypatch.setattr(proxy_logging, "_process_prompt_template", process)
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"x": "input"}], "model": "m", "prompt_id": "p1", "litellm_logging_obj": MagicMock()},
+        call_type="acompletion",
+    )
+    process.assert_awaited_once()

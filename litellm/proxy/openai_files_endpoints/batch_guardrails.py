@@ -104,9 +104,9 @@ def raise_public(failure: BatchScanFailure) -> NoReturn:
             )
         case UnscannableRecord(line_number=line_number, custom_id=custom_id, url=url):
             raise _rejected(
-                f"Batch input line {line_number}{_describe(custom_id)} targets {url or 'no url'}, "
-                "which guardrails cannot scan. Supported urls are /v1/chat/completions, "
-                "/v1/completions, /v1/embeddings, /v1/responses and /v1/messages"
+                f"Batch input line {line_number}{_describe(custom_id)} targets {url or 'no url'} "
+                "and its body has no messages, prompt or input, so guardrails cannot read it. "
+                "Give the record a chat, completion, embedding, responses or messages body"
             )
         case RedactionRequired(line_number=line_number, custom_id=custom_id):
             raise _rejected(
@@ -144,7 +144,9 @@ def _iter_records(source: BinaryIO) -> Iterator[_ParsedRecord | UnparseableRecor
 
 
 def _call_type_from_url(url: str) -> CallTypesLiteral | None:
-    call_types: Final = get_call_types_for_route(url)
+    # Callers write the url by hand, so a query string or a trailing slash is not a different route.
+    path: Final = url.split("?")[0].rstrip("/")
+    call_types: Final = get_call_types_for_route(path)
     if call_types is None:
         return None
     scannable: Final = next((c for c in call_types if c in _SCANNABLE_CALL_TYPES), None)
@@ -157,9 +159,15 @@ def _call_type_from_body(body: Mapping[str, object]) -> CallTypesLiteral | None:
 
 
 def _scannable_call_type(url: object, body: Mapping[str, object]) -> CallTypesLiteral | None:
-    if not isinstance(url, str) or url == "":
-        return _call_type_from_body(body)
-    return _call_type_from_url(url)
+    """
+    Resolve how to scan a record: its url when we recognize one, otherwise its body shape.
+
+    An unrecognized url falls through to the body rather than rejecting, because a record we can
+    still read is a record we can still scan, and the provider transformers treat an unknown url
+    as chat rather than as an error.
+    """
+    from_url: Final = _call_type_from_url(url) if isinstance(url, str) and url else None
+    return from_url if from_url is not None else _call_type_from_body(body)
 
 
 def _custom_id_of(payload: Mapping[str, object]) -> str | None:
