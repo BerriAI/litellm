@@ -1433,4 +1433,51 @@ describe("Teams - the exact bytes the create call sends", () => {
       expect(payload).toHaveProperty(key);
     }
   });
+
+  it("leaves policies out of the request body for a caller without the viewPolicies capability", async () => {
+    can.mockReturnValue(false);
+
+    await openCreateModal();
+    await openSection("Additional Settings", /Team Member Key Duration/);
+
+    const payload = await submit();
+
+    expect(payload).toStrictEqual({
+      team_alias: "Byte Contract Team",
+      organization_id: null,
+      models: ["no-default-models"],
+      max_budget: undefined,
+      budget_duration: undefined,
+      tpm_limit: undefined,
+      rpm_limit: undefined,
+      metadata: undefined,
+      team_id: undefined,
+      team_member_budget: undefined,
+      team_member_key_duration: undefined,
+      team_member_rpm_limit: undefined,
+      team_member_tpm_limit: undefined,
+      secret_manager_settings: undefined,
+      guardrails: undefined,
+      disable_global_guardrails: undefined,
+      access_group_ids: undefined,
+      allowed_vector_store_ids: undefined,
+      allowed_passthrough_routes: undefined,
+    });
+  });
+
+  it("blocks the create on an empty team name and names the rule", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    act(() => {
+      fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+
+    const buttons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(buttons[buttons.length - 1]);
+
+    expect(await screen.findByText("Please input a team name")).toBeInTheDocument();
+    expect(teamCreateCall).not.toHaveBeenCalled();
+  });
 });

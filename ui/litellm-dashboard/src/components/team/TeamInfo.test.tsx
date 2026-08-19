@@ -1875,4 +1875,96 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(Object.keys(wireBody(payload)).filter((key) => key.startsWith("team_member"))).toEqual([]);
     expect(wireBody(payload)).not.toHaveProperty("default_team_member_models");
   });
+
+  it("puts the global guardrails back on the team when the kill switch is turned off again", async () => {
+    const user = userEvent.setup({ delay: null });
+    testQueryClient.clear();
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({
+      guardrails: [
+        { guardrail_name: "always-on", litellm_params: { default_on: true } },
+        { guardrail_name: "opt-in", litellm_params: { default_on: false } },
+      ],
+    });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        metadata: { guardrails: ["opt-in"], disable_global_guardrails: true },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} premiumUser={true} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    expect(screen.queryAllByLabelText("always-on")).toHaveLength(0);
+
+    await user.click(screen.getByRole("switch", { name: /Disable all global guardrails/ }));
+
+    expect(await screen.findAllByLabelText("always-on")).toHaveLength(1);
+
+    const payload = await save(user);
+
+    expect(payload.metadata).toStrictEqual(
+      expect.objectContaining({
+        guardrails: ["opt-in"],
+        opted_out_global_guardrails: [],
+        disable_global_guardrails: false,
+      }),
+    );
+  });
+
+  it("sends a typed model rate limit as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], metadata: { model_tpm_limit: { "gpt-4": 30 } } }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    const rpmInput = await screen.findByPlaceholderText("RPM Limit");
+    await user.clear(rpmInput);
+    await user.type(rpmInput, "45");
+
+    const payload = await save(user);
+
+    expect(payload.model_rpm_limit).toStrictEqual({ "gpt-4": 45 });
+    expect(payload.model_tpm_limit).toStrictEqual({ "gpt-4": 30 });
+  });
+
+  it("leaves stored policies out of the update body for a caller without the viewPolicies capability", async () => {
+    const user = userEvent.setup({ delay: null });
+    can.mockReturnValue(false);
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"], policies: ["pci"] }));
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    const payload = await save(user);
+
+    expect(payload).toHaveProperty("team_alias");
+    expect(wireBody(payload)).not.toHaveProperty("policies");
+  });
+
+  it("blocks the save on an empty team name and names the rule", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.clear(screen.getByLabelText("Team Name"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(await screen.findByText("Please input a team name")).toBeInTheDocument();
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+  });
 });
