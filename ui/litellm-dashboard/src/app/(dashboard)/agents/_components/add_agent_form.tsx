@@ -846,7 +846,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       <div>
         {/* Agent name chip */}
         <div className="mb-6 flex justify-center">
-          <Tag icon={<Bot />} color="purple" className="px-3 py-1 text-sm">
+          <Tag color="purple" className="inline-flex items-center gap-1.5 px-3 py-1 text-sm">
+            <Bot className="size-3.5" />
             {agentName}
           </Tag>
         </div>
@@ -961,7 +962,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       <CircleCheck className="mb-4 size-12 text-green-500" />
       <h3 className="mb-2 text-xl font-semibold text-foreground">Agent Created!</h3>
       <div className="mb-4 flex justify-center">
-        <Tag icon={<Bot />} color="purple" className="px-3 py-1 text-sm">
+        <Tag color="purple" className="inline-flex items-center gap-1.5 px-3 py-1 text-sm">
+          <Bot className="size-3.5" />
           {createdAgentName}
         </Tag>
       </div>

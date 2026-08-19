@@ -107,7 +107,7 @@ const RoutingGroups: React.FC = () => {
         <Flex justify="space-between" align="center" gap={12} className="mb-4">
           <Input
             allowClear
-            prefix={<Search className="text-gray-400" />}
+            prefix={<Search className="size-4 text-gray-400" />}
             placeholder="Search groups..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
