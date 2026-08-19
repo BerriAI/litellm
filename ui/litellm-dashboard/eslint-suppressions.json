@@ -1816,12 +1816,6 @@
   "src/components/add_model/cache_control_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "src/components/add_model/conditional_public_model_name.test.tsx": {
@@ -2275,15 +2269,6 @@
   "src/components/model_info_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "max-lines": {
-      "count": 1
-    },
-    "no-nested-ternary": {
-      "count": 14
     },
     "no-restricted-imports": {
       "count": 1
