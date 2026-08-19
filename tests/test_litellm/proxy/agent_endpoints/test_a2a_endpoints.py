@@ -1518,6 +1518,173 @@ async def test_handle_stream_message_frames_preserialized_jsonrpc_error_once():
 
 
 @pytest.mark.asyncio
+async def test_handle_stream_message_proxy_hook_path_frames_errors_as_sse():
+    """A failure while the hooked generator is streaming must reach the client as
+    a ``data:``-framed JSON-RPC error, not as a bare NDJSON line."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+    from litellm.proxy.utils import ProxyLogging
+
+    async def fake_stream(**kwargs):
+        yield {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}}
+        raise ValueError("upstream died")
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "a2a/test"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == 2
+    assert chunks[-1].startswith("data: ")
+    error_payload = json.loads(chunks[-1].removeprefix("data: ").strip())
+    assert error_payload["id"] == "req-1"
+    assert error_payload["error"]["code"] == -32603
+    assert "upstream died" in error_payload["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_frames_upstream_call_failure_as_sse_error():
+    """A failure raised before any event is streamed (with proxy hooks wired) is
+    still delivered as a ``data:``-framed JSON-RPC error."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+    from litellm.proxy.utils import ProxyLogging
+
+    def fake_stream(**kwargs):
+        raise ValueError("could not reach agent")
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "a2a/test"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == 1
+    error_payload = json.loads(chunks[0].removeprefix("data: ").strip())
+    assert error_payload["id"] == "req-1"
+    assert error_payload["error"]["code"] == -32603
+    assert "could not reach agent" in error_payload["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_forwards_unparseable_chunk_as_sse_event():
+    """A chunk that is not JSON at all still leaves as one well-formed SSE event
+    instead of raising and killing the stream."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    async def fake_stream(**kwargs):
+        yield "not json at all"
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert chunks == ['data: "not json at all"\n\n']
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_frames_mid_stream_failure_as_sse_error():
+    """An upstream failure after the response started is reported as a
+    ``data:``-framed JSON-RPC error object, so an SSE client sees the failure."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    async def fake_stream(**kwargs):
+        yield {"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "task", "id": "t-1"}}
+        raise RuntimeError("upstream died")
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch("litellm.a2a_protocol.asend_message_streaming", new=fake_stream)
+        )
+
+        response = await _handle_stream_message(
+            api_base="http://upstream.local",
+            request_id="req-1",
+            params={
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                }
+            },
+        )
+
+        chunks = [
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            async for chunk in response.body_iterator
+        ]
+
+    assert len(chunks) == 2
+    error_payload = json.loads(chunks[-1].removeprefix("data: ").strip())
+    assert error_payload["id"] == "req-1"
+    assert error_payload["error"]["code"] == -32603
+    assert "upstream died" in error_payload["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_send_message_pascal_case_routes_to_asend_message():
     from litellm.proxy._types import UserAPIKeyAuth
 
