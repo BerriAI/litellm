@@ -331,7 +331,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             return configured_region
         raise ValueError(
             f"Cannot derive the SigV4 signing region from api_base '{api_base}' "
-            "or the AWS configuration chain. Set aws_region_name (or AWS_REGION / "
+            "or the AWS configuration chain. Set aws_region_name (or AWS_DEFAULT_REGION / "
             "a profile region) to the gateway's region when using a custom hostname."
         )
 
