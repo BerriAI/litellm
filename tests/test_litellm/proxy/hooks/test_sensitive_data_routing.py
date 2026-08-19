@@ -750,6 +750,53 @@ class TestProxyHandleSensitiveDataRouteException:
         )
 
     @pytest.mark.asyncio
+    async def test_guardrail_session_ttl_overrides_the_proxy_default(
+        self, proxy_logging, routing_hook
+    ):
+        proxy_logging.proxy_hook_mapping["sensitive_data_routing"] = routing_hook
+        exc = SensitiveDataRouteException(
+            route_to_model="on-premise-model",
+            session_id="sess-ttl",
+            guardrail_name="sensitive-data-routing",
+            sticky_session_routing=True,
+            session_ttl_seconds=14400,
+        )
+
+        await proxy_logging._handle_sensitive_data_route_exception(
+            exc,
+            {"model": "gpt-4", "metadata": {"session_id": "sess-ttl"}},
+            UserAPIKeyAuth(api_key="tenant-a"),
+        )
+
+        cache_key = routing_hook._make_cache_key("sess-ttl", "tenant-a")
+        assert routing_hook.internal_usage_cache._ttls[cache_key] == 14400
+        assert routing_hook.ttl == DEFAULT_SENSITIVE_ROUTING_TTL
+
+    @pytest.mark.asyncio
+    async def test_routing_without_guardrail_ttl_uses_the_proxy_default(
+        self, proxy_logging, routing_hook
+    ):
+        proxy_logging.proxy_hook_mapping["sensitive_data_routing"] = routing_hook
+        exc = SensitiveDataRouteException(
+            route_to_model="on-premise-model",
+            session_id="sess-default-ttl",
+            guardrail_name="pii",
+            sticky_session_routing=True,
+        )
+
+        await proxy_logging._handle_sensitive_data_route_exception(
+            exc,
+            {"model": "gpt-4", "metadata": {"session_id": "sess-default-ttl"}},
+            UserAPIKeyAuth(api_key="tenant-a"),
+        )
+
+        cache_key = routing_hook._make_cache_key("sess-default-ttl", "tenant-a")
+        assert (
+            routing_hook.internal_usage_cache._ttls[cache_key]
+            == DEFAULT_SENSITIVE_ROUTING_TTL
+        )
+
+    @pytest.mark.asyncio
     async def test_non_sticky_routing_does_not_persist_override(
         self, proxy_logging, routing_hook
     ):

@@ -2002,6 +2002,7 @@ class ProxyLogging:
                     model=exc.route_to_model,
                     user_api_key_dict=user_api_key_dict,
                     guardrail_name=exc.guardrail_name,
+                    ttl=exc.session_ttl_seconds,
                 )
             else:
                 verbose_proxy_logger.warning(
