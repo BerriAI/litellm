@@ -128,7 +128,7 @@ Run the tests covering your change:
 uv run pytest tests/test_litellm/test_your_file.py -v
 ```
 
-`tests/test_litellm` holds thousands of tests, so running all of it locally takes a long time. CI runs it as a parallel matrix (`make test-unit-llms`, `make test-unit-proxy-core`, and the other `test-unit-*` targets, see `make help`), so reach for the group that covers your change instead of the whole suite. `make test-unit` runs everything when you really want it.
+`tests/test_litellm` holds thousands of tests, so running all of it locally takes a long time. CI runs it as a parallel matrix (`make test-unit-llms`, `make test-unit-proxy-core`, and the other `test-unit-*` targets) on beefier boxes, so if, for whatever reason, you must run the whole suite, it's better to rely on CI to do that.
 
 If you're running broader test suites, proxy tests, or anything that touches PostgreSQL-backed fixtures/plugins, install the full local test environment first:
 
