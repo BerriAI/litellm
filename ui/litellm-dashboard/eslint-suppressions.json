@@ -565,11 +565,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/mcp-servers/_components/EnvVarsSection.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/mcp-servers/_components/IdJagFormFields.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -670,9 +665,6 @@
   "src/app/(dashboard)/mcp-servers/_components/UserEnvVarsModal.tsx": {
     "no-nested-ternary": {
       "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/index.tsx": {
@@ -682,9 +674,6 @@
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_connect.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/static-components": {
@@ -1574,11 +1563,6 @@
       "count": 1
     }
   },
-  "src/components/Settings/AdminSettings/LoggingSettings/LoggingSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -1612,11 +1596,6 @@
   },
   "src/components/Settings/AdminSettings/SSOSettings/RedactableField.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/Settings/AdminSettings/SSOSettings/RoleMappings.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1704,9 +1683,6 @@
   "src/components/VirtualKeysPage/keyTableColumns.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/activity_metrics.tsx": {
@@ -1714,11 +1690,6 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/add_model/AdaptiveRoutingConfig.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1735,36 +1706,11 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 2
-    }
-  },
-  "src/components/add_model/ClassificationMethodConfig.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/add_model/ComplexityRouterConfig.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/add_model/EscalationKeywords.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/add_model/KeywordTierRules.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
   "src/components/add_model/RouterConfigBuilder.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/add_model/SemanticKeywordMatching.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -1786,7 +1732,7 @@
       "count": 1
     },
     "no-restricted-imports": {
-      "count": 3
+      "count": 1
     }
   },
   "src/components/add_model/auto_router_connection_test.tsx": {
@@ -2203,7 +2149,7 @@
   },
   "src/components/model_add/CredentialModal.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/model_add/reuse_credentials.tsx": {

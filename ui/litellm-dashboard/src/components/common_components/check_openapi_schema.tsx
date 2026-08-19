@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { Input as AntdInput, InputNumber, Select } from "antd";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Tooltip } from "antd";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import type { UseFormSetValue } from "react-hook-form";
 import { getOpenAPISchema } from "../networking";
 import { formatLabel } from "@/utils/textUtils";
@@ -56,6 +57,13 @@ const validateJSON = (value: string): boolean => {
 };
 
 const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
+
+const toSchemaNumber = (raw: string, isInteger: boolean): number | null => {
+  if (raw === "") return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return null;
+  return isInteger ? Math.trunc(parsed) : parsed;
+};
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -182,9 +190,9 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
     const formLabel = tooltip ? (
       <span>
         {label}{" "}
-        <Tooltip title={tooltip}>
+        <SimpleTooltip content={tooltip}>
           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-        </Tooltip>
+        </SimpleTooltip>
       </span>
     ) : (
       label
@@ -204,7 +212,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
         {(control) => {
           if (isJSONField(key, property)) {
             return (
-              <AntdInput.TextArea
+              <Textarea
                 {...control}
                 value={control.value as string | undefined}
                 rows={4}
@@ -215,22 +223,34 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
           }
           if (property.enum) {
             return (
-              <Select {...control} value={control.value as string | undefined}>
-                {property.enum.map((value) => (
-                  <Select.Option key={value} value={value}>
-                    {value}
-                  </Select.Option>
-                ))}
+              <Select value={(control.value as string | undefined) ?? null} onValueChange={control.onChange}>
+                <SelectTrigger
+                  id={control.id}
+                  onBlur={control.onBlur}
+                  aria-invalid={control["aria-invalid"]}
+                  className="w-full"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {property.enum.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             );
           }
           if (type === "number" || type === "integer") {
             return (
-              <InputNumber
+              <Input
                 {...control}
-                value={control.value as number | undefined}
-                style={{ width: "100%" }}
-                precision={type === "integer" ? 0 : undefined}
+                type="number"
+                step={type === "integer" ? 1 : "any"}
+                value={(control.value as number | undefined) ?? ""}
+                onChange={(event) => control.onChange(toSchemaNumber(event.target.value, type === "integer"))}
+                className="w-full"
               />
             );
           }
