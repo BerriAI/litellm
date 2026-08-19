@@ -34,7 +34,7 @@ import time
 import urllib.parse
 import urllib.request
 from bisect import bisect_right
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Awaitable, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -1608,62 +1608,87 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
         ttl: Optional[int],
         load_key_source: str,
         action: str = "increment",
-    ) -> Optional[int]:
+        on_result: Optional[Callable[[Optional[float]], Awaitable[None]]] = None,
+    ) -> Optional[float]:
         """
         Synchronous entry point for a request-count delta (increment/decrement).
 
-        Returns an in-memory delta'd value immediately so routing decisions see
-        a correct count, and schedules the Redis write asynchronously on the
-        running event loop so a slow Redis never blocks the request hot path.
+        Writes the delta to **Redis** (the value routing consults via
+        ``redis_only=True``) and returns the Redis-sourced new value, matching
+        the pre-fix ``increment_cache`` semantics. The write is deferred onto the
+        running event loop so a slow Redis can never block the request hot path.
 
-        If no event loop is running (sync callers / tests), falls back to a
-        direct synchronous Redis delta — preserving the original behavior.
+        ``on_result`` is an optional async callback invoked with the Redis-sourced
+        new value (or ``None`` on failure) once the deferred write completes. It
+        carries the caller-specific downstream logic (dedup recording, metrics,
+        negative-counter reset, TTL refresh, logging) so that logic runs with the
+        authoritative Redis value in scope. On the synchronous fallback path it
+        is driven to completion inline.
 
-        The async decrement path already uses `await async_increment_cache`;
-        this mirrors it for the sync callback signatures (log_pre_api_call and
-        the sync log_success/log_failure callbacks) without changing them.
+        Only ``redis_cache.async_increment`` is used on the deferred path (not
+        ``DualCache.async_increment_cache``) so the in-memory cache is not touched
+        — routing reads ``redis_only=True`` and never consults it.
         """
-        # Decide dispatch first to avoid double-applying the in-memory cache
-        # (the sync fallback's increment_cache also touches in-memory).
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             # No running loop: fall back to the original synchronous Redis path.
             try:
-                return self.router_cache.increment_cache(
+                result = self.router_cache.increment_cache(
                     key=cache_key, value=value, ttl=ttl
                 )
             except Exception as e:
                 verbose_router_logger.error(
                     f"StickyLeastBusy sync increment_cache error: {e}"
                 )
-                return None
+                result = None
+            if on_result is not None:
+                try:
+                    asyncio.run(on_result(result))
+                except Exception as cb_err:
+                    verbose_router_logger.error(
+                        f"StickyLeastBusy {action} on_result callback error: {cb_err}"
+                    )
+            return result
 
-        # Running loop: apply in-memory synchronously for an immediate
-        # correct value, then defer the Redis write so it can never block.
-        immediate: Optional[int] = None
-        if self.router_cache.in_memory_cache is not None:
-            immediate = self.router_cache.in_memory_cache.increment_cache(
-                cache_key, value, ttl=ttl
-            )
-
+        # Running loop: defer the Redis write so it can never block the caller.
+        # Redis is the source of truth for routing (redis_only=True reads), so we
+        # do NOT touch in-memory here — only Redis, via redis_cache.async_increment
+        # directly to avoid DualCache.async_increment_cache's in-memory write.
         async def _do_redis_delta() -> None:
+            new_value: Optional[float] = None
             try:
-                await self.router_cache.async_increment_cache(
-                    key=cache_key, value=value, ttl=ttl
-                )
+                redis_cache = self.router_cache.redis_cache
+                if redis_cache is not None:
+                    new_value = await redis_cache.async_increment(
+                        key=cache_key,
+                        value=value,
+                        ttl=ttl,
+                    )
+                else:
+                    in_mem = self.router_cache.in_memory_cache
+                    if in_mem is not None:
+                        new_value = in_mem.increment_cache(cache_key, value, ttl=ttl)
             except Exception as e:
                 verbose_router_logger.warning(
                     f"StickyLeastBusy async Redis {action} failed (non-blocking): {e}"
                 )
                 self._counter_events.labels(
                     action,
-                    "redis_async_failed_in_memory_used",
+                    "redis_async_failed",
                     load_key_source,
                 ).inc()
+                new_value = None
+            if on_result is not None:
+                try:
+                    await on_result(new_value)
+                except Exception as cb_err:
+                    verbose_router_logger.error(
+                        f"StickyLeastBusy {action} on_result callback error: {cb_err}"
+                    )
 
         loop.create_task(_do_redis_delta())
-        return immediate
+        return None
 
     def log_pre_api_call(self, model, messages, kwargs):
         """Increment in-flight count. Deduped by litellm_call_id for streaming."""
@@ -1721,29 +1746,39 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
                 return
 
             cache_key = self._get_request_count_cache_key(model_group, dep_id, load_key)
-            new_value = self._non_blocking_cache_delta(
-                cache_key, 1, self.cache_ttl, load_key_source, action="increment"
-            )
-            if litellm_call_id and new_value is not None:
-                self._remember_incremented_call_id(litellm_call_id)
-            if new_value is not None:
-                self._refresh_cache_ttl(cache_key)
-                self._routing_in_flight.labels(model_group, dep_id).inc()
-            counter_result = "applied" if new_value is not None else "cache_increment_returned_none"
-            self._counter_events.labels("increment", counter_result, load_key_source).inc()
-            if debug_enabled:
-                previous_count = self._previous_count_from_delta(new_value, 1)
-                verbose_router_logger.debug(
-                    f"[StickyLeastBusyWeighted COUNTER] action=increment "
-                    f"model_group={model_group}, deployment_id={dep_id}, "
-                    f"load_key={self._format_load_key(load_key)}, "
-                    f"load_key_source={load_key_source}, "
-                    f"cache_key={cache_key}, delta=1, previous_count={previous_count}, "
-                    f"new_count={new_value}, stream={stream}, "
-                    f"call_id={self._format_call_id(litellm_call_id)}, "
-                    f"redis_configured={self._is_redis_configured()}, "
-                    f"seen_call_ids={len(self._seen_call_ids)}"
+
+            async def _on_increment_result(new_value: Optional[float]) -> None:
+                if litellm_call_id and new_value is not None:
+                    self._remember_incremented_call_id(litellm_call_id)
+                if new_value is not None:
+                    self._refresh_cache_ttl(cache_key)
+                    self._routing_in_flight.labels(model_group, dep_id).inc()
+                counter_result = (
+                    "applied" if new_value is not None else "cache_increment_returned_none"
                 )
+                self._counter_events.labels("increment", counter_result, load_key_source).inc()
+                if debug_enabled:
+                    previous_count = self._previous_count_from_delta(new_value, 1)
+                    verbose_router_logger.debug(
+                        f"[StickyLeastBusyWeighted COUNTER] action=increment "
+                        f"model_group={model_group}, deployment_id={dep_id}, "
+                        f"load_key={self._format_load_key(load_key)}, "
+                        f"load_key_source={load_key_source}, "
+                        f"cache_key={cache_key}, delta=1, previous_count={previous_count}, "
+                        f"new_count={new_value}, stream={stream}, "
+                        f"call_id={self._format_call_id(litellm_call_id)}, "
+                        f"redis_configured={self._is_redis_configured()}, "
+                        f"seen_call_ids={len(self._seen_call_ids)}"
+                    )
+
+            self._non_blocking_cache_delta(
+                cache_key,
+                1,
+                self.cache_ttl,
+                load_key_source,
+                action="increment",
+                on_result=_on_increment_result,
+            )
         except Exception as e:
             verbose_router_logger.error(f"StickyLeastBusy log_pre_api_call error: {e}")
 
@@ -1825,64 +1860,74 @@ class StickyLeastBusyWeightedLoggingHandler(CustomLogger):
                 return
 
             cache_key = self._get_request_count_cache_key(model_group, dep_id, load_key)
-            new_value = self._non_blocking_cache_delta(
-                cache_key, -1, self.cache_ttl, load_key_source, action="decrement"
-            )
-            if new_value is not None:
-                self._refresh_cache_ttl(cache_key)
-                self._routing_in_flight.labels(model_group, dep_id).dec()
-                self._counter_events.labels("decrement", "applied", load_key_source).inc()
-            if debug_enabled:
-                previous_count = self._previous_count_from_delta(new_value, -1)
-                verbose_router_logger.debug(
-                    f"[StickyLeastBusyWeighted COUNTER] action=decrement "
-                    f"callback_type={callback_type}, model_group={model_group}, "
-                    f"deployment_id={dep_id}, load_key={self._format_load_key(load_key)}, "
-                    f"load_key_source={load_key_source}, cache_key={cache_key}, delta=-1, "
-                    f"previous_count={previous_count}, new_count={new_value}, "
-                    f"call_id={self._format_call_id(litellm_call_id)}, "
-                    f"call_id_seen_before_cleanup={call_id_seen_before_cleanup}, "
-                    f"redis_configured={self._is_redis_configured()}, "
-                    f"seen_call_ids={len(self._seen_call_ids)}"
-                )
-            if new_value is None:
-                if litellm_call_id:
-                    self._decremented_call_ids.pop(litellm_call_id, None)
-                self._counter_events.labels("decrement", "cache_increment_returned_none", load_key_source).inc()
-                verbose_router_logger.warning(
-                    f"[StickyLeastBusyWeighted COUNTER-WARNING] action=decrement "
-                    f"callback_type={callback_type}, reason=cache_increment_returned_none, "
-                    f"model_group={model_group}, deployment_id={dep_id}, "
-                    f"load_key={self._format_load_key(load_key)}, "
-                    f"cache_key={cache_key}, call_id={self._format_call_id(litellm_call_id)}, "
-                    f"redis_configured={self._is_redis_configured()}"
-                )
-                return
-            elif new_value < 0:
-                self._reset_negative_counter_if_still_negative(
-                    cache_key=cache_key,
-                    model_group=model_group,
-                    dep_id=dep_id,
-                    new_value=new_value,
-                    litellm_call_id=litellm_call_id,
-                    callback_type=callback_type,
-                )
 
-            if litellm_call_id:
-                mark_completed = "SUCCESS" in callback_type
-                self._cleanup_call_id(litellm_call_id, mark_completed=mark_completed)
+            async def _on_decrement_result(new_value: Optional[float]) -> None:
+                if new_value is not None:
+                    self._refresh_cache_ttl(cache_key)
+                    self._routing_in_flight.labels(model_group, dep_id).dec()
+                    self._counter_events.labels("decrement", "applied", load_key_source).inc()
                 if debug_enabled:
+                    previous_count = self._previous_count_from_delta(new_value, -1)
                     verbose_router_logger.debug(
-                        f"[StickyLeastBusyWeighted DEDUP] action=cleanup "
+                        f"[StickyLeastBusyWeighted COUNTER] action=decrement "
                         f"callback_type={callback_type}, model_group={model_group}, "
-                        f"deployment_id={dep_id}, "
+                        f"deployment_id={dep_id}, load_key={self._format_load_key(load_key)}, "
+                        f"load_key_source={load_key_source}, cache_key={cache_key}, delta=-1, "
+                        f"previous_count={previous_count}, new_count={new_value}, "
                         f"call_id={self._format_call_id(litellm_call_id)}, "
-                        f"removed={call_id_seen_before_cleanup}, "
-                        f"mark_completed={mark_completed}, "
-                        f"seen_call_ids={len(self._seen_call_ids)}, "
-                        f"completed_call_ids={len(self._completed_call_ids)}, "
-                        f"tracked_call_ids={len(self._selected_deployments_by_call_id)}"
+                        f"call_id_seen_before_cleanup={call_id_seen_before_cleanup}, "
+                        f"redis_configured={self._is_redis_configured()}, "
+                        f"seen_call_ids={len(self._seen_call_ids)}"
                     )
+                if new_value is None:
+                    if litellm_call_id:
+                        self._decremented_call_ids.pop(litellm_call_id, None)
+                    self._counter_events.labels(
+                        "decrement", "cache_increment_returned_none", load_key_source
+                    ).inc()
+                    verbose_router_logger.warning(
+                        f"[StickyLeastBusyWeighted COUNTER-WARNING] action=decrement "
+                        f"callback_type={callback_type}, reason=cache_increment_returned_none, "
+                        f"model_group={model_group}, deployment_id={dep_id}, "
+                        f"load_key={self._format_load_key(load_key)}, "
+                        f"cache_key={cache_key}, call_id={self._format_call_id(litellm_call_id)}, "
+                        f"redis_configured={self._is_redis_configured()}"
+                    )
+                    return
+                elif new_value < 0:
+                    self._reset_negative_counter_if_still_negative(
+                        cache_key=cache_key,
+                        model_group=model_group,
+                        dep_id=dep_id,
+                        new_value=new_value,
+                        litellm_call_id=litellm_call_id,
+                        callback_type=callback_type,
+                    )
+
+                if litellm_call_id:
+                    mark_completed = "SUCCESS" in callback_type
+                    self._cleanup_call_id(litellm_call_id, mark_completed=mark_completed)
+                    if debug_enabled:
+                        verbose_router_logger.debug(
+                            f"[StickyLeastBusyWeighted DEDUP] action=cleanup "
+                            f"callback_type={callback_type}, model_group={model_group}, "
+                            f"deployment_id={dep_id}, "
+                            f"call_id={self._format_call_id(litellm_call_id)}, "
+                            f"removed={call_id_seen_before_cleanup}, "
+                            f"mark_completed={mark_completed}, "
+                            f"seen_call_ids={len(self._seen_call_ids)}, "
+                            f"completed_call_ids={len(self._completed_call_ids)}, "
+                            f"tracked_call_ids={len(self._selected_deployments_by_call_id)}"
+                        )
+
+            self._non_blocking_cache_delta(
+                cache_key,
+                -1,
+                self.cache_ttl,
+                load_key_source,
+                action="decrement",
+                on_result=_on_decrement_result,
+            )
         except Exception as e:
             verbose_router_logger.error(f"StickyLeastBusy decrement error: {e}")
 

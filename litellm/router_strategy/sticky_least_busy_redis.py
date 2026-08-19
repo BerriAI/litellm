@@ -32,7 +32,7 @@ to pure least-busy routing with random tie-breaking (no stickiness).
 import asyncio
 import hashlib
 import random
-from typing import Dict, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -466,58 +466,86 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
     # =========================================================================
 
     def _non_blocking_cache_delta(
-        self, cache_key: str, value: int, ttl: Optional[int]
-    ) -> Optional[int]:
+        self,
+        cache_key: str,
+        value: int,
+        ttl: Optional[int],
+        action: str = "increment",
+        on_result: Optional[Callable[[Optional[float]], Awaitable[None]]] = None,
+    ) -> Optional[float]:
         """
         Synchronous entry point for a request-count delta (increment/decrement).
 
-        Returns an in-memory delta'd value immediately so routing decisions see
-        a correct count, and schedules the Redis write asynchronously on the
-        running event loop so a slow Redis never blocks the request hot path.
+        Writes the delta to **Redis** (the value routing consults via
+        ``redis_only=True``) and returns the Redis-sourced new value, matching
+        the pre-fix ``increment_cache`` semantics. The write is deferred onto the
+        running event loop so a slow Redis can never block the request hot path.
 
-        If no event loop is running (sync callers / tests), falls back to a
-        direct synchronous Redis delta — preserving the original behavior.
+        ``on_result`` is an optional async callback invoked with the Redis-sourced
+        new value (or ``None`` on failure) once the deferred write completes. It
+        carries the caller-specific downstream logic (metrics, TTL refresh,
+        logging) so that logic runs with the authoritative Redis value in scope.
+        On the synchronous fallback path it is driven to completion inline.
 
-        The async decrement path already uses `await async_increment_cache`;
-        this mirrors it for the sync callback signatures (log_pre_api_call and
-        the sync log_success/log_failure callbacks) without changing them.
+        Only ``redis_cache.async_increment`` is used on the deferred path (not
+        ``DualCache.async_increment_cache``) so the in-memory cache is not touched
+        — routing reads ``redis_only=True`` and never consults it.
         """
-        # Decide dispatch first to avoid double-applying the in-memory cache
-        # (the sync fallback's increment_cache also touches in-memory).
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             # No running loop: fall back to the original synchronous Redis path.
             try:
-                return self.router_cache.increment_cache(
+                result = self.router_cache.increment_cache(
                     key=cache_key, value=value, ttl=ttl
                 )
             except Exception as e:
                 verbose_router_logger.error(
                     f"StickyLeastBusyRedis sync increment_cache error: {e}"
                 )
-                return None
+                result = None
+            if on_result is not None:
+                try:
+                    asyncio.run(on_result(result))
+                except Exception as cb_err:
+                    verbose_router_logger.error(
+                        f"StickyLeastBusyRedis {action} on_result callback error: {cb_err}"
+                    )
+            return result
 
-        # Running loop: apply in-memory synchronously for an immediate
-        # correct value, then defer the Redis write so it can never block.
-        immediate: Optional[int] = None
-        if self.router_cache.in_memory_cache is not None:
-            immediate = self.router_cache.in_memory_cache.increment_cache(
-                cache_key, value, ttl=ttl
-            )
-
+        # Running loop: defer the Redis write so it can never block the caller.
+        # Redis is the source of truth for routing (redis_only=True reads), so we
+        # do NOT touch in-memory here — only Redis, via redis_cache.async_increment
+        # directly to avoid DualCache.async_increment_cache's in-memory write.
         async def _do_redis_delta() -> None:
+            new_value: Optional[float] = None
             try:
-                await self.router_cache.async_increment_cache(
-                    key=cache_key, value=value, ttl=ttl
-                )
+                redis_cache = self.router_cache.redis_cache
+                if redis_cache is not None:
+                    new_value = await redis_cache.async_increment(
+                        key=cache_key,
+                        value=value,
+                        ttl=ttl,
+                    )
+                else:
+                    in_mem = self.router_cache.in_memory_cache
+                    if in_mem is not None:
+                        new_value = in_mem.increment_cache(cache_key, value, ttl=ttl)
             except Exception as e:
                 verbose_router_logger.warning(
-                    f"StickyLeastBusyRedis async Redis delta failed (non-blocking): {e}"
+                    f"StickyLeastBusyRedis async Redis {action} failed (non-blocking): {e}"
                 )
+                new_value = None
+            if on_result is not None:
+                try:
+                    await on_result(new_value)
+                except Exception as cb_err:
+                    verbose_router_logger.error(
+                        f"StickyLeastBusyRedis {action} on_result callback error: {cb_err}"
+                    )
 
         loop.create_task(_do_redis_delta())
-        return immediate
+        return None
 
     def log_pre_api_call(self, model, messages, kwargs):
         """Increment in-flight count. Deduped by litellm_call_id for streaming."""
@@ -553,17 +581,24 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
                 return
 
             cache_key = self._get_request_count_cache_key(model_group, dep_id)
-            new_value = self._non_blocking_cache_delta(cache_key, 1, self.cache_ttl)
-            self._refresh_cache_ttl(cache_key)
-            self._routing_in_flight.labels(model_group, dep_id).inc()
             stream = kwargs.get("stream", False)
-            verbose_router_logger.debug(
-                f"[StickyLeastBusyRedis INCREMENT] "
-                f"deployment_id={dep_id}, "
-                f"model_group={model_group}, "
-                f"new_count={new_value}, "
-                f"stream={stream}, "
-                f"call_id={litellm_call_id[:16] if litellm_call_id else 'None'}..."
+
+            async def _on_increment_result(new_value: Optional[float]) -> None:
+                self._refresh_cache_ttl(cache_key)
+                self._routing_in_flight.labels(model_group, dep_id).inc()
+                verbose_router_logger.debug(
+                    f"[StickyLeastBusyRedis INCREMENT] "
+                    f"deployment_id={dep_id}, "
+                    f"model_group={model_group}, "
+                    f"new_count={new_value}, "
+                    f"stream={stream}, "
+                    f"call_id={litellm_call_id[:16] if litellm_call_id else 'None'}..."
+                )
+
+            self._non_blocking_cache_delta(
+                cache_key, 1, self.cache_ttl,
+                action="increment",
+                on_result=_on_increment_result,
             )
         except Exception as e:
             verbose_router_logger.error(
@@ -597,29 +632,35 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
                 dep_id = str(dep_id)
 
             cache_key = self._get_request_count_cache_key(model_group, dep_id)
-            new_value = self._non_blocking_cache_delta(cache_key, -1, self.cache_ttl)
-            self._refresh_cache_ttl(cache_key)
-            self._routing_in_flight.labels(model_group, dep_id).dec()
-            verbose_router_logger.debug(
-                f"[StickyLeastBusyRedis DECREMENT {callback_type}] "
-                f"deployment_id={dep_id}, "
-                f"model_group={model_group}, "
-                f"new_count={new_value}"
-            )
-            if new_value < 0:
-                verbose_router_logger.warning(
-                    f"[StickyLeastBusyRedis WARNING] Negative count detected "
-                    f"for deployment_id={dep_id}, resetting to 0"
-                )
-                self.router_cache.set_cache(
-                    key=cache_key, value=0, ttl=self.cache_ttl
-                )
-
             litellm_call_id = kwargs.get("litellm_call_id") or litellm_params.get(
                 "litellm_call_id"
             )
-            if litellm_call_id:
-                self._cleanup_call_id(litellm_call_id)
+
+            async def _on_decrement_result(new_value: Optional[float]) -> None:
+                self._refresh_cache_ttl(cache_key)
+                self._routing_in_flight.labels(model_group, dep_id).dec()
+                verbose_router_logger.debug(
+                    f"[StickyLeastBusyRedis DECREMENT {callback_type}] "
+                    f"deployment_id={dep_id}, "
+                    f"model_group={model_group}, "
+                    f"new_count={new_value}"
+                )
+                if new_value is not None and new_value < 0:
+                    verbose_router_logger.warning(
+                        f"[StickyLeastBusyRedis WARNING] Negative count detected "
+                        f"for deployment_id={dep_id}, resetting to 0"
+                    )
+                    self.router_cache.set_cache(
+                        key=cache_key, value=0, ttl=self.cache_ttl
+                    )
+                if litellm_call_id:
+                    self._cleanup_call_id(litellm_call_id)
+
+            self._non_blocking_cache_delta(
+                cache_key, -1, self.cache_ttl,
+                action="decrement",
+                on_result=_on_decrement_result,
+            )
         except Exception as e:
             verbose_router_logger.error(
                 f"StickyLeastBusyRedis decrement error: {e}"

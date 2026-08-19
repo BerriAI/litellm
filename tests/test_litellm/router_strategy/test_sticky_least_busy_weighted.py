@@ -775,28 +775,56 @@ class TestPrometheusMetrics:
 
 
 class TestNonBlockingIncrement:
-    """The increment on the request hot path must never block the event loop."""
+    """The increment on the request hot path must never block the event loop.
+
+    The helper defers the Redis write onto the running event loop and returns
+    None immediately on the loop path; the Redis-sourced new value is delivered
+    to the caller's ``on_result`` async callback once the deferred write lands.
+    """
 
     def test_falls_back_to_sync_without_loop(self):
         """Without a running event loop (tests / sync callers), the original
-        synchronous Redis increment path is used exactly once."""
+        synchronous Redis increment path is used exactly once and returns the
+        Redis-sourced value inline."""
         cache = RecordingDualCache()
         handler = StickyLeastBusyWeightedLoggingHandler(router_cache=cache)
         dep_id = "sync-fallback-deployment"
         cache_key = handler._get_request_count_cache_key(MG, dep_id)
 
+        seen: list = []
+
+        async def on_result(new_value):
+            seen.append(new_value)
+
         result = handler._non_blocking_cache_delta(
-            cache_key, 1, handler.cache_ttl, "test", action="increment"
+            cache_key, 1, handler.cache_ttl, "test", action="increment",
+            on_result=on_result,
         )
 
+        # Sync fallback returns the Redis value inline, and the callback is
+        # driven to completion synchronously (no deferred task).
         assert result is not None
+        assert seen == [result]
         assert cache.increment_calls == [(cache_key, 1)]
         assert cache.async_increment_calls == []
 
     def test_does_not_block_loop_on_slow_redis(self):
         """With a running loop, a slow async Redis increment must not block the
-        caller — the helper returns well before the Redis write completes."""
+        caller — the helper returns None well before the Redis write completes."""
         cache = RecordingDualCache()
+        # Give the cache a fake redis_cache whose async_increment sleeps.
+        redis_calls: list = []
+
+        class FakeRedis:
+            async def async_increment(self, key, value, ttl=None, **kwargs):
+                await asyncio.sleep(2)
+                redis_calls.append((key, value))
+                return 1
+
+            def check_and_fix_namespace(self, key):
+                return key
+
+        cache.redis_cache = FakeRedis()  # type: ignore[assignment]
         handler = StickyLeastBusyWeightedLoggingHandler(router_cache=cache)
         dep_id = "slow-redis-deployment"
         cache_key = handler._get_request_count_cache_key(MG, dep_id)
@@ -804,57 +832,91 @@ class TestNonBlockingIncrement:
         async def main():
             loop = asyncio.get_running_loop()
             started = loop.time()
-            # Patch async_increment_cache to simulate a slow Redis round-trip.
-            cache.async_increment_calls = []
-
-            async def slow_increment(key, value, **kwargs):
-                await asyncio.sleep(2)
-                cache.async_increment_calls.append((key, value))
-                return 1
-
-            cache.async_increment_cache = slow_increment  # type: ignore[assignment]
 
             result = handler._non_blocking_cache_delta(
                 cache_key, 1, handler.cache_ttl, "test", action="increment"
             )
             elapsed = loop.time() - started
 
-            # Returned immediately with the in-memory value.
-            assert result is not None
+            # Returned immediately (None on the loop path) — did NOT block.
+            assert result is None
             assert elapsed < 0.2  # did NOT wait for the 2s Redis write
             # The async write has not completed yet.
-            assert cache.async_increment_calls == []
+            assert redis_calls == []
 
             # Give the scheduled task time to finish.
             await asyncio.sleep(2.5)
-            assert cache.async_increment_calls == [(cache_key, 1)]
+            assert redis_calls == [(cache_key, 1)]
 
         asyncio.run(main())
 
-    def test_uses_in_memory_value_immediately(self):
-        """With a running loop, the returned value is the in-memory increment
-        result, available before the async Redis task completes."""
+    def test_redis_value_delivered_to_callback(self):
+        """With a running loop, the Redis-sourced new value is delivered to the
+        on_result callback once the deferred write completes — not an in-memory
+        approximation. The in-memory cache is NOT touched (redis_only writes)."""
         cache = RecordingDualCache()
+
+        class FakeRedis:
+            async def async_increment(self, key, value, ttl=None, **kwargs):
+                return 42  # authoritative Redis value
+
+            def check_and_fix_namespace(self, key):
+                return key
+
+        cache.redis_cache = FakeRedis()  # type: ignore[assignment]
         handler = StickyLeastBusyWeightedLoggingHandler(router_cache=cache)
-        dep_id = "in-memory-deployment"
+        dep_id = "redis-sourced-deployment"
         cache_key = handler._get_request_count_cache_key(MG, dep_id)
 
         async def main():
-            # Block the async Redis write so it cannot influence the result.
-            pending = asyncio.Event()
+            seen: list = []
 
-            async def blocked_increment(key, value, **kwargs):
-                await pending.wait()
-                return 1
-
-            cache.async_increment_cache = blocked_increment  # type: ignore[assignment]
+            async def on_result(new_value):
+                seen.append(new_value)
 
             result = handler._non_blocking_cache_delta(
-                cache_key, 1, handler.cache_ttl, "test", action="increment"
+                cache_key, 1, handler.cache_ttl, "test", action="increment",
+                on_result=on_result,
             )
-            assert result == 1  # in-memory value, despite Redis being blocked
+            assert result is None  # loop path returns None, not an in-memory value
             assert cache.increment_calls == []  # sync path NOT taken
-            pending.set()  # release the blocked task so the loop can exit
+            # Let the deferred task + callback run.
+            await asyncio.sleep(0.1)
+            assert seen == [42]  # Redis-sourced value delivered to callback
+            # In-memory was never touched (redis_only write).
+            assert cache.increment_calls == []
+
+        asyncio.run(main())
+
+    def test_redis_failure_delivers_none_to_callback(self):
+        """If the Redis write raises, the callback receives None so the caller
+        can apply its failure semantics (e.g. not record the dedup call-id)."""
+        cache = RecordingDualCache()
+
+        class FakeRedis:
+            async def async_increment(self, key, value, ttl=None, **kwargs):
+                raise RuntimeError("redis down")
+
+            def check_and_fix_namespace(self, key):
+                return key
+
+        cache.redis_cache = FakeRedis()  # type: ignore[assignment]
+        handler = StickyLeastBusyWeightedLoggingHandler(router_cache=cache)
+        dep_id = "redis-failing-deployment"
+        cache_key = handler._get_request_count_cache_key(MG, dep_id)
+
+        async def main():
+            seen: list = []
+
+            async def on_result(new_value):
+                seen.append(new_value)
+
+            handler._non_blocking_cache_delta(
+                cache_key, 1, handler.cache_ttl, "test", action="increment",
+                on_result=on_result,
+            )
+            await asyncio.sleep(0.1)
+            assert seen == [None]
 
         asyncio.run(main())
 
@@ -862,24 +924,28 @@ class TestNonBlockingIncrement:
         """The sync decrement path (log_success_event/log_failure_event) must
         also defer Redis, so a slow Redis can't block the response callback."""
         cache = RecordingDualCache()
+        redis_calls: list = []
+
+        class FakeRedis:
+            async def async_increment(self, key, value, ttl=None, **kwargs):
+                redis_calls.append((key, value))
+                return 0
+
+            def check_and_fix_namespace(self, key):
+                return key
+
+        cache.redis_cache = FakeRedis()  # type: ignore[assignment]
         handler = StickyLeastBusyWeightedLoggingHandler(router_cache=cache)
         dep_id = "decrement-deployment"
         cache_key = handler._get_request_count_cache_key(MG, dep_id)
 
         async def main():
-            pending = asyncio.Event()
-
-            async def blocked_delta(key, value, **kwargs):
-                await pending.wait()
-                return 0
-
-            cache.async_increment_cache = blocked_delta  # type: ignore[assignment]
-
             result = handler._non_blocking_cache_delta(
                 cache_key, -1, handler.cache_ttl, "test", action="decrement"
             )
-            assert result == -1  # in-memory value, despite Redis being blocked
+            assert result is None  # loop path returns None
             assert cache.increment_calls == []  # sync path NOT taken
-            pending.set()
+            await asyncio.sleep(0.1)
+            assert redis_calls == [(cache_key, -1)]
 
         asyncio.run(main())
