@@ -231,6 +231,37 @@ class TestAgentCoreSearch:
         with pytest.raises(Exception, match="tool not found"):
             config.transform_search_response(raw_response=mock_response, logging_obj=MagicMock())
 
+    def test_transform_search_response_raises_on_tool_error(self):
+        """A failed tools/call comes back as HTTP 200 with result.isError; it must not be
+        reported to the caller as a successful search with zero results."""
+        config = AgentCoreSearchConfig()
+        mock_response = _make_mock_response(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "isError": True,
+                    "content": [{"type": "text", "text": "AccessDeniedException: not authorized"}],
+                },
+            }
+        )
+        with pytest.raises(Exception, match="AccessDeniedException"):
+            config.transform_search_response(raw_response=mock_response, logging_obj=MagicMock())
+
+    def test_transform_search_response_parses_crlf_framed_sse(self):
+        """SSE streams may be CRLF framed; events must still split into separate events."""
+        config = AgentCoreSearchConfig()
+        progress = {"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progress": 1}}
+        sse_text = (
+            f"event: message\r\ndata: {json.dumps(progress)}\r\n\r\n"
+            f"event: message\r\ndata: {json.dumps(_mcp_response_body())}\r\n\r\n"
+        )
+        mock_response = _make_mock_response(text=sse_text)
+
+        response = config.transform_search_response(raw_response=mock_response, logging_obj=MagicMock())
+        assert len(response.results) == 2
+        assert response.results[0].title == "Test Result 1"
+
     def test_sign_request_uses_bearer_token_when_api_key_set(self):
         """CUSTOM_JWT gateways: api_key is sent as a bearer token, no SigV4."""
         config = AgentCoreSearchConfig()
@@ -280,6 +311,54 @@ class TestAgentCoreSearch:
             os.environ.pop("AGENTCORE_GATEWAY_TOKEN", None)
             os.environ.pop("AGENTCORE_GATEWAY_URL", None)
 
+    def test_sign_request_uses_env_token_for_gateway_api_base_without_gateway_url(self):
+        """api_base pointing at a real gateway is a trusted destination for the env token,
+        so operators configuring api_base in yaml don't also need AGENTCORE_GATEWAY_URL."""
+        config = AgentCoreSearchConfig()
+        os.environ["AGENTCORE_GATEWAY_TOKEN"] = "env-jwt-token"
+        os.environ.pop("AGENTCORE_GATEWAY_URL", None)
+        try:
+            headers, _ = config.sign_request(
+                headers={},
+                optional_params={},
+                request_data={"jsonrpc": "2.0"},
+                api_base=GATEWAY_URL,
+            )
+            assert headers["Authorization"] == "Bearer env-jwt-token"
+        finally:
+            os.environ.pop("AGENTCORE_GATEWAY_TOKEN", None)
+
+    @pytest.mark.parametrize(
+        "untrusted_api_base",
+        [
+            "https://attacker.example.com/mcp",
+            # gateway hostname in the path/query must not pass for the host
+            "https://attacker.example.com/gw.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+        ],
+    )
+    def test_sign_request_refuses_sigv4_to_untrusted_host(self, untrusted_api_base):
+        """A SigV4 signature carries the proxy's credential scope and session token, so it
+        must never be sent to a host that is not the operator's gateway."""
+        config = AgentCoreSearchConfig()
+        os.environ.pop("AGENTCORE_GATEWAY_TOKEN", None)
+        os.environ["AGENTCORE_GATEWAY_URL"] = GATEWAY_URL
+        try:
+            with patch.object(
+                AgentCoreSearchConfig.__mro__[2],  # BaseAWSLLM
+                "_sign_request",
+                return_value=({}, b"{}"),
+            ) as mock_base_sign:
+                with pytest.raises(ValueError, match="Refusing to send"):
+                    config.sign_request(
+                        headers={},
+                        optional_params={"aws_region_name": "us-east-1"},
+                        request_data={"jsonrpc": "2.0"},
+                        api_base=untrusted_api_base,
+                    )
+                mock_base_sign.assert_not_called()
+        finally:
+            os.environ.pop("AGENTCORE_GATEWAY_URL", None)
+
     def test_sign_request_does_not_leak_bedrock_bearer_token(self):
         """AWS_BEARER_TOKEN_BEDROCK is a Bedrock Runtime credential — it must not
         replace SigV4 on requests to an AgentCore gateway."""
@@ -303,39 +382,49 @@ class TestAgentCoreSearch:
     def test_sign_request_custom_hostname_requires_region(self):
         """Custom hostname + empty AWS config chain → clear error, no guessed region."""
         config = AgentCoreSearchConfig()
+        custom_url = "https://gateway.internal.example.com/mcp"
+        os.environ["AGENTCORE_GATEWAY_URL"] = custom_url
 
         mock_session = MagicMock()
         mock_session.region_name = None  # nothing configured anywhere
-        with patch("boto3.Session", return_value=mock_session):
-            with pytest.raises(ValueError, match="signing region"):
-                config.sign_request(
-                    headers={},
-                    optional_params={},
-                    request_data={"jsonrpc": "2.0"},
-                    api_base="https://gateway.internal.example.com/mcp",
-                )
+        try:
+            with patch("boto3.Session", return_value=mock_session):
+                with pytest.raises(ValueError, match="signing region"):
+                    config.sign_request(
+                        headers={},
+                        optional_params={},
+                        request_data={"jsonrpc": "2.0"},
+                        api_base=custom_url,
+                    )
+        finally:
+            os.environ.pop("AGENTCORE_GATEWAY_URL", None)
 
     def test_sign_request_custom_hostname_uses_shared_config_region(self):
         """Custom hostname + region from AWS shared config (profile) must be honored."""
         config = AgentCoreSearchConfig()
+        custom_url = "https://gateway.internal.example.com/mcp"
+        os.environ["AGENTCORE_GATEWAY_URL"] = custom_url
 
         mock_session = MagicMock()
         mock_session.region_name = "eu-west-1"  # e.g. from ~/.aws/config profile
-        with (
-            patch("boto3.Session", return_value=mock_session),
-            patch.object(
-                AgentCoreSearchConfig.__mro__[2],  # BaseAWSLLM
-                "_sign_request",
-                return_value=({}, b"{}"),
-            ) as mock_base_sign,
-        ):
-            config.sign_request(
-                headers={},
-                optional_params={},
-                request_data={"jsonrpc": "2.0"},
-                api_base="https://gateway.internal.example.com/mcp",
-            )
-            assert mock_base_sign.call_args.kwargs["optional_params"]["aws_region_name"] == "eu-west-1"
+        try:
+            with (
+                patch("boto3.Session", return_value=mock_session),
+                patch.object(
+                    AgentCoreSearchConfig.__mro__[2],  # BaseAWSLLM
+                    "_sign_request",
+                    return_value=({}, b"{}"),
+                ) as mock_base_sign,
+            ):
+                config.sign_request(
+                    headers={},
+                    optional_params={},
+                    request_data={"jsonrpc": "2.0"},
+                    api_base=custom_url,
+                )
+                assert mock_base_sign.call_args.kwargs["optional_params"]["aws_region_name"] == "eu-west-1"
+        finally:
+            os.environ.pop("AGENTCORE_GATEWAY_URL", None)
 
     def test_sign_request_passes_explicit_aws_credentials(self):
         """Explicit aws_* params (e.g. from a proxy search_tools entry) reach the signer."""
@@ -434,7 +523,11 @@ class TestAgentCoreSearchEdgeCases:
         assert getattr(err, "status_code", None) == 503
         assert "boom" in str(err)
 
-    def test_search_cost_lookup_is_mapped(self):
+    def test_search_cost_lookup_is_mapped(self, monkeypatch):
+        """Assert against the map in this checkout: the remote cost map litellm loads by
+        default only carries providers already released."""
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
         from litellm.search.cost_calculator import search_provider_cost_per_query
 
+        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
         assert search_provider_cost_per_query(model="agentcore/search", custom_llm_provider="agentcore") == (0.0, 0.0)

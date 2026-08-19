@@ -71,11 +71,17 @@ AGENTCORE_TOOL_NAME_SUFFIX: Final = "___WebSearch"
 # servers that predate the header ignore it.
 AGENTCORE_MCP_PROTOCOL_VERSION: Final = "2025-06-18"
 
-_GATEWAY_REGION_PATTERN: Final = re.compile(r"\.gateway\.bedrock-agentcore\.([a-z0-9-]+)\.amazonaws\.com")
+# Matched against the URL host so a crafted path or query string can't pass for
+# a gateway hostname.
+_GATEWAY_HOST_PATTERN: Final = re.compile(r"[a-z0-9-]+\.gateway\.bedrock-agentcore\.([a-z0-9-]+)\.amazonaws\.com")
 
-_SSE_EVENT_SEPARATOR: Final = re.compile(r"\n[ \t]*\n")
+_SSE_EVENT_SEPARATOR: Final = re.compile(r"\r?\n[ \t]*\r?\n")
 
 _SSE_LINE_PREFIXES: Final = ("event:", "data:", ":", "id:", "retry:")
+
+
+def _gateway_host_match(api_base: str) -> re.Match[str] | None:
+    return _GATEWAY_HOST_PATTERN.fullmatch(httpx.URL(api_base).host)
 
 
 def _string_field(item: Mapping[str, object], *keys: str) -> str | None:
@@ -245,16 +251,17 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         if not isinstance(request_data, dict):
             raise TypeError("AgentCore search expects a single dict request body")
 
-        # Server-managed token fallback is gated on the request targeting the
-        # operator-configured gateway host, otherwise an authenticated caller
-        # could point api_base at their own server (e.g. via
-        # /search_tools/test_connection) and receive AGENTCORE_GATEWAY_TOKEN.
+        # Server-managed credentials only go to a trusted host, otherwise an
+        # authenticated caller could point api_base at their own server (e.g. via
+        # /search_tools/test_connection) and collect AGENTCORE_GATEWAY_TOKEN or a
+        # SigV4 signature with the proxy's credential scope and session token.
+        gateway_host_match: Final = _gateway_host_match(api_base)
         bearer_token: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
             key_env_vars=("AGENTCORE_GATEWAY_TOKEN",),
             base_env_var="AGENTCORE_GATEWAY_URL",
-            default_api_base=None,
+            default_api_base=api_base if gateway_host_match else None,
         )
         if bearer_token:
             bearer_headers: Final = {  # mutable-ok: httpx request headers are a dict
@@ -262,6 +269,13 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
                 "Authorization": f"Bearer {bearer_token}",
             }
             return bearer_headers, json.dumps(request_data).encode()
+
+        if gateway_host_match is None and not self._is_configured_gateway(api_base):
+            raise ValueError(
+                f"Refusing to send SigV4-signed AgentCore requests to '{api_base}': it is neither an "
+                "AgentCore gateway hostname nor the host in AGENTCORE_GATEWAY_URL. Set "
+                "AGENTCORE_GATEWAY_URL to authorize a custom gateway hostname."
+            )
 
         signing_params: Final = (
             optional_params
@@ -285,6 +299,13 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         )
 
     @staticmethod
+    def _is_configured_gateway(api_base: str) -> bool:
+        configured: Final = get_secret_str("AGENTCORE_GATEWAY_URL")
+        if not configured:
+            return False
+        return httpx.URL(configured).host == httpx.URL(api_base).host
+
+    @staticmethod
     def _signing_region(api_base: str) -> str:
         """
         Resolve the SigV4 signing region, which must match the gateway's region.
@@ -296,7 +317,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         nothing rather than silently signing for a guessed region the gateway
         would reject with a confusing auth error.
         """
-        match: Final = _GATEWAY_REGION_PATTERN.search(api_base)
+        match: Final = _gateway_host_match(api_base)
         if match:
             return match.group(1)
 
@@ -336,6 +357,15 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
                 message=f"AgentCore gateway MCP error: {error}",
             )
 
+        # A failed tools/call is reported in-band, as HTTP 200 with result.isError
+        # and the failure text where the results would be.
+        result: Final = response_json.get("result")
+        if isinstance(result, dict) and result.get("isError"):
+            raise BedrockError(
+                status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
+                message=f"AgentCore web search tool error: {self._tool_error_message(response_json)}",
+            )
+
         return SearchResponse(
             results=[  # mutable-ok: SearchResponse.results is a pydantic list field
                 _to_search_result(item)
@@ -344,6 +374,12 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             ],
             object="search",
         )
+
+    def _tool_error_message(self, response_json: Mapping[str, object]) -> str:
+        texts: Final = tuple(
+            text for block in self._text_blocks(response_json) if isinstance(text := block.get("text"), str)
+        )
+        return " ".join(texts) if texts else json.dumps(response_json.get("result"))[:500]
 
     @staticmethod
     def _text_blocks(response_json: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
