@@ -895,6 +895,7 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
     batch_output = pricing["output_cost_per_token_batches"]
 
     assert batch_input < pricing["input_cost_per_token"]
+    assert batch_output < pricing["output_cost_per_token"]
     assert cost > 0
     assert cost == pytest.approx(30 * batch_input + 15 * batch_output)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
