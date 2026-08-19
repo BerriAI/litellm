@@ -599,6 +599,25 @@ describe("ComplexityRouterConfig classifier rubric", () => {
     expect(screen.getByText(/only conversational traffic/)).toBeInTheDocument();
   });
 
+  it("records the business preset the operator picks", async () => {
+    const onChange = openClassificationPanel(llmValue);
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Classification Rubric" }));
+    await userEvent.click(await screen.findByTitle("Business"));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classifier_llm_config: expect.objectContaining({ classification_rubric: "business" }),
+      }),
+    );
+  });
+
+  it("shows the stored preset when editing a router already on business", () => {
+    openClassificationPanel({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "business" },
+    });
+    expect(screen.getByText(/business-oriented tier definitions/)).toBeInTheDocument();
+  });
+
   it("disables the preset once a custom prompt replaces the rubric it would select", () => {
     // The backend rejects both together, so the picker must not look like it still applies.
     openClassificationPanel({
