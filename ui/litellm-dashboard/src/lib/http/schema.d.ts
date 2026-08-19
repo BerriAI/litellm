@@ -895,8 +895,10 @@ export interface paths {
          * Stop Shadow Eval Job
          * @description Stop an active shadow eval job, every key it scopes at once. Attempts are kept;
          *     sampling halts within ~10s. Keys that already stopped on their own budget keep the
-         *     stopped_at they earned. One statement stamps stopped_by and every missing stopped_at
-         *     together, so a half-applied stop can never read stopped while legs keep sampling.
+         *     stopped_at they earned. The statement is the whole state machine: it claims the job
+         *     only while a leg still samples inside the window with no stop recorded, so a racing
+         *     operator, a same-instant budget spend, and a repeat stop all read the same 400 with
+         *     the status the job actually holds.
          */
         post: operations["stop_shadow_eval_job_auto_router_shadow_eval__job_id__stop_post"];
         delete?: never;
