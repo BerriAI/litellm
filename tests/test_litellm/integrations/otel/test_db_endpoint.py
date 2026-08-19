@@ -93,6 +93,10 @@ MISPARSED_AUTHORITY_DSNS = (
     # that hijacks the host= parameter into server.address.
     ("postgresql://litellm:12345?a=aBcD@db.internal/litellm", "aBcD"),
     ("postgresql://litellm:12345?host=aBcD@db.internal/litellm", "aBcD"),
+    # Both '/' and '?key=value' together: the slash leaves a clean path holding
+    # the password remainder and the query still parses, so only the stranded
+    # at-sign gives it away.
+    ("postgresql://litellm:12345/aBcD?x=1@db.internal/litellm", "aBcD"),
 )
 
 
@@ -133,14 +137,20 @@ def test_a_mis_split_authority_never_exports_the_database_username(dsn):
     [
         "postgresql://db.internal:5432/litellm?application_name=svc@prod",
         "postgresql://db.internal:5432/litellm?user=admin@company.com",
-        "postgresql://u:p@db.internal:5432/litellm?application_name=svc@prod",
     ],
 )
-def test_an_at_sign_inside_a_query_parameter_is_not_a_mis_split(dsn):
-    """libpq parameters legitimately carry '@', so the guard must key on a query
-    that did not parse as parameters, not on the character alone."""
-    endpoint = parse_database_endpoint(dsn)
-    assert endpoint is not None and endpoint.address == "db.internal"
+def test_an_unencoded_at_sign_in_a_query_forfeits_the_endpoint(dsn):
+    """This shape is byte-for-byte indistinguishable from a mis-split password,
+    so it resolves to no endpoint rather than risking a credential fragment.
+    Percent-encoding the at-sign restores the attributes."""
+    assert parse_database_endpoint(dsn) is None
+    assert parse_database_endpoint(dsn.replace("@", "%40")) is not None
+
+
+def test_host_and_port_query_parameters_are_honoured_together():
+    assert parse_database_endpoint("postgresql://ignored/litellm?host=real.internal&port=6543") == DatabaseEndpoint(
+        address="real.internal", port=6543, namespace="litellm"
+    )
 
 
 def test_percent_encoded_password_still_resolves_the_endpoint():

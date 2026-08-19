@@ -26,7 +26,6 @@ _READ_REPLICA_ENV: Final = "DATABASE_URL_READ_REPLICA"
 _DEFAULT_POSTGRES_PORT: Final = 5432
 _DEFAULT_POSTGRES_SCHEMA: Final = "public"
 _POSTGRES_SCHEMES: Final = frozenset({"postgres", "postgresql"})
-_MISPARSED_AUTHORITY_MARKERS: Final = frozenset("@/")
 _EMPTY_ATTRIBUTES: Final[Mapping[str, str | int]] = MappingProxyType({})
 
 
@@ -54,13 +53,14 @@ def parse_database_endpoint(url: str | None) -> DatabaseEndpoint | None:
             return None
         query: Final = parse_qs(parsed.query)
         raw_database: Final = (parsed.path or "").lstrip("/")
-        if _is_misparsed_authority(parsed, raw_database, query):
+        if _is_misparsed_authority(parsed, url, raw_database):
             return None
         # ``host=`` beats the netloc: it is how libpq names a Unix socket
         # directory and how the Cloud SQL connector sits behind a localhost
         # netloc, where the netloc is the very answer this module replaces.
         address: Final = _first(query.get("host")) or parsed.hostname
-        port: Final = (parsed.port or _DEFAULT_POSTGRES_PORT) if address else None
+        # ``port=`` accompanies ``host=`` in a libpq URI, so honour it the same way.
+        port: Final = _port(_first(query.get("port")), parsed.port) if address else None
         namespace: Final = _namespace(unquote(raw_database), _first(query.get("schema")))
     except ValueError:
         return None
@@ -69,27 +69,37 @@ def parse_database_endpoint(url: str | None) -> DatabaseEndpoint | None:
     return DatabaseEndpoint(address=address, port=port, namespace=namespace)
 
 
-def _is_misparsed_authority(parsed: ParseResult, raw_database: str, query: Mapping[str, Sequence[str]]) -> bool:
-    """Whether an unencoded character in the password truncated the authority.
+def _is_misparsed_authority(parsed: ParseResult, url: str, raw_database: str) -> bool:
+    """Whether the URL authority may have been truncated by an unencoded character.
 
     ``/``, ``#`` or ``?`` in a password ends the netloc early, so urlparse hands
-    back the username as the host and strands the real userinfo ``@`` in the
-    path, fragment or query. A PostgreSQL DSN never carries a fragment, and its
-    database name cannot hold an unencoded ``@`` or ``/``. An ``@`` in the query
-    is legitimate only when the query parsed as parameters AND a database path
-    preceded it, as in ``postgres://host/db?application_name=svc@prod``. A ``?``
-    in a password strands the tail in the query with no path left behind, and it
-    can still parse as parameters, so neither test alone is enough.
+    back the username as the host, the leading digits of the password as the
+    port, and the rest of the credential as the path, query or fragment. The
+    stranded userinfo ``@`` is the only surviving evidence.
+
+    A DSN that carries the at-sign in a query parameter instead, such as
+    A database name cannot hold an unencoded slash either, so a second path
+    segment is the same evidence.
+
+    ``?application_name=svc@prod``, is indistinguishable from a mis-split by any
+    property of the parse: both leave no userinfo, a host, a port and a path.
+    Since guessing wrong publishes a credential fragment to a tracing backend,
+    that ambiguity resolves to refusing the endpoint. Such a DSN loses
+    ``server.address`` and ``db.namespace`` and keeps the rest of the span,
+    which is the cheaper error of the two. Percent-encode the at-sign to keep
+    them.
     """
-    if parsed.fragment:
+    if "/" in raw_database:
         return True
-    if any(marker in raw_database for marker in _MISPARSED_AUTHORITY_MARKERS):
-        return True
-    return "@" in parsed.query and (not query or not parsed.path)
+    return "@" in url and "@" not in parsed.netloc
 
 
 def _first(values: Sequence[str] | None) -> str:
     return values[0] if values else ""
+
+
+def _port(from_query: str, from_netloc: int | None) -> int:
+    return int(from_query) if from_query.isdigit() else (from_netloc or _DEFAULT_POSTGRES_PORT)
 
 
 def _namespace(database: str, schema: str) -> str | None:
