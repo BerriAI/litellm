@@ -63,7 +63,11 @@ export default function PlaygroundPage() {
             Agent Builder (Experimental)
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="chat" className="mt-0 h-full min-h-0 min-w-0 overflow-hidden data-hidden:hidden">
+        <TabsContent
+          value="chat"
+          className="mt-0 h-full min-h-0 min-w-0 overflow-hidden data-hidden:hidden"
+          keepMounted
+        >
           <ChatUI
             accessToken={accessToken}
             token={token}
@@ -73,13 +77,13 @@ export default function PlaygroundPage() {
             proxySettings={proxySettings}
           />
         </TabsContent>
-        <TabsContent value="compare" className="mt-0 h-full data-hidden:hidden">
+        <TabsContent value="compare" className="mt-0 h-full data-hidden:hidden" keepMounted>
           <CompareUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
         </TabsContent>
-        <TabsContent value="compliance" className="mt-0 h-full data-hidden:hidden">
+        <TabsContent value="compliance" className="mt-0 h-full data-hidden:hidden" keepMounted>
           <ComplianceUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
         </TabsContent>
-        <TabsContent value="agent-builder" className="mt-0 h-full data-hidden:hidden">
+        <TabsContent value="agent-builder" className="mt-0 h-full data-hidden:hidden" keepMounted>
           <DeprecationBanner featureName="The Playground's Agent Builder" />
           <AgentBuilderView
             accessToken={accessToken}
