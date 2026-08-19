@@ -998,10 +998,19 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         )
 
         logging_obj.model_call_details["response_headers"] = headers
+        _custom_provider = (
+            getattr(logging_obj, "custom_llm_provider", None)
+            or (
+                logging_obj.model_call_details.get("custom_llm_provider")
+                if hasattr(logging_obj, "model_call_details")
+                else None
+            )
+            or "openai"
+        )
         streamwrapper: Final = CustomStreamWrapper(
             completion_stream=response,
             model=model,
-            custom_llm_provider="openai",
+            custom_llm_provider=_custom_provider,
             logging_obj=logging_obj,
             stream_options=data.get("stream_options", None),
             _response_headers=headers,
@@ -1070,10 +1079,21 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     logging_obj=logging_obj,
                 )
                 logging_obj.model_call_details["response_headers"] = headers
+                _custom_provider = (
+                    getattr(provider_config, "custom_llm_provider", None)
+                    or getattr(logging_obj, "custom_llm_provider", None)
+                    or litellm_params.get("custom_llm_provider")
+                    or (
+                        logging_obj.model_call_details.get("custom_llm_provider")
+                        if hasattr(logging_obj, "model_call_details")
+                        else None
+                    )
+                    or "openai"
+                )
                 streamwrapper = CustomStreamWrapper(
                     completion_stream=response,
                     model=model,
-                    custom_llm_provider="openai",
+                    custom_llm_provider=_custom_provider,
                     logging_obj=logging_obj,
                     stream_options=data.get("stream_options", None),
                     _response_headers=headers,

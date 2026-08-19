@@ -2435,7 +2435,15 @@ def _coerce_token_details(
         return None
     if isinstance(raw, details_type):
         return raw
-    return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
+    if isinstance(raw, dict):
+        return details_type(**raw)
+    if hasattr(raw, "model_dump"):
+        return details_type(**raw.model_dump())
+    if hasattr(raw, "dict"):
+        return details_type(**raw.dict())
+    if hasattr(raw, "__dict__"):
+        return details_type(**raw.__dict__)
+    return None
 
 
 def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
@@ -2453,13 +2461,29 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
     cache_creation_token_details: CacheCreationTokenDetails | None = None
 
     for chunk in chunks:
-        if "usage" in chunk and chunk["usage"] is not None:
+        usage = None
+        if hasattr(chunk, "usage") and chunk.usage is not None:
+            usage = chunk.usage
+        elif isinstance(chunk, dict) and "usage" in chunk and chunk["usage"] is not None:
             usage = chunk["usage"]
+        elif (
+            hasattr(chunk, "_hidden_params")
+            and isinstance(chunk._hidden_params, dict)
+            and chunk._hidden_params.get("usage") is not None
+        ):
+            usage = chunk._hidden_params.get("usage")
+
+        if usage is not None:
             latest_usage_chunk = usage
-            if "prompt_tokens" in usage:
-                prompt_tokens = usage.get("prompt_tokens", 0) or 0
-            if "completion_tokens" in usage:
-                completion_tokens = usage.get("completion_tokens", 0) or 0
+            if isinstance(usage, dict):
+                if "prompt_tokens" in usage and usage["prompt_tokens"] is not None:
+                    prompt_tokens = usage.get("prompt_tokens", 0) or 0
+                if "completion_tokens" in usage and usage["completion_tokens"] is not None:
+                    completion_tokens = usage.get("completion_tokens", 0) or 0
+            else:
+                prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+
             incoming_prompt_tokens_details = _coerce_token_details(
                 usage, "prompt_tokens_details", PromptTokensDetailsWrapper
             )
