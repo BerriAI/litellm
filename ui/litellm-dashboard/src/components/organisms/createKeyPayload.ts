@@ -88,18 +88,15 @@ const parseMetadata = (raw: unknown): unknown => {
   }
 };
 
-const assignServiceAccountId = (metadata: unknown, keyAlias: unknown): unknown => {
-  (metadata as Record<string, unknown>).service_account_id = keyAlias;
-  return metadata;
-};
-
 const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInput): string => {
   const parsed = parseMetadata(values.metadata);
-  const owned = input.keyOwner === "service_account" ? assignServiceAccountId(parsed, values.key_alias) : parsed;
+  if (input.keyOwner === "service_account") {
+    (parsed as Record<string, unknown>).service_account_id = values.key_alias;
+  }
   const logged =
     input.loggingSettings.length > 0
-      ? { ...(owned as object), logging: input.loggingSettings.filter((config) => config.callback_name) }
-      : owned;
+      ? { ...(parsed as object), logging: input.loggingSettings.filter((config) => config.callback_name) }
+      : parsed;
   const disabled =
     input.disabledCallbacks.length > 0
       ? { ...(logged as object), litellm_disabled_callbacks: mapDisplayToInternalNames(input.disabledCallbacks) }
