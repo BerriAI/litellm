@@ -24,17 +24,6 @@ vi.mock("./utils", () => {
   };
 });
 
-// Mock notifications
-vi.mock("../molecules/notifications_manager", () => {
-  return {
-    default: {
-      success: vi.fn(),
-      fromBackend: vi.fn(),
-      info: vi.fn(),
-    },
-  };
-});
-
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: vi.fn(() => ({

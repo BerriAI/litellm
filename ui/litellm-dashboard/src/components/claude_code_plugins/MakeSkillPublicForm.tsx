@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/cva.config";
 import { enableClaudeCodePlugin, disableClaudeCodePlugin } from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Plugin } from "./types";
 
 const STEP_TITLES = ["Select Skills", "Confirm"];
@@ -38,7 +38,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
 
   const handleNext = () => {
     if (selectedSkills.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one skill");
+      toast.fromError("Please select at least one skill");
       return;
     }
     setCurrentStep(1);
@@ -71,7 +71,7 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedSkills.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one skill");
+      toast.fromError("Please select at least one skill");
       return;
     }
 
@@ -91,12 +91,12 @@ const MakeSkillPublicForm: React.FC<MakeSkillPublicFormProps> = ({
         }),
       );
 
-      NotificationsManager.success(`Skill Hub updated — ${selectedSkills.size} skill(s) published`);
+      toast.success(`Skill Hub updated — ${selectedSkills.size} skill(s) published`);
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error publishing skills:", error);
-      NotificationsManager.fromBackend("Failed to update skills. Please try again.");
+      toast.fromError("Failed to update skills. Please try again.");
     } finally {
       setLoading(false);
     }

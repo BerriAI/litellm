@@ -65,6 +65,7 @@ from litellm.constants import (
     DEFAULT_EMBEDDING_PARAM_VALUES,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
     INITIAL_RETRY_DELAY,
@@ -2110,7 +2111,7 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
 
 def decode(
     model="",
-    tokens: list[int] = [],
+    tokens: Sequence[int] = (),
     custom_tokenizer: dict | None = None,
     skip_special_tokens: bool = True,
 ):
@@ -2132,7 +2133,7 @@ def decode(
     return dec
 
 
-def _strip_huggingface_special_token_ids(tokenizer: Tokenizer, tokens: list[int]) -> list[int]:
+def _strip_huggingface_special_token_ids(tokenizer: Tokenizer, tokens: Sequence[int]) -> Sequence[int]:
     try:
         added_tokens_decoder: Final = tokenizer.get_added_tokens_decoder()
     except Exception:
@@ -3972,6 +3973,8 @@ def get_optional_params(
     thinking: AnthropicThinkingParam | None = None,
     web_search_options: OpenAIWebSearchOptions | None = None,
     safety_identifier: str | None = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
     base_model: str | None = None,
     **kwargs,
 ):
@@ -5578,6 +5581,7 @@ def _get_model_info_helper(
                 input_cost_per_token=_input_cost_per_token,
                 input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
                 input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
+                input_cost_per_token_ultrafast=_model_info.get("input_cost_per_token_ultrafast", None),
                 cache_creation_input_token_cost=_model_info.get("cache_creation_input_token_cost", None),
                 cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_creation_input_token_cost_above_200k_tokens", None
@@ -5594,6 +5598,9 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_flex=_model_info.get("cache_creation_input_token_cost_flex", None),
                 cache_creation_input_token_cost_priority=_model_info.get(
                     "cache_creation_input_token_cost_priority", None
+                ),
+                cache_creation_input_token_cost_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_ultrafast", None
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
@@ -5617,6 +5624,7 @@ def _get_model_info_helper(
                 ),
                 cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
                 cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
+                cache_read_input_token_cost_ultrafast=_model_info.get("cache_read_input_token_cost_ultrafast", None),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
@@ -5647,6 +5655,7 @@ def _get_model_info_helper(
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
                 output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),
+                output_cost_per_token_ultrafast=_model_info.get("output_cost_per_token_ultrafast", None),
                 regional_processing_uplift_multiplier_eu=_model_info.get(
                     "regional_processing_uplift_multiplier_eu", None
                 ),
@@ -7630,12 +7639,20 @@ def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
 
 
 def validate_and_fix_thinking_param(
-    thinking: AnthropicThinkingParam | None,
+    thinking: AnthropicThinkingParam | bool | None,
 ) -> AnthropicThinkingParam | None:
     """
-    Normalizes camelCase keys in the thinking param to snake_case.
+    Coerces bool thinking values (True becomes enabled with the default medium budget, False becomes None)
+    and normalizes camelCase keys in the thinking param to snake_case.
     Handles clients that send budgetTokens instead of budget_tokens.
     """
+    if thinking is True:
+        return cast(
+            "AnthropicThinkingParam",
+            {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+        )
+    if thinking is False:
+        return None
     if thinking is None or not isinstance(thinking, dict):
         return thinking
     normalized: Final = dict(thinking)
@@ -7705,17 +7722,12 @@ def validate_chat_completion_tool_choice(
 
     Prevents user errors like: https://github.com/BerriAI/litellm/issues/7483
     """
-    from litellm.types.llms.openai import (
-        ChatCompletionToolChoiceObjectParam,
-        ChatCompletionToolChoiceStringValues,
-    )
-
     if tool_choice is None or isinstance(tool_choice, str):
         return tool_choice
     elif isinstance(tool_choice, dict):
-        # Handle Cursor IDE format: {"type": "auto"} -> return as-is
-        if tool_choice.get("type") in ["auto", "none", "required"] and "function" not in tool_choice:
-            return tool_choice
+        tool_choice_type = tool_choice.get("type")
+        if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
+            return tool_choice_type
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
@@ -8737,6 +8749,12 @@ class ProviderConfigManager:
             )
 
             return S3VectorsVectorStoreConfig()
+        elif litellm.LlmProviders.VALKEY == provider:
+            from litellm.llms.valkey.vector_stores.transformation import (
+                ValkeyVectorStoreConfig,
+            )
+
+            return ValkeyVectorStoreConfig()
         return None
 
     @staticmethod

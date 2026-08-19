@@ -11064,3 +11064,80 @@ async def test_ptu_rollup_job_not_registered_without_opt_in(monkeypatch):
 
     assert scheduler.get_job(PTU_ROLLUP_JOB_ID) is None
     assert len(scheduler.get_jobs()) > 0
+
+
+@pytest.mark.asyncio
+async def test_moderations_reraises_proxy_exception_unwrapped():
+    """A 400 ProxyException from request validation must surface as-is,
+    not be re-wrapped into a code-500 ProxyException."""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    exc = ProxyException(
+        message="Invalid type for 'metadata': expected an object, but got a string instead.",
+        type=ProxyErrorTypes.bad_request_error,
+        param="metadata",
+        code=400,
+    )
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi", "metadata": "abc"}')
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as exc_info:
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert exc_info.value is exc
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "metadata"
+    mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+class TestEmbeddingsFailureHookRequestData:
+    @pytest.mark.asyncio
+    async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
+        """Request setup replaces the processor's data dict (adding the logging
+        object the failure hook needs to lift token usage from); the embeddings
+        exception handler must pass that replaced dict, not the raw request body
+        dict it was rebuilt from."""
+        from litellm.proxy._types import ProxyException
+
+        captured = {}
+        logging_obj_sentinel = MagicMock()
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_logging_obj": logging_obj_sentinel}
+            captured["processor_data"] = self.data
+            raise RuntimeError("provider timeout")
+
+        with (
+            patch.object(
+                proxy_server_module,
+                "_read_request_body",
+                new=AsyncMock(return_value={"model": "my-embed", "input": "hello"}),
+            ),
+            patch.object(
+                proxy_server_module.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=fake_process,
+            ),
+            patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock(return_value=None)
+            with pytest.raises(ProxyException):
+                await proxy_server_module.embeddings(
+                    request=MagicMock(),
+                    fastapi_response=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+        assert hook_request_data is captured["processor_data"]
+        assert hook_request_data["litellm_logging_obj"] is logging_obj_sentinel

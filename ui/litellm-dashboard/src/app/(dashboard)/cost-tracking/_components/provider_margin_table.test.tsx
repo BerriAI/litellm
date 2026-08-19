@@ -68,7 +68,7 @@ describe("ProviderMarginTable", () => {
       />,
     );
     const logo = screen.getByRole("img", { name: `${Providers.OpenAI} logo` });
-    expect(logo.getAttribute("src")).toBe(providerLogoMap[Providers.OpenAI]);
+    expect(logo).toHaveAttribute("src", providerLogoMap[Providers.OpenAI]);
   });
 
   it("should fall back to a letter avatar for a provider with no bundled logo", () => {

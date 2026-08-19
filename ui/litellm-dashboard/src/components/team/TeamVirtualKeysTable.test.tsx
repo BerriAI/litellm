@@ -212,7 +212,7 @@ describe("TeamVirtualKeysTable", () => {
 
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
-    await waitFor(() => expect(screen.getByTestId("sort-header-created_at")).toBeInTheDocument());
+    expect(await screen.findByTestId("sort-header-created_at")).toBeInTheDocument();
     await user.click(screen.getByTestId("sort-header-created_at"));
 
     await waitFor(() =>

@@ -689,3 +689,54 @@ def test_uvicorn_log_config_without_filter_instances_still_logs(bare_uvicorn_log
 
     message = json.loads(capsys.readouterr().out.strip())["message"]
     assert message == '127.0.0.1:52814 - "GET /health/liveliness HTTP/1.1" 200'
+
+
+def test_aws_credential_redaction_catches_quoted_values():
+    """AWS creds appear as quoted dict-repr values, not just bare key=value."""
+    cases = (
+        "{'aws_secret_access_key': 'wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY'}",
+        '{"aws_session_token": "IQoJb3JpZ2luX2VjEaCXVzLWVhc3QtMSJHMEUCIQ"}',
+        "aws_session_token: 'FwoGZXIvYXdzEBYaDHh4eHh4eHh4eHh4eCLLAe'",
+        "aws_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+        "{'aws_access_key_id': 'not-an-akia-shaped-value'}",
+    )
+    for secret_line in cases:
+        result = redact_string(secret_line)
+        assert "REDACTED" in result, f"AWS redaction missed: {secret_line!r}"
+        assert "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY" not in result
+        assert "IQoJb3JpZ2luX2VjEaCXVzLWVhc3QtMSJHMEUCIQ" not in result
+
+    safe = "'aws_region_name': 'us-east-1'"
+    assert redact_string(safe) == safe
+
+
+@pytest.mark.parametrize(
+    "extra",
+    (
+        {"api_base": {f"https://host/v1?key={SECRET}"}},
+        {"blob": {"authorization": f"Bearer {SECRET}"}},
+        {"blob": [f"Bearer {SECRET}"]},
+        {"blob": ({"nested": {"deep": SECRET}},)},
+    ),
+    ids=("set", "dict", "list", "nested"),
+)
+def test_json_formatter_redacts_non_string_extra_values(extra):
+    """SecretRedactionFilter only scrubs str attrs, so containers must be caught on render."""
+    buf = StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(_secret_filter)
+
+    logger = logging.getLogger("test_json_extra_redaction")
+    logger.handlers = [handler]
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    try:
+        logger.warning("request sent", extra=extra)
+    finally:
+        logger.handlers = []
+
+    output = buf.getvalue()
+    assert output.strip(), "no record captured"
+    assert SECRET not in output, f"non-string extra leaked a secret: {output}"
+    assert "REDACTED" in output

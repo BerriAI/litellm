@@ -1,7 +1,7 @@
 import React from "react";
 import { Copy, Info } from "lucide-react";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -27,9 +27,9 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
     if (responsesSessionId) {
       try {
         await navigator.clipboard.writeText(responsesSessionId);
-        NotificationsManager.success("Response ID copied to clipboard!");
+        toast.success("Response ID copied to clipboard!");
       } catch {
-        NotificationsManager.error("Unable to copy response ID");
+        toast.error("Unable to copy response ID");
       }
     }
   };

@@ -14,17 +14,6 @@ vi.mock("./networking", () => ({
   alertingSettingsCall: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("./molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    clear: vi.fn(),
-  },
-}));
-
 vi.mock("./alerting/alerting_settings", () => ({
   __esModule: true,
   default: () => <div>Mock Alerting Settings</div>,
@@ -345,7 +334,7 @@ describe("CallbackSelector logos", () => {
 
     expect(await screen.findByAltText("Langfuse logo")).toHaveAttribute("src", "/ui/assets/logos/langfuse.png");
     expect(screen.getByAltText("Hosted logo")).toHaveAttribute("src", "https://logos.example.com/hosted.png");
-    expect(screen.queryByAltText("NoLogo logo")).toBeNull();
+    expect(screen.queryByAltText("NoLogo logo")).not.toBeInTheDocument();
     expect(screen.getByText("N")).toBeInTheDocument();
   });
 });

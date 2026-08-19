@@ -69,7 +69,7 @@ const ON_TOTAL_LATENCY_INDEX = 24;
 
 async function sendOneMessage(): Promise<void> {
   render(<ChatConversationPage />);
-  await waitFor(() => expect(screen.getByRole("button", { name: /gpt-5\.4-mini/ })).toBeInTheDocument());
+  expect(await screen.findByRole("button", { name: /gpt-5\.4-mini/ })).toBeInTheDocument();
   fireEvent.change(screen.getByPlaceholderText("How can I help you today?"), {
     target: { value: "How much did this cost?" },
   });
@@ -98,7 +98,7 @@ describe("/ui/chat request metrics", () => {
 
     await sendOneMessage();
 
-    await waitFor(() => expect(screen.getByLabelText("Total: 20")).toBeInTheDocument());
+    expect(await screen.findByLabelText("Total: 20")).toBeInTheDocument();
     expect(screen.getByLabelText("TTFT: 0.25s")).toBeInTheDocument();
     expect(screen.getByLabelText("Total Latency: 1.20s")).toBeInTheDocument();
     expect(screen.getByLabelText("In: 12")).toBeInTheDocument();
@@ -126,7 +126,7 @@ describe("/ui/chat request metrics", () => {
 
     await sendOneMessage();
 
-    await waitFor(() => expect(screen.getByText("No usage here.")).toBeInTheDocument());
+    expect(await screen.findByText("No usage here.")).toBeInTheDocument();
     expect(document.querySelector(".response-metrics")).toBeNull();
   });
 });

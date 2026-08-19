@@ -124,6 +124,30 @@ def test_get_logging_payload_maps_openai_cache_write_tokens_to_cache_creation_in
     assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 800
 
 
+def test_get_logging_payload_maps_nested_cache_creation_input_tokens():
+    """
+    Regression (LIT-5757): DashScope nests cache_creation_input_tokens inside
+    prompt_tokens_details; SpendLogs must record it as cache_creation_input_tokens.
+    """
+    additional_usage_values: Final = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=2059,
+            completion_tokens=31,
+            total_tokens=2090,
+            prompt_tokens_details={
+                "cached_tokens": 0,
+                "text_tokens": 2059,
+                "cache_type": "ephemeral",
+                "cache_creation_input_tokens": 2048,
+                "cache_creation": {"ephemeral_5m_input_tokens": 2048},
+            },
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 2048
+    assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 2048
+
+
 def test_get_logging_payload_preserves_anthropic_cache_creation_input_tokens():
     additional_usage_values = _get_additional_usage_values_for_usage(
         litellm.Usage(
@@ -1563,6 +1587,38 @@ def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
         "evaluated_input": "Say hi in 3 words",
         "verdict": "allow",
     }
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_preserves_guardrail_usage_when_flag_false(
+    mock_should_store,
+):
+    """
+    LIT-5650 regression: provider-reported billable usage counters live in
+    guardrail_usage, a sibling of guardrail_response, precisely so the
+    default spend-log redaction cannot drop them. The response blob (which
+    also embeds a usage copy) must still be redacted wholesale.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "bedrock-guard",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": {
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "Sorry, the model cannot answer this question."}],
+                "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+            },
+            "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0},
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    entry = result[0]
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0}
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")

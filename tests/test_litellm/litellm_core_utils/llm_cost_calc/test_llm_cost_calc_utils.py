@@ -1781,6 +1781,81 @@ def test_service_tier_fallback_pricing():
     ), f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
 
 
+def test_service_tier_ultrafast_pricing():
+    """An ultrafast request bills the *_ultrafast rates for all token types.
+
+    Regression for the ultrafast service tier being absent from ServiceTier:
+    the cost-key lookup silently returned the standard keys, undercounting
+    every ultrafast request.
+    """
+    cached_tokens = 200
+    cache_write_tokens = 300
+    text_tokens = 500
+    usage = Usage(
+        prompt_tokens=text_tokens + cached_tokens + cache_write_tokens,
+        completion_tokens=400,
+        total_tokens=text_tokens + cached_tokens + cache_write_tokens + 400,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+    model_info: ModelInfo = {
+        "key": "gpt-5.6-sol",
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 3e-05,
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token_ultrafast": 5e-05,
+        "output_cost_per_token_ultrafast": 3e-04,
+        "cache_creation_input_token_cost_ultrafast": 6.25e-05,
+        "cache_read_input_token_cost_ultrafast": 5e-06,
+    }
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-5.6-sol",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="ultrafast",
+        model_info=model_info,
+    )
+
+    expected_prompt_cost = (
+        text_tokens * 5e-05 + cached_tokens * 5e-06 + cache_write_tokens * 6.25e-05
+    )
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost == pytest.approx(400 * 3e-04)
+
+
+def test_service_tier_ultrafast_fallback_pricing():
+    """Without *_ultrafast keys an ultrafast request bills the standard rate, not zero.
+
+    Guards the suffix fallback in _get_cost_per_unit: "_fast" is a substring of
+    "_ultrafast", so a shortest-first suffix match would strip the wrong suffix
+    and price the request at 0.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    std_prompt_cost, std_completion_cost = generic_cost_per_token(
+        model="gpt-5.6-sol",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=None,
+    )
+    ultrafast_prompt_cost, ultrafast_completion_cost = generic_cost_per_token(
+        model="gpt-5.6-sol",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="ultrafast",
+    )
+
+    assert std_prompt_cost + std_completion_cost > 0
+    assert ultrafast_prompt_cost == pytest.approx(std_prompt_cost)
+    assert ultrafast_completion_cost == pytest.approx(std_completion_cost)
+
+
 @pytest.mark.parametrize(
     "model",
     [
@@ -2322,7 +2397,11 @@ def test_service_tier_suffixes_constant_in_sync_with_enum():
     from litellm.litellm_core_utils.llm_cost_calc.utils import _SERVICE_TIER_SUFFIXES
     from litellm.types.utils import ServiceTier
 
-    assert _SERVICE_TIER_SUFFIXES == tuple(f"_{st.value}" for st in ServiceTier)
+    assert set(_SERVICE_TIER_SUFFIXES) == {f"_{st.value}" for st in ServiceTier}
+    # longest-first so a substring match resolves "_ultrafast" before "_fast"
+    assert list(_SERVICE_TIER_SUFFIXES) == sorted(
+        _SERVICE_TIER_SUFFIXES, key=len, reverse=True
+    )
 
 
 def test_get_cost_per_unit_falls_back_from_service_tier_key_to_base():
@@ -2922,9 +3001,9 @@ def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict)
     assert cost is not None
     assert round(cost, 12) == round(expected, 12)
 GEMINI_DAY0_LAUNCH_PRICING = [
-    ("gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
-    ("gemini/gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
-    ("vertex_ai/gemini-3.6-flash", 1.5e-06, 7.5e-06, 1.5e-07),
+    ("gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("gemini/gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("vertex_ai/gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
     ("gemini-3.5-flash-lite", 3e-07, 2.5e-06, 3e-08),
     ("gemini/gemini-3.5-flash-lite", 3e-07, 2.5e-06, 3e-08),
     ("vertex_ai/gemini-3.5-flash-lite", 3e-07, 2.5e-06, 3e-08),
@@ -2966,8 +3045,53 @@ def test_generic_cost_per_token_gemini_36_flash():
         usage=usage,
         custom_llm_provider="gemini",
     )
-    assert prompt_cost == pytest.approx(0.0015)
-    assert completion_cost == pytest.approx(0.00375)
+    assert prompt_cost == pytest.approx(0.00075)
+    assert completion_cost == pytest.approx(0.001875)
+
+
+GEMINI_36_FLASH_SERVICE_TIER_PRICING = [
+    (None, 7.5e-07, 3.75e-06, 7.5e-08),
+    ("flex", 3.75e-07, 1.875e-06, 3.75e-08),
+    ("priority", 1.35e-06, 6.75e-06, 1.35e-07),
+]
+
+
+@pytest.mark.parametrize(
+    "service_tier,input_rate,output_rate,cache_read_rate", GEMINI_36_FLASH_SERVICE_TIER_PRICING
+)
+@pytest.mark.parametrize(
+    "model", ["gemini-3.6-flash", "gemini/gemini-3.6-flash", "vertex_ai/gemini-3.6-flash"]
+)
+def test_gemini_36_flash_service_tier_introductory_pricing(
+    model, service_tier, input_rate, output_rate, cache_read_rate, _local_model_cost_map
+):
+    """Regression: every 3.6 Flash tier is on Google's introductory rates through 2026-12-31,
+    so flex and priority requests must not be billed at the post-introductory rates."""
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=500,
+        total_tokens=1_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200, text_tokens=800),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model.split("/")[-1],
+        usage=usage,
+        custom_llm_provider=model.split("/")[0] if "/" in model else "gemini",
+        service_tier=service_tier,
+    )
+
+    assert prompt_cost == pytest.approx(800 * input_rate + 200 * cache_read_rate, rel=1e-9)
+    assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    "model", ["gemini-3.6-flash", "gemini/gemini-3.6-flash", "vertex_ai/gemini-3.6-flash"]
+)
+def test_gemini_36_flash_batch_introductory_pricing(model, _local_model_cost_map):
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["input_cost_per_token_batches"] == 3.75e-07
+    assert model_cost_map["output_cost_per_token_batches"] == 1.875e-06
 
 
 def test_generic_cost_per_token_gemini_35_flash_lite():

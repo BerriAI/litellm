@@ -420,6 +420,8 @@ async def acompletion(
     verbosity: Literal["low", "medium", "high"] | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
     # set api_base, api_version, api_key
     base_url: str | None = None,
     api_version: str | None = None,
@@ -585,6 +587,8 @@ async def acompletion(
         "verbosity": verbosity,
         "safety_identifier": safety_identifier,
         "service_tier": service_tier,
+        "store": store,
+        "prompt_cache_key": prompt_cache_key,
         "extra_headers": extra_headers,
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
@@ -4930,6 +4934,8 @@ def completion(
     extra_headers: dict | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
     # soon to be deprecated params by OpenAI
     functions: list | None = None,
     function_call: str | None = None,
@@ -5001,7 +5007,6 @@ def completion(
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
-    # normalize camelCase thinking keys (e.g. budgetTokens -> budget_tokens)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
 
     ######### unpacking kwargs #####################
@@ -5058,6 +5063,8 @@ def completion(
                 verbosity=verbosity,
                 safety_identifier=safety_identifier,
                 service_tier=service_tier,
+                store=store,
+                prompt_cache_key=prompt_cache_key,
                 base_url=base_url,
                 api_version=api_version,
                 api_key=api_key,
@@ -5367,6 +5374,8 @@ def completion(
             ),
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
+            "store": store,
+            "prompt_cache_key": prompt_cache_key,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
             "base_model": base_model,
         }
