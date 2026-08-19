@@ -1,5 +1,4 @@
 import React from "react";
-import { Card, Title, Subtitle } from "@tremor/react";
 import { Alert } from "antd";
 import { CircleHelp } from "lucide-react";
 
@@ -7,6 +6,7 @@ import GuardrailSelector from "../guardrails/GuardrailSelector";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { Field, FieldLabel } from "@/components/shared/form/field";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 type GuardrailFields = { request_fields?: string[]; response_fields?: string[] };
@@ -60,12 +60,12 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
 
   return (
     <TooltipProvider>
-      <Card className="p-6">
-        <Title className="mb-2 text-lg font-semibold text-foreground">Guardrails</Title>
-        <Subtitle className="mb-6 text-muted-foreground">
+      <Card className="block p-6">
+        <h3 className="mb-2 text-lg font-semibold text-foreground">Guardrails</h3>
+        <p className="mb-6 text-sm text-muted-foreground">
           Configure guardrails to enforce policies on requests and responses. Guardrails are opt-in for passthrough
           endpoints.
-        </Subtitle>
+        </p>
 
         <Alert
           message={
@@ -128,7 +128,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
               <div className="text-xs text-muted-foreground">💡 Tip: Leave empty to check entire payload</div>
             </div>
             {selectedGuardrails.map((guardrailName) => (
-              <Card key={guardrailName} className="bg-muted/50 p-4">
+              <Card key={guardrailName} className="block bg-muted/50 p-4">
                 <div className="mb-3 text-sm font-medium text-foreground">{guardrailName}</div>
                 <div className="space-y-3">
                   <Field>
@@ -174,6 +174,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                       value={value[guardrailName]?.request_fields ?? []}
                       onValueChange={(fields) => handleFieldChange(guardrailName, "request_fields", fields)}
                       tokenSeparators={[","]}
+                      disabled={disabled}
                     />
                   </Field>
                   <Field>
@@ -212,6 +213,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                       value={value[guardrailName]?.response_fields ?? []}
                       onValueChange={(fields) => handleFieldChange(guardrailName, "response_fields", fields)}
                       tokenSeparators={[","]}
+                      disabled={disabled}
                     />
                   </Field>
                 </div>
