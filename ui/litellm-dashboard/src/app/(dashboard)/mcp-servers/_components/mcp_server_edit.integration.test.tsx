@@ -299,6 +299,11 @@ const CASES: readonly Case[] = [
     server: { ...BASE, allowed_tools: [] },
     expected: { ...EXPECTED_BASE },
   },
+  {
+    label: "object-shaped access groups are normalised to their names",
+    server: { ...BASE, mcp_access_groups: [{ name: "eng" }, "ops"] as never },
+    expected: { ...EXPECTED_BASE, mcp_access_groups: ["eng", "ops"] },
+  },
 ];
 
 const saveAndCapture = async (server: MCPServer): Promise<Record<string, unknown>> => {
