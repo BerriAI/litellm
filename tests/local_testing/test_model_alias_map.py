@@ -15,7 +15,7 @@ from litellm import completion, embedding
 
 litellm.set_verbose = True
 
-model_alias_map = {"good-model": "groq/llama-3.1-8b-instant"}
+model_alias_map = {"good-model": "groq/openai/gpt-oss-120b"}
 
 
 def test_model_alias_map(caplog):
@@ -34,7 +34,7 @@ def test_model_alias_map(caplog):
             if rec.levelname == "ERROR" and rec.name.startswith("LiteLLM"):
                 pytest.fail(f"Unexpected litellm ERROR log: {rec.getMessage()}")
 
-        assert "llama-3.1-8b-instant" in response.model
+        assert "gpt-oss-120b" in response.model
     except litellm.ServiceUnavailableError:
         pass
     except Exception as e:

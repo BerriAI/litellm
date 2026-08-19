@@ -56,7 +56,7 @@ describe("GuardrailCard", () => {
   it("should render the logo through the shared Logo component with the card src", () => {
     render(<GuardrailCard card={baseCard} onClick={vi.fn()} />);
     const img = screen.getByAltText("Test Guardrail logo");
-    expect(img.getAttribute("src")).toContain("/logos/test.svg");
+    expect(img).toHaveAttribute("src", expect.stringContaining("/logos/test.svg"));
   });
 
   it("should pass a bundled static-import src through unchanged", () => {

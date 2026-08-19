@@ -30,7 +30,7 @@ def test_transform_usage():
         }
     )
     config = AmazonConverseConfig()
-    openai_usage = config._transform_usage(usage)
+    openai_usage = config.transform_usage(usage)
     assert (
         openai_usage.prompt_tokens
         == usage["inputTokens"]
@@ -62,7 +62,7 @@ def test_transform_usage_with_reasoning_content():
     )
     config = AmazonConverseConfig()
     reasoning_text = "Let me think about this step by step."
-    openai_usage = config._transform_usage(usage, reasoning_content=reasoning_text)
+    openai_usage = config.transform_usage(usage, reasoning_content=reasoning_text)
     assert openai_usage.completion_tokens_details is not None
     assert openai_usage.completion_tokens_details.reasoning_tokens > 0
     assert openai_usage.completion_tokens_details.text_tokens == (
@@ -6003,3 +6003,52 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
     )
 
     assert "thinking" not in optional_params
+
+
+def test_is_converse_usage_shape_distinguishes_camel_case_from_anthropic():
+    config = AmazonConverseConfig()
+    assert config.is_converse_usage_shape({"inputTokens": 1, "outputTokens": 2}) is True
+    assert config.is_converse_usage_shape({"outputTokens": 2}) is True
+    assert config.is_converse_usage_shape({"input_tokens": 1, "output_tokens": 2}) is False
+    assert config.is_converse_usage_shape({}) is False
+
+
+def test_usage_from_batch_output_completes_an_incomplete_block():
+    """Batch output omits totalTokens and the cache counts the live API always sends."""
+    usage = AmazonConverseConfig().usage_from_batch_output({"inputTokens": 2202, "outputTokens": 540})
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (2202, 540, 2742)
+
+
+def test_usage_from_batch_output_inflates_input_by_cache_counts():
+    usage = AmazonConverseConfig().usage_from_batch_output(
+        {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "totalTokens": 120,
+            "cacheReadInputTokens": 800,
+            "cacheWriteInputTokens": 200,
+        }
+    )
+    assert usage.prompt_tokens == 1100
+    assert usage.prompt_tokens_details.cached_tokens == 800
+    assert usage.prompt_tokens_details.cache_creation_tokens == 200
+
+
+def test_streaming_usage_chunk_is_transformed():
+    """The streaming decoder's usage event feeds the same public transform."""
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    decoder = AWSEventStreamDecoder(model="us.amazon.nova-lite-v1:0")
+    chunk = decoder.converse_chunk_parser({"usage": {"inputTokens": 11, "outputTokens": 4, "totalTokens": 15}})
+    assert chunk.usage.prompt_tokens == 11
+    assert chunk.usage.completion_tokens == 4
+    assert chunk.usage.total_tokens == 15
+
+
+def test_update_optional_params_with_thinking_tokens_bool_thinking_does_not_crash():
+    config = AmazonConverseConfig()
+    optional_params = {"thinking": True}
+    config.update_optional_params_with_thinking_tokens(
+        non_default_params={"thinking": True}, optional_params=optional_params
+    )
+    assert "maxTokens" not in optional_params

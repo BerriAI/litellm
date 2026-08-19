@@ -5,6 +5,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Popover, Typography } from "antd";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
+import { inheritedBudgetGates } from "@/components/shared/InheritedBudgetHint";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
@@ -304,13 +305,14 @@ export const getKeyTableColumns = ({
     size: 180,
     enableSorting: true,
     cell: ({ row }) => {
-      const teamId = row.original.team_id;
-      const team = allTeams.find((t) => t.team_id === teamId);
+      const team = allTeams.find((t) => t.team_id === row.original.team_id);
+      const orgId = row.original.organization_id || row.original.org_id || team?.organization_id;
+      const organization = organizations.find((o) => o.organization_id === orgId);
       return (
         <SpendBudgetCell
           spend={row.original.spend}
           maxBudget={row.original.max_budget}
-          teamMaxBudget={team?.max_budget ?? null}
+          inheritedGates={row.original.max_budget == null ? inheritedBudgetGates(team, organization) : []}
         />
       );
     },

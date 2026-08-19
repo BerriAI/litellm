@@ -3,22 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import TransformRequestPanel from "./TransformRequestPanel";
 import { transformRequestCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   transformRequestCall: vi.fn(),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    info: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const transformRequestCallMock = vi.mocked(transformRequestCall);
-const notify = vi.mocked(NotificationsManager);
+const notify = vi.mocked(toast);
 
 const ACCESS_TOKEN = "sk-test-token";
 
@@ -76,10 +68,10 @@ describe("TransformRequestPanel", () => {
     });
 
     const output = await screen.findByText(/api\.anthropic\.com\/v1\/messages/);
-    expect(output.textContent).toContain("curl -X POST");
-    expect(output.textContent).toContain("-H 'x-api-key: redacted'");
-    expect(output.textContent).toContain('"model": "claude-opus-4-8"');
-    expect(output.textContent).toContain('"max_tokens": 42');
+    expect(output).toHaveTextContent(/curl \-X POST/);
+    expect(output).toHaveTextContent(/\-H 'x\-api\-key: redacted'/);
+    expect(output).toHaveTextContent(/"model": "claude\-opus\-4\-8"/);
+    expect(output).toHaveTextContent(/"max_tokens": 42/);
     expect(notify.success).toHaveBeenCalledWith("Request transformed successfully");
   });
 
@@ -109,7 +101,7 @@ describe("TransformRequestPanel", () => {
     await user.type(textarea, "not json");
     await user.click(getTransformButton());
 
-    await waitFor(() => expect(notify.fromBackend).toHaveBeenCalledWith("Invalid JSON in request body"));
+    await waitFor(() => expect(notify.fromError).toHaveBeenCalledWith("Invalid JSON in request body"));
     expect(transformRequestCallMock).not.toHaveBeenCalled();
   });
 
@@ -120,7 +112,7 @@ describe("TransformRequestPanel", () => {
 
     await user.click(getTransformButton());
 
-    await waitFor(() => expect(notify.fromBackend).toHaveBeenCalledWith("No access token found"));
+    await waitFor(() => expect(notify.fromError).toHaveBeenCalledWith("No access token found"));
     expect(transformRequestCallMock).not.toHaveBeenCalled();
   });
 
@@ -133,7 +125,7 @@ describe("TransformRequestPanel", () => {
 
     await user.click(getTransformButton());
 
-    await waitFor(() => expect(notify.fromBackend).toHaveBeenCalledWith("Failed to transform request"));
+    await waitFor(() => expect(notify.fromError).toHaveBeenCalledWith("Failed to transform request"));
     expect(screen.getByText(/https:\/\/api\.openai\.com\/v1\/chat\/completions/)).toBeInTheDocument();
   });
 

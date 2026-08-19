@@ -28,6 +28,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     compute_budget_reset_at,
     get_budget_reset_settings,
 )
+from litellm.proxy.common_utils.user_api_key_cache import tag_cache_key
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import ReadOnlyTable, SpendLinkedTable
@@ -112,7 +113,7 @@ def _tag_counter_key(row: _TagRow) -> str:
 
 
 def _tag_cache_keys(row: _TagRow) -> tuple[str, ...]:
-    return (f"tag:{row.tag_name}",)
+    return (tag_cache_key(row.tag_name),)
 
 
 def _budget_link_where(

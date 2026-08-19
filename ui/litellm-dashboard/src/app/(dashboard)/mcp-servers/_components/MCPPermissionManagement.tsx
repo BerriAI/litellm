@@ -1,7 +1,20 @@
 import React, { useEffect } from "react";
-import { Alert, Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
+import { Select, Tooltip, Collapse, Input, Space, Switch } from "antd";
+import { TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Button } from "@/components/ui/button";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
 import { MCPServer, AUTH_TYPE } from "@/components/mcp_tools/types";
+import {
+  MountedFormField,
+  useMountedName,
+  type MountedFormValues,
+} from "@/components/common_components/MountedFormField";
+import { antdRequired } from "@/components/common_components/antdFormRules";
+import { Field, FieldLabel } from "@/components/shared/form/field";
+import { invertedSwitchControl, selectControl, switchControl, textControl } from "./mcpFieldRules";
+import { listControl } from "./mcpFormStore";
 const { Panel } = Collapse;
 
 interface MCPPermissionManagementProps {
@@ -13,7 +26,67 @@ interface MCPPermissionManagementProps {
     value: string;
     label: React.ReactNode;
   }>;
+  /**
+   * The auth type as seen through the gate that mounts the auth_type field.
+   * Callers pass undefined whenever that field is unmounted, because both
+   * toggles below are mounted from this value and the payload only carries
+   * what is mounted.
+   */
+  mountedAuthType: string | null | undefined;
 }
+
+const StaticHeadersFieldArray: React.FC = () => {
+  const { control } = useFormContext<MountedFormValues>();
+  const { fields, append, remove } = useFieldArray({ control: listControl(control), name: "static_headers" });
+  useMountedName("static_headers");
+
+  return (
+    <div className="space-y-3">
+      {fields.map((item, index) => (
+        <Space key={item.id} className="flex w-full" align="baseline" size="middle">
+          <MountedFormField
+            name={["static_headers", String(index), "header"]}
+            className="flex-1"
+            rules={{ validate: { required: antdRequired("Header name is required") } }}
+          >
+            {(headerControl) => (
+              <Input
+                {...textControl(headerControl)}
+                size="large"
+                allowClear
+                className="rounded-lg"
+                placeholder="Header name (e.g., X-API-Key)"
+              />
+            )}
+          </MountedFormField>
+          <MountedFormField
+            name={["static_headers", String(index), "value"]}
+            className="flex-1"
+            rules={{ validate: { required: antdRequired("Header value is required") } }}
+          >
+            {(valueControl) => (
+              <Input
+                {...textControl(valueControl)}
+                size="large"
+                allowClear
+                className="rounded-lg"
+                placeholder="Header value"
+              />
+            )}
+          </MountedFormField>
+          <MinusCircleOutlined
+            onClick={() => remove(index)}
+            className="text-gray-500 hover:text-red-500 cursor-pointer"
+          />
+        </Space>
+      ))}
+      <Button variant="outline" className="w-full border-dashed" onClick={() => append({})}>
+        <PlusOutlined />
+        Add Static Header
+      </Button>
+    </div>
+  );
+};
 
 const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
   availableAccessGroups,
@@ -21,12 +94,12 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
   searchValue,
   setSearchValue,
   getAccessGroupOptions,
+  mountedAuthType,
 }) => {
-  const form = Form.useFormInstance();
-  const watchedAuthType = Form.useWatch("auth_type", form);
-  const isOAuth2 = watchedAuthType === AUTH_TYPE.OAUTH2;
-  const isNoneAuth = watchedAuthType === AUTH_TYPE.NONE || watchedAuthType == null;
-  const watchedExtraHeaders = Form.useWatch("extra_headers", form);
+  const { setValue } = useFormContext<MountedFormValues>();
+  const isOAuth2 = mountedAuthType === AUTH_TYPE.OAUTH2;
+  const isNoneAuth = mountedAuthType === AUTH_TYPE.NONE || mountedAuthType == null;
+  const watchedExtraHeaders = useWatch({ name: "extra_headers" });
   const hasAuthorizationHeader =
     Array.isArray(watchedExtraHeaders) &&
     watchedExtraHeaders.some((h) => typeof h === "string" && h.toLowerCase() === "authorization");
@@ -39,8 +112,8 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
   // Kept as separate flags so neither silently implies the other and existing
   // oauth2 servers can't regress into pass-through behavior.
   const canEnableOAuthPassthrough = isNoneAuth && hasAuthorizationHeader;
-  const watchedDelegateAuth = Form.useWatch("delegate_auth_to_upstream", form);
-  const watchedPublicInternet = Form.useWatch("available_on_public_internet", form);
+  const watchedDelegateAuth = useWatch({ name: "delegate_auth_to_upstream" });
+  const watchedPublicInternet = useWatch({ name: "available_on_public_internet" });
   const showInternalDelegatePkceWarning = isOAuth2 && watchedDelegateAuth === true && watchedPublicInternet === false;
 
   // Set initial values when mcpServer changes
@@ -51,10 +124,10 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
           header,
           value: value != null ? String(value) : "",
         }));
-        form.setFieldValue("static_headers", staticHeaders);
+        setValue("static_headers", staticHeaders);
       }
       if (Array.isArray(mcpServer.env_vars) && mcpServer.env_vars.length > 0) {
-        form.setFieldValue(
+        setValue(
           "env_vars",
           mcpServer.env_vars.map((entry) => ({
             name: entry.name,
@@ -65,41 +138,41 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         );
       }
       if (typeof mcpServer.allow_all_keys === "boolean") {
-        form.setFieldValue("allow_all_keys", mcpServer.allow_all_keys);
+        setValue("allow_all_keys", mcpServer.allow_all_keys);
       }
       if (typeof mcpServer.available_on_public_internet === "boolean") {
-        form.setFieldValue("available_on_public_internet", mcpServer.available_on_public_internet);
+        setValue("available_on_public_internet", mcpServer.available_on_public_internet);
       }
       if (typeof mcpServer.delegate_auth_to_upstream === "boolean") {
-        form.setFieldValue("delegate_auth_to_upstream", mcpServer.delegate_auth_to_upstream);
+        setValue("delegate_auth_to_upstream", mcpServer.delegate_auth_to_upstream);
       }
       if (typeof mcpServer.oauth_passthrough === "boolean") {
-        form.setFieldValue("oauth_passthrough", mcpServer.oauth_passthrough);
+        setValue("oauth_passthrough", mcpServer.oauth_passthrough);
       }
     } else {
-      form.setFieldValue("allow_all_keys", false);
-      form.setFieldValue("available_on_public_internet", true);
-      form.setFieldValue("delegate_auth_to_upstream", false);
-      form.setFieldValue("oauth_passthrough", false);
+      setValue("allow_all_keys", false);
+      setValue("available_on_public_internet", true);
+      setValue("delegate_auth_to_upstream", false);
+      setValue("oauth_passthrough", false);
     }
-  }, [mcpServer, form]);
+  }, [mcpServer, setValue]);
 
   // delegate_auth_to_upstream is only honored server-side for oauth2 servers.
   // Force it back to false whenever the user switches away from oauth2 so a
   // stale toggle value doesn't get persisted unexpectedly.
   useEffect(() => {
     if (!isOAuth2) {
-      form.setFieldValue("delegate_auth_to_upstream", false);
+      setValue("delegate_auth_to_upstream", false);
     }
-  }, [isOAuth2, form]);
+  }, [isOAuth2, setValue]);
 
   // oauth_passthrough is only honored for auth_type=none servers that forward
   // Authorization upstream. Force it back to false otherwise.
   useEffect(() => {
     if (!canEnableOAuthPassthrough) {
-      form.setFieldValue("oauth_passthrough", false);
+      setValue("oauth_passthrough", false);
     }
-  }, [canEnableOAuthPassthrough, form]);
+  }, [canEnableOAuthPassthrough, setValue]);
 
   return (
     <Collapse className="bg-gray-50 border border-gray-200 rounded-lg" expandIconPosition="end" ghost={false}>
@@ -130,14 +203,9 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                 Enable if this server should be &quot;public&quot; to all keys.
               </p>
             </div>
-            <Form.Item
-              name="allow_all_keys"
-              valuePropName="checked"
-              initialValue={mcpServer?.allow_all_keys ?? false}
-              className="mb-0"
-            >
-              <Switch />
-            </Form.Item>
+            <MountedFormField name="allow_all_keys" defaultValue={mcpServer?.allow_all_keys ?? false} className="mb-0">
+              {(control) => <Switch {...switchControl(control)} />}
+            </MountedFormField>
           </div>
 
           <div className="flex items-start justify-between gap-4">
@@ -152,16 +220,9 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                 Turn on to restrict access to callers within your internal network only.
               </p>
             </div>
-            <Form.Item
-              name="available_on_public_internet"
-              valuePropName="checked"
-              getValueProps={(value) => ({ checked: !value })}
-              getValueFromEvent={(checked: boolean) => !checked}
-              initialValue={true}
-              className="mb-0"
-            >
-              <Switch />
-            </Form.Item>
+            <MountedFormField name="available_on_public_internet" defaultValue={true} className="mb-0">
+              {(control) => <Switch {...invertedSwitchControl(control)} />}
+            </MountedFormField>
           </div>
 
           {isOAuth2 && (
@@ -177,14 +238,13 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                   Bypass LiteLLM auth so clients authenticate directly with the upstream OAuth MCP server.
                 </p>
               </div>
-              <Form.Item
+              <MountedFormField
                 name="delegate_auth_to_upstream"
-                valuePropName="checked"
-                initialValue={mcpServer?.delegate_auth_to_upstream ?? false}
+                defaultValue={mcpServer?.delegate_auth_to_upstream ?? false}
                 className="mb-0"
               >
-                <Switch />
-              </Form.Item>
+                {(control) => <Switch {...switchControl(control)} />}
+              </MountedFormField>
             </div>
           )}
 
@@ -202,28 +262,29 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                   upstream MCP server.
                 </p>
               </div>
-              <Form.Item
+              <MountedFormField
                 name="oauth_passthrough"
-                valuePropName="checked"
-                initialValue={mcpServer?.oauth_passthrough ?? false}
+                defaultValue={mcpServer?.oauth_passthrough ?? false}
                 className="mb-0"
               >
-                <Switch />
-              </Form.Item>
+                {(control) => <Switch {...switchControl(control)} />}
+              </MountedFormField>
             </div>
           )}
 
           {showInternalDelegatePkceWarning && (
-            <Alert
-              type="warning"
-              showIcon
-              className="mb-2"
-              message="Internal server with upstream OAuth delegation"
-              description="This MCP server is configured as internal-only but delegates auth to upstream. Anonymous users will be able to reach the upstream OAuth2 /authorize flow without a LiteLLM session. Ensure your upstream provider and network enforce access controls."
-            />
+            <Alert variant="warning" className="mb-2">
+              <TriangleAlert />
+              <AlertTitle>Internal server with upstream OAuth delegation</AlertTitle>
+              <AlertDescription>
+                This MCP server is configured as internal-only but delegates auth to upstream. Anonymous users will be
+                able to reach the upstream OAuth2 /authorize flow without a LiteLLM session. Ensure your upstream
+                provider and network enforce access controls.
+              </AlertDescription>
+            </Alert>
           )}
 
-          <Form.Item
+          <MountedFormField
             label={
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 MCP Access Groups
@@ -235,21 +296,24 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
             name="mcp_access_groups"
             className="mb-4"
           >
-            <Select
-              mode="tags"
-              showSearch
-              placeholder="Select existing groups or type to create new ones"
-              optionFilterProp="value"
-              filterOption={(input, option) => (option?.value ?? "").toLowerCase().includes(input.toLowerCase())}
-              onSearch={(value) => setSearchValue(value)}
-              tokenSeparators={[","]}
-              options={getAccessGroupOptions()}
-              maxTagCount="responsive"
-              allowClear
-            />
-          </Form.Item>
+            {(control) => (
+              <Select
+                {...selectControl(control)}
+                mode="tags"
+                showSearch
+                placeholder="Select existing groups or type to create new ones"
+                optionFilterProp="value"
+                filterOption={(input, option) => (option?.value ?? "").toLowerCase().includes(input.toLowerCase())}
+                onSearch={(value) => setSearchValue(value)}
+                tokenSeparators={[","]}
+                options={getAccessGroupOptions()}
+                maxTagCount="responsive"
+                allowClear
+              />
+            )}
+          </MountedFormField>
 
-          <Form.Item
+          <MountedFormField
             label={
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 Extra Headers
@@ -265,70 +329,34 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
             }
             name="extra_headers"
           >
-            <Select
-              mode="tags"
-              placeholder={
-                mcpServer?.extra_headers && mcpServer.extra_headers.length > 0
-                  ? `Currently: ${mcpServer.extra_headers.join(", ")}`
-                  : "Enter header names (e.g., Authorization, X-Custom-Header)"
-              }
-              className="rounded-lg"
-              size="large"
-              tokenSeparators={[","]}
-              allowClear
-            />
-          </Form.Item>
+            {(control) => (
+              <Select
+                {...selectControl(control)}
+                mode="tags"
+                placeholder={
+                  mcpServer?.extra_headers && mcpServer.extra_headers.length > 0
+                    ? `Currently: ${mcpServer.extra_headers.join(", ")}`
+                    : "Enter header names (e.g., Authorization, X-Custom-Header)"
+                }
+                className="rounded-lg"
+                size="large"
+                tokenSeparators={[","]}
+                allowClear
+              />
+            )}
+          </MountedFormField>
 
-          <Form.Item
-            label={
+          <Field>
+            <FieldLabel>
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 Static Headers
                 <Tooltip title="Send these key-value headers with every request to this MCP server.">
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
-            }
-            required={false}
-          >
-            <Form.List name="static_headers">
-              {(fields, { add, remove }) => (
-                <div className="space-y-3">
-                  {fields.map(({ key, name, ...restField }) => (
-                    <Space key={key} className="flex w-full" align="baseline" size="middle">
-                      <Form.Item
-                        {...restField}
-                        name={[name, "header"]}
-                        className="flex-1"
-                        rules={[{ required: true, message: "Header name is required" }]}
-                      >
-                        <Input
-                          size="large"
-                          allowClear
-                          className="rounded-lg"
-                          placeholder="Header name (e.g., X-API-Key)"
-                        />
-                      </Form.Item>
-                      <Form.Item
-                        {...restField}
-                        name={[name, "value"]}
-                        className="flex-1"
-                        rules={[{ required: true, message: "Header value is required" }]}
-                      >
-                        <Input size="large" allowClear className="rounded-lg" placeholder="Header value" />
-                      </Form.Item>
-                      <MinusCircleOutlined
-                        onClick={() => remove(name)}
-                        className="text-gray-500 hover:text-red-500 cursor-pointer"
-                      />
-                    </Space>
-                  ))}
-                  <Button type="dashed" onClick={() => add()} icon={<PlusOutlined />} block>
-                    Add Static Header
-                  </Button>
-                </div>
-              )}
-            </Form.List>
-          </Form.Item>
+            </FieldLabel>
+            <StaticHeadersFieldArray />
+          </Field>
         </div>
       </Panel>
     </Collapse>

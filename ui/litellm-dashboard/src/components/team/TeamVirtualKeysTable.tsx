@@ -1,6 +1,6 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import CopyButton from "@/components/shared/CopyButton";
 import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 import {
@@ -150,9 +150,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const value = info.getValue() as string;
           return (
-            <Tooltip content={value}>
+            <SimpleTooltip content={value}>
               <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
-            </Tooltip>
+            </SimpleTooltip>
           );
         },
       },
@@ -182,9 +182,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const user = info.getValue() as { user_email?: string } | undefined;
           const value = user?.user_email;
           return (
-            <Tooltip content={value}>
+            <SimpleTooltip content={value}>
               <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
-            </Tooltip>
+            </SimpleTooltip>
           );
         },
       },
@@ -198,9 +198,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const userId = info.getValue() as string | null;
           const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
           return (
-            <Tooltip content={displayValue}>
+            <SimpleTooltip content={displayValue}>
               <span className="block max-w-full truncate font-mono text-xs">{displayValue ?? "-"}</span>
-            </Tooltip>
+            </SimpleTooltip>
           );
         },
       },
@@ -336,11 +336,11 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const models = info.getValue() as string[];
           const scope = deriveKeyModelScope(info.row.original.allowed_routes, info.row.original.key_type);
           const emptyModelsBadge = !scope.hasModelAccess ? (
-            <Tooltip content={`Scoped to ${scope.label} routes; this key cannot call any models`}>
+            <SimpleTooltip content={`Scoped to ${scope.label} routes; this key cannot call any models`}>
               <Badge variant="secondary" className="mb-1">
                 No model access
               </Badge>
-            </Tooltip>
+            </SimpleTooltip>
           ) : (
             <Badge variant="destructive" className="mb-1">
               All Proxy Models

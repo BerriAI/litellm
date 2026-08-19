@@ -1,9 +1,13 @@
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import { testAutoRouterRouting } from "../networking";
 import { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
 vi.mock("../networking", () => ({
   testAutoRouterRouting: vi.fn(),
@@ -63,7 +67,9 @@ describe("AutoRouterRoutingTest", () => {
     vi.mocked(testAutoRouterRouting).mockResolvedValue(successResponse);
     renderWithProviders(<Harness />);
 
-    await user.type(screen.getByTestId("auto-router-routing-test-prompt"), "think step by step");
+    fireEvent.change(screen.getByTestId("auto-router-routing-test-prompt"), {
+      target: { value: "think step by step" },
+    });
     await user.click(screen.getByTestId("auto-router-routing-test-send"));
 
     expect(testAutoRouterRouting).toHaveBeenCalledWith("token", expectedRequest);
@@ -80,7 +86,7 @@ describe("AutoRouterRoutingTest", () => {
     });
     renderWithProviders(<Harness />);
 
-    await user.type(screen.getByTestId("auto-router-routing-test-prompt"), "hello");
+    fireEvent.change(screen.getByTestId("auto-router-routing-test-prompt"), { target: { value: "hello" } });
     await user.click(screen.getByTestId("auto-router-routing-test-send"));
 
     expect(await screen.findByTestId("auto-router-routing-test-unconfigured")).toBeInTheDocument();
@@ -91,7 +97,7 @@ describe("AutoRouterRoutingTest", () => {
     vi.mocked(testAutoRouterRouting).mockResolvedValue({ status: "error", error: "no tier has a model" });
     renderWithProviders(<Harness />);
 
-    await user.type(screen.getByTestId("auto-router-routing-test-prompt"), "hello");
+    fireEvent.change(screen.getByTestId("auto-router-routing-test-prompt"), { target: { value: "hello" } });
     await user.click(screen.getByTestId("auto-router-routing-test-send"));
 
     expect(await screen.findByText("no tier has a model")).toBeInTheDocument();

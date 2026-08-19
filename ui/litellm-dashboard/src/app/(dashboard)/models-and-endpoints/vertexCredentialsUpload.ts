@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import type CredentialsPanel from "@/components/model_add/CredentialsPanel";
 
 interface VertexCredentialsForm {
@@ -28,9 +28,9 @@ export function vertexCredentialsUploadProps(form: VertexCredentialsForm): Uploa
     },
     onChange(info) {
       if (info.file.status === "done") {
-        NotificationsManager.success(`${info.file.name} file uploaded successfully`);
+        toast.success(`${info.file.name} file uploaded successfully`);
       } else if (info.file.status === "error") {
-        NotificationsManager.fromBackend(`${info.file.name} file upload failed.`);
+        toast.fromError(`${info.file.name} file upload failed.`);
       }
     },
   };

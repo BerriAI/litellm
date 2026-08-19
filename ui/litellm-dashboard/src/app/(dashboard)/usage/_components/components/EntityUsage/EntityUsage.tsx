@@ -14,25 +14,16 @@ import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import {
-  Card,
-  Col,
-  DateRangePickerValue,
-  Grid,
-  Subtitle,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Text,
-  Title,
-} from "@tremor/react";
-import { DownOutlined, ExportOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
+import { ChevronDown, ChevronRight, ExternalLink, Info, Loader2 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Alert, Button, Tooltip } from "antd";
+import { Alert, AlertDescription } from "@/components/shared/Alert";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
+import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import type { EntityType } from "@/components/EntityUsageExport/types";
@@ -41,6 +32,7 @@ import {
   customerDailyActivityCall,
   organizationDailyActivityCall,
   tagDailyActivityCall,
+  teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
   userDailyActivityCall,
 } from "@/components/networking";
@@ -94,6 +86,7 @@ interface EntityUsageProps {
   entityList: EntityList[] | null;
   premiumUser: boolean;
   dateValue: DateRangePickerValue;
+  isOrgAdmin?: boolean;
 }
 
 const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
@@ -103,6 +96,12 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
   customer: customerDailyActivityCall,
   agent: agentDailyActivityCall,
   user: userDailyActivityCall,
+};
+
+// Single-shot endpoints returning the whole range in one response; entity types
+// without one fall back to page-draining the paginated endpoint.
+const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, (...args: any[]) => Promise<any>>> = {
+  team: teamDailyActivityAggregatedCall,
 };
 
 const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
@@ -117,6 +116,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityList,
   userRole,
   dateValue,
+  isOrgAdmin = false,
 }) => {
   const { teams } = useTeams();
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -135,8 +135,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   }, [entityType, selectedTags]);
 
   const fetchFn = ENTITY_FETCH_FNS[entityType];
+  const aggregatedFetchFn = ENTITY_AGGREGATED_FETCH_FNS[entityType];
   const entityCapability = ENTITY_CAPABILITIES[entityType];
-  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability);
+  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability, isOrgAdmin);
   const showAgentBreakdown = entityType === "team" && hasCapability(userRole, "viewAgentUsage");
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
@@ -151,6 +152,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     fetchFn,
     args: [accessToken, startTime, endTime, entityFilterArg],
     enabled,
+    aggregatedFetchFn,
   });
 
   const spendData = spendDataRaw as unknown as EntitySpendData;
@@ -264,6 +266,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     return `Select ${entityType} to filter...`;
   };
 
+  const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
+    team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
+    user: (
+      <UserDropdown value={selectedTags[0] ?? null} onChange={(userId) => setSelectedTags(userId ? [userId] : [])} />
+    ),
+  };
+  const filterSlot = entityFilterSlots[entityType];
+
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
   const providerSpend = useMemo(() => getProviderSpend(spendData.results), [spendData.results]);
@@ -341,23 +351,29 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [],
   );
 
-  const chev = "text-gray-400 text-xs";
-  const expandIcon = showCostBreakdown ? <DownOutlined className={chev} /> : <RightOutlined className={chev} />;
-  const infoIcon = <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />;
+  const chev = "size-3 text-gray-400";
+  const expandIcon = showCostBreakdown ? <ChevronDown className={chev} /> : <ChevronRight className={chev} />;
 
   const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
-    <Card
+    <ShadcnCard
       key={title}
       className={expandable ? "cursor-pointer hover:bg-gray-50 transition-colors" : undefined}
       onClick={expandable ? () => setShowCostBreakdown(!showCostBreakdown) : undefined}
     >
-      <div className="flex items-center gap-2">
-        <Title>{title}</Title>
-        {tooltip ? <Tooltip title={tooltip}>{infoIcon}</Tooltip> : null}
-        {expandable ? expandIcon : null}
-      </div>
-      <Text className={`text-2xl font-bold mt-2 ${className ?? ""}`}>{value}</Text>
-    </Card>
+      <CardContent>
+        <div className="flex items-center gap-2">
+          <h3 className="text-lg font-medium text-foreground">{title}</h3>
+          {tooltip ? (
+            <Tooltip>
+              <TooltipTrigger render={<Info className="size-4 text-gray-400 hover:text-gray-600" />} />
+              <TooltipContent>{tooltip}</TooltipContent>
+            </Tooltip>
+          ) : null}
+          {expandable ? expandIcon : null}
+        </div>
+        <p className={`text-2xl font-bold mt-2 ${className ?? ""}`}>{value}</p>
+      </CardContent>
+    </ShadcnCard>
   );
 
   const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];
@@ -366,18 +382,18 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const modelViewTitle = modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models";
 
   const costPanel = (
-    <Grid numItems={2} className="gap-2 w-full">
-      <Col numColSpan={2}>
-        <Card>
-          <Title>{capitalizedEntityLabel} Spend Overview</Title>
-          <Grid numItems={5} className="gap-4 mt-4">
-            {summaryTiles.map(renderSummaryTile)}
-          </Grid>
-        </Card>
-      </Col>
+    <div className="grid grid-cols-2 gap-2 w-full">
+      <div className="col-span-2">
+        <ShadcnCard>
+          <CardContent>
+            <h3 className="text-lg font-medium text-foreground">{capitalizedEntityLabel} Spend Overview</h3>
+            <div className="grid grid-cols-5 gap-4 mt-4">{summaryTiles.map(renderSummaryTile)}</div>
+          </CardContent>
+        </ShadcnCard>
+      </div>
 
       {/* Daily Spend Chart */}
-      <Col numColSpan={2}>
+      <div className="col-span-2">
         <ShadcnCard>
           <CardHeader>
             <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
@@ -451,15 +467,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             />
           </CardContent>
         </ShadcnCard>
-      </Col>
+      </div>
 
       {/* Entity Breakdown Section */}
-      <Col numColSpan={2}>
-        <Card>
-          <div className="flex flex-col space-y-4">
+      <div className="col-span-2">
+        <ShadcnCard>
+          <CardContent className="flex flex-col space-y-4">
             <div className="flex flex-col space-y-2">
-              <Title>Spend Per {capitalizedEntityLabel}</Title>
-              <Subtitle className="text-xs">Showing Top 5 by Spend</Subtitle>
+              <h3 className="text-lg font-medium text-foreground">Spend Per {capitalizedEntityLabel}</h3>
+              <p className="text-xs text-muted-foreground">Showing Top 5 by Spend</p>
               <div className="flex items-center text-sm text-gray-500">
                 <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
                 <a
@@ -470,8 +486,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                 </a>
               </div>
             </div>
-            <Grid numItems={2} className="gap-6">
-              <Col numColSpan={1}>
+            <div className="grid grid-cols-2 gap-6">
+              <div>
                 <BarChart
                   className="mt-4 h-52"
                   data={getProcessedEntityBreakdownForChart()}
@@ -499,8 +515,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                     );
                   }}
                 />
-              </Col>
-              <Col numColSpan={1}>
+              </div>
+              <div>
                 <DataTable
                   columns={entityBreakdownColumns}
                   data={getEntityBreakdown().filter((entity) => entity.metrics.spend > 0)}
@@ -509,61 +525,69 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                   noDataMessage={`No ${entityType} spend data`}
                   size="compact"
                 />
-              </Col>
-            </Grid>
-          </div>
-        </Card>
-      </Col>
+              </div>
+            </div>
+          </CardContent>
+        </ShadcnCard>
+      </div>
 
       {/* Top API Keys */}
-      <Col numColSpan={1}>
-        <Card>
-          <Title>Top Virtual Keys</Title>
-          <TopKeyView
-            topKeys={getTopAPIKeys(spendData.results, topKeysLimit)}
-            teams={null}
-            showTags={entityType === "tag"}
-            topKeysLimit={topKeysLimit}
-            setTopKeysLimit={setTopKeysLimit}
-          />
-        </Card>
-      </Col>
+      <div>
+        <ShadcnCard>
+          <CardContent>
+            <h3 className="text-lg font-medium text-foreground">Top Virtual Keys</h3>
+            <TopKeyView
+              topKeys={getTopAPIKeys(spendData.results, topKeysLimit)}
+              teams={null}
+              showTags={entityType === "tag"}
+              topKeysLimit={topKeysLimit}
+              setTopKeysLimit={setTopKeysLimit}
+            />
+          </CardContent>
+        </ShadcnCard>
+      </div>
 
       {/* Top Models */}
-      <Col numColSpan={1}>
-        <Card>
-          <div className="flex justify-between items-center">
-            <Title>{entityType === "agent" ? "Top Agents" : modelViewTitle}</Title>
-            <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
-          </div>
-          <TopModelView
-            topModels={getTopModels(spendData.results, modelBreakdownKey, topModelsLimit)}
-            topModelsLimit={topModelsLimit}
-            setTopModelsLimit={setTopModelsLimit}
-          />
-        </Card>
-      </Col>
+      <div>
+        <ShadcnCard>
+          <CardContent>
+            <div className="flex justify-between items-center">
+              <h3 className="text-lg font-medium text-foreground">
+                {entityType === "agent" ? "Top Agents" : modelViewTitle}
+              </h3>
+              <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
+            </div>
+            <TopModelView
+              topModels={getTopModels(spendData.results, modelBreakdownKey, topModelsLimit)}
+              topModelsLimit={topModelsLimit}
+              setTopModelsLimit={setTopModelsLimit}
+            />
+          </CardContent>
+        </ShadcnCard>
+      </div>
 
       {showAgentBreakdown && (
-        <Col numColSpan={2}>
-          <Card>
-            <Title>Top Agents Driving Spend</Title>
-            <TopModelView
-              topModels={getTopAgents(agentSpendData.results, topAgentsLimit)}
-              topModelsLimit={topAgentsLimit}
-              setTopModelsLimit={setTopAgentsLimit}
-            />
-          </Card>
-        </Col>
+        <div className="col-span-2">
+          <ShadcnCard>
+            <CardContent>
+              <h3 className="text-lg font-medium text-foreground">Top Agents Driving Spend</h3>
+              <TopModelView
+                topModels={getTopAgents(agentSpendData.results, topAgentsLimit)}
+                topModelsLimit={topAgentsLimit}
+                setTopModelsLimit={setTopAgentsLimit}
+              />
+            </CardContent>
+          </ShadcnCard>
+        </div>
       )}
 
       {/* Spend by Provider */}
-      <Col numColSpan={2}>
-        <Card>
-          <div className="flex flex-col space-y-4">
-            <Title>Provider Usage</Title>
-            <Grid numItems={2}>
-              <Col numColSpan={1}>
+      <div className="col-span-2">
+        <ShadcnCard>
+          <CardContent className="flex flex-col space-y-4">
+            <h3 className="text-lg font-medium text-foreground">Provider Usage</h3>
+            <div className="grid grid-cols-2">
+              <div>
                 <DonutChart
                   className="mt-4 h-40"
                   data={providerSpend}
@@ -575,8 +599,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                   startAngle={90}
                   endAngle={-270}
                 />
-              </Col>
-              <Col numColSpan={1}>
+              </div>
+              <div>
                 <DataTable
                   columns={providerSpendColumns}
                   data={providerSpend}
@@ -584,12 +608,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                   noDataMessage="No provider usage data"
                   size="compact"
                 />
-              </Col>
-            </Grid>
-          </div>
-        </Card>
-      </Col>
-    </Grid>
+              </div>
+            </div>
+          </CardContent>
+        </ShadcnCard>
+      </div>
+    </div>
   );
 
   const tabs: readonly { key: string; label: string; content: ReactNode }[] = [
@@ -620,108 +644,84 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   return (
     <div style={{ width: "100%" }} className="relative">
       {isFetchingMore && (
-        <Alert
-          banner
-          type="warning"
-          className="mb-2"
-          message={
-            <div className="flex items-center justify-between">
-              <span>
-                <LoadingOutlined spin className="mr-2" />
-                Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
-                update periodically as data loads. Moving off of this page will stop and reset this. To continue using
-                the UI in the meantime,{" "}
-                <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                  open a new tab <ExportOutlined />
-                </a>
-                .
-              </span>
-              <Button type="primary" danger onClick={cancel}>
-                Stop
-              </Button>
-            </div>
-          }
-        />
+        <Alert variant="warning" className="mb-2">
+          <AlertDescription className="flex items-center justify-between text-inherit">
+            <span>
+              <Loader2 className="mr-2 inline size-4 animate-spin align-text-bottom" />
+              Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
+              update periodically as data loads. Moving off of this page will stop and reset this. To continue using the
+              UI in the meantime,{" "}
+              <a href={window.location.href} target="_blank" rel="noopener noreferrer">
+                open a new tab <ExternalLink className="inline size-3.5 align-text-bottom" />
+              </a>
+              .
+            </span>
+            <Button variant="destructive" onClick={cancel}>
+              Stop
+            </Button>
+          </AlertDescription>
+        </Alert>
       )}
       {cancelled && (
-        <Alert
-          banner
-          type="info"
-          className="mb-2"
-          message={
-            <span>
-              Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
-            </span>
-          }
-        />
+        <Alert variant="info" className="mb-2">
+          <AlertDescription className="text-inherit">
+            Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
+          </AlertDescription>
+        </Alert>
       )}
       {agentIsFetchingMore && showAgentBreakdown && (
-        <Alert
-          banner
-          type="warning"
-          className="mb-2"
-          message={
-            <div className="flex items-center justify-between">
-              <span>
-                <LoadingOutlined spin className="mr-2" />
-                Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
-                Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
-                continue using the UI in the meantime,{" "}
-                <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                  open a new tab <ExportOutlined />
-                </a>
-                .
-              </span>
-              <Button type="primary" danger onClick={agentCancel}>
-                Stop
-              </Button>
-            </div>
-          }
-        />
+        <Alert variant="warning" className="mb-2">
+          <AlertDescription className="flex items-center justify-between text-inherit">
+            <span>
+              <Loader2 className="mr-2 inline size-4 animate-spin align-text-bottom" />
+              Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
+              Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
+              continue using the UI in the meantime,{" "}
+              <a href={window.location.href} target="_blank" rel="noopener noreferrer">
+                open a new tab <ExternalLink className="inline size-3.5 align-text-bottom" />
+              </a>
+              .
+            </span>
+            <Button variant="destructive" onClick={agentCancel}>
+              Stop
+            </Button>
+          </AlertDescription>
+        </Alert>
       )}
       {agentCancelled && showAgentBreakdown && (
-        <Alert
-          banner
-          type="info"
-          className="mb-2"
-          message={
-            <span>
-              Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
-            </span>
-          }
-        />
-      )}
-      {entityType === "team" && (
-        <div className="mb-4">
-          <Text className="mb-2">Filter by team</Text>
-          <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />
-        </div>
+        <Alert variant="info" className="mb-2">
+          <AlertDescription className="text-inherit">
+            Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
+          </AlertDescription>
+        </Alert>
       )}
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
-        showFilters={entityType !== "team" && entityList !== null && entityList.length > 0}
+        showFilters={filterSlot === undefined && entityList !== null && entityList.length > 0}
+        filterSlot={filterSlot}
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
-        filterMode={entityType === "user" ? "single" : "multiple"}
         teams={teams || []}
       />
-      <TabGroup>
-        <TabList variant="solid" className="mt-1">
+      <Tabs defaultValue={tabs[0].key}>
+        <TabsList className="mt-1">
           {tabs.map(({ key, label }) => (
-            <Tab key={key}>{label}</Tab>
+            <TabsTrigger key={key} value={key} className="flex-none px-3">
+              {label}
+            </TabsTrigger>
           ))}
-        </TabList>
-        <TabPanels>
-          {tabs.map(({ key, content }) => (
-            <TabPanel key={key}>{content}</TabPanel>
-          ))}
-        </TabPanels>
-      </TabGroup>
+        </TabsList>
+        {tabs.map(({ key, content }) => (
+          <TabsContent key={key} value={key} keepMounted>
+            {content}
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 };
