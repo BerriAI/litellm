@@ -463,7 +463,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
-                                        elif c.get("type") == "tool_reference":
+                                        elif cast(dict[str, object], c).get("type") == "tool_reference":
                                             tool_name = c.get("tool_name")
                                             text_content = (
                                                 f"[Loaded tool: {tool_name}]" if tool_name else "[Loaded tool]"
@@ -518,7 +518,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 document_part = self._tool_result_document_part(c.get("source"))
                                                 if document_part:
                                                     combined_content_parts.append(document_part)
-                                            elif c.get("type") == "tool_reference":
+                                            elif cast(dict[str, object], c).get("type") == "tool_reference":
                                                 tool_name = c.get("tool_name")
                                                 text_repr = (
                                                     f"[Loaded tool: {tool_name}]" if tool_name else "[Loaded tool]"
