@@ -11,7 +11,7 @@ import json
 import os
 import re
 import traceback
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import httpx
 
@@ -158,7 +158,7 @@ class GenericAPILogger(CustomBatchLogger):
                 "endpoint not set for GenericAPILogger, GENERIC_LOGGER_ENDPOINT not found in environment variables"
             )
 
-        self.headers: dict = self._get_headers(headers)
+        self.headers: dict[str, str] = self._get_headers(headers)
         self.endpoint: str = endpoint
         self.event_types: list[API_EVENT_TYPES] | None = event_types
         self.callback_name: str | None = callback_name
@@ -248,18 +248,15 @@ class GenericAPILogger(CustomBatchLogger):
         await asyncio.sleep(delay)
 
     async def _post_with_retries(self, data: str) -> httpx.Response:
-        post_kwargs: Final[dict[str, Any]] = {
-            "url": self.endpoint,
-            "headers": self.headers,
-            "data": data,
-        }
-        if self.timeout is not None:
-            post_kwargs["timeout"] = self.timeout
-
         total_attempts: Final = self.max_retries + 1
         for attempt in range(total_attempts):
             try:
-                return await self.async_httpx_client.post(**post_kwargs)
+                return await self.async_httpx_client.post(
+                    url=self.endpoint,
+                    headers=self.headers,
+                    data=data,
+                    timeout=self.timeout,
+                )
             except Exception as e:
                 is_last_attempt = attempt == self.max_retries
                 should_retry = self._should_retry_exception(e)

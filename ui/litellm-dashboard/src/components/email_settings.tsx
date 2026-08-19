@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import NotificationManager from "./molecules/notifications_manager";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { Eye, EyeOff } from "lucide-react";
+import { toast } from "@/lib/toast";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
 import { EmailEventSettings } from "./email_events";
 
@@ -29,7 +30,18 @@ const FIELD_HELP: Record<string, React.ReactNode> = {
 
 const PREMIUM_ONLY_FIELDS = ["EMAIL_LOGO_URL", "EMAIL_SUPPORT_CONTACT"];
 
+const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN)/i;
+
 const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser, alerts }) => {
+  const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
+
+  const toggleFieldVisibility = (key: string) => {
+    setVisibleFields((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
   const handleSaveEmailSettings = async () => {
     if (!accessToken) {
       return;
@@ -66,9 +78,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
     };
     try {
       await setCallbacksCall(accessToken, payload);
-      NotificationManager.success("Email settings updated successfully");
+      toast.success("Email settings updated successfully");
     } catch (error) {
-      NotificationManager.fromBackend(error);
+      toast.fromError(error);
     }
   };
 
@@ -99,6 +111,8 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
               <div key={index} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {Object.entries(alert.variables ?? {}).map(([key, value]) => {
                   const isLocked = !premiumUser && PREMIUM_ONLY_FIELDS.includes(key);
+                  const isSensitive = SENSITIVE_FIELD_PATTERN.test(key);
+                  const isVisible = visibleFields[key] || false;
                   return (
                     <div key={key} className="space-y-1">
                       {isLocked ? (
@@ -113,13 +127,25 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                       ) : (
                         <p className="text-sm">{key}</p>
                       )}
-                      <Input
-                        name={key}
-                        defaultValue={value as string}
-                        type="password"
-                        disabled={isLocked}
-                        className="max-w-100"
-                      />
+                      <InputGroup className="max-w-100">
+                        <InputGroupInput
+                          name={key}
+                          defaultValue={value as string}
+                          type={isSensitive && !isVisible ? "password" : "text"}
+                          disabled={isLocked}
+                        />
+                        {isSensitive && (
+                          <InputGroupAddon align="inline-end">
+                            <InputGroupButton
+                              size="icon-xs"
+                              onClick={() => toggleFieldVisibility(key)}
+                              aria-label={isVisible ? "Hide credential" : "Show credential"}
+                            >
+                              {isVisible ? <EyeOff /> : <Eye />}
+                            </InputGroupButton>
+                          </InputGroupAddon>
+                        )}
+                      </InputGroup>
                       <div className="text-xs text-muted-foreground italic">{FIELD_HELP[key]}</div>
                     </div>
                   );
@@ -135,9 +161,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                 if (!accessToken) return;
                 try {
                   await serviceHealthCheck(accessToken, "email");
-                  NotificationManager.success("Email test triggered. Check your configured email inbox/logs.");
+                  toast.success("Email test triggered. Check your configured email inbox/logs.");
                 } catch (error) {
-                  NotificationManager.fromBackend(error);
+                  toast.fromError(error);
                 }
               }}
             >
