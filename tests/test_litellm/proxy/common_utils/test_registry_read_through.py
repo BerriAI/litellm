@@ -260,6 +260,7 @@ class FakeGuardrailRow:
                     "blocked_words": [{"keyword": "secret", "action": "BLOCK"}],
                 },
                 "guardrail_info": {},
+                "status": "active",
             }.items()
         )
 
@@ -277,7 +278,7 @@ async def test_get_guardrail_with_read_through_recovers_guardrail_created_on_sib
     guardrail_id: Final = "read-through-db-guardrail-id"
     guardrail_name: Final = "read-through-db-guardrail"
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
+    prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(
         return_value=FakeGuardrailRow(guardrail_id, guardrail_name)
     )
     prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
@@ -290,8 +291,8 @@ async def test_get_guardrail_with_read_through_recovers_guardrail_created_on_sib
         guardrail: Final = await get_initialized_guardrail_with_read_through(guardrail_name=guardrail_name)
         assert guardrail is not None
         assert guardrail.guardrail_name == guardrail_name
-        prisma_client.db.litellm_guardrailstable.find_unique.assert_awaited_once_with(
-            where={"guardrail_name": guardrail_name}
+        prisma_client.db.litellm_guardrailstable.find_first.assert_awaited_once_with(
+            where={"guardrail_name": guardrail_name, "status": "active"}
         )
     finally:
         IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(guardrail_id)
@@ -307,11 +308,62 @@ async def test_get_guardrail_with_read_through_returns_none_for_unknown_guardrai
     )
 
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 
     assert await get_initialized_guardrail_with_read_through(guardrail_name="guardrail-nobody-created") is None
+
+
+@pytest.mark.asyncio
+async def test_resync_guardrails_never_loads_non_active_rows(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_guardrails
+
+    pending_name: Final = "pending-review-guardrail"
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    assert await _resync_guardrails(pending_name) is False
+    prisma_client.db.litellm_guardrailstable.find_first.assert_awaited_once_with(
+        where={"guardrail_name": pending_name, "status": "active"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_resync_guardrails_syncs_under_guardrail_reconcile_lock(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.common_utils.registry_read_through as read_through_module
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_guardrails
+    from litellm.proxy.guardrails.guardrail_registry import (
+        GUARDRAIL_RECONCILE_LOCK,
+        IN_MEMORY_GUARDRAIL_HANDLER,
+    )
+
+    guardrail_name: Final = "lock-scope-guardrail"
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(
+        return_value=FakeGuardrailRow("lock-scope-guardrail-id", guardrail_name)
+    )
+    lock_states: list[bool] = []
+
+    def record_sync(guardrail) -> None:
+        lock_states.append(GUARDRAIL_RECONCILE_LOCK.locked())
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "sync_guardrail_from_db", record_sync)
+    monkeypatch.setattr(read_through_module, "_initialized_guardrail", lambda guardrail_name: MagicMock())
+
+    assert await _resync_guardrails(guardrail_name) is True
+    assert lock_states == [True]
+    assert not GUARDRAIL_RECONCILE_LOCK.locked()
 
 
 @pytest.mark.asyncio

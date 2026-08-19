@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from prisma.types import (
         LiteLLM_AgentsTableInclude,
         LiteLLM_AgentsTableWhereUniqueInput,
+        LiteLLM_GuardrailsTableWhereInput,
         LiteLLM_ProxyModelTableWhereInput,
     )
 
@@ -132,20 +133,25 @@ async def _resync_model_deployments(model_name: str) -> bool:
 async def _resync_guardrails(guardrail_name: str) -> bool:
     from litellm.proxy import proxy_server
     from litellm.proxy.guardrails.guardrail_registry import (
+        GUARDRAIL_RECONCILE_LOCK,
         IN_MEMORY_GUARDRAIL_HANDLER,
-        GuardrailRegistry,
     )
+    from litellm.repositories.table_repositories import GuardrailsRepository
+    from litellm.types.guardrails import Guardrail
 
     if not _db_backed_registries_enabled("guardrails"):
         return False
     prisma_client: Final = proxy_server.prisma_client
     assert prisma_client is not None
-    row: Final = await GuardrailRegistry().get_guardrail_by_name_from_db(
-        guardrail_name=guardrail_name, prisma_client=prisma_client
-    )
+    active_row_filter: Final[LiteLLM_GuardrailsTableWhereInput] = {
+        "guardrail_name": guardrail_name,
+        "status": "active",
+    }
+    row: Final = await GuardrailsRepository(prisma_client).table.find_first(where=active_row_filter)
     if row is None:
         return False
-    IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=row)
+    async with GUARDRAIL_RECONCILE_LOCK:
+        IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=Guardrail(**dict(row)))
     return _initialized_guardrail(guardrail_name) is not None
 
 
