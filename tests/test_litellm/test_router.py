@@ -7595,6 +7595,62 @@ def test_pre_call_checks_keeps_deployment_when_provider_is_unresolvable(monkeypa
     assert len(result) == 1
 
 
+class TestUpsertDeploymentRollback:
+    """
+    Regression tests: `upsert_deployment` pops the previous deployment before
+    re-adding the edited one. When the re-add raises under
+    `ignore_invalid_deployments=True`, the pop must be rolled back so this pod
+    keeps serving the previous configuration instead of silently dropping a live
+    deployment (the "Error upserting deployment" drop behind the access-group
+    reload 500 in the 2-replica e2e suite).
+    """
+
+    def test_failed_upsert_keeps_previous_deployment_serving(self):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "prod-model",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "sk-old"},
+                    "model_info": {"id": "prod-1", "db_model": True},
+                }
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+        result = router.upsert_deployment(
+            deployment=Deployment(
+                model_name="prod-model",
+                litellm_params=LiteLLM_Params(model="auto_router/broken"),
+                model_info=ModelInfo(id="prod-1", db_model=True),
+            )
+        )
+
+        assert result is None
+        restored = router.get_deployment(model_id="prod-1")
+        assert restored is not None
+        assert restored.litellm_params.model == "gpt-4o"
+        assert [model["model_name"] for model in router.model_list] == ["prod-model"]
+
+    def test_failed_fresh_add_returns_none_without_restore(self):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router = litellm.Router(model_list=[], ignore_invalid_deployments=True)
+
+        result = router.upsert_deployment(
+            deployment=Deployment(
+                model_name="fresh-router",
+                litellm_params=LiteLLM_Params(model="auto_router/broken"),
+                model_info=ModelInfo(id="fresh-1", db_model=True),
+            )
+        )
+
+        assert result is None
+        assert router.get_deployment(model_id="fresh-1") is None
+        assert router.model_list == []
+
+
 class TestConsumedRequestTagsStamp:
     """Issue #36621: when a request's tags select a tagged pre-routing strategy, those
     tags are consumed by the selection; the hook must stamp the rewritten model group so

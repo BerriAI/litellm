@@ -1179,7 +1179,7 @@ async def test_route_request_read_through_recovers_model_created_on_sibling_repl
 
     assert response.choices[0].message.content == "hello-from-db"
     assert len(table.find_many_wheres) == 1
-    assert table.find_many_wheres[0] == {"OR": [{"model_name": model_name}, {"model_id": model_name}]}
+    assert table.find_many_wheres[0] == {"model_name": model_name}
 
 
 @pytest.mark.asyncio
@@ -1207,7 +1207,7 @@ async def test_route_request_unknown_model_raises_and_hits_db_once_within_ttl(mo
     with pytest.raises(ProxyModelNotFoundError):
         await route_request(data=data, llm_router=router, user_model=None, route_type="acompletion")
 
-    assert len(table.find_many_wheres) == 1
+    assert table.find_many_wheres == [{"model_name": model_name}, {"model_id": model_name}]
 
 
 @pytest.mark.asyncio

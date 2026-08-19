@@ -57,20 +57,20 @@ def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
     return ModelRepository(prisma_client).table
 
 
-def validate_models_exist(model_names: list[str], llm_router: "Router | None") -> tuple[bool, list[str]]:
+def validate_models_exist(model_names: Sequence[str], llm_router: "Router | None") -> tuple[bool, Sequence[str]]:
     """
     Validate that all requested model names exist in the router.
     Checks only exact model name matches.
 
     Returns:
-        Tuple[bool, List[str]]: (all_valid, missing_models)
+        (all_valid, missing_models)
     """
     if llm_router is None:
         return False, model_names
 
-    router_model_names: Final = set(llm_router.get_model_names())
-    missing: Final = [m for m in model_names if m not in router_model_names]
-    return (len(missing) == 0, missing)
+    router_model_names: Final = frozenset(llm_router.get_model_names())
+    missing: Final = tuple(m for m in model_names if m not in router_model_names)
+    return (not missing, missing)
 
 
 async def _missing_models_after_read_through(
@@ -81,12 +81,12 @@ async def _missing_models_after_read_through(
         model_registry_read_through,
     )
 
-    _, missing = validate_models_exist(model_names=list(model_names), llm_router=llm_router)
+    _, missing = validate_models_exist(model_names=model_names, llm_router=llm_router)
     if not missing:
         return ()
     for name in missing:
         await model_registry_read_through.attempt(name)
-    _, still_missing = validate_models_exist(model_names=list(model_names), llm_router=proxy_server.llm_router)
+    _, still_missing = validate_models_exist(model_names=model_names, llm_router=proxy_server.llm_router)
     return tuple(still_missing)
 
 
@@ -118,13 +118,21 @@ def _raise_http_if_reload_degraded_serving(
     before: frozenset[str],
     written_models: Sequence[tuple[str, object]],
     access_group: str,
+    still_desired: frozenset[str] | None,
+    live_after: frozenset[str] | None,
 ) -> None:
     """Same verdict as the model-write endpoints, expressed through this file's
     HTTPException error convention, with the metadata-only obligation: these writes
     change group membership, not the models themselves, so a row that was already not
     serving before the reload is never blamed here; only a model this reload stopped
     serving is reported."""
-    missing, collateral = reload_serving_verdict(before=before, written_models=written_models, written_must_serve=False)
+    missing, collateral = reload_serving_verdict(
+        before=before,
+        written_models=written_models,
+        written_must_serve=False,
+        still_desired=still_desired,
+        live_after=live_after,
+    )
     gone: Final = tuple(dict.fromkeys((*missing, *collateral)))
     if not gone:
         return
@@ -456,11 +464,13 @@ async def create_model_group(
 
         live_before_reload: Final = live_model_ids_snapshot()
 
-        await clear_cache()
+        reload_outcome: Final = await clear_cache()
         _raise_http_if_reload_degraded_serving(
             before=live_before_reload,
             written_models=updated_pairs,
             access_group=data.access_group,
+            still_desired=reload_outcome.still_desired,
+            live_after=reload_outcome.live_after,
         )
 
         verbose_proxy_logger.info(
@@ -716,11 +726,13 @@ async def update_access_group(
 
         # Clear cache and reload models to pick up the access group changes
         live_before_reload: Final = live_model_ids_snapshot()
-        await clear_cache()
+        reload_outcome: Final = await clear_cache()
         _raise_http_if_reload_degraded_serving(
             before=live_before_reload,
             written_models=list({**dict(stripped_pairs), **dict(updated_pairs)}.items()),
             access_group=access_group,
+            still_desired=reload_outcome.still_desired,
+            live_after=reload_outcome.live_after,
         )
 
         verbose_proxy_logger.info(
@@ -818,11 +830,13 @@ async def delete_access_group(
 
         # Clear cache and reload models to pick up the access group changes
         live_before_reload: Final = live_model_ids_snapshot()
-        await clear_cache()
+        reload_outcome: Final = await clear_cache()
         _raise_http_if_reload_degraded_serving(
             before=live_before_reload,
             written_models=removed_pairs,
             access_group=access_group,
+            still_desired=reload_outcome.still_desired,
+            live_after=reload_outcome.live_after,
         )
 
         verbose_proxy_logger.info(
