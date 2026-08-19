@@ -40,6 +40,7 @@ class SingulrGuardrailPayload(BaseModel):
 
 
 class SingulrMcpGuardrailPayload(BaseModel):
+    model_name: str | None = None
     guardrail_scope: str | None = None
     tool_name: str | None = None
     tool_arguments: Mapping[str, Any] | None = None

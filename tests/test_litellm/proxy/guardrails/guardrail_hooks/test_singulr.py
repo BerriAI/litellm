@@ -436,6 +436,7 @@ class TestSingulrMcpResponse:
             "call_type": "call_mcp_tool",
             "mcp_tool_name": "search_docs",
             "mcp_server_name": "docs-server",
+            "model": "MCP: docs-server",
         }
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await singulr_guardrail.apply_guardrail(
@@ -445,7 +446,7 @@ class TestSingulrMcpResponse:
             )
         sent_payload = mock_post.call_args.kwargs["json"]
         assert sent_payload["guardrail_scope"] == "mcp_response"
-        assert sent_payload["tool_name"] == "search_docs"
+        assert sent_payload["model_name"] == "MCP: docs-server"
         assert sent_payload["tool_result"] == ["Result: password reset link sent."]
 
     @pytest.mark.asyncio

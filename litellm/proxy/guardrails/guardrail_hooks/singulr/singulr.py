@@ -287,10 +287,8 @@ class SingulrGuardrail(CustomGuardrail):
         metadata: Final = self._build_metadata(request_data=request_data)
 
         singulr_mcp_obj = SingulrMcpGuardrailPayload(
+            model_name=request_data.get("model"),
             guardrail_scope="mcp_response",
-            tool_name=request_data.get("mcp_tool_name"),
-            tool_arguments=request_data.get("mcp_arguments"),
-            mcp_server_name=request_data.get("mcp_server_name"),
             tool_result=texts,
             metadata=metadata,
         )
