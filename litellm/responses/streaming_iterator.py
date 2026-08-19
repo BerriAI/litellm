@@ -20,7 +20,7 @@ from litellm.constants import (
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -48,6 +48,16 @@ if TYPE_CHECKING:
         ResponsesBackendWebSocket,
         ResponsesClientWebSocket,
     )
+
+
+class ProjectQuotaCallback(Protocol):
+    async def enforce_project_io_token_quota_for_frame(
+        self,
+        user_api_key_dict: UserAPIKeyAuth | None,
+        requested_model: str | None,
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+    ) -> None: ...
 
 
 @lru_cache(maxsize=1)
@@ -1331,6 +1341,84 @@ def _build_synthetic_response_events(
 
 from litellm._logging import verbose_logger
 
+# Conservative per-frame output-token floor used when a response.create
+# frame omits max_output_tokens, so a project OTPM quota can't be bypassed
+# by simply never declaring an output cap.
+_FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR: Final = 1024
+
+# Rough chars-per-token ratio for estimating a frame's input tokens without
+# resolving a real per-model tokenizer, matching the conservative estimate
+# the proxy's own rate limiter uses for the same purpose.
+_FRAME_CHARS_PER_TOKEN_ESTIMATE: Final = 4
+
+
+def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple[int, int | None]:
+    """Extract a rough input-token count and any explicit max_output_tokens
+    from a ``response.create`` frame, handling both wire shapes:
+      flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}
+      nested: {"type": "response.create", "response": {"input": ..., "max_output_tokens": ...}}
+    """
+    nested: Final = msg_obj.get("response")
+    params: Final[Mapping[str, object]] = (
+        nested
+        if _is_json_object(nested) and nested
+        else MappingProxyType(  # mutable-ok: immediately frozen filtered frame
+            {k: v for k, v in msg_obj.items() if k != "type"}
+        )
+    )
+    text_parts: Final[list[str]] = []  # mutable-ok: local accumulator built in one pass, not shared
+    pending: Final[list[object]] = [  # mutable-ok: explicit worklist avoids recursion
+        params.get("input"),
+        params.get("instructions"),
+    ]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str):
+            text_parts.append(value)
+        elif _is_json_array(value):
+            for item in value:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                elif _is_json_object(item):
+                    pending.append(item.get("content"))
+                    pending.append(item.get("text"))
+    total_chars: Final = sum(len(part) for part in text_parts)
+    estimated_input_tokens: Final = max(1, total_chars // _FRAME_CHARS_PER_TOKEN_ESTIMATE) if total_chars else 0
+
+    max_output_tokens: Final = params.get("max_output_tokens")
+    return estimated_input_tokens, max_output_tokens if isinstance(max_output_tokens, int) else None
+
+
+async def _enforce_frame_project_quota(
+    quota_callbacks: Sequence[ProjectQuotaCallback],
+    user_api_key_dict: UserAPIKeyAuth | None,
+    model: str | None,
+    raw_message: str,
+) -> None:
+    """Charge one response.create frame's estimated tokens against every
+    registered project ITPM/OTPM quota callback, in isolation from PII
+    masking / logging so a malformed frame still reaches those callbacks."""
+    if not quota_callbacks:
+        return
+    try:
+        msg_obj = json.loads(raw_message)
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not _is_json_object(msg_obj) or msg_obj.get("type") != "response.create":
+        return
+    estimated_input_tokens, explicit_max_output_tokens = _extract_frame_quota_estimate_inputs(msg_obj)
+    estimated_output_tokens: Final = (
+        explicit_max_output_tokens if explicit_max_output_tokens is not None else _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR
+    )
+    for callback in quota_callbacks:
+        await callback.enforce_project_io_token_quota_for_frame(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=model,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+        )
+
+
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.created",
     "response.completed",
@@ -1365,6 +1453,7 @@ class ResponsesWebSocketStreaming:
         first_message: str | None = None,
         guardrail_callbacks: list[Any] | None = None,
         output_guardrail_callbacks: list[PresidioGuardrailCallback] | None = None,
+        quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         authorized_model: str | None = None,
     ):
         self.websocket = websocket
@@ -1377,6 +1466,7 @@ class ResponsesWebSocketStreaming:
         self.first_message = first_message
         self.guardrail_callbacks: list[Any] = guardrail_callbacks or []
         self.output_guardrail_callbacks: list[PresidioGuardrailCallback] = output_guardrail_callbacks or []
+        self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
@@ -1786,10 +1876,39 @@ class ResponsesWebSocketStreaming:
 
         return json.dumps(evt_obj) if modified else response_str
 
+    async def _enforce_or_reject_frame(self, message: str) -> bool:
+        """Run the per-frame project quota check.
+
+        On rejection, sends an ``error`` event to the client and reports that
+        the frame must be dropped instead of forwarded, so the connection
+        stays open for the client to retry once the window resets.
+        """
+        try:
+            await _enforce_frame_project_quota(
+                self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
+            )
+        except RateLimitError as e:
+            try:
+                await self.websocket.send_text(
+                    json.dumps(  # mutable-ok: WebSocket wire payload requires JSON objects
+                        {  # mutable-ok: WebSocket wire payload requires JSON objects
+                            "type": "error",
+                            "error": {  # mutable-ok: nested WebSocket error object
+                                "type": "rate_limit_exceeded",
+                                "message": str(e),
+                            },
+                        }
+                    )
+                )
+            except Exception:  # noqa: BLE001, S110  # client may already be gone
+                pass
+            return False
+        return True
+
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
-            if self.first_message is not None:
+            if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
                 masked_first: Final = await self._mask_response_create(self.first_message)
                 self._store_input(masked_first)
                 self._store_event(masked_first)
@@ -1797,6 +1916,8 @@ class ResponsesWebSocketStreaming:
 
             while True:
                 message = await self.websocket.receive_text()
+                if not await self._enforce_or_reject_frame(message):
+                    continue
                 masked = await self._mask_response_create(message)
                 self._store_input(masked)
                 self._store_event(masked)
@@ -1876,6 +1997,7 @@ class ManagedResponsesWebSocketHandler:
         timeout: float | None = None,
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
+        quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
@@ -1893,6 +2015,7 @@ class ManagedResponsesWebSocketHandler:
         self.custom_llm_provider = custom_llm_provider
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
+        self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
@@ -2296,6 +2419,14 @@ class ManagedResponsesWebSocketHandler:
                 await self._send_warmup_ack(msg_obj)
             except Exception as exc:
                 verbose_logger.debug("ManagedResponsesWS: error sending warmup ack: %s", exc)
+            return
+
+        try:
+            await _enforce_frame_project_quota(
+                self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
+            )
+        except RateLimitError as e:
+            await self._send_error(str(e), error_type="rate_limit_exceeded")
             return
 
         call_kwargs: Final = self._build_base_call_kwargs(msg_obj)

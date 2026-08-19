@@ -136,4 +136,17 @@ describe("TagInfoView save payload", () => {
 
     expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expected);
   });
+
+  it("leaves the tag untouched and returns to the detail view when Cancel is clicked", async () => {
+    const { user } = await renderEditor();
+
+    const descriptionInput = screen.getByLabelText("Description");
+    await user.clear(descriptionInput);
+    await user.type(descriptionInput, "abandoned description");
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(await screen.findByText("Tag Details")).toBeInTheDocument();
+    expect(mockTagUpdateCall).not.toHaveBeenCalled();
+  });
 });

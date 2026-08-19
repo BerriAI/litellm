@@ -1,5 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ToolTestPanel } from "./ToolTestPanel";
@@ -155,5 +157,235 @@ describe("ToolTestPanel defaults", () => {
     const callButton = screen.getByRole("button", { name: "Call Tool" });
     expect(callButton.closest("form")).not.toBeNull();
     expect(callButton).toHaveAttribute("type", "button");
+  });
+});
+
+describe("ToolTestPanel argument payload", () => {
+  const submitPanel = async (schema: InputSchema | string, drive?: (user: UserEvent) => Promise<void>) => {
+    const onSubmit = vi.fn();
+    render(
+      <ToolTestPanel
+        tool={buildTool(schema)}
+        onSubmit={onSubmit}
+        isLoading={false}
+        result={null}
+        error={null}
+        onClose={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    if (drive) {
+      await drive(user);
+    }
+    await user.click(screen.getByRole("button", { name: "Call Tool" }));
+    return onSubmit;
+  };
+
+  it("sends a typed string under its own key, whitespace trimmed", async () => {
+    const onSubmit = await submitPanel(
+      { type: "object", properties: { message: { type: "string" } } },
+      async (user) => {
+        await user.type(screen.getByLabelText("message"), "  hello world  ");
+      },
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith({ message: "hello world" });
+  });
+
+  it("sends what the user typed into the fallback input when the tool has no real schema", async () => {
+    const onSubmit = vi.fn();
+    render(
+      <ToolTestPanel
+        tool={buildTool("tool_input_schema")}
+        onSubmit={onSubmit}
+        isLoading={false}
+        result={null}
+        error={null}
+        onClose={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText("Enter input for this tool"), "  do the thing  ");
+    await user.click(screen.getByRole("button", { name: "Call Tool" }));
+
+    expect(onSubmit).toHaveBeenCalledWith({ input: "do the thing" });
+  });
+
+  it("coerces integer fields to truncated numbers and number fields to floats", async () => {
+    const onSubmit = await submitPanel(
+      { type: "object", properties: { attempts: { type: "integer" }, ratio: { type: "number" } } },
+      async (user) => {
+        await user.clear(screen.getByLabelText("attempts"));
+        await user.type(screen.getByLabelText("attempts"), "7.9");
+        await user.clear(screen.getByLabelText("ratio"));
+        await user.type(screen.getByLabelText("ratio"), "1.25");
+      },
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith({ attempts: 7, ratio: 1.25 });
+  });
+
+  it("sends a real boolean, not the string 'true', when the boolean select is changed", async () => {
+    const onSubmit = await submitPanel(
+      { type: "object", properties: { active: { type: "boolean", default: false } } },
+      async (user) => {
+        await user.click(screen.getByLabelText("active"));
+        await user.click(await screen.findByText("True"));
+      },
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith({ active: true });
+  });
+
+  it("parses object and array textareas into real JSON values", async () => {
+    const onSubmit = await submitPanel(
+      {
+        type: "object",
+        properties: { payload: { type: "object" }, tags: { type: "array" } },
+      },
+      async (user) => {
+        await user.clear(screen.getByTestId("textarea-payload"));
+        await user.type(screen.getByTestId("textarea-payload"), '{{"a":1}');
+        await user.clear(screen.getByTestId("textarea-tags"));
+        await user.type(screen.getByTestId("textarea-tags"), '[["x","y"]');
+      },
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith({ payload: { a: 1 }, tags: ["x", "y"] });
+  });
+
+  it("omits a field whose value is left empty", async () => {
+    const onSubmit = await submitPanel({
+      type: "object",
+      properties: { message: { type: "string" }, note: { type: "string" } },
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith({});
+  });
+
+  it("keeps a dotted schema key flat rather than nesting it", async () => {
+    const onSubmit = await submitPanel(
+      { type: "object", properties: { "filter.name": { type: "string" } } },
+      async (user) => {
+        await user.type(screen.getByLabelText("filter.name"), "acme");
+      },
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith({ "filter.name": "acme" });
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("filter");
+  });
+
+  it("sends the option picked from an enum select", async () => {
+    const onSubmit = await submitPanel(
+      { type: "object", properties: { mode: { type: "string", enum: ["fast", "thorough"] } } },
+      async (user) => {
+        await user.selectOptions(screen.getByLabelText("mode"), "thorough");
+      },
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith({ mode: "thorough" });
+  });
+
+  it("wraps the arguments back under params for a nested params schema", async () => {
+    const onSubmit = await submitPanel(
+      {
+        type: "object",
+        properties: {
+          params: { type: "object", properties: { query: { type: "string" } } },
+        },
+      },
+      async (user) => {
+        await user.type(screen.getByLabelText("query"), "widgets");
+      },
+    );
+
+    expect(onSubmit).toHaveBeenCalledWith({ params: { query: "widgets" } });
+  });
+
+  it("blocks the call and shows the required message when a required field is empty", async () => {
+    const onSubmit = await submitPanel({
+      type: "object",
+      properties: { message: { type: "string" } },
+      required: ["message"],
+    });
+
+    expect(await screen.findByText("Please enter message")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("blocks the call and shows the JSON message when an object field holds invalid JSON", async () => {
+    const onSubmit = await submitPanel(
+      { type: "object", properties: { payload: { type: "object" } } },
+      async (user) => {
+        await user.clear(screen.getByTestId("textarea-payload"));
+        await user.type(screen.getByTestId("textarea-payload"), "not json");
+      },
+    );
+
+    expect(await screen.findByText("Invalid JSON")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("sends the seeded defaults when the user submits without touching anything", async () => {
+    const onSubmit = await submitPanel({
+      type: "object",
+      properties: {
+        ratio: { type: "number", default: 0.4 },
+        active: { type: "boolean", default: true },
+        label: { type: "string", default: "seeded" },
+      },
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith({ ratio: 0.4, active: true, label: "seeded" });
+  });
+});
+
+describe("ToolTestPanel schema changes under a stable tool name", () => {
+  const renderWith = (schema: InputSchema, onSubmit: ReturnType<typeof vi.fn>) => (
+    <ToolTestPanel
+      tool={buildTool(schema)}
+      onSubmit={onSubmit}
+      isLoading={false}
+      result={null}
+      error={null}
+      onClose={vi.fn()}
+    />
+  );
+
+  it("reseeds the fields when the same-named tool's schema changes", async () => {
+    const onSubmit = vi.fn();
+    const before: InputSchema = { type: "object", properties: { message: { type: "string" } } };
+    const after: InputSchema = {
+      type: "object",
+      properties: { query: { type: "string" }, limit: { type: "integer", default: 5 } },
+    };
+
+    const { rerender } = render(renderWith(before, onSubmit));
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("message"), "stale value");
+
+    rerender(renderWith(after, onSubmit));
+
+    expect(screen.queryByLabelText("message")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("query")).toHaveValue("");
+    expect(screen.getByLabelText("limit")).toHaveValue(5);
+
+    await user.type(screen.getByLabelText("query"), "widgets");
+    await user.click(screen.getByRole("button", { name: "Call Tool" }));
+
+    expect(onSubmit).toHaveBeenCalledWith({ query: "widgets", limit: 5 });
+  });
+
+  it("keeps what the user typed when the schema is rebuilt with identical content", async () => {
+    const onSubmit = vi.fn();
+    const schema = (): InputSchema => ({ type: "object", properties: { message: { type: "string" } } });
+
+    const { rerender } = render(renderWith(schema(), onSubmit));
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("message"), "typed by hand");
+
+    rerender(renderWith(schema(), onSubmit));
+
+    expect(screen.getByLabelText("message")).toHaveValue("typed by hand");
   });
 });

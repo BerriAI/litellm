@@ -1,4 +1,4 @@
-import { TextInput } from "@tremor/react";
+import { Input } from "@/components/ui/input";
 import { Select as AntdSelect, Button, Form, Modal, Tooltip, Typography } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import { useState } from "react";
@@ -74,7 +74,7 @@ export default function CredentialModal({
           name="credential_name"
           rules={[{ required: true, message: "Credential name is required" }]}
         >
-          <TextInput placeholder="Enter a friendly name for these credentials" disabled={isEdit} />
+          <Input placeholder="Enter a friendly name for these credentials" disabled={isEdit} />
         </Form.Item>
 
         <Form.Item

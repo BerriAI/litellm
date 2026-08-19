@@ -301,4 +301,16 @@ describe("ModelRetrySettingsTab", () => {
     const result = updater({ "gpt-4": { BadRequestErrorRetries: 0 } });
     expect(result["gpt-4"]).toMatchObject({ BadRequestErrorRetries: 2 });
   });
+
+  it("shows the global scope by its human label rather than the raw value", () => {
+    render(<ModelRetrySettingsTab {...buildProps()} />);
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("Global Default");
+  });
+
+  it("shows a selected model group by its own name", () => {
+    render(<ModelRetrySettingsTab {...buildProps({ selectedModelGroup: "gpt-4" })} />);
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("gpt-4");
+  });
 });

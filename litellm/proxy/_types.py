@@ -811,6 +811,9 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        # Endpoint restricts results to organizations the caller is ORG_ADMIN
+        # of; a caller who administers none gets an empty result set.
+        "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
@@ -1995,6 +1998,18 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
         return values
 
 
+class TeamCallbackDeleteResponseData(LiteLLMPydanticObjectBase):
+    team_id: str
+    success_callbacks: tuple[str, ...]
+    failure_callbacks: tuple[str, ...]
+
+
+class TeamCallbackDeleteResponse(LiteLLMPydanticObjectBase):
+    status: Literal["success"]
+    message: str
+    data: TeamCallbackDeleteResponseData
+
+
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: list[str] | None = []
     failure_callback: list[str] | None = []
@@ -3044,6 +3059,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     models: list[str] = []
     model_rpm_limit: dict | None = None
     model_tpm_limit: dict | None = None
+    model_itpm_limit: Mapping[str, int] | None = None
+    model_otpm_limit: Mapping[str, int] | None = None
     blocked: bool = False
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
@@ -3076,6 +3093,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     models: list[str] | None = None
     model_rpm_limit: dict | None = None
     model_tpm_limit: dict | None = None
+    model_itpm_limit: Mapping[str, int] | None = None
+    model_otpm_limit: Mapping[str, int] | None = None
     blocked: bool | None = None
     budget_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
@@ -4227,6 +4246,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "model_itpm_limit",
+    "model_otpm_limit",
     "default_estimated_output_tokens",
     "default_estimated_output_tokens_per_model",
     "mcp_rpm_limit",

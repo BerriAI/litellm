@@ -63,25 +63,6 @@ vi.mock("react-copy-to-clipboard", () => ({
   CopyToClipboard: ({ children }: { children: any }) => children,
 }));
 
-vi.mock("@tremor/react", () => {
-  const React = require("react");
-  const Stub = ({ children }: { children?: any }) => React.createElement("div", null, children);
-  const Button = ({ children, ...props }: { children?: any }) => React.createElement("button", props, children);
-  const TextInput = (props: any) => React.createElement("input", props);
-
-  return {
-    Accordion: Stub,
-    AccordionBody: Stub,
-    AccordionHeader: Stub,
-    Button,
-    Col: Stub,
-    Grid: Stub,
-    Text: Stub,
-    TextInput,
-    Title: Stub,
-  };
-});
-
 vi.mock("antd", () => {
   const React = require("react");
 
@@ -385,6 +366,13 @@ describe("CreateKey", () => {
     addKey: vi.fn(),
   };
 
+  const openOptionalSettings = async () => {
+    const trigger = await screen.findByRole("button", { name: /optional settings/i });
+    act(() => {
+      fireEvent.click(trigger);
+    });
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     if (typeof window !== "undefined" && window.localStorage && typeof window.localStorage.clear === "function") {
@@ -427,6 +415,8 @@ describe("CreateKey", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
     });
+
+    await openOptionalSettings();
 
     await waitFor(() => {
       expect(screen.getByTestId("access-group-selector")).toBeInTheDocument();
@@ -777,6 +767,8 @@ describe("CreateKey", () => {
         fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
       });
 
+      await openOptionalSettings();
+
       await waitFor(() => {
         expect(screen.getByText("production")).toBeInTheDocument();
         expect(screen.getByText("staging")).toBeInTheDocument();
@@ -788,11 +780,12 @@ describe("CreateKey", () => {
     const POLICIES_PLACEHOLDER = "Premium feature - Upgrade to set policies by key";
     const PROMPTS_PLACEHOLDER = "Premium feature - Upgrade to set prompts by key";
 
-    const openModal = () => {
+    const openModal = async () => {
       renderWithProviders(<CreateKey {...defaultProps} />);
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
       });
+      await openOptionalSettings();
     };
 
     beforeEach(() => {
@@ -801,7 +794,7 @@ describe("CreateKey", () => {
     });
 
     it("should load and offer both selectors for an admin", async () => {
-      openModal();
+      await openModal();
 
       await waitFor(() => {
         expect(screen.getByRole("option", { name: "policy-a" })).toBeInTheDocument();
@@ -816,7 +809,7 @@ describe("CreateKey", () => {
     it("should omit both selectors and fire neither admin-only request for an internal user", async () => {
       authorizedState = { ...defaultAuthorizedState, userRole: "Internal User" };
 
-      openModal();
+      await openModal();
 
       expect(await screen.findByTestId("org-dropdown")).toBeInTheDocument();
 
@@ -834,6 +827,8 @@ describe("CreateKey", () => {
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
       });
+
+      await openOptionalSettings();
 
       await waitFor(() => {
         expect(screen.getByTestId("budget-duration-dropdown")).toBeInTheDocument();

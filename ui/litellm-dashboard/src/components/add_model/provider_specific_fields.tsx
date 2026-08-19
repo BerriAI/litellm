@@ -1,7 +1,7 @@
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { UploadOutlined } from "@ant-design/icons";
-import { Text, TextInput } from "@tremor/react";
-import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, UploadProps } from "antd";
+import { Input } from "@/components/ui/input";
+import { Button as Button2, Col, Form, Input as AntdInput, Row, Select, Typography, Upload, UploadProps } from "antd";
 import React from "react";
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
@@ -216,21 +216,74 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     },
   };
 
+  const renderFieldControl = (field: ProviderCredentialField) => {
+    if (field.type === "select") {
+      return (
+        <Select placeholder={field.placeholder} defaultValue={field.defaultValue}>
+          {field.options?.map((option) => (
+            <Select.Option key={option} value={option}>
+              {option}
+            </Select.Option>
+          ))}
+        </Select>
+      );
+    }
+
+    if (field.type === "upload") {
+      return (
+        <Upload
+          {...handleUpload}
+          onChange={(info) => {
+            if (uploadProps?.onChange) {
+              uploadProps.onChange(info);
+            }
+          }}
+        >
+          <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
+        </Upload>
+      );
+    }
+
+    if (field.type === "textarea") {
+      return (
+        <AntdInput.TextArea
+          placeholder={field.placeholder}
+          defaultValue={field.defaultValue}
+          rows={6}
+          style={{ fontFamily: "monospace", fontSize: "12px" }}
+        />
+      );
+    }
+
+    if (field.type === "password") {
+      return <AntdInput.Password placeholder={field.placeholder} defaultValue={field.defaultValue} />;
+    }
+
+    return (
+      <Input
+        placeholder={field.placeholder}
+        type="text"
+        defaultValue={field.defaultValue}
+        onChange={field.key === "api_base" ? handleApiBaseChange : undefined}
+      />
+    );
+  };
+
   return (
     <>
       {isLoading && allFields.length === 0 && (
         <Row>
           <Col span={24}>
-            <Text className="mb-2">Loading provider fields...</Text>
+            <p className="text-sm mb-2">Loading provider fields...</p>
           </Col>
         </Row>
       )}
       {loadError && allFields.length === 0 && (
         <Row>
           <Col span={24}>
-            <Text className="mb-2 text-red-500">
+            <p className="text-sm mb-2 text-red-500">
               {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
-            </Text>
+            </p>
           </Col>
         </Row>
       )}
@@ -243,47 +296,14 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
-            {field.type === "select" ? (
-              <Select placeholder={field.placeholder} defaultValue={field.defaultValue}>
-                {field.options?.map((option) => (
-                  <Select.Option key={option} value={option}>
-                    {option}
-                  </Select.Option>
-                ))}
-              </Select>
-            ) : field.type === "upload" ? (
-              <Upload
-                {...handleUpload}
-                onChange={(info) => {
-                  if (uploadProps?.onChange) {
-                    uploadProps.onChange(info);
-                  }
-                }}
-              >
-                <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
-              </Upload>
-            ) : field.type === "textarea" ? (
-              <Input.TextArea
-                placeholder={field.placeholder}
-                defaultValue={field.defaultValue}
-                rows={6}
-                style={{ fontFamily: "monospace", fontSize: "12px" }}
-              />
-            ) : (
-              <TextInput
-                placeholder={field.placeholder}
-                type={field.type === "password" ? "password" : "text"}
-                defaultValue={field.defaultValue}
-                onChange={field.key === "api_base" ? handleApiBaseChange : undefined}
-              />
-            )}
+            {renderFieldControl(field)}
           </Form.Item>
 
           {/* Special case for Vertex Credentials help text */}
           {field.key === "vertex_credentials" && (
             <Row>
               <Col>
-                <Text className="mb-3 mt-1">Give a gcp service account(.json file)</Text>
+                <p className="text-sm mb-3 mt-1">Give a gcp service account(.json file)</p>
               </Col>
             </Row>
           )}
@@ -293,7 +313,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
             <Row>
               <Col span={10}></Col>
               <Col span={10}>
-                <Text className="mb-2">
+                <p className="text-sm mb-2">
                   The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
                   <Link
                     href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
@@ -301,7 +321,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
                   >
                     here
                   </Link>
-                </Text>
+                </p>
               </Col>
             </Row>
           )}

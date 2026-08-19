@@ -4826,3 +4826,135 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def _build_success_payload(logging_obj, kwargs):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.datetime.now()
+    return get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+
+def _guardrail_kwargs(response_cost):
+    return {
+        "litellm_call_id": "guardrail-cost-call",
+        "model": "gpt-4o",
+        "messages": [],
+        "response_cost": response_cost,
+        "litellm_params": {
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {
+                        "guardrail_name": "bedrock-pre",
+                        "guardrail_status": "success",
+                        "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+                        "guardrail_cost": 0.0003,
+                    },
+                    {"guardrail_name": "no-usage-guardrail", "guardrail_status": "success"},
+                ]
+            }
+        },
+    }
+
+
+def test_payload_response_cost_includes_guardrail_cost(logging_obj):
+    """LIT-5651: provider-billed guardrail cost must count in response_cost."""
+    payload = _build_success_payload(logging_obj, _guardrail_kwargs(response_cost=0.0000429))
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0003429)
+    assert payload["cost_breakdown"] is not None
+    assert payload["cost_breakdown"]["guardrail_cost"] == pytest.approx(0.0003)
+    assert payload["cost_breakdown"]["total_cost"] == pytest.approx(0.0003)
+    assert payload["hidden_params"]["response_cost"] == pytest.approx(0.0000429)
+
+
+def test_payload_guardrail_cost_merges_into_existing_cost_breakdown(logging_obj):
+    logging_obj.set_cost_breakdown(
+        input_cost=0.00003,
+        output_cost=0.0000129,
+        total_cost=0.0000429,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    payload = _build_success_payload(logging_obj, _guardrail_kwargs(response_cost=0.0000429))
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0003429)
+    assert payload["cost_breakdown"]["guardrail_cost"] == pytest.approx(0.0003)
+    assert payload["cost_breakdown"]["total_cost"] == pytest.approx(0.0003429)
+    assert payload["cost_breakdown"]["input_cost"] == pytest.approx(0.00003)
+    assert logging_obj.cost_breakdown["total_cost"] == pytest.approx(0.0000429)
+
+
+def test_payload_without_guardrail_cost_is_unchanged(logging_obj):
+    kwargs = {
+        "litellm_call_id": "no-guardrail-call",
+        "model": "gpt-4o",
+        "messages": [],
+        "response_cost": 0.0000429,
+        "litellm_params": {"metadata": {}},
+    }
+    payload = _build_success_payload(logging_obj, kwargs)
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0000429)
+    assert payload["cost_breakdown"] is None
+
+
+_AWS_SECRET = "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY"
+_GEMINI_KEY = "AIzaSyC0000000000000000000000000000000"
+
+
+def test_empty_api_base_does_not_dump_call_state(logging_obj):
+    """Direct (non-HTTP) providers pass api_base='', which used to echo model_call_details."""
+    logging_obj.model_call_details["litellm_params"] = {
+        "api_key": "sk-proj-hunter2hunter2hunter2hunter2",
+        "aws_secret_access_key": _AWS_SECRET,
+    }
+
+    curl_command = logging_obj._get_request_curl_command(
+        api_base="",
+        headers={},
+        additional_args={},
+        data={"model": "some-model"},
+    )
+
+    assert "litellm_call_id" not in curl_command
+    assert _AWS_SECRET not in curl_command
+    assert "hunter2" not in curl_command
+
+
+def test_pre_call_redacts_and_masks_raw_request(logging_obj):
+    """log_raw_request_response echoes the request body and api_base back to loggers/UI."""
+    metadata = {"user_api_key_alias": "qa-key"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+    logging_obj.log_raw_request_response = True
+
+    logging_obj.pre_call(
+        input="hi",
+        api_key="",
+        additional_args={
+            "api_base": f"https://generativelanguage.googleapis.com/v1beta/models/x:generateContent?key={_GEMINI_KEY}",
+            "headers": {},
+            "complete_input_dict": {"aws_secret_access_key": _AWS_SECRET},
+        },
+    )
+
+    raw_request = metadata["raw_request"]
+    assert _AWS_SECRET not in raw_request
+    assert "REDACTED" in raw_request
+
+    raw_api_base = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_api_base"]
+    assert _GEMINI_KEY not in raw_api_base
+    assert "key=*****" in raw_api_base

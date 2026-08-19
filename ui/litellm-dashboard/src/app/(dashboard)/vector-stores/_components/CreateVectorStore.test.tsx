@@ -16,18 +16,21 @@ vi.mock("@/components/vector_store_providers", () => ({
     OPENAI: "OpenAI",
     AZURE_OPENAI: "Azure OpenAI",
     S3Vectors: "AWS S3 Vectors",
+    Valkey: "Valkey",
   },
   vectorStoreProviderMap: {
     BEDROCK: "bedrock",
     OPENAI: "openai",
     AZURE_OPENAI: "azure_openai",
     S3Vectors: "s3_vectors",
+    Valkey: "valkey",
   },
   vectorStoreProviderLogoMap: {
     "Amazon Bedrock": "https://example.com/bedrock.png",
     OpenAI: "https://example.com/openai.png",
     "Azure OpenAI": "https://example.com/azure.png",
     "AWS S3 Vectors": "https://example.com/aws.png",
+    Valkey: "https://example.com/valkey.svg",
   },
   getProviderSpecificFields: vi.fn((provider: string) => {
     if (provider === "s3_vectors") {
@@ -80,6 +83,19 @@ describe("CreateVectorStore", () => {
 
     expect(screen.getByText("Click or drag files to this area to upload")).toBeInTheDocument();
     expect(screen.getByText(/Support for single or bulk upload/)).toBeInTheDocument();
+  });
+
+  it("should show the provider display name on the trigger rather than its wire value", async () => {
+    const user = userEvent.setup();
+    render(<CreateVectorStore accessToken="test-token" />);
+
+    const providerSelect = screen.getByRole("combobox", { name: /Provider/ });
+    expect(providerSelect).toHaveTextContent("Amazon Bedrock");
+
+    await user.click(providerSelect);
+    await user.click(await screen.findByText("AWS S3 Vectors"));
+
+    expect(screen.getByRole("combobox", { name: /Provider/ })).toHaveTextContent("AWS S3 Vectors");
   });
 
   it("should have provider selection dropdown", () => {
@@ -197,6 +213,21 @@ describe("CreateVectorStore", () => {
     await waitFor(() => {
       expect(screen.getByText("Vector Store Created Successfully")).toBeInTheDocument();
     });
+  });
+
+  it("should exclude valkey from the provider dropdown since it has no RAG ingestion", async () => {
+    render(<CreateVectorStore accessToken="test-token" />);
+
+    const providerSelect = screen.getByRole("combobox");
+
+    await act(async () => {
+      fireEvent.mouseDown(providerSelect);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("AWS S3 Vectors")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Valkey")).not.toBeInTheDocument();
   });
 
   it("should display S3 Vectors provider-specific fields when selected", async () => {

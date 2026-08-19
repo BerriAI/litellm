@@ -1,11 +1,17 @@
 import React from "react";
 import { Form, Switch, Select, Tooltip, DatePicker } from "antd";
-import { Text, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
+import { ChevronDown } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
 import { Row, Col, Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
-import CacheControlSettings from "./cache_control_settings";
+import CacheControlInjectionPoints, {
+  CACHE_CONTROL_LABEL,
+  CACHE_CONTROL_TOOLTIP,
+  NEW_CACHE_CONTROL_POINT,
+} from "./cache_control_settings";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { Tag } from "../tag_management/types";
 import { formItemValidateJSON } from "../../utils/textUtils";
@@ -118,11 +124,12 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
 
   return (
     <>
-      <Accordion className="mt-2 mb-4">
-        <AccordionHeader>
+      <Collapsible className="mt-2 mb-4 overflow-hidden rounded-lg border">
+        <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
           <b>Advanced Settings</b>
-        </AccordionHeader>
-        <AccordionBody>
+          <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="px-4 pb-3">
           <div className="bg-white rounded-lg">
             <Form.Item label="Custom Pricing" name="custom_pricing" valuePropName="checked" className="mb-4">
               <Switch onChange={handleCustomPricingChange} className="bg-gray-600" />
@@ -206,7 +213,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   tooltip="Provisioned throughput units for this deployment. Set together with Cost per PTU / Hour and a Team to attribute a flat daily cost."
                   className="mb-4"
                 >
-                  <TextInput placeholder="e.g. 15" />
+                  <Input placeholder="e.g. 15" />
                 </Form.Item>
 
                 <Form.Item
@@ -217,7 +224,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   tooltip="Flat cost = PTU count * this rate * active hours, attributed to the deployment's team."
                   className="mb-4"
                 >
-                  <TextInput placeholder="e.g. 2.00" />
+                  <Input placeholder="e.g. 2.00" />
                 </Form.Item>
 
                 <Form.Item
@@ -266,7 +273,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       className="mb-4"
                     >
-                      <TextInput />
+                      <Input />
                     </Form.Item>
                     <Form.Item
                       label="Output Cost (per 1M tokens)"
@@ -275,7 +282,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                       className="mb-4"
                     >
-                      <TextInput />
+                      <Input />
                     </Form.Item>
                     <Form.Item
                       label="Cache Read Cost (per 1M tokens)"
@@ -285,7 +292,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       tooltip="If left blank, defaults to Input Cost."
                       className="mb-4"
                     >
-                      <TextInput placeholder="Defaults to Input Cost if blank" />
+                      <Input placeholder="Defaults to Input Cost if blank" />
                     </Form.Item>
                     <Form.Item
                       label="Cache Write Cost (per 1M tokens)"
@@ -295,7 +302,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       tooltip="If left blank, defaults to Input Cost (the backend falls back to input_cost_per_token when no cache-write rate is set)."
                       className="mb-4"
                     >
-                      <TextInput placeholder="Defaults to Input Cost if blank" />
+                      <Input placeholder="Defaults to Input Cost if blank" />
                     </Form.Item>
                   </>
                 ) : (
@@ -306,7 +313,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                     rules={[{ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)]}
                     className="mb-4"
                   >
-                    <TextInput />
+                    <Input />
                   </Form.Item>
                 )}
               </div>
@@ -329,11 +336,21 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               <Switch onChange={handlePassThroughChange} className="bg-gray-600" />
             </Form.Item>
 
-            <CacheControlSettings
-              form={form}
-              showCacheControl={showCacheControl}
-              onCacheControlChange={handleCacheControlChange}
-            />
+            <Form.Item
+              label={CACHE_CONTROL_LABEL}
+              name="cache_control"
+              valuePropName="checked"
+              className="mb-4"
+              tooltip={CACHE_CONTROL_TOOLTIP}
+            >
+              <Switch onChange={handleCacheControlChange} className="bg-gray-600" />
+            </Form.Item>
+
+            {showCacheControl && (
+              <Form.Item name="cache_control_injection_points" initialValue={[NEW_CACHE_CONTROL_POINT]} noStyle>
+                <CacheControlInjectionPoints />
+              </Form.Item>
+            )}
             <Form.Item
               label="LiteLLM Params"
               name="litellm_extra_params"
@@ -353,12 +370,12 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
             <Row className="mb-4">
               <Col span={10}></Col>
               <Col span={10}>
-                <Text className="text-gray-600 text-sm">
+                <p className="text-gray-600 text-sm">
                   Pass JSON of litellm supported params{" "}
                   <Link href="https://docs.litellm.ai/docs/completion/input" target="_blank">
                     litellm.completion() call
                   </Link>
-                </Text>
+                </p>
               </Col>
             </Row>
             <Form.Item
@@ -376,8 +393,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               />
             </Form.Item>
           </div>
-        </AccordionBody>
-      </Accordion>
+        </CollapsibleContent>
+      </Collapsible>
     </>
   );
 };
