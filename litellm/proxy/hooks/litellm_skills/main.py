@@ -27,7 +27,7 @@ Usage:
 import base64
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -41,6 +41,30 @@ from litellm.types.utils import CallTypes, CallTypesLiteral, LLMResponseTypes
 
 if TYPE_CHECKING:
     from litellm.llms.litellm_proxy.skills.sandbox_executor import SkillsSandboxExecutor
+
+
+class _ToolCallFunction(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def arguments(self) -> str: ...
+
+
+class _ChatToolCall(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def function(self) -> _ToolCallFunction: ...
+
+
+class _ChatMessage(Protocol):
+    @property
+    def content(self) -> str | None: ...
+
+    @property
+    def tool_calls(self) -> Sequence[_ChatToolCall] | None: ...
 
 
 class SkillsInjectionHook(CustomLogger):
@@ -443,7 +467,7 @@ class SkillsInjectionHook(CustomLogger):
     async def _execute_code_loop_messages_api(
         self,
         data: dict,
-        response: Any,
+        response: object,
         skill_files: dict[str, bytes],
     ) -> LLMResponseTypes | None:
         """
@@ -673,7 +697,7 @@ print('No executable skill module found')
     async def _execute_code_loop(
         self,
         data: dict,
-        response: Any,
+        response: object,
         skill_files: dict[str, bytes],
     ) -> LLMResponseTypes:
         """
@@ -714,8 +738,8 @@ print('No executable skill module found')
 
         for iteration in range(self.max_iterations):
             # OpenAI format response has choices[0].message
-            assistant_message = current_response.choices[0].message
-            stop_reason = current_response.choices[0].finish_reason
+            assistant_message: _ChatMessage = current_response.choices[0].message
+            stop_reason: str | None = current_response.choices[0].finish_reason
 
             # Build assistant message for conversation history
             assistant_msg_dict: dict[str, object] = {
@@ -784,14 +808,14 @@ print('No executable skill module found')
 
     async def _execute_code_tool(
         self,
-        tool_call: Any,
+        tool_call: _ChatToolCall,
         skill_files: dict[str, bytes],
         executor: "SkillsSandboxExecutor",
         generated_files: list[dict[str, object]],
     ) -> str:
         """Execute a litellm_code_execution tool call and return result string."""
         try:
-            args: Final = json.loads(tool_call.function.arguments)
+            args: Final[Mapping[str, str]] = json.loads(tool_call.function.arguments)
             code: Final[str] = args.get("code", "")
 
             verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", len(code))

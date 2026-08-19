@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -101,7 +101,7 @@ describe("EditHashicorpVaultModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Token"), "rotated-token");
+    fireEvent.change(screen.getByLabelText("Token"), { target: { value: "rotated-token" } });
     await save(user);
 
     await waitFor(() => {
@@ -139,7 +139,7 @@ describe("EditHashicorpVaultModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("Vault Address"), "vault.example.com");
+    fireEvent.change(screen.getByLabelText("Vault Address"), { target: { value: "vault.example.com" } });
     await save(user);
 
     expect(await screen.findByText("Must start with http:// or https://")).toBeInTheDocument();

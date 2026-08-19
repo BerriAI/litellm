@@ -1236,7 +1236,7 @@ describe("TeamInfoView", () => {
       expect(screen.getAllByPlaceholderText("Value")[0]).toHaveValue("CC-OLD");
 
       await user.clear(screen.getAllByPlaceholderText("Value")[0]);
-      await user.type(screen.getAllByPlaceholderText("Value")[0], "CC-NEW");
+      fireEvent.change(screen.getAllByPlaceholderText("Value")[0], { target: { value: "CC-NEW" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

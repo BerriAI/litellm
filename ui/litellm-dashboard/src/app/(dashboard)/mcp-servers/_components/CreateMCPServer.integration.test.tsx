@@ -266,11 +266,11 @@ describe("CreateMCPServer", () => {
 
       // Fill in server name (use id to avoid duplicate placeholder)
       const nameInput = getServerNameInput();
-      await user.type(nameInput, "Test_Server");
+      fireEvent.change(nameInput, { target: { value: "Test_Server" } });
 
       // Fill in URL
       const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await user.type(urlInput, "https://example.com/mcp");
+      fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
 
       // Select API Key auth type
       await selectAntOption("Authentication", "API Key");
@@ -310,10 +310,10 @@ describe("CreateMCPServer", () => {
       const user = userEvent.setup({ delay: null });
 
       const nameInput = getServerNameInput();
-      await user.type(nameInput, "Test_Server");
+      fireEvent.change(nameInput, { target: { value: "Test_Server" } });
 
       const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await user.type(urlInput, "https://example.com/mcp");
+      fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
 
       await selectAntOption("Authentication", "Bearer Token");
 
@@ -351,10 +351,10 @@ describe("CreateMCPServer", () => {
       const user = userEvent.setup({ delay: null });
 
       const nameInput = getServerNameInput();
-      await user.type(nameInput, "My_Server");
+      fireEvent.change(nameInput, { target: { value: "My_Server" } });
 
       const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await user.type(urlInput, "https://example.com/mcp");
+      fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
 
       await selectAntOption("Authentication", "API Key");
 
@@ -364,7 +364,7 @@ describe("CreateMCPServer", () => {
 
       // Fill in auth value
       const authInput = screen.getByPlaceholderText("Enter token or secret");
-      await user.type(authInput, "my-secret-key");
+      fireEvent.change(authInput, { target: { value: "my-secret-key" } });
 
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-1",
@@ -397,8 +397,10 @@ describe("CreateMCPServer", () => {
       await selectHttpTransport();
 
       const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "PT_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "PT_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
 
       await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
 
@@ -423,8 +425,10 @@ describe("CreateMCPServer", () => {
       await selectHttpTransport();
 
       const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "CF_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "CF_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
 
       await selectAntOption("Authentication", optionLabel);
 
@@ -487,19 +491,22 @@ describe("CreateMCPServer", () => {
         await selectHttpTransport();
 
         const user = userEvent.setup({ delay: null });
-        await user.type(getServerNameInput(), "CF_App_Server");
-        await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+        fireEvent.change(getServerNameInput(), { target: { value: "CF_App_Server" } });
+        fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+          target: { value: "https://example.com/mcp" },
+        });
 
         await selectAntOption("Authentication", optionLabel);
 
         // Admin declares the org's pre-registered upstream app; unlike the browser-authorized
         // token, this is config and must survive onto the server row so internal users'
         // Tools-page Authorize relays through it (required for non-DCR upstreams like Slack).
-        await user.type(
-          screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
-          "org-app-client-id",
-        );
-        await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+        fireEvent.change(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), {
+          target: { value: "org-app-client-id" },
+        });
+        fireEvent.change(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), {
+          target: { value: "org-app-secret" },
+        });
 
         await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
         await act(async () => {
@@ -548,16 +555,19 @@ describe("CreateMCPServer", () => {
       await selectHttpTransport();
 
       const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "CF_Keep_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "CF_Keep_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
 
       await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
 
-      await user.type(
-        screen.getByPlaceholderText("Leave blank to use dynamic client registration"),
-        "org-app-client-id",
-      );
-      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "org-app-secret");
+      fireEvent.change(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), {
+        target: { value: "org-app-client-id" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), {
+        target: { value: "org-app-secret" },
+      });
 
       await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
       await act(async () => {
@@ -605,8 +615,10 @@ describe("CreateMCPServer", () => {
       await selectHttpTransport();
 
       const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "Switch_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "Switch_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
 
       await selectAntOption("Authentication", "OAuth");
 
@@ -653,8 +665,10 @@ describe("CreateMCPServer", () => {
     it("keeps the DCR-minted client out of form.credentials but reuses it via getCredentials", async () => {
       await selectHttpTransport();
       const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "DCR_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "DCR_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
       await selectAntOption("Authentication", "OAuth");
 
       await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
@@ -678,8 +692,10 @@ describe("CreateMCPServer", () => {
       await selectAntOption("Transport Type", "Streamable HTTP");
       expect(await screen.findByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
       const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "Leak_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "Leak_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
       await selectAntOption("Authentication", "OAuth");
 
       await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
@@ -705,8 +721,10 @@ describe("CreateMCPServer", () => {
     it("persists the DCR client on an oauth2 submit via the ref", async () => {
       await selectHttpTransport();
       const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "DCR_Submit_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "DCR_Submit_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
       await selectAntOption("Authentication", "OAuth");
 
       await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
@@ -823,10 +841,14 @@ describe("CreateMCPServer", () => {
     it("keeps the typed app but warns when the URL changes after a client-forwarded authorize", async () => {
       await selectHttpTransport();
       const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "CF_Warn");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "CF_Warn" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
       await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
-      await user.type(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
+      fireEvent.change(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), {
+        target: { value: "app-id" },
+      });
 
       await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
       await act(async () => {
@@ -845,12 +867,17 @@ describe("CreateMCPServer", () => {
 
     it("keeps client_secret when only client_id is edited after a client-forwarded authorize", async () => {
       await selectHttpTransport();
-      const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "CF_Keystroke");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "CF_Keystroke" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
       await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
-      await user.type(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "app-id");
-      await user.type(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), "app-secret");
+      fireEvent.change(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), {
+        target: { value: "app-id" },
+      });
+      fireEvent.change(screen.getByPlaceholderText("Leave blank for public clients / PKCE"), {
+        target: { value: "app-secret" },
+      });
 
       await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
       await act(async () => {
@@ -859,7 +886,9 @@ describe("CreateMCPServer", () => {
 
       // Editing only client_id fires an invalidation whose changedValues carries only the client_id
       // sub-field; the preserve + deep-merge re-apply must keep client_secret from being dropped.
-      await user.type(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), "2");
+      fireEvent.change(screen.getByPlaceholderText("Leave blank to use dynamic client registration"), {
+        target: { value: "app-id2" },
+      });
 
       const cfKeystrokeServer = {
         server_id: "cf-keystroke",
@@ -886,8 +915,10 @@ describe("CreateMCPServer", () => {
     it("replaces the token set on re-authorize instead of leaving stale siblings", async () => {
       await selectHttpTransport();
       const user = userEvent.setup({ delay: null });
-      await user.type(getServerNameInput(), "Reauth_Server");
-      await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
+      fireEvent.change(getServerNameInput(), { target: { value: "Reauth_Server" } });
+      fireEvent.change(screen.getByPlaceholderText("https://your-mcp-server.com"), {
+        target: { value: "https://example.com/mcp" },
+      });
       await selectAntOption("Authentication", "OAuth");
 
       await waitFor(() => expect(oauthHook.onTokenReceived).toBeTruthy());
@@ -922,10 +953,10 @@ describe("CreateMCPServer", () => {
       const user = userEvent.setup({ delay: null });
 
       const nameInput = getServerNameInput();
-      await user.type(nameInput, "No_Auth_Server");
+      fireEvent.change(nameInput, { target: { value: "No_Auth_Server" } });
 
       const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await user.type(urlInput, "https://example.com/mcp");
+      fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
 
       await selectAntOption("Authentication", "None");
 
@@ -1001,15 +1032,15 @@ describe("CreateMCPServer", () => {
       const user = userEvent.setup({ delay: null });
 
       const nameInput = getServerNameInput();
-      await user.type(nameInput, "Limited_Server");
+      fireEvent.change(nameInput, { target: { value: "Limited_Server" } });
 
       const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await user.type(urlInput, "https://example.com/mcp");
+      fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
 
       await selectAntOption("Authentication", "None");
 
       const limitInput = screen.getByPlaceholderText("e.g. 10");
-      await user.type(limitInput, "5");
+      fireEvent.change(limitInput, { target: { value: "5" } });
 
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-1",
@@ -1265,10 +1296,10 @@ describe("CreateMCPServer", () => {
       const user = userEvent.setup({ delay: null });
 
       const nameInput = getServerNameInput();
-      await user.type(nameInput, "Locked_Down_Server");
+      fireEvent.change(nameInput, { target: { value: "Locked_Down_Server" } });
 
       const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-      await user.type(urlInput, "https://example.com/mcp");
+      fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
 
       await selectAntOption("Authentication", "None");
 
@@ -2147,7 +2178,7 @@ describe("CreateMCPServer dcr_bridge toggle", () => {
   });
 
   // Forcing dcr_bridge false for every non-client-forwarded auth type is covered in
-  // createServerPayload.test.ts. The two form-state cases below stay: they prove the Form.Item
+  // createServerPayload.test.ts. The two form-state cases below stay: they prove the field
   // unmounts on a switch away, and that the live value survives a client-forwarded swap.
 
   it("forces dcr_bridge: false when the auth type is switched away after toggling", async () => {
@@ -2179,7 +2210,7 @@ describe("CreateMCPServer dcr_bridge toggle", () => {
     });
     expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
 
-    // The Form.Item is mounted in both client-forwarded modes, so switching between them keeps the
+    // The field is mounted in both client-forwarded modes, so switching between them keeps the
     // live toggle value rather than forcing it back to the default or to false.
     await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
     await waitFor(() => {
