@@ -8,10 +8,10 @@ green replay run can never certify against fixtures that have drifted more than
 a week from the live proxy.
 
 This module owns the format only. The transports that produce and consume it
-live in fixture_transport.py; canonical request matching, streaming chunk
-fidelity, and provider-scoping are follow-ups (LIT-5741/5742/5745) and are
-deliberately absent here, which is why every interaction file stores the full
-redacted request even though replay today matches by call order.
+live in fixture_transport.py and the canonical match keys they compute live in
+fixture_canonical.py (LIT-5741); streaming chunk fidelity and provider-scoping
+are follow-ups (LIT-5742/5745). Every interaction file stores the full redacted
+request because replay matches on its canonicalized content.
 """
 
 from __future__ import annotations
@@ -54,12 +54,13 @@ class Manifest(BaseModel):
 
 
 class RecordedRequest(BaseModel):
-    """The request as the transport saw it, auth header values redacted.
+    """The request as the transport saw it, auth header values and credential
+    body/form fields redacted.
 
-    Replay today only matches ``method`` (the transport verb, not the HTTP verb)
-    and ``path`` in call order; the rest is stored so LIT-5741 can move to
-    content-based match keys without re-recording. File uploads store a content
-    digest instead of the bytes."""
+    Replay matches on the canonical content key fixture_canonical.py computes
+    over ``method`` (the transport verb, not the HTTP verb), ``path``, and the
+    canonicalized headers, params, body, form, and file identity. File uploads
+    store a content digest instead of the bytes."""
 
     method: str
     path: str
