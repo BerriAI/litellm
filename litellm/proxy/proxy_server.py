@@ -6316,6 +6316,9 @@ class ProxyConfig:
         if "global_max_parallel_requests" in _general_settings:
             general_settings["global_max_parallel_requests"] = _general_settings["global_max_parallel_requests"]
 
+        if "max_batch_file_size_mb" not in self._yaml_general_settings_keys:
+            general_settings["max_batch_file_size_mb"] = _general_settings.get("max_batch_file_size_mb")
+
         ## ALERTING ARGS ##
         if "alerting_args" in _general_settings:
             general_settings["alerting_args"] = _general_settings["alerting_args"]
