@@ -977,6 +977,23 @@ describe("CreateKey", () => {
     });
   });
 
+  describe("dialog accessible names", () => {
+    it("names the create form dialog", async () => {
+      await openModal();
+
+      expect(screen.getByRole("dialog", { name: "Create New Key" })).toBeInTheDocument();
+    });
+
+    it("names the created key dialog", async () => {
+      await openModal();
+      await nameTheKey();
+      await submit();
+      await createdPayload();
+
+      expect(await screen.findByRole("dialog", { name: "Save your Key" })).toBeInTheDocument();
+    });
+  });
+
   describe("key type gating", () => {
     it("labels the llm_api option AI APIs", async () => {
       await openModal();

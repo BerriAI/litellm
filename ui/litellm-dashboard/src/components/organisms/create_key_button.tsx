@@ -262,26 +262,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const selectedModels: string[] = (useWatch({ control: form.control, name: "models" }) as string[] | undefined) ?? [];
-  const handleOk = () => {
-    setIsModalVisible(false);
-    form.reset(formDefaults);
-    setLoggingSettings([]);
-    setDisabledCallbacks([]);
-    setKeyType("llm_api");
-    setModelAliases({});
-    setAutoRotationEnabled(false);
-    setRotationInterval("30d");
-    setRouterSettings(null);
-    setRouterSettingsKey((prev) => prev + 1);
-    setSelectedAgentId(null);
-    setSelectedOrganizationId(null);
-    setSelectedProjectId(null);
-    setBudgetLimits([]);
-    setTagRateLimits([]);
-    setBudgetFallbacks({});
-    setBudgetFallbacksKey((k) => k + 1);
-  };
-
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiKey(null);
@@ -654,6 +634,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       )}
       <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-semibold text-foreground">Create New Key</DialogTitle>
+          </DialogHeader>
           <MountedFormProvider value={mountedForm}>
             <form onSubmit={handleSubmit}>
               {/* Section 1: Key Ownership */}
@@ -1769,7 +1752,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
           <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
             <div className="grid grid-cols-1 gap-2 w-full">
-              <h3 className="text-lg font-medium text-foreground">Save your Key</h3>
+              <DialogTitle className="text-lg font-medium text-foreground">Save your Key</DialogTitle>
               {apiKey != null ? (
                 <CreatedKeyDisplay apiKey={apiKey} />
               ) : (
