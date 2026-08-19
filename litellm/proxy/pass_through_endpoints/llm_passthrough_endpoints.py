@@ -601,9 +601,6 @@ async def anthropic_proxy_route(
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
-    # A client-forwarded Anthropic OAuth token (e.g. Claude Code Max subscription auth)
-    # must not be sent alongside a server-configured x-api-key: Anthropic authenticates
-    # off x-api-key when both are present, silently discarding the client's own identity.
     client_forwards_own_oauth: Final = is_anthropic_oauth_key(request.headers.get("authorization"))
     auth_header: Final = (
         None if client_forwards_own_oauth else AnthropicModelInfo.get_auth_header(anthropic_api_key or None)

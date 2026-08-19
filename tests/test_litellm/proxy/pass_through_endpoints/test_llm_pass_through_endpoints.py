@@ -2935,11 +2935,7 @@ class TestOpenAIPassthroughRoute:
 
 
 class TestAnthropicProxyRoute:
-    """Regression (issue #37344): a client forwarding its own Anthropic OAuth token
-    (e.g. a Claude Code Max subscription) must not also get the server-configured
-    ANTHROPIC_API_KEY injected as x-api-key. Anthropic authenticates off x-api-key
-    when both are present, silently discarding the client's forwarded identity.
-    """
+    """Regression test for issue #37344."""
 
     @pytest.mark.asyncio
     async def test_anthropic_passthrough_omits_server_api_key_when_client_forwards_oauth(self):
@@ -3002,6 +2998,37 @@ class TestAnthropicProxyRoute:
 
             call_args = mock_create_route.call_args[1]
             assert call_args["custom_headers"] == {"x-api-key": "sk-ant-server-configured-key"}
+
+    @pytest.mark.asyncio
+    async def test_anthropic_passthrough_omits_server_api_key_for_lowercase_bearer_scheme(self):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"authorization": "bearer sk-ant-oat01-canary"}
+        mock_request.query_params = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="sk-ant-server-configured-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_endpoint_func = AsyncMock(return_value={"id": "msg_123"})
+            mock_create_route.return_value = mock_endpoint_func
+
+            await anthropic_proxy_route(
+                endpoint="v1/messages",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            call_args = mock_create_route.call_args[1]
+            assert call_args["custom_headers"] == {}
 
 
 def _resolve_route_name(method: str, path: str) -> str | None:
