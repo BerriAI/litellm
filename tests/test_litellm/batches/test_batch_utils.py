@@ -186,6 +186,11 @@ def test_iter_output_entries_skips_malformed_and_non_object_lines():
     assert list(bu._iter_batch_output_entries(content)) == [{"ok": 1}, {"ok": 2}]
 
 
+def test_iter_output_entries_skips_undecodable_line():
+    content = b'{"ok": 1}\n{"note": "\xff-bad"}\n{"ok": 2}\n'
+    assert list(bu._iter_batch_output_entries(content)) == [{"ok": 1}, {"ok": 2}]
+
+
 # =========================================================================== #
 # _estimate_batch_entry_tokens  (regression: an uncountable/malformed row must
 # never contribute zero tokens, or a crafted batch could evade the TPM limit)
