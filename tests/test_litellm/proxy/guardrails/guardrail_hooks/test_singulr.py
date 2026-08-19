@@ -9,6 +9,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     SingulrGuardrailConfigModel,
 )
+from litellm.types.utils import ModelResponse
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +167,41 @@ class TestSingulrRequestPayload:
             )
         mock_post.assert_not_called()
         assert result == {"texts": []}
+
+    @pytest.mark.asyncio
+    async def test_tools_are_forwarded(self, singulr_guardrail):
+        """Regression: tool/function definitions are client-controlled and can
+        carry prompt-injection content, so they must reach Singulr for
+        inspection instead of only messages and images."""
+        resp = _make_response({"should_block": False})
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "search_docs", "description": "Search internal docs", "parameters": {}},
+            }
+        ]
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["How do I reset my password?"], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["tools"] == tools
+
+    @pytest.mark.asyncio
+    async def test_tools_alone_still_triggers_the_api_call(self, singulr_guardrail):
+        """Regression: a request with tool definitions but no text or images
+        must still be checked, not skipped for lack of a message."""
+        resp = _make_response({"should_block": False})
+        tools = [{"type": "function", "function": {"name": "delete_file", "description": "", "parameters": {}}}]
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": [], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+        mock_post.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_images_alone_still_triggers_the_api_call(self, singulr_guardrail):
@@ -494,36 +530,6 @@ class TestSingulrApplyGuardrailDispatch:
 
 
 # ---------------------------------------------------------------------------
-# Content extraction helpers (used by the logging_only hook)
-# ---------------------------------------------------------------------------
-
-
-class TestSingulrContentExtraction:
-    def test_extract_content_text_from_plain_string(self, singulr_guardrail):
-        assert singulr_guardrail._extract_content_text("hello") == "hello"
-
-    def test_extract_content_text_from_content_blocks(self, singulr_guardrail):
-        content = [{"type": "text", "text": "hello"}, {"type": "image_url", "image_url": {}}]
-        assert singulr_guardrail._extract_content_text(content) == "hello"
-
-    def test_extract_content_text_returns_none_for_no_text_blocks(self, singulr_guardrail):
-        content = [{"type": "image_url", "image_url": {}}]
-        assert singulr_guardrail._extract_content_text(content) is None
-
-    def test_extract_completion_text_skips_non_stop_choices(self, singulr_guardrail):
-        response = {
-            "choices": [
-                {"finish_reason": "tool_calls", "message": {"content": "should be skipped"}},
-                {"finish_reason": "stop", "message": {"content": "final answer"}},
-            ]
-        }
-        assert singulr_guardrail._extract_completion_text(response) == "final answer"
-
-    def test_extract_completion_text_returns_none_for_no_choices(self, singulr_guardrail):
-        assert singulr_guardrail._extract_completion_text({}) is None
-
-
-# ---------------------------------------------------------------------------
 # logging_only hook
 # ---------------------------------------------------------------------------
 
@@ -542,7 +548,41 @@ class TestSingulrLoggingHook:
         assert request_payload["guardrail_scope"] == "request"
         assert request_payload["messages"] == kwargs["messages"]
         assert response_payload["guardrail_scope"] == "response"
-        assert response_payload["response"]["content"] == "hello there"
+        assert response_payload["response"] == result
+
+    @pytest.mark.asyncio
+    async def test_forwards_a_real_model_response_without_swallowing_it(self, singulr_guardrail):
+        """Regression: a normal completion callback passes a ModelResponse, not a
+        dict. The response payload must carry its actual serialized content instead
+        of silently dropping it because ModelResponse isn't a Mapping."""
+        resp = _make_response({"should_block": False})
+        result = ModelResponse(
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hello there"}}]
+        )
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.async_logging_hook(kwargs={}, result=result, call_type="acompletion")
+
+        response_payload = mock_post.call_args.kwargs["json"]
+        assert response_payload["guardrail_scope"] == "response"
+        assert response_payload["response"]["choices"][0]["message"]["content"] == "hello there"
+
+    @pytest.mark.asyncio
+    async def test_non_serializable_result_falls_back_to_string_report(self, singulr_guardrail):
+        """A result that pydantic can't serialize to JSON must still get reported,
+        as a stringified fallback, instead of raising out of the logging_only hook."""
+        resp = _make_response({"should_block": False})
+
+        class Unserializable:
+            def __repr__(self) -> str:
+                return "<Unserializable>"
+
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.async_logging_hook(
+                kwargs={}, result=Unserializable(), call_type="acompletion"
+            )
+
+        response_payload = mock_post.call_args.kwargs["json"]
+        assert response_payload["response"] == "<Unserializable>"
 
     @pytest.mark.asyncio
     async def test_no_messages_and_no_result_skips_both_api_calls(self, singulr_guardrail):

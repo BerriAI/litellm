@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from litellm.types.llms.openai import ChatCompletionToolParam
+
 from .base import GuardrailConfigModel
 
 
@@ -35,7 +37,8 @@ class SingulrGuardrailPayload(BaseModel):
     guardrail_scope: str | None = None
     messages: Sequence[Any] | None = None
     images: Sequence[str] | None = None
-    response: AssistantMessage | None = None
+    tools: Sequence[ChatCompletionToolParam] | None = None
+    response: Any = None  # pyright: ignore[reportExplicitAny]  # logging_only reports raw litellm callback results (ModelResponse, EmbeddingResponse, etc.)
     metadata: Mapping[str, Any] | None = None
 
 

@@ -134,26 +134,6 @@ class SingulrGuardrail(CustomGuardrail):
     def _build_user_message(text: str) -> Mapping[str, Any]:
         return {"role": "user", "content": text}  # mutable-ok: short-lived JSON payload dict
 
-    @staticmethod
-    def _extract_content_text(content: str | Sequence[Mapping[str, Any]] | None) -> str | None:
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            text: Final = "\n".join(block.get("text", "") for block in content if block.get("type") == "text")
-            return text or None
-        return None
-
-    def _extract_completion_text(self, response: Mapping[str, Any]) -> str | None:
-        choices: Final = response.get("choices") or ()
-        for choice in choices:
-            if choice.get("finish_reason") != "stop":
-                continue
-            message = choice.get("message") or _EMPTY_MAPPING
-            text = self._extract_content_text(message.get("content"))
-            if text:
-                return text
-        return None
-
     def _build_headers(self) -> Mapping[str, str]:
         all_headers: Final = MappingProxyType(
             {
@@ -226,9 +206,10 @@ class SingulrGuardrail(CustomGuardrail):
         )
 
         images: Final = inputs.get("images")
+        tools: Final = inputs.get("tools")
 
-        if not messages and not images:
-            verbose_proxy_logger.debug("Singulr: No messages or images to check after filtering")
+        if not messages and not images and not tools:
+            verbose_proxy_logger.debug("Singulr: No messages, images, or tools to check after filtering")
             return inputs
 
         metadata: Final = self._build_metadata(request_data=request_data)
@@ -239,6 +220,7 @@ class SingulrGuardrail(CustomGuardrail):
             guardrail_scope="request",
             messages=messages,
             images=images,
+            tools=tools,
             metadata=metadata,
         )
         payload = singulr_req_obj.model_dump(mode="json")
@@ -387,18 +369,20 @@ class SingulrGuardrail(CustomGuardrail):
                 await self._call_api(payload_req)
 
             if result:
-                completion_text = self._extract_completion_text(result)
-                assistant_message = AssistantMessage(
-                    role="assistant",
-                    content=completion_text,
-                    tool_calls=(),
-                )
                 singulr_res_obj = SingulrGuardrailPayload(
                     correlation_id=kwargs.get("litellm_call_id"),
                     guardrail_scope="response",
-                    response=assistant_message,
+                    response=result,
                 )
-                payload = singulr_res_obj.model_dump(mode="json")
+                try:
+                    payload = singulr_res_obj.model_dump(mode="json")
+                except Exception as exc:  # noqa: BLE001  # result can be any callback shape; fall back to a stringified report
+                    verbose_proxy_logger.debug("Singulr: could not JSON-serialize response, falling back: %s", exc)
+                    payload = {
+                        "correlation_id": kwargs.get("litellm_call_id"),
+                        "guardrail_scope": "response",
+                        "response": str(result),
+                    }
                 await self._call_api(payload)
         except GuardrailRaisedException:
             guardrail_status = "guardrail_intervened"
