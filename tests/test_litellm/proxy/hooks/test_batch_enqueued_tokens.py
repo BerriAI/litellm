@@ -128,9 +128,10 @@ async def test_zero_token_reserve_charges_nothing():
 class _SingleKeyRedisFake:
     """Emulates the Redis script path one single-key call at a time, recording every call."""
 
-    def __init__(self) -> None:
+    def __init__(self, fail_reserve_keys: frozenset[str] = frozenset()) -> None:
         self.script_calls: tuple[tuple[str, tuple[str, ...]], ...] = ()
         self.counters: Mapping[str, int] = MappingProxyType({})
+        self.fail_reserve_keys = fail_reserve_keys
 
     def async_register_script(self, script: str):
         kind: Final = "reserve" if "INCRBY" in script else "refund" if "DECRBY" in script else "record"
@@ -143,6 +144,8 @@ class _SingleKeyRedisFake:
 
     def _run(self, kind: str, keys: tuple[str, ...], args: tuple[str | bytes | int | float, ...]) -> object:
         if kind == "reserve":
+            if keys[0] in self.fail_reserve_keys:
+                raise ConnectionError(f"simulated redis failure for {keys[0]}")
             amount, limit = int(args[0]), int(args[2])
             current: Final = self.counters.get(keys[0], 0)
             if current + amount > limit:
@@ -179,6 +182,42 @@ async def test_redis_reserve_issues_single_key_calls_and_rolls_back_on_over_limi
     await store.refund(fits)
     assert not fake.counters
     assert all(len(keys) == 1 for _, keys in fake.script_calls)
+
+
+@pytest.mark.asyncio
+async def test_partial_redis_reserve_failure_rolls_back_and_grants_in_memory():
+    key_scope = _scope(limit=100, key="api_key")
+    team_scope = _scope(limit=50, key="team")
+    fake = _SingleKeyRedisFake(fail_reserve_keys=frozenset({f"batch_enqueued_tokens:team:{team_scope.value}"}))
+    store = BatchEnqueuedTokenStore(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=fake, default_in_memory_ttl=60))
+    )
+
+    outcome = await store.reserve(tokens=10, scopes=(key_scope, team_scope))
+    assert isinstance(outcome, BatchEnqueuedTokenReservation)
+    assert outcome.backend == "memory"
+    assert tuple(kind for kind, _ in fake.script_calls) == ("reserve", "reserve", "refund")
+    assert not fake.counters
+
+    await store.refund(outcome)
+    assert tuple(kind for kind, _ in fake.script_calls) == ("reserve", "reserve", "refund")
+
+    refilled = await store.reserve(tokens=50, scopes=(team_scope,))
+    assert isinstance(refilled, BatchEnqueuedTokenReservation)
+    assert refilled.backend == "memory"
+
+
+@pytest.mark.asyncio
+async def test_pop_reservation_defaults_legacy_records_to_redis_backend():
+    store = _in_memory_store()
+    legacy = '{"tokens": 5, "scopes": [{"key": "api_key", "value": "k", "limit": 10}]}'
+    store.internal_usage_cache.dual_cache.in_memory_cache.set_cache(
+        key="batch_enqueued_token_reservation:batch_legacy", value=legacy
+    )
+    popped = await store.pop_reservation("batch_legacy")
+    assert popped == BatchEnqueuedTokenReservation(
+        tokens=5, scopes=(BatchEnqueuedTokenScope(key="api_key", value="k", limit=10),), backend="redis"
+    )
 
 
 def test_canonical_provider_batch_id_passes_raw_ids_through():

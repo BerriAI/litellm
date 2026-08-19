@@ -5936,6 +5936,33 @@ async def test_success_hook_refunds_batch_enqueued_reservation_on_cancellation()
 
 
 @pytest.mark.asyncio
+async def test_success_hook_refunds_on_provider_cased_terminal_status():
+    from litellm.proxy.hooks.batch_enqueued_tokens import (
+        BatchEnqueuedTokenOverLimit,
+        BatchEnqueuedTokenReservation,
+        BatchEnqueuedTokenScope,
+    )
+
+    handler = _enqueued_test_handler()
+    store = handler.batch_enqueued_token_store
+    scope = BatchEnqueuedTokenScope(key="api_key", value="hashed-enqueued-key", limit=100)
+    user = UserAPIKeyAuth(api_key="hashed-enqueued-key")
+
+    reservation = await store.reserve(tokens=90, scopes=(scope,))
+    assert isinstance(reservation, BatchEnqueuedTokenReservation)
+    get_or_create_request_stash().batch_enqueued_reservation = reservation
+    await handler.async_post_call_success_hook(
+        data={}, user_api_key_dict=user, response=_batch_response("batch_enq_cased", "InProgress")
+    )
+    assert isinstance(await store.reserve(tokens=100, scopes=(scope,)), BatchEnqueuedTokenOverLimit)
+
+    await handler.async_post_call_success_hook(
+        data={}, user_api_key_dict=user, response=_batch_response("batch_enq_cased", "Completed")
+    )
+    assert isinstance(await store.reserve(tokens=100, scopes=(scope,)), BatchEnqueuedTokenReservation)
+
+
+@pytest.mark.asyncio
 async def test_failure_hook_refunds_stashed_batch_enqueued_reservation():
     from litellm.proxy.hooks.batch_enqueued_tokens import (
         BatchEnqueuedTokenReservation,
