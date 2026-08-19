@@ -2990,6 +2990,26 @@ def test_native_provider_routes_are_unchanged(method, path, expected_name):
     assert _resolve_route_name(method, path) == expected_name
 
 
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("POST", "/anthropic/v1/files"),
+        ("GET", "/anthropic/v1/files"),
+        ("GET", "/anthropic/v1/files/file-abc123"),
+        ("DELETE", "/anthropic/v1/files/file-abc123"),
+        ("POST", "/anthropic/v1/batches"),
+        ("POST", "/anthropic/v1/messages"),
+    ],
+)
+def test_anthropic_passthrough_prefix_wins_over_native_provider_routes(method, path):
+    """
+    Anthropic's Files API has no `purpose` field and no `files_settings` config,
+    so the native /{provider}/v1/files and /{provider}/v1/batches routes must never
+    capture /anthropic/... with provider="anthropic".
+    """
+    assert _resolve_route_name(method, path) == "anthropic_proxy_route"
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 
