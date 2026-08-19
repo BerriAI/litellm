@@ -13,6 +13,7 @@ from typing import Any, Final
 from litellm.constants import STREAM_SSE_DONE_STRING
 
 _MAX_CONTENT_INDEX: Final = 1024
+MAX_CONTENT_INDEX: Final = _MAX_CONTENT_INDEX
 
 
 def parse_sse_json_chunk(chunk: str) -> dict[str, Any] | None:
