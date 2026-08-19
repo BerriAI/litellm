@@ -9,6 +9,7 @@ This test suite ensures that:
 5. Path parameters are properly URL encoded
 """
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -410,6 +411,194 @@ class TestBuildInputSchema:
 
         # Required should include original names
         assert "repository-id" in schema["required"]
+
+    def test_request_body_ref_is_dereferenced(self):
+        """A FastAPI/Pydantic-style $ref request body must expose its fields.
+
+        Without inlining, the body reaches the MCP client as an empty object, so
+        models guess field names and the upstream API answers 422.
+        """
+        operation = {
+            "operationId": "tool_kubectl_get_post",
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/kubectl_get_form_model"}
+                    }
+                },
+            },
+        }
+        components = {
+            "schemas": {
+                "kubectl_get_form_model": {
+                    "type": "object",
+                    "required": ["resourceType"],
+                    "properties": {
+                        "resourceType": {
+                            "type": "string",
+                            "description": "Type of resource to get",
+                        },
+                        "name": {"type": "string"},
+                        "namespace": {"type": "string", "default": "default"},
+                    },
+                }
+            }
+        }
+
+        schema = build_input_schema(operation, components)
+
+        body = schema["properties"]["body"]
+        assert set(body["properties"]) == {"resourceType", "name", "namespace"}
+        assert body["properties"]["resourceType"]["description"] == "Type of resource to get"
+        assert body["properties"]["namespace"]["default"] == "default"
+        assert body["required"] == ["resourceType"]
+        assert schema["required"] == ["body"]
+
+    def test_request_body_nested_refs_are_dereferenced(self):
+        """Refs nested inside body fields must be inlined too.
+
+        MCP ships inputSchema without the spec's components section, so a
+        surviving $ref is unresolvable on the client side.
+        """
+        operation = {
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Outer"}
+                    }
+                },
+            },
+        }
+        components = {
+            "schemas": {
+                "Outer": {
+                    "type": "object",
+                    "properties": {
+                        "inner": {"$ref": "#/components/schemas/Inner"},
+                        "inners": {
+                            "type": "array",
+                            "items": {"$ref": "#/components/schemas/Inner"},
+                        },
+                        "maybe_inner": {
+                            "anyOf": [
+                                {"$ref": "#/components/schemas/Inner"},
+                                {"type": "null"},
+                            ]
+                        },
+                    },
+                },
+                "Inner": {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}},
+                },
+            }
+        }
+
+        body = build_input_schema(operation, components)["properties"]["body"]
+
+        inner_props = {"label": {"type": "string"}}
+        assert body["properties"]["inner"]["properties"] == inner_props
+        assert body["properties"]["inners"]["items"]["properties"] == inner_props
+        assert body["properties"]["maybe_inner"]["anyOf"][0]["properties"] == inner_props
+        assert "$ref" not in json.dumps(body)
+
+    def test_request_body_schema_uses_json_native_containers(self):
+        """The MCP server validates the raw inputSchema against the JSON Schema
+        metaschema on every tool call, so a tuple or a mapping proxy in place of
+        an array or object makes the tool uncallable.
+        """
+        operation = {
+            "requestBody": {
+                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Payload"}}},
+            },
+        }
+        components = {
+            "schemas": {
+                "Payload": {
+                    "type": "object",
+                    "required": ["mode"],
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["fast", "slow"]},
+                        "name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                }
+            }
+        }
+
+        schema = build_input_schema(operation, components)
+
+        assert json.loads(json.dumps(schema)) == schema
+
+        empty_body = build_input_schema({"requestBody": {"content": {"application/json": {}}}})["properties"]["body"]
+        assert isinstance(empty_body["properties"], dict)
+        assert isinstance(empty_body["required"], list)
+
+    def test_recursive_request_body_ref_terminates(self):
+        """A self-referencing schema must not recurse forever."""
+        operation = {
+            "requestBody": {
+                "content": {
+                    "application/json": {"schema": {"$ref": "#/components/schemas/Node"}}
+                },
+            },
+        }
+        components = {
+            "schemas": {
+                "Node": {
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string"},
+                        "child": {"$ref": "#/components/schemas/Node"},
+                    },
+                }
+            }
+        }
+
+        body = build_input_schema(operation, components)["properties"]["body"]
+
+        assert "value" in body["properties"]
+        assert body["properties"]["child"] == {}
+
+    def test_unresolvable_request_body_ref_does_not_raise(self):
+        operation = {
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Missing"}
+                    }
+                },
+            },
+        }
+
+        body = build_input_schema(operation, {"schemas": {}})["properties"]["body"]
+
+        assert body["properties"] == {}
+
+    def test_inline_request_body_schema_still_works(self):
+        operation = {
+            "requestBody": {
+                "required": True,
+                "description": "The payload",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {"name": {"type": "string"}},
+                        }
+                    }
+                },
+            },
+        }
+
+        schema = build_input_schema(operation)
+
+        body = schema["properties"]["body"]
+        assert body["description"] == "The payload"
+        assert body["properties"] == {"name": {"type": "string"}}
+        assert body["required"] == ["name"]
+        assert schema["required"] == ["body"]
 
 
 class TestExtractParameters:

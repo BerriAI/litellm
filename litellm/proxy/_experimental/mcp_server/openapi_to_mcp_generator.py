@@ -9,6 +9,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
+from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict
 from urllib.parse import quote
 
@@ -50,12 +51,8 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 _OpenAPIParameter: TypeAlias = Mapping[str, Any]
 
 
-class _OpenAPIJSONSchema(TypedDict, total=False):
-    properties: Mapping[str, object]
-
-
 class _OpenAPIMediaType(TypedDict, total=False):
-    schema: _OpenAPIJSONSchema
+    schema: Mapping[str, Any]
 
 
 class _OpenAPIRequestBody(TypedDict, total=False):
@@ -80,6 +77,7 @@ class _OpenAPIPathItem(TypedDict, total=False):
 
 class _OpenAPIComponents(TypedDict, total=False):
     parameters: Mapping[str, _OpenAPIParameter]
+    schemas: Mapping[str, Mapping[str, Any]]
 
 
 # Store the base URL and headers globally
@@ -266,6 +264,49 @@ def resolve_operation_params(
     return result
 
 
+_SCHEMA_REF_PREFIX: Final = "#/components/schemas/"
+_EMPTY_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_JSON_OBJECT: Final[Mapping[str, Any]] = {}  # mutable-ok: MCP validates the raw schema; only real dicts pass
+_EMPTY_JSON_ARRAY: Final[Sequence[str]] = []  # mutable-ok: MCP validates the raw schema; only real lists pass
+
+
+def _inline_schema_refs(
+    schema: Mapping[str, Any],
+    component_schemas: Mapping[str, Mapping[str, Any]],
+    seen: frozenset[str] = frozenset(),
+) -> Mapping[str, Any]:
+    """Inline ``#/components/schemas/...`` refs into *schema*.
+
+    MCP hands the client an ``inputSchema`` on its own, without the OpenAPI
+    ``components`` section, so a surviving ``$ref`` is unresolvable there and the
+    client sees a field with no definition. A ref missing from *component_schemas*,
+    or one recursing into a schema already being inlined, is dropped: inlining it
+    would either invent a definition or never terminate.
+    """
+    ref: Final[str] = schema.get("$ref", "")
+    name: Final = ref[len(_SCHEMA_REF_PREFIX) :] if ref.startswith(_SCHEMA_REF_PREFIX) else ""
+    target: Final = component_schemas.get(name) if name and name not in seen else None
+    if target is not None:
+        return _inline_schema_refs(target, component_schemas, seen | frozenset((name,)))
+    # mutable-ok: the result is a JSON Schema payload handed to MCP clients, so it stays plain JSON types
+    return {
+        key: _inlined_schema_value(value, component_schemas, seen) for key, value in schema.items() if key != "$ref"
+    }
+
+
+def _inlined_schema_value(
+    value: object,
+    component_schemas: Mapping[str, Mapping[str, Any]],
+    seen: frozenset[str],
+) -> object:
+    if isinstance(value, Mapping):
+        return _inline_schema_refs(value, component_schemas, seen)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        # mutable-ok: MCP validates the raw schema against the JSON Schema metaschema, where a tuple is not an array
+        return [_inlined_schema_value(item, component_schemas, seen) for item in value]
+    return value
+
+
 def extract_parameters(operation: Mapping[str, Any]) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
     """Extract parameter names from OpenAPI operation."""
     path_params: Final = []
@@ -292,10 +333,13 @@ def extract_parameters(operation: Mapping[str, Any]) -> tuple[Sequence[str], Seq
     return path_params, query_params, body_params
 
 
-def build_input_schema(operation: Mapping[str, Any]) -> dict[str, Any]:
+def build_input_schema(operation: Mapping[str, Any], components: _OpenAPIComponents | None = None) -> dict[str, Any]:
     """Build MCP input schema from OpenAPI operation."""
     properties: Final = {}
     required: Final = []
+    component_schemas: Final[Mapping[str, Mapping[str, Any]]] = (components or _EMPTY_SCHEMA).get(
+        "schemas", _EMPTY_SCHEMA
+    )
 
     # Process parameters
     if "parameters" in operation:
@@ -321,11 +365,14 @@ def build_input_schema(operation: Mapping[str, Any]) -> dict[str, Any]:
 
         # Try to get JSON schema
         if "application/json" in content:
-            schema: Final[_OpenAPIJSONSchema] = content["application/json"].get("schema", {})
+            schema: Final[Mapping[str, Any]] = _inline_schema_refs(
+                content["application/json"].get("schema", _EMPTY_SCHEMA), component_schemas
+            )
             properties["body"] = {
                 "type": "object",
                 "description": request_body.get("description", "Request body"),
-                "properties": schema.get("properties", {}),
+                "properties": schema.get("properties", _EMPTY_JSON_OBJECT),
+                "required": schema.get("required", _EMPTY_JSON_ARRAY),
             }
             if request_body.get("required", False):
                 required.append("body")
@@ -493,6 +540,7 @@ def create_tool_function(
 def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
     """Register MCP tools from OpenAPI specification."""
     paths: Final[Mapping[str, Mapping[str, Any]]] = spec.get("paths", {})
+    components: Final[_OpenAPIComponents] = spec.get("components", {})
     used_names: Final = set()
 
     for path, path_item in paths.items():
@@ -526,7 +574,7 @@ def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
                 description = operation.get("summary", operation.get("description", f"{method.upper()} {path}"))
 
                 # Build input schema
-                input_schema = build_input_schema(operation)
+                input_schema = build_input_schema(operation, components)
 
                 # Create tool function
                 tool_func = create_tool_function(path, method, operation, base_url)
