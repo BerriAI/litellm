@@ -7,9 +7,10 @@ import hashlib
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import Any, Final, NamedTuple, cast
+from typing import Any, Final, NamedTuple, Protocol
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.watsonx_orchestrate.transformation import (
@@ -38,11 +39,59 @@ class WXORequestParams(NamedTuple):
     thread_id: str | None
 
 
+class WXOLitellmParams(TypedDict, total=False):
+    """litellm_params keys read when routing an A2A request to watsonx Orchestrate."""
+
+    cp4d_host: ReadOnly[str]
+    instance_id: ReadOnly[str]
+    wxo_agent_id: ReadOnly[str]
+    api_key: ReadOnly[str]
+    username: ReadOnly[str | None]
+    auth_mode: ReadOnly[str]
+    thread_id: ReadOnly[str | None]
+
+
+class _IBMCloudTokenBody(TypedDict):
+    """Fields read from the IBM Cloud IAM token response."""
+
+    access_token: ReadOnly[str]
+    expires_in: ReadOnly[NotRequired[int]]
+
+
+class _CP4DTokenBody(TypedDict):
+    """Fields read from the CP4D authorize response."""
+
+    token: ReadOnly[str]
+    expiration: ReadOnly[NotRequired[float]]
+
+
+class _WXORun(TypedDict, total=False):
+    """Fields the handler reads from a WXO run object or run event."""
+
+    status: ReadOnly[str]
+    run_id: ReadOnly[str]
+    id: ReadOnly[str]
+
+
+class _SSELineSource(Protocol):
+    def aiter_lines(self) -> AsyncIterator[str]: ...
+
+
+class _WXOView(TypedDict, total=False):
+    """Typed reads of otherwise untyped watsonx Orchestrate and httpx values."""
+
+    ibm_cloud_token: ReadOnly[_IBMCloudTokenBody]
+    cp4d_token: ReadOnly[_CP4DTokenBody]
+    run: ReadOnly[_WXORun]
+    content_type: ReadOnly[str]
+    sse_source: ReadOnly[_SSELineSource]
+
+
 class WatsonxOrchestrateHandler:
     @staticmethod
     def _http_client(timeout: float = 90.0) -> AsyncHTTPHandler:
         return get_async_httpx_client(
-            llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
+            llm_provider=httpxSpecialProvider.A2AProvider,
             params={"timeout": timeout},
         )
 
@@ -57,7 +106,7 @@ class WatsonxOrchestrateHandler:
         return hashlib.sha256(material.encode()).hexdigest()
 
     @staticmethod
-    def _cp4d_token_ttl_seconds(expiration: Any, now_wall: float | None = None) -> int:
+    def _cp4d_token_ttl_seconds(expiration: float, now_wall: float | None = None) -> int:
         # CP4D returns expiration as absolute Unix epoch seconds, not a duration.
         expires_at: Final = int(expiration)
         wall: Final = now_wall if now_wall is not None else time.time()
@@ -90,9 +139,9 @@ class WatsonxOrchestrateHandler:
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
             response.raise_for_status()
-            payload = response.json()
-            token = str(payload["access_token"])
-            ttl_s = int(payload.get("expires_in", 3600))
+            iam_payload: Final[_WXOView] = {"ibm_cloud_token": response.json()}
+            token = str(iam_payload["ibm_cloud_token"]["access_token"])
+            ttl_s = int(iam_payload["ibm_cloud_token"].get("expires_in", 3600))
         else:
             if not username:
                 raise ValueError("'username' is required in litellm_params when auth_mode='cp4d'")
@@ -103,9 +152,9 @@ class WatsonxOrchestrateHandler:
                 headers={"Content-Type": "application/json"},
             )
             response.raise_for_status()
-            payload = response.json()
-            token = str(payload["token"])
-            expiration: Final = payload.get("expiration")
+            cp4d_payload: Final[_WXOView] = {"cp4d_token": response.json()}
+            token = str(cp4d_payload["cp4d_token"]["token"])
+            expiration: Final = cp4d_payload["cp4d_token"].get("expiration")
             if expiration is None:
                 ttl_s = 3600
             else:
@@ -119,6 +168,16 @@ class WatsonxOrchestrateHandler:
         return token
 
     @staticmethod
+    def _run_body(response: httpx.Response) -> _WXORun:
+        view: Final[_WXOView] = {"run": response.json()}
+        return view["run"]
+
+    @staticmethod
+    def _decode_run_event(payload: str | bytes) -> _WXORun:
+        view: Final[_WXOView] = {"run": json.loads(payload)}
+        return view["run"]
+
+    @staticmethod
     async def _poll_run(
         base_url: str,
         run_id: str,
@@ -126,14 +185,14 @@ class WatsonxOrchestrateHandler:
         client: AsyncHTTPHandler,
         max_attempts: int = _MAX_POLL_ATTEMPTS,
         interval_s: float = _POLL_INTERVAL_S,
-    ) -> dict[str, Any]:
+    ) -> _WXORun:
         url: Final = f"{base_url}/v1/orchestrate/runs/{run_id}"
 
         for attempt in range(max_attempts):
             await asyncio.sleep(interval_s)
             response = await client.get(url, headers=auth_headers)
             response.raise_for_status()
-            result: dict[str, Any] = response.json()
+            result = WatsonxOrchestrateHandler._run_body(response)
             status = result.get("status", "")
             verbose_logger.debug("WXO: Poll %s/%s run='%s' status='%s'", attempt + 1, max_attempts, run_id, status)
             if status in WatsonxOrchestrateTransformation.TERMINAL_STATES:
@@ -145,11 +204,11 @@ class WatsonxOrchestrateHandler:
 
     @staticmethod
     async def _get_successful_run_data(
-        run_data: dict[str, Any],
+        run_data: _WXORun,
         base_url: str,
         auth_headers: dict[str, str],
         client: AsyncHTTPHandler,
-    ) -> dict[str, Any]:
+    ) -> _WXORun:
         status = run_data.get("status", "")
         if status not in WatsonxOrchestrateTransformation.TERMINAL_STATES:
             run_id: Final = run_data.get("run_id") or run_data.get("id") or ""
@@ -170,15 +229,16 @@ class WatsonxOrchestrateHandler:
 
     @staticmethod
     async def _accumulate_wxo_sse_text(response: Any) -> str:
+        source: Final[_WXOView] = {"sse_source": response}
         accumulated_text = ""
-        async for line in response.aiter_lines():
+        async for line in source["sse_source"].aiter_lines():
             if not line.startswith("data:"):
                 continue
             data_str = line[5:].strip()
             if not data_str or data_str == "[DONE]":
                 continue
             try:
-                event = json.loads(data_str)
+                event = WatsonxOrchestrateHandler._decode_run_event(data_str)
             except json.JSONDecodeError:
                 continue
             chunk_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(event)
@@ -187,7 +247,7 @@ class WatsonxOrchestrateHandler:
         return accumulated_text
 
     @staticmethod
-    def _extract_litellm_params(litellm_params: dict[str, Any]) -> WXORequestParams:
+    def _extract_litellm_params(litellm_params: WXOLitellmParams) -> WXORequestParams:
         cp4d_host: Final = litellm_params.get("cp4d_host") or ""
         instance_id: Final = litellm_params.get("instance_id") or ""
         wxo_agent_id: Final = litellm_params.get("wxo_agent_id") or ""
@@ -215,9 +275,9 @@ class WatsonxOrchestrateHandler:
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
-        params: dict[str, Any],
-        litellm_params: dict[str, Any],
-    ) -> dict[str, Any]:
+        params: dict[str, object],
+        litellm_params: WXOLitellmParams,
+    ) -> dict[str, object]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
         client: Final = WatsonxOrchestrateHandler._http_client(timeout=90.0)
@@ -246,7 +306,8 @@ class WatsonxOrchestrateHandler:
             headers=auth_headers,
         )
         run_response.raise_for_status()
-        run_data: dict[str, Any] = run_response.json()
+        started: Final[_WXOView] = {"run": run_response.json()}
+        run_data: _WXORun = started["run"]
 
         run_data = await WatsonxOrchestrateHandler._get_successful_run_data(
             run_data=run_data,
@@ -261,11 +322,11 @@ class WatsonxOrchestrateHandler:
     @staticmethod
     async def handle_streaming(
         request_id: str,
-        params: dict[str, Any],
-        litellm_params: dict[str, Any],
+        params: dict[str, object],
+        litellm_params: WXOLitellmParams,
         chunk_size: int = 50,
         delay_ms: int = 10,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, object]]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
         client: Final = WatsonxOrchestrateHandler._http_client(timeout=120.0)
@@ -316,10 +377,11 @@ class WatsonxOrchestrateHandler:
                 yield chunk
             return
 
-        content_type: Final = response.headers.get("content-type", "").lower()
+        header_view: Final[_WXOView] = {"content_type": response.headers.get("content-type", "")}
+        content_type: Final = header_view["content_type"].lower()
         if "text/event-stream" not in content_type:
             response_body: Final = await response.aread()
-            result = json.loads(response_body)
+            result = WatsonxOrchestrateHandler._decode_run_event(response_body)
             result = await WatsonxOrchestrateHandler._get_successful_run_data(
                 run_data=result,
                 base_url=base_url,

@@ -194,6 +194,13 @@ class _PrismaTableActions(Protocol[_PrismaRowT]):
         data: Mapping[str, object],
     ) -> _PrismaRowT | None: ...
 
+    async def upsert(
+        self,
+        *,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> _PrismaRowT: ...
+
 
 class _UserRowLike(Protocol):
     user_id: str | None
@@ -209,24 +216,43 @@ class _TxTables(Protocol):
     litellm_proxymodeltable: _PrismaTableActions[object]
 
 
+class _TableSource(Protocol[_PrismaRowT]):
+    """Repository view that exposes its untyped Prisma ``table`` with a concrete row type."""
+
+    @property
+    def table(self) -> _PrismaTableActions[_PrismaRowT]: ...
+
+
+def _table_of(source: _TableSource[_PrismaRowT]) -> _PrismaTableActions[_PrismaRowT]:
+    return source.table
+
+
 def _prisma_table(
     repository: BaseRepository[_RepositoryModelT],
 ) -> _PrismaTableActions[_RepositoryModelT]:
-    return repository.table
+    return _table_of(repository)
 
 
 def _deleted_verification_token_table(
     prisma_client: PrismaClient,
 ) -> _PrismaTableActions[LiteLLM_DeletedVerificationToken]:
-    return DeletedVerificationTokenRepository(prisma_client).table
+    return _table_of(DeletedVerificationTokenRepository(prisma_client))
+
+
+def _deprecated_verification_token_table(prisma_client: PrismaClient) -> _PrismaTableActions[object]:
+    return _table_of(DeprecatedVerificationTokenRepository(prisma_client))
+
+
+def _user_table(prisma_client: PrismaClient) -> _PrismaTableActions[_UserRowLike]:
+    return _table_of(UserRepository(prisma_client))
 
 
 def _credentials_table(prisma_client: PrismaClient) -> _PrismaTableActions[CredentialItem]:
-    return CredentialsRepository(prisma_client).table
+    return _table_of(CredentialsRepository(prisma_client))
 
 
 def _config_table(prisma_client: PrismaClient) -> _PrismaTableActions[ConfigParam]:
-    return ConfigRepository(prisma_client).table
+    return _table_of(ConfigRepository(prisma_client))
 
 
 async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
@@ -4656,7 +4682,7 @@ async def _insert_deprecated_key(
 
     try:
         revoke_at: Final = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
-        await DeprecatedVerificationTokenRepository(prisma_client).table.upsert(
+        await _deprecated_verification_token_table(prisma_client).upsert(
             where={"token": old_token_hash},
             data={
                 "create": {
@@ -6059,13 +6085,13 @@ async def _list_key_helper(
     total_pages: Final = -(-total_count // size)  # Ceiling division
 
     # Fetch user information if expand includes "user"
-    user_map = {}
+    user_map = dict[str | None, _UserRowLike]()
     if expand and "user" in expand:
         user_ids: Final = [key.user_id for key in keys if key.user_id]
         created_by_ids: Final = [key.created_by for key in keys if key.created_by]
         all_ids: Final = list(set(user_ids + created_by_ids))  # Remove duplicates
         if all_ids:
-            users: Final[Sequence[_UserRowLike]] = await UserRepository(prisma_client).table.find_many(
+            users: Final[Sequence[_UserRowLike]] = await _user_table(prisma_client).find_many(
                 where={"user_id": {"in": all_ids}}
             )
             user_map = {user.user_id: user for user in users}

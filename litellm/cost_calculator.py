@@ -102,6 +102,7 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
+    PromptTokensDetailsWrapper,
     ServiceTier,
     StandardBuiltInToolsParams,
     TranscriptionUsageDurationObject,
@@ -286,7 +287,7 @@ def _transcription_usage_has_token_details(
 
     prompt_tokens_val: Final = getattr(usage_block, "prompt_tokens", 0) or 0
     completion_tokens_val: Final = getattr(usage_block, "completion_tokens", 0) or 0
-    prompt_details: Final = getattr(usage_block, "prompt_tokens_details", None)
+    prompt_details: Final[PromptTokensDetailsWrapper | None] = getattr(usage_block, "prompt_tokens_details", None)
 
     if prompt_details is not None:
         audio_token_count: Final = getattr(prompt_details, "audio_tokens", 0) or 0
@@ -375,7 +376,7 @@ def cost_per_token(
     _is_anthropic_style = False
 
     if usage_object is not None:
-        _pt_details: Final = getattr(usage_object, "prompt_tokens_details", None)
+        _pt_details: Final[PromptTokensDetailsWrapper | None] = getattr(usage_object, "prompt_tokens_details", None)
         if _pt_details is not None:
             _cache_read_tokens = float(getattr(_pt_details, "cached_tokens", 0) or 0)
             # OpenAI-compatible providers report cache-write tokens under
@@ -385,8 +386,8 @@ def cost_per_token(
                 getattr(_pt_details, "cache_write_tokens", 0) or getattr(_pt_details, "cache_creation_tokens", 0) or 0
             )
 
-        _anthropic_read: Final = getattr(usage_object, "cache_read_input_tokens", None)
-        _anthropic_create: Final = getattr(usage_object, "cache_creation_input_tokens", None)
+        _anthropic_read: Final[int | None] = getattr(usage_object, "cache_read_input_tokens", None)
+        _anthropic_create: Final[int | None] = getattr(usage_object, "cache_creation_input_tokens", None)
         if _anthropic_read is not None or _anthropic_create is not None:
             _is_anthropic_style = True
             if _anthropic_read is not None:
@@ -703,7 +704,7 @@ def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
     return a100_80gb_price_per_second_public * total_time / 1000
 
 
-def has_hidden_params(obj: Any) -> bool:
+def has_hidden_params(obj: object) -> bool:
     return hasattr(obj, "_hidden_params")
 
 
@@ -728,7 +729,7 @@ def _get_provider_for_cost_calc(
 
 def _select_model_name_for_cost_calc(
     model: str | None,
-    completion_response: Any | None,
+    completion_response: object | None,
     base_model: str | None = None,
     custom_pricing: bool | None = None,
     custom_llm_provider: str | None = None,
@@ -804,7 +805,7 @@ def _model_contains_known_llm_provider(model: str) -> bool:
     return _provider_prefix in LlmProvidersSet
 
 
-def _get_response_model(completion_response: Any) -> str | None:
+def _get_response_model(completion_response: object) -> str | None:
     """
     Extract the model name from a completion response object.
 
@@ -866,8 +867,18 @@ def _normalize_service_tier(service_tier: object) -> str | None:
     return service_tier
 
 
+def _extract_service_tier(source: object) -> str | None:
+    """Read a raw ``service_tier`` off a response body or usage object, dict or pydantic model alike."""
+    if isinstance(source, BaseModel):
+        return getattr(source, "service_tier", None)
+    elif isinstance(source, dict):
+        return source.get("service_tier")
+
+    return None
+
+
 def _get_usage_object(
-    completion_response: Any,
+    completion_response: object,
 ) -> Usage | None:
     usage_obj: Final = cast(
         Usage | ResponseAPIUsage | dict | BaseModel,
@@ -1110,7 +1121,7 @@ def _store_cost_breakdown_in_logging_obj(
 
 
 def completion_cost(
-    completion_response=None,
+    completion_response: object | None = None,
     model: str | None = None,
     prompt="",
     messages: list = [],
@@ -1197,19 +1208,13 @@ def completion_cost(
 
         # Extract service_tier from completion_response if not provided
         if service_tier is None and completion_response is not None:
-            if isinstance(completion_response, BaseModel):
-                service_tier = getattr(completion_response, "service_tier", None)
-            elif isinstance(completion_response, dict):
-                service_tier = completion_response.get("service_tier")
+            service_tier = _extract_service_tier(completion_response)
 
         service_tier = _normalize_service_tier(service_tier)
 
         # Extract service_tier from usage object if not provided
         if service_tier is None and cost_per_token_usage_object is not None:
-            if isinstance(cost_per_token_usage_object, BaseModel):
-                service_tier = getattr(cost_per_token_usage_object, "service_tier", None)
-            elif isinstance(cost_per_token_usage_object, dict):
-                service_tier = cost_per_token_usage_object.get("service_tier")
+            service_tier = _extract_service_tier(cost_per_token_usage_object)
 
         service_tier = _normalize_service_tier(service_tier)
 
@@ -1412,7 +1417,7 @@ def completion_cost(
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
                         meta_obj = completion_response.meta
                         if meta_obj is not None:
-                            billed_units = meta_obj.get("billed_units", {}) or {}
+                            billed_units: RerankBilledUnits = meta_obj.get("billed_units") or {}
                         else:
                             billed_units = {}
 
@@ -1801,7 +1806,7 @@ def response_cost_calculator(
 def ocr_cost(
     model: str,
     custom_llm_provider: str | None,
-    response: Any | None = None,
+    response: object | None = None,
 ) -> tuple[float, float]:
     """
     Args:
