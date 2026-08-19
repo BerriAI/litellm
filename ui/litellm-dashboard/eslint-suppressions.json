@@ -2628,15 +2628,6 @@
   "src/components/templates/key_edit_view.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    },
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/templates/key_info_view.tsx": {
