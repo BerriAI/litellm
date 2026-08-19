@@ -60,17 +60,31 @@ export const useMountRegistry = (): MountRegistry => {
   );
 };
 
-/**
- * Static literal names only: the registry counts by name and this emits flat keys, so a runtime-generated name, a
- * Form.List row and its per-row sub-fields, is never in the mounted set and goes silently missing from the payload.
- */
+const withIndex = (base: readonly unknown[], index: number, next: unknown): readonly unknown[] =>
+  Array.from({ length: Math.max(base.length, index + 1) }, (_, i) => (i === index ? next : base[i]));
+
+const setPath = (target: unknown, segments: readonly string[], value: unknown): unknown => {
+  const [head, ...rest] = segments;
+  if (/^\d+$/.test(head)) {
+    const base: readonly unknown[] = Array.isArray(target) ? target : [];
+    const index = Number(head);
+    return withIndex(base, index, rest.length === 0 ? value : setPath(base[index], rest, value));
+  }
+  const base: Record<string, unknown> =
+    target !== null && typeof target === "object" && !Array.isArray(target) ? (target as Record<string, unknown>) : {};
+  return { ...base, [head]: rest.length === 0 ? value : setPath(base[head], rest, value) };
+};
+
 export const projectMountedValues = (
   registry: MountRegistry,
   getValues: UseFormGetValues<MountedFormValues>,
 ): MountedFormValues => {
   const names = [...registry.mountedNames()];
   const values = getValues(names);
-  return Object.fromEntries(names.map((name, index) => [name, values[index]]));
+  return names.reduce<MountedFormValues>(
+    (projected, name, index) => setPath(projected, name.split("."), values[index]) as MountedFormValues,
+    {},
+  );
 };
 
 export type MountedFieldControlProps = {
