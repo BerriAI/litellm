@@ -87,6 +87,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 
     if (!searchText) {
       setUserOptions([]);
+      setLoading(false);
       return;
     }
 

@@ -252,4 +252,23 @@ describe("UserSearchModal out-of-order search results", () => {
       role: "user",
     });
   });
+
+  it("stops loading once the box is cleared and the abandoned search answers", async () => {
+    const user = userEvent.setup();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={vi.fn()} accessToken="sk-test" />);
+
+    const input = getEmailSearchInput();
+    await user.click(input);
+    await user.type(input, "ali");
+    await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
+    await screen.findByText("Loading...");
+
+    await user.clear(input);
+    await screen.findByText("No results");
+
+    await answerFor("ali", [{ user_id: "u-jones", user_email: "alice.jones@example.com" }]);
+
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    expect(screen.getByText("No results")).toBeInTheDocument();
+  });
 });
