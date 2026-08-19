@@ -294,19 +294,22 @@ class TestUnifiedGuardrailCallTypeResolution:
 
         response_body = {"candidates": [{"content": {"parts": [{"text": "hello"}]}}]}
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail.load_guardrail_translation_mappings"
-        ) as mock_load:
-            mock_handler_instance = AsyncMock()
-            mock_handler_instance.process_output_response = AsyncMock(
-                return_value=response_body
-            )
-            mock_handler_class = MagicMock(return_value=mock_handler_instance)
+        mock_handler_instance = AsyncMock()
+        mock_handler_instance.process_output_response = AsyncMock(
+            return_value=response_body
+        )
+        mock_handler_class = MagicMock(return_value=mock_handler_instance)
 
-            from litellm.types.utils import CallTypes
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
+            unified_guardrail as unified_guardrail_module,
+        )
+        from litellm.types.utils import CallTypes
 
-            mock_load.return_value = {CallTypes.pass_through: mock_handler_class}
-
+        with patch.object(
+            unified_guardrail_module,
+            "endpoint_guardrail_translation_mappings",
+            {CallTypes.pass_through: mock_handler_class},
+        ):
             result = await unified.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=user_api_key_dict,

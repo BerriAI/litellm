@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from "react";
-import { Button } from "@tremor/react";
-import { Modal } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "@/components/networking";
 import AddPluginForm from "./add_plugin_form";
 import PluginTable from "./PluginTable";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 import { isAdminRole } from "@/utils/roles";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Plugin, ListPluginsResponse } from "@/components/claude_code_plugins/types";
 
 interface ClaudeCodePluginsPanelProps {
@@ -58,11 +66,11 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
     setIsDeleting(true);
     try {
       await deleteClaudeCodePlugin(accessToken, pluginToDelete.name);
-      NotificationsManager.success(`Skill "${pluginToDelete.displayName}" deleted successfully`);
+      toast.success(`Skill "${pluginToDelete.displayName}" deleted successfully`);
       fetchPlugins();
     } catch (error) {
       console.error("Error deleting skill:", error);
-      NotificationsManager.error("Failed to delete skill");
+      toast.error("Failed to delete skill");
     } finally {
       setIsDeleting(false);
       setPluginToDelete(null);
@@ -115,20 +123,28 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
       />
 
       {pluginToDelete && (
-        <Modal
-          title="Delete Skill"
-          open={pluginToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={() => setPluginToDelete(null)}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
+        <AlertDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setPluginToDelete(null);
+          }}
         >
-          <p>
-            Are you sure you want to delete skill: <strong>{pluginToDelete.displayName}</strong>?
-          </p>
-          <p>This action cannot be undone.</p>
-        </Modal>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Skill</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete skill: <strong>{pluginToDelete.displayName}</strong>?
+              </AlertDialogDescription>
+              <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
+                Delete
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
     </div>
   );

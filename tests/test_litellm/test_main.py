@@ -1,3 +1,5 @@
+import contextlib
+import copy
 import json
 import os
 import sys
@@ -810,8 +812,12 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_plus_reasoning_routes_to
     assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_azure_gpt_5_4_tools_without_reasoning_stays_chat():
-    """Azure gpt-5.4 with tools only should not be force-routed to Responses API."""
+def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
+    """
+    Azure gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables
+    reasoning by default for gpt-5.4+, and Chat Completions rejects function tools
+    whenever reasoning is on.
+    """
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
@@ -824,11 +830,15 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_without_reasoning_stays_
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") != "responses"
+    assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_gpt_5_4_tools_without_reasoning_stays_chat():
-    """gpt-5.4 with tools only should not be force-routed to Responses API."""
+def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
+    """
+    gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables reasoning
+    by default for gpt-5.4+, and Chat Completions rejects function tools whenever
+    reasoning is on ("use /v1/responses or set reasoning_effort to 'none'").
+    """
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
@@ -841,6 +851,302 @@ def test_responses_api_bridge_check_gpt_5_4_tools_without_reasoning_stays_chat()
         )
 
     assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat():
+    """
+    Explicit reasoning_effort "none" is OpenAI's documented escape hatch that keeps
+    function tools servable on Chat Completions; the bridge must not fire.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort="none",
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_reasoning_none_with_summary_still_routes_to_responses():
+    """A reasoning summary is Responses-only regardless of effort value."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            reasoning_effort="none",
+            reasoning_summary="detailed",
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_custom_tools_only_stays_chat():
+    """
+    Chat Completions serves custom (grammar) tools natively with reasoning on; only
+    FUNCTION tools trigger the OpenAI rejection. Custom-only requests must stay on chat
+    so responses keep the native custom tool_call shape instead of the bridge's
+    function-shaped mapping.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "custom", "custom": {"name": "ApplyPatch", "description": "V4A patch"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_mixed_function_and_custom_tools_routes_to_responses():
+    """One function tool in the mix is enough to make chat unservable with reasoning on."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[
+                {"type": "custom", "custom": {"name": "ApplyPatch"}},
+                {"type": "function", "function": {"name": "shell"}},
+            ],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_gpt_5_4_flat_function_tool_routes_to_responses():
+    """Responses-style flat function tool defs still count as function tools."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "name": "shell", "parameters": {"type": "object"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_dict_effort_none_stays_chat():
+    """The escape hatch must honor litellm's dict form: {"effort": "none"} means reasoning off."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort={"effort": "none"},
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_dict_effort_active_routes_to_responses():
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort={"effort": "low"},
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_dict_effort_none_with_summary_routes_to_responses():
+    """A summary inside the dict form is Responses-only even when effort is none."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort={"effort": "none", "summary": "concise"},
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize("blank_api_base", [None, "", "   ", "\t"])
+def test_responses_api_bridge_check_blank_api_base_is_default_openai(blank_api_base):
+    """
+    A blank api_base (None, empty, or whitespace) resolves to the default OpenAI
+    endpoint downstream, which enforces the reasoning+tools constraint, so gpt-5.4+
+    function-tool requests with unset reasoning_effort must still auto-bridge.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base=blank_api_base,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_custom_api_base_with_unset_effort_stays_chat():
+    """
+    Chat-only OpenAI-compatible backends registered under the openai provider with a
+    custom api_base and gpt-5.4+ model names serve tools-without-reasoning fine and
+    have no /responses route; the unset-effort arm must not reroute them.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base="http://vllm.internal:8000/v1",
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_custom_api_base_via_global_with_unset_effort_stays_chat(monkeypatch):
+    """
+    A custom base set through the litellm.api_base global (not the call arg) is resolved the
+    same way the chat handler resolves it, so the unset-effort arm must not reroute a chat-only
+    backend to a /responses route it lacks. Regression guard: the gate previously inspected only
+    the call-level api_base and bridged these requests.
+    """
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "api_base", "http://vllm.internal:8000/v1")
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+@pytest.mark.parametrize("env_var", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
+def test_responses_api_bridge_check_custom_api_base_via_env_with_unset_effort_stays_chat(monkeypatch, env_var):
+    """
+    A custom base set via OPENAI_BASE_URL/OPENAI_API_BASE env is resolved identically to the chat
+    handler, so the unset-effort arm leaves the request on chat instead of bridging it.
+    """
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setenv(env_var, "http://vllm.internal:8000/v1")
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_routes():
+    """Explicit reasoning_effort keeps its pre-existing bridging behavior on any api_base."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort="high",
+            api_base="http://vllm.internal:8000/v1",
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes():
+    """Azure OpenAI always sets api_base and does enforce the constraint; keep bridging."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="azure",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+            api_base="https://myresource.openai.azure.com",
+        )
+
+    assert model == "gpt-5.4"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
+    """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model="gpt-5.1",
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == "gpt-5.1"
     assert model_info.get("mode") != "responses"
 
 
@@ -2083,6 +2389,114 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
 
 
+def test_completion_forwards_store_and_prompt_cache_key_to_openai():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/33184
+
+    store and prompt_cache_key are documented OpenAI chat completion params that
+    were accepted as supported but silently dropped before the provider request
+    was built, because they were not named parameters of completion() and
+    get_optional_params() the way safety_identifier is.
+    """
+    from openai import OpenAI
+
+    client = OpenAI(api_key="fake-api-key")
+
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+        try:
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                store=False,
+                prompt_cache_key="test-cache-key",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+        assert request_body["store"] is False
+        assert request_body["prompt_cache_key"] == "test-cache-key"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_forwards_store_and_prompt_cache_key_to_openai():
+    """
+    Async variant of the store/prompt_cache_key forwarding regression test for
+    https://github.com/BerriAI/litellm/issues/33184
+    """
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key")
+
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+        try:
+            await litellm.acompletion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                store=False,
+                prompt_cache_key="test-cache-key",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+        assert request_body["store"] is False
+        assert request_body["prompt_cache_key"] == "test-cache-key"
+
+
+def test_completion_omits_store_and_prompt_cache_key_when_not_passed():
+    """
+    When store and prompt_cache_key are not passed, they must not appear in the
+    outbound request body (guards against always forwarding None defaults).
+    """
+    from openai import OpenAI
+
+    client = OpenAI(api_key="fake-api-key")
+
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+        try:
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello"}],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+        assert "store" not in request_body
+        assert "prompt_cache_key" not in request_body
+
+
+def test_completion_forwards_store_and_prompt_cache_key_to_mcp_gateway():
+    """
+    Regression test for the MCP gateway early-return in completion(): store and
+    prompt_cache_key are named params, so they no longer travel via **kwargs and
+    must be forwarded explicitly like safety_identifier and service_tier.
+    """
+    with patch(
+        "litellm.responses.mcp.chat_completions_handler.acompletion_with_mcp"
+    ) as mock_mcp:
+        result = litellm.completion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy"}],
+            store=False,
+            prompt_cache_key="test-cache-key",
+        )
+
+        result.close()
+        mock_mcp.assert_called_once()
+        call_kwargs = mock_mcp.call_args.kwargs
+        assert call_kwargs["store"] is False
+        assert call_kwargs["prompt_cache_key"] == "test-cache-key"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "aws_credential_kwargs",
@@ -2157,3 +2571,104 @@ async def test_acompletion_forwards_aws_credentials_through_responses_bridge(
     finally:
         litellm.disable_aiohttp_transport = original_disable_aiohttp
         litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+_GEMINI_RESPONSE_BODY = {
+    "candidates": [{"content": {"parts": [{"text": "hello"}], "role": "model"}, "finishReason": "STOP"}],
+    "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},
+}
+
+
+def _gemini_client_returning_a_reply():
+    """An injected HTTP client whose post() answers like generativelanguage does."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    request = httpx.Request("POST", "https://generativelanguage.googleapis.com/")
+    post = MagicMock(return_value=httpx.Response(200, json=_GEMINI_RESPONSE_BODY, request=request))
+    return client, post
+
+
+@pytest.fixture
+def restore_model_registry():
+    """litellm.model_cost and the provider name sets are module-global.
+
+    register_model merges into the existing entry in place, hence the deep copy.
+    """
+    model_cost = copy.deepcopy(litellm.model_cost)
+    openai_models = set(litellm.open_ai_chat_completion_models)
+    yield
+    litellm.model_cost.clear()
+    litellm.model_cost.update(model_cost)
+    litellm.open_ai_chat_completion_models.clear()
+    litellm.open_ai_chat_completion_models.update(openai_models)
+
+
+def test_openai_model_name_does_not_outrank_explicit_provider():
+    """`gemini/gpt-4o` goes to Google, not to litellm's OpenAI handler.
+
+    completion() checks `model in litellm.open_ai_chat_completion_models` ahead of
+    the gemini branch, so the call used to reach the OpenAI handler carrying
+    VertexGeminiConfig, whose transform_request raises NotImplementedError.
+    """
+    assert "gpt-4o" in litellm.open_ai_chat_completion_models
+    client, post = _gemini_client_returning_a_reply()
+
+    with patch.object(client, "post", new=post):
+        response = litellm.completion(
+            model="gemini/gpt-4o",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-api-key",
+            client=client,
+        )
+
+    assert "generativelanguage.googleapis.com" in post.call_args.kwargs["url"]
+    assert "models/gpt-4o" in post.call_args.kwargs["url"]
+    assert response.choices[0].message.content == "hello"
+
+
+def test_mislabelled_pricing_entry_does_not_reroute_provider(restore_model_registry):
+    """register_model is the other way into the same failure.
+
+    An entry claiming litellm_provider "openai" adds its name to
+    open_ai_chat_completion_models, so one mislabelled price reroutes every later
+    call to that model in the process.
+    """
+    litellm.register_model(
+        {
+            "gemini-2.5-pro": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+            }
+        }
+    )
+    assert "gemini-2.5-pro" in litellm.open_ai_chat_completion_models
+    client, post = _gemini_client_returning_a_reply()
+
+    with patch.object(client, "post", new=post):
+        response = litellm.completion(
+            model="gemini/gemini-2.5-pro",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="test-api-key",
+            client=client,
+        )
+
+    assert "generativelanguage.googleapis.com" in post.call_args.kwargs["url"]
+    assert response.choices[0].message.content == "hello"
+
+
+def test_openai_model_without_a_provider_still_routes_to_openai():
+    from openai import OpenAI
+
+    client = OpenAI(api_key="fake-key")
+    raw_response = client.chat.completions.with_raw_response
+    with patch.object(raw_response, "create") as mock_create, contextlib.suppress(Exception):
+        litellm.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hello"}],
+            client=client,
+        )
+
+    mock_create.assert_called()

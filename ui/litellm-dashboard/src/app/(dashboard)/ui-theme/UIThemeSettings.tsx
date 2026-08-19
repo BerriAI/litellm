@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Text, TextInput, Button } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 interface UIThemeSettingsProps {
   userID: string | null;
@@ -11,7 +15,7 @@ interface UIThemeSettingsProps {
 }
 
 const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, accessToken }) => {
-  const { logoUrl, setLogoUrl, faviconUrl, setFaviconUrl } = useTheme();
+  const { setLogoUrl, setFaviconUrl } = useTheme();
   const [logoUrlInput, setLogoUrlInput] = useState<string>("");
   const [faviconUrlInput, setFaviconUrlInput] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -62,7 +66,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
         }),
       });
       if (response.ok) {
-        NotificationsManager.success("Theme settings updated successfully!");
+        toast.success("Theme settings updated successfully!");
         setLogoUrl(logoUrlInput || null);
         setFaviconUrl(faviconUrlInput || null);
       } else {
@@ -70,7 +74,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
       }
     } catch (error) {
       console.error("Error updating theme settings:", error);
-      NotificationsManager.fromBackend("Failed to update theme settings");
+      toast.fromError("Failed to update theme settings");
     } finally {
       setLoading(false);
     }
@@ -94,13 +98,13 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
         body: JSON.stringify({ logo_url: null, favicon_url: null }),
       });
       if (response.ok) {
-        NotificationsManager.success("Theme settings reset to default!");
+        toast.success("Theme settings reset to default!");
       } else {
         throw new Error("Failed to reset");
       }
     } catch (error) {
       console.error("Error resetting theme settings:", error);
-      NotificationsManager.fromBackend("Failed to reset theme settings");
+      toast.fromError("Failed to reset theme settings");
     } finally {
       setLoading(false);
     }
@@ -113,50 +117,58 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   return (
     <div className="w-full mx-auto max-w-4xl px-6 py-8">
       <div className="mb-8">
-        <Title className="text-2xl font-bold mb-2">UI Theme Customization</Title>
-        <Text className="text-gray-600">Customize your LiteLLM admin dashboard with a custom logo and favicon.</Text>
+        <h1 className="mb-2 text-2xl font-bold">UI Theme Customization</h1>
+        <p className="text-sm text-muted-foreground">
+          Customize your LiteLLM admin dashboard with a custom logo and favicon.
+        </p>
       </div>
-      <Card className="shadow-xs p-6">
-        <div className="space-y-6">
+      <Card>
+        <CardContent className="space-y-6">
           <div>
-            <Text className="text-sm font-medium text-gray-700 mb-2 block">Custom Logo URL</Text>
-            <TextInput
+            <Label htmlFor="ui-theme-logo-url" className="mb-2">
+              Custom Logo URL
+            </Label>
+            <Input
+              id="ui-theme-logo-url"
               placeholder="https://example.com/logo.png"
               value={logoUrlInput}
-              onValueChange={(v) => {
-                setLogoUrlInput(v);
-                setLogoUrl(v || null);
+              onChange={(event) => {
+                setLogoUrlInput(event.target.value);
+                setLogoUrl(event.target.value || null);
               }}
-              className="w-full"
             />
-            <Text className="text-xs text-gray-500 mt-1">
+            <p className="mt-1 text-xs text-muted-foreground">
               Enter a URL for your custom logo or leave empty for default
-            </Text>
+            </p>
           </div>
           <div>
-            <Text className="text-sm font-medium text-gray-700 mb-2 block">Custom Favicon URL</Text>
-            <TextInput
+            <Label htmlFor="ui-theme-favicon-url" className="mb-2">
+              Custom Favicon URL
+            </Label>
+            <Input
+              id="ui-theme-favicon-url"
               placeholder="https://example.com/favicon.ico"
               value={faviconUrlInput}
-              onValueChange={(v) => {
-                setFaviconUrlInput(v);
-                setFaviconUrl(v || null);
+              onChange={(event) => {
+                setFaviconUrlInput(event.target.value);
+                setFaviconUrl(event.target.value || null);
               }}
-              className="w-full"
             />
-            <Text className="text-xs text-gray-500 mt-1">
+            <p className="mt-1 text-xs text-muted-foreground">
               Enter a URL for your custom favicon (.ico, .png, or .svg) or leave empty for default
-            </Text>
+            </p>
           </div>
           <div className="flex gap-3 pt-4">
-            <Button onClick={handleSave} loading={loading} disabled={loading} color="indigo">
+            <Button onClick={handleSave} disabled={loading}>
+              {loading && <UiLoadingSpinner className="size-4" />}
               Save Changes
             </Button>
-            <Button onClick={handleReset} loading={loading} disabled={loading} variant="secondary" color="gray">
+            <Button variant="outline" onClick={handleReset} disabled={loading}>
+              {loading && <UiLoadingSpinner className="size-4" />}
               Reset to Default
             </Button>
           </div>
-        </div>
+        </CardContent>
       </Card>
     </div>
   );

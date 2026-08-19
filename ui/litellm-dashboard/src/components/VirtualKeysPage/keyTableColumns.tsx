@@ -5,6 +5,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Popover, Typography } from "antd";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
+import { inheritedBudgetGates } from "@/components/shared/InheritedBudgetHint";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
@@ -46,7 +47,11 @@ const getKeyStatus = (key: KeyResponse): KeyStatus => {
   if (!Number.isNaN(expiresAt) && expiresAt < Date.now()) {
     return { tone: "warning", label: "Expired", tooltip: "This key has passed its expiry date." };
   }
-  return { tone: "success", label: "Active" };
+  return {
+    tone: "success",
+    label: "Active",
+    tooltip: "This key is not blocked and has not expired.",
+  };
 };
 
 const UserPopoverCell = ({
@@ -300,13 +305,14 @@ export const getKeyTableColumns = ({
     size: 180,
     enableSorting: true,
     cell: ({ row }) => {
-      const teamId = row.original.team_id;
-      const team = allTeams.find((t) => t.team_id === teamId);
+      const team = allTeams.find((t) => t.team_id === row.original.team_id);
+      const orgId = row.original.organization_id || row.original.org_id || team?.organization_id;
+      const organization = organizations.find((o) => o.organization_id === orgId);
       return (
         <SpendBudgetCell
           spend={row.original.spend}
           maxBudget={row.original.max_budget}
-          teamMaxBudget={team?.max_budget ?? null}
+          inheritedGates={row.original.max_budget == null ? inheritedBudgetGates(team, organization) : []}
         />
       );
     },
@@ -359,6 +365,5 @@ export const KEY_TABLE_HIDDEN_COLUMNS: Record<string, boolean> = {
   created_by: false,
   updated_at: false,
   expires: false,
-  budget_reset_at: false,
   rate_limits: false,
 };
