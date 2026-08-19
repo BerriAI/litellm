@@ -405,12 +405,13 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
 
   const pricingField = (name: TouchedPricingField, label: string, placeholder: string, description?: string) => (
     <div>
-      <FieldLabel>{label}</FieldLabel>
+      <FieldLabel htmlFor={name}>{label}</FieldLabel>
       {isEditing ? (
         <FormField control={form.control} name={name} description={description}>
           {({ value, onChange, ...control }) => (
             <NumericalInput
               {...control}
+              id={name}
               value={value ?? ""}
               placeholder={placeholder}
               onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
