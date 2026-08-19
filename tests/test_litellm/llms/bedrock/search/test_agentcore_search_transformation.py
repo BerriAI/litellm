@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 import litellm
 from litellm.llms.bedrock.search.transformation import (
-    AGENTCORE_MCP_PROTOCOL_VERSION,
+    AGENTCORE_DEFAULT_MCP_PROTOCOL_VERSION,
     AgentCoreSearchConfig,
 )
 
@@ -157,7 +157,20 @@ class TestAgentCoreSearch:
         headers = config.validate_environment(headers={})
         assert headers["Accept"] == "application/json, text/event-stream"
         assert headers["Content-Type"] == "application/json"
-        assert headers["MCP-Protocol-Version"] == AGENTCORE_MCP_PROTOCOL_VERSION
+        assert headers["MCP-Protocol-Version"] == AGENTCORE_DEFAULT_MCP_PROTOCOL_VERSION
+
+    def test_default_protocol_version_is_the_agentcore_gateway_default(self):
+        """A default AgentCore gateway supports only 2025-03-26 and answers
+        -32600 to anything newer, so that exact revision must be the default."""
+        assert AGENTCORE_DEFAULT_MCP_PROTOCOL_VERSION == "2025-03-26"
+
+    def test_protocol_version_env_override_wins(self):
+        """A gateway pinned to a newer supportedVersions list needs the header
+        to match, so AGENTCORE_MCP_PROTOCOL_VERSION must override the default."""
+        config = AgentCoreSearchConfig()
+        with patch.dict(os.environ, {"AGENTCORE_MCP_PROTOCOL_VERSION": "2025-06-18"}):
+            headers = config.validate_environment(headers={})
+        assert headers["MCP-Protocol-Version"] == "2025-06-18"
 
     def test_protocol_version_header_survives_signing(self):
         """Both auth paths must keep the MCP-Protocol-Version header on the wire."""
@@ -171,7 +184,7 @@ class TestAgentCoreSearch:
             api_base=GATEWAY_URL,
             api_key="test-jwt-token",
         )
-        assert bearer_headers["MCP-Protocol-Version"] == AGENTCORE_MCP_PROTOCOL_VERSION
+        assert bearer_headers["MCP-Protocol-Version"] == AGENTCORE_DEFAULT_MCP_PROTOCOL_VERSION
 
         with patch.dict(
             os.environ,
@@ -187,7 +200,7 @@ class TestAgentCoreSearch:
                 api_base=GATEWAY_URL,
             )
         assert signed_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
-        assert signed_headers["MCP-Protocol-Version"] == AGENTCORE_MCP_PROTOCOL_VERSION
+        assert signed_headers["MCP-Protocol-Version"] == AGENTCORE_DEFAULT_MCP_PROTOCOL_VERSION
 
     def test_transform_search_response_parses_sse_frame(self):
         """Gateway may answer with an SSE-framed JSON-RPC message."""
