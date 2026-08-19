@@ -1649,6 +1649,15 @@ def test_anthropic_thinking_param_to_gemini_3_force_low_feature_flag():
         )
         assert result_pro["thinkingLevel"] == "low"
         assert result_pro["includeThoughts"] is True
+
+        # gemini-3.7-flash dropped MINIMAL support, so the forced-low mapping must
+        # not send "minimal" to it (issue #37314).
+        result_37 = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3.7-flash",
+        )
+        assert result_37["thinkingLevel"] == "low"
+        assert result_37["includeThoughts"] is True
     finally:
         litellm.enable_gemini_default_thinking_level_low = original_force_low_flag
 
