@@ -9,9 +9,11 @@ Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
@@ -42,6 +44,47 @@ _CLAUDE_MODEL_PREFIXES: Final = (
     "claude-",
     "claude_",
 )
+
+
+class _AnthropicContentBlock(TypedDict, total=False):
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+    id: ReadOnly[str]
+    name: ReadOnly[str]
+    input: ReadOnly[Mapping[str, object]]
+
+
+class _AnthropicUsageBlock(TypedDict, total=False):
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+
+
+class _AnthropicMessagesResponse(TypedDict, total=False):
+    id: ReadOnly[str]
+    model: ReadOnly[str]
+    stop_reason: ReadOnly[str]
+    content: ReadOnly[Sequence[_AnthropicContentBlock]]
+    usage: ReadOnly[_AnthropicUsageBlock]
+
+
+class _ChatCompletionsResponse(Protocol):
+    """Response view that decodes the Cortex chat-completions body as a field mapping."""
+
+    def json(self) -> Mapping[str, object]: ...
+
+
+class _MessagesResponse(Protocol):
+    """Response view that decodes the Cortex messages body in Anthropic shape."""
+
+    def json(self) -> _AnthropicMessagesResponse: ...
+
+
+def _decoded_chat_completions(response: _ChatCompletionsResponse) -> Mapping[str, object]:
+    return response.json()
+
+
+def _decoded_messages(response: _MessagesResponse) -> _AnthropicMessagesResponse:
+    return response.json()
 
 
 def _is_claude_model(model: str) -> bool:
@@ -129,7 +172,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                anthropic_tool: dict[str, Any] = {
+                anthropic_tool: dict[str, object] = {
                     "name": func.get("name", ""),
                 }
                 if "description" in func:
@@ -173,7 +216,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             elif role == "assistant":
                 tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
                 if tool_calls:
-                    content_blocks: list[dict[str, Any]] = []
+                    content_blocks: list[dict[str, object]] = []
                     if content:
                         content_blocks.append({"type": "text", "text": content})
                     for tc in tool_calls:
@@ -310,7 +353,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         model_name: Final = model.removeprefix("snowflake/")
 
-        body: Final[dict[str, Any]] = {
+        body: Final[dict[str, object]] = {
             "model": model_name,
             "messages": conversation,
             "stream": stream,
@@ -336,7 +379,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -356,7 +399,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse standard OpenAI chat completions response."""
-        response_json: Final = raw_response.json()
+        response_json: Final = _decoded_chat_completions(raw_response)
 
         logging_obj.post_call(
             input=messages,
@@ -383,7 +426,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse Anthropic Messages response into OpenAI format."""
-        response_json: Final = raw_response.json()
+        response_json: Final = _decoded_messages(raw_response)
 
         logging_obj.post_call(
             input=messages,
@@ -447,10 +490,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Any,
+        streaming_response: object,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "SnowflakeStreamingHandler":
         return SnowflakeStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -468,7 +511,7 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
 
     def __init__(
         self,
-        streaming_response: Any,
+        streaming_response: object,
         sync_stream: bool,
         json_mode: bool | None = False,
     ):

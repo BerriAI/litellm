@@ -18,6 +18,7 @@ from litellm.integrations.otel.mappers.utils import (
     serialize_messages,
     tool_definition_attrs,
 )
+from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -27,7 +28,6 @@ from litellm.integrations.otel.model.payloads import (
     ToolDefinition,
 )
 from litellm.integrations.otel.model.semconv import (
-    DB,
     MCP,
     Error,
     GenAI,
@@ -36,7 +36,6 @@ from litellm.integrations.otel.model.semconv import (
     RpcSystem,
     Server,
 )
-from litellm.integrations.otel.model.spans import db_system
 
 
 class GenAIMapper:
@@ -182,12 +181,8 @@ class GenAIMapper:
     def _service(cls, data: ServiceSpanData) -> AttributeMap:
         attrs: Final = collect(cls._SERVICE_ATTRS, data)
         # An outbound datastore call (DB_CALL / CLIENT span) also carries db.*
-        # semconv. Internal services (router, budget jobs, …) have no db.system,
-        # so they get only the litellm.service.* keys above.
-        system: Final = db_system(data.service_name)
-        if system is not None:
-            attrs[DB.SYSTEM_NAME] = system
-            if data.call_type:
-                attrs[DB.OPERATION_NAME] = data.call_type
+        # semconv naming the server it reached. Internal services (router, budget
+        # jobs, …) have no db.system, so they get only the litellm.service.* keys.
+        attrs.update(db_span_attributes(data.service_name, data.call_type))
         attrs.update({f"{LiteLLM.METADATA_PREFIX}{key}": value for key, value in data.event_metadata.items()})
         return attrs

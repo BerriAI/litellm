@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { useRouter } from "next/navigation";
 import { useChatShell } from "@/contexts/ChatShellContext";
 import { getChatRoutes } from "@/components/chat/ChatShell";
@@ -111,7 +111,7 @@ export default function ChatConversationPage() {
           localStorage.setItem(LOCALSTORAGE_MODEL_KEY, names[0]);
         }
       })
-      .catch(() => MessageManager.error("Could not load models"))
+      .catch(() => toast.error("Could not load models"))
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 

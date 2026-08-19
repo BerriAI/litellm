@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Button, Card, Flex, Input, Modal, Space, Typography } from "antd";
+import { Card, Flex, Input, Modal, Space, Typography } from "antd";
+import { Button } from "@/components/ui/button";
 import { PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
 import { useRouterFields } from "@/app/(dashboard)/hooks/router/useRouterFields";
@@ -10,7 +11,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
 
 const { Text } = Typography;
@@ -76,14 +77,14 @@ const RoutingGroups: React.FC = () => {
 
     try {
       await saveMutation.mutateAsync(next);
-      NotificationsManager.success(
+      toast.success(
         drawerMode === "create"
           ? `Created routing group "${incoming.group_name}"`
           : `Updated routing group "${incoming.group_name}"`,
       );
       setDrawerOpen(false);
     } catch (err) {
-      NotificationsManager.error(err instanceof Error ? err.message : "Failed to save routing group");
+      toast.error(err instanceof Error ? err.message : "Failed to save routing group");
     }
   };
 
@@ -92,10 +93,10 @@ const RoutingGroups: React.FC = () => {
     const next = groups.filter((g) => g.group_name !== deletingGroup.group_name);
     try {
       await saveMutation.mutateAsync(next);
-      NotificationsManager.success(`Deleted routing group "${deletingGroup.group_name}"`);
+      toast.success(`Deleted routing group "${deletingGroup.group_name}"`);
       setDeletingGroup(null);
     } catch (err) {
-      NotificationsManager.error(err instanceof Error ? err.message : "Failed to delete routing group");
+      toast.error(err instanceof Error ? err.message : "Failed to delete routing group");
     }
   };
 
@@ -112,10 +113,17 @@ const RoutingGroups: React.FC = () => {
             className="max-w-sm"
           />
           <Flex align="center" gap={12}>
-            <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isFetching && !isLoading}>
+            <Button
+              variant="outline"
+              onClick={() => refetch()}
+              disabled={isFetching && !isLoading}
+              aria-busy={isFetching && !isLoading}
+            >
+              <ReloadOutlined />
               Refresh
             </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            <Button onClick={openCreate}>
+              <PlusOutlined />
               Create Group
             </Button>
             <Text type="secondary" className="text-sm whitespace-nowrap">

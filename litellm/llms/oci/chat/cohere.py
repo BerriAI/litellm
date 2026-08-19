@@ -84,9 +84,9 @@ def adapt_messages_to_cohere_standard(
             tool_calls_raw: Any = msg.get("tool_calls") or []
             for tc in tool_calls_raw:
                 tc_id = tc.get("id", "")
-                raw_args: Any = tc.get("function", {}).get("arguments", "{}")
+                raw_args = tc.get("function", {}).get("arguments", "{}")
                 try:
-                    params: dict[str, Any] = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    params: dict[str, object] = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                 except json.JSONDecodeError:
                     params = {}
                 tool_call_lookup[tc_id] = CohereToolCall(
@@ -111,10 +111,10 @@ def adapt_messages_to_cohere_standard(
         if role == "assistant" and msg.get("tool_calls"):
             tool_calls = []
             for tc in msg["tool_calls"]:  # pyright: ignore[reportOptionalIterable]  # truthiness check above rules out None
-                raw_arguments: Any = tc.get("function", {}).get("arguments", {})
+                raw_arguments = tc.get("function", {}).get("arguments", {})
                 if isinstance(raw_arguments, str):
                     try:
-                        arguments: dict[str, Any] = json.loads(raw_arguments)
+                        arguments: dict[str, object] = json.loads(raw_arguments)
                     except json.JSONDecodeError:
                         arguments = {}
                 else:
@@ -211,7 +211,7 @@ def handle_cohere_response(
     response_text: Final = cohere_response.chatResponse.text
     finish_reason: Final = _normalize_oci_finish_reason(cohere_response.chatResponse.finishReason)
 
-    tool_calls: list[dict[str, Any]] | None = None
+    tool_calls: list[dict[str, object]] | None = None
     if cohere_response.chatResponse.toolCalls:
         tool_calls = [
             {
@@ -232,7 +232,7 @@ def handle_cohere_response(
     # ``"tool_calls" in message`` (rather than truthiness) incorrectly conclude
     # that tool calls were attempted. Matches the generic handler's behaviour,
     # which only sets ``message.tool_calls`` when tool calls are present.
-    message: Final[dict[str, Any]] = {"role": "assistant", "content": content}
+    message: Final[dict[str, object]] = {"role": "assistant", "content": content}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
 
@@ -317,7 +317,7 @@ def handle_cohere_stream_chunk(
     # passing them through is the only chance to surface them.
     cohere_tool_calls = None if (is_terminal_consolidation and prior_tool_calls_emitted) else typed_chunk.toolCalls
 
-    tool_calls: list[dict[str, Any]] | None = None
+    tool_calls: list[dict[str, object]] | None = None
     if cohere_tool_calls:
         tool_calls = [
             {

@@ -3,7 +3,7 @@
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -76,10 +76,10 @@ export default function UISettings() {
       { disable_model_add_for_internal_users: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -90,10 +90,10 @@ export default function UISettings() {
       { disable_team_admin_delete_team_user: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -102,10 +102,10 @@ export default function UISettings() {
   const handleUpdatePageVisibility = (settings: { enabled_ui_pages_internal_users: string[] | null }) => {
     updateSettings(settings, {
       onSuccess: () => {
-        NotificationManager.success("Page visibility settings updated successfully");
+        toast.success("Page visibility settings updated successfully");
       },
       onError: (error) => {
-        NotificationManager.fromBackend(error);
+        toast.fromError(error);
       },
     });
   };
@@ -115,10 +115,10 @@ export default function UISettings() {
       { forward_client_headers_to_llm_api: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -129,10 +129,10 @@ export default function UISettings() {
       { forward_llm_provider_auth_headers: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -143,11 +143,11 @@ export default function UISettings() {
       { enable_projects_ui: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully. Refreshing page...");
+          toast.success("UI settings updated successfully. Refreshing page...");
           setTimeout(() => window.location.reload(), 1000);
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -158,11 +158,11 @@ export default function UISettings() {
       { enable_chat_ui: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully. Refreshing page...");
+          toast.success("UI settings updated successfully. Refreshing page...");
           setTimeout(() => window.location.reload(), 1000);
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -173,10 +173,10 @@ export default function UISettings() {
       { require_auth_for_public_ai_hub: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -187,10 +187,10 @@ export default function UISettings() {
       { disable_agents_for_internal_users: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -201,10 +201,10 @@ export default function UISettings() {
       { allow_agents_for_team_admins: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -215,10 +215,10 @@ export default function UISettings() {
       { disable_vector_stores_for_internal_users: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -229,10 +229,10 @@ export default function UISettings() {
       { allow_vector_stores_for_team_admins: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -243,10 +243,10 @@ export default function UISettings() {
       { scope_user_search_to_org: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );
@@ -257,10 +257,10 @@ export default function UISettings() {
       { disable_custom_api_keys: checked },
       {
         onSuccess: () => {
-          NotificationManager.success("UI settings updated successfully");
+          toast.success("UI settings updated successfully");
         },
         onError: (error) => {
-          NotificationManager.fromBackend(error);
+          toast.fromError(error);
         },
       },
     );

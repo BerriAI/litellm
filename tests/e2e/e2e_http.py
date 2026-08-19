@@ -75,6 +75,8 @@ class NetworkError(BaseModel):
 
 class UnauthorizedError(BaseModel):
     kind: Literal["unauthorized"] = "unauthorized"
+    # litellm 401s for key auth, model access, and tag routing alike, so keep the body to tell them apart.
+    body: str = ""
 
 
 class RateLimitedError(BaseModel):
@@ -289,7 +291,7 @@ def _classify[R: BaseModel](
     resp: requests.Response, response_type: type[R]
 ) -> Result[R]:
     if resp.status_code == 401:
-        return UnauthorizedError()
+        return UnauthorizedError(body=resp.text)
     if resp.status_code == 429:
         return RateLimitedError(body=resp.text)
     if not resp.ok:

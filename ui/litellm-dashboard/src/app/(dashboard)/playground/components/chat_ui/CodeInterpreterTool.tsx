@@ -1,5 +1,5 @@
 import React from "react";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { Code, Info, TriangleAlert } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -39,7 +39,7 @@ const CodeInterpreterTool: React.FC<CodeInterpreterToolProps> = ({
 
   const handleToggle = (checked: boolean) => {
     if (checked && !isOpenAI) {
-      MessageManager.warning("Code Interpreter is only available for OpenAI models");
+      toast.warning("Code Interpreter is only available for OpenAI models");
       return;
     }
     onEnabledChange(checked);

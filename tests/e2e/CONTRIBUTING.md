@@ -52,6 +52,17 @@ The suites run against a live proxy, so bring one up first by running the litell
 
 Some suites need extra services the bare proxy does not start. The `logging/` OTEL trace-completeness tests read spans back from a jaeger query API at `http://localhost:16686` (override with `E2E_OTEL_QUERY_URL`); run a `jaegertracing/all-in-one` and point `PHOENIX_COLLECTOR_HTTP_ENDPOINT` at its OTLP ingest. The `mcp/` suite needs the deterministic upstream MCP server in `mcp_tests/mcp_e2e_upstream_server.py` reachable by the proxy
 
+### Record and replay
+
+`E2E_FIXTURE_MODE=record` runs a suite against the live proxy as usual while writing every request/response pair to a fixture bundle (default `tests/e2e/.fixtures`, override with `E2E_FIXTURE_DIR`); `E2E_FIXTURE_MODE=replay` then runs the same suite entirely from that bundle, with no proxy traffic and no provider spend; the proxy liveness gate is skipped, so replay runs with no proxy up at all. Unset (or `live`) behaves exactly as before the knob existed
+
+```bash
+E2E_FIXTURE_MODE=record uv run pytest tests/e2e/llm_translation/ -v
+E2E_FIXTURE_MODE=replay uv run pytest tests/e2e/llm_translation/ -v
+```
+
+Replay fails hard (`ReplayMiss`) when the tests drift from the recording, and a bundle older than seven days fails at collection time naming its age; either way the fix is to re-record. See `CLAUDE.md` in this directory for the bundle format and the transport seam
+
 Tests marked `@pytest.mark.e2e` hard-fail when no proxy answers `/health/liveliness`, so a run that goes red with `No live proxy` at setup means the proxy isn't up; they never skip for a missing proxy, so an absent proxy can't be mistaken for a pass
 
 ## What a complete test looks like

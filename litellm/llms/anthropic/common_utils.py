@@ -1227,16 +1227,13 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
 
 
 def _anthropic_model_entry(model: ModelInfoResponse, created_at: str) -> Mapping[str, object]:
-    token_limits: Final = (
-        ("max_input_tokens", model.get("max_input_tokens")),
-        ("max_tokens", model.get("max_output_tokens")),
-    )
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "type": "model",
         "id": model["id"],
         "display_name": model["id"],
         "created_at": created_at,
-        **{name: limit for name, limit in token_limits if limit is not None},  # mutable-ok: merged into the body above
+        "max_input_tokens": model.get("max_input_tokens"),
+        "max_tokens": model.get("max_output_tokens"),
     }
 
 
@@ -1246,7 +1243,8 @@ def create_anthropic_model_list_response(models: Sequence[ModelInfoResponse]) ->
     Clients that send an anthropic-version header parse the Anthropic Models API
     shape (type/display_name/created_at plus has_more/first_id/last_id) and filter
     the list themselves, so every model is returned here. The token limits carry
-    over from the OpenAI-shaped listing, named as the Messages API names them
+    over from the OpenAI-shaped listing, named as the Messages API names them, and
+    are always present because the vendor shape declares them nullable, not optional
     """
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")

@@ -69,6 +69,6 @@ describe("MCPLogoSelector", () => {
 
   it("should preview a custom external URL untouched", () => {
     render(<MCPLogoSelector value="https://cdn.example.com/logo.png" />);
-    expect(screen.getByAltText("Selected logo").getAttribute("src")).toBe("https://cdn.example.com/logo.png");
+    expect(screen.getByAltText("Selected logo")).toHaveAttribute("src", "https://cdn.example.com/logo.png");
   });
 });

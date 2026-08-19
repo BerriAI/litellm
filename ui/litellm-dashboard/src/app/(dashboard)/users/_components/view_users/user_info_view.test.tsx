@@ -42,8 +42,16 @@ const MOCK_USER_DATA_NO_TEAMS = {
   teams: [],
 };
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/users",
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+
+// entityLinks -> migratedPages imports serverRootPath from the same module, so the mock must export it too.
 vi.mock("@/components/networking", () => {
   return {
+    serverRootPath: "/",
     userGetInfoV2: (...args: any[]) => mockUserGetInfoV2(...args),
     userDeleteCall: vi.fn(),
     userUpdateUserCall: (...args: unknown[]) => mockUserUpdateUserCall(...args),
@@ -142,6 +150,21 @@ describe("UserInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Alpha Team")).toBeInTheDocument();
       expect(screen.getByText("Beta Team")).toBeInTheDocument();
+    });
+  });
+
+  it("should link each team name to its team page", async () => {
+    render(<UserInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Alpha Team" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/teams?team=team-1"),
+      );
+      expect(screen.getByRole("link", { name: "Beta Team" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/teams?team=team-2"),
+      );
     });
   });
 
@@ -254,6 +277,20 @@ describe("UserInfoView", () => {
         user_id: "user-123",
       });
     });
+  });
+
+  it("should keep the Details panel state while the Overview tab is shown", async () => {
+    const user = userEvent.setup();
+    render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} />);
+
+    await user.click(await screen.findByText("GitHub MCP (srv-1)"));
+    expect(await screen.findByText("list_issues")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(await screen.findByText(/of \$100\.00/)).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Details" }));
+
+    expect(screen.getByText("list_issues")).toBeVisible();
   });
 
   describe("MCP permissions", () => {

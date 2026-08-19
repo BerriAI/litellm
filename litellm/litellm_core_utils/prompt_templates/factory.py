@@ -1418,7 +1418,7 @@ def convert_to_gemini_tool_call_result(
                 content_type = content.get("type", "")
                 if content_type == "text":
                     content_str += content.get("text", "")
-                elif content_type == "image":
+                elif content_type == "image":  # pyright: ignore[reportUnnecessaryComparison]  # loose runtime dict
                     # Anthropic-native image block: {"type": "image", "source": {"type": "base64", ...}}
                     source = content.get("source", {})
                     if isinstance(source, dict) and source.get("type") == "base64":
@@ -3712,7 +3712,13 @@ def _convert_to_bedrock_tool_call_invoke(
                         _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={tool_calls} to bedrock tool calls. Received error={e}")
+        tool_call_ids: Final = tuple(tool.get("id") for tool in tool_calls if isinstance(tool, dict))
+        raise litellm.BadRequestError(
+            message=f"Unable to convert openai tool calls with ids={tool_call_ids} to bedrock tool calls. "
+            f"Received error={e}",
+            model=model or "",
+            llm_provider="bedrock",
+        ) from e
 
 
 def _append_bedrock_tool_result_media_block(

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import RouterSettings from "./index";
 
@@ -27,7 +27,7 @@ vi.mock("@/components/networking", () => ({
 }));
 
 import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 const mockCallbacksResponse = {
   router_settings: {
@@ -144,7 +144,7 @@ describe("RouterSettings", () => {
 
     const numRetries = await screen.findByRole("textbox", { name: /num_retries/i });
     await user.clear(numRetries);
-    await user.type(numRetries, "42");
+    fireEvent.change(numRetries, { target: { value: "42" } });
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -168,7 +168,7 @@ describe("RouterSettings", () => {
     });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    expect(NotificationsManager.success).toHaveBeenCalledWith("router settings updated successfully");
+    expect(toast.success).toHaveBeenCalledWith("router settings updated successfully");
   });
 
   it("should not render or save routing_groups (owned by the Routing Groups tab)", async () => {
@@ -207,8 +207,8 @@ describe("RouterSettings", () => {
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalled();
+      expect(toast.fromError).toHaveBeenCalled();
     });
-    expect(NotificationsManager.success).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });
