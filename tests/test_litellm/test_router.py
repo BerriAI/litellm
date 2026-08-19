@@ -493,6 +493,54 @@ async def test_async_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
+async def test_async_router_acreate_file_does_not_fall_back_across_model_groups():
+    """A file created for batches only exists under the credentials of the model group
+    the caller named. A cross-group fallback silently stores it with the wrong provider
+    and the later batch create against the named group permanently fails."""
+    from unittest.mock import MagicMock, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-gpt",
+                "litellm_params": {
+                    "model": "azure/my-azure-deployment",
+                    "api_base": "http://127.0.0.1:9",
+                    "api_key": "dummy-key",
+                    "api_version": "2024-06-01",
+                },
+            },
+            {
+                "model_name": "openai-gpt",
+                "litellm_params": {"model": "gpt-4o-mini"},
+            },
+        ],
+        fallbacks=[{"azure-gpt": ["openai-gpt"]}],
+    )
+
+    def fail_azure(*args: object, **kwargs: object) -> MagicMock:
+        if kwargs.get("model") == "azure/my-azure-deployment":
+            raise litellm.APIConnectionError(
+                message="Connection error.",
+                llm_provider="azure",
+                model="azure/my-azure-deployment",
+            )
+        return MagicMock()
+
+    with patch("litellm.acreate_file", side_effect=fail_azure) as mock_acreate_file:
+        with pytest.raises(litellm.APIConnectionError):
+            await router.acreate_file(
+                model="azure-gpt",
+                purpose="batch",
+                file=MagicMock(),
+            )
+
+        called_models = [call.kwargs.get("model") for call in mock_acreate_file.call_args_list]
+        assert "azure/my-azure-deployment" in called_models
+        assert "gpt-4o-mini" not in called_models
+
+
+@pytest.mark.asyncio
 async def test_async_router_acreate_file_uses_deployment_custom_llm_provider():
     """
     Ensure file routing preserves deployment custom_llm_provider instead of
@@ -7790,6 +7838,21 @@ class TestTaggedAutoRouterOnSharedModelName:
         router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
 
         response = await self._hook_response(router, {"metadata": {"tags": ["route"]}})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_request_level_tag_filtering_from_key_settings_bypasses_the_marker(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=False)
+
+        assert await self._hook_response(router, {"enable_tag_filtering": True}) is None
+
+    @pytest.mark.asyncio
+    async def test_globally_disabled_filtering_still_lets_the_marker_capture_untagged_requests(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=False)
+
+        response = await self._hook_response(router, {})
 
         assert response is not None
         assert response.model == "gemini-flash"
