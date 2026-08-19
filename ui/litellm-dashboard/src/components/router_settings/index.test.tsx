@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import RouterSettings from "./index";
 
@@ -144,7 +144,7 @@ describe("RouterSettings", () => {
 
     const numRetries = await screen.findByRole("textbox", { name: /num_retries/i });
     await user.clear(numRetries);
-    await user.type(numRetries, "42");
+    fireEvent.change(numRetries, { target: { value: "42" } });
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 

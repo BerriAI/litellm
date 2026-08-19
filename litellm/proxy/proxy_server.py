@@ -12992,9 +12992,9 @@ async def _filter_models_by_team_id(
 async def _find_model_by_id(
     model_id: str,
     search: str | None,
-    llm_router,
-    prisma_client,
-    proxy_config,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    proxy_config: "ProxyConfig",
 ) -> tuple[list, int | None]:
     """Find a model by its ID and optionally filter by search term."""
     found_model = None
