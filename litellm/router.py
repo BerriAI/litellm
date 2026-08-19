@@ -105,6 +105,12 @@ from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
+from litellm.router_utils.canonical_model_resolution import (
+    build_canonical_index,
+)
+from litellm.router_utils.canonical_model_resolution import (
+    lookup as canonical_lookup,
+)
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
@@ -220,6 +226,7 @@ from litellm.utils import (
     Rules,
     function_setup,
     get_llm_provider,
+    get_model_cost_mutation_generation,
     get_non_default_completion_params,
     get_secret,
     get_utc_datetime,
@@ -628,6 +635,20 @@ class Router:
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
         self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
+        # Lazily-built (provider, canonical_name) -> model_group index for
+        # ``resolve_canonical_model_name``. Invalidated alongside the model
+        # group info cache and on cost-map mutation (generation counter).
+        self._canonical_model_index: Mapping[tuple[str, str], str | None] | None = None
+        self._canonical_model_index_cost_generation: int = -1
+        # (requested, target) pairs already announced at INFO, so a hot path
+        # logs once per distinct pair rather than once per request. Keyed on
+        # the pair, not just the target, so each new requested spelling that
+        # resolves to an already-seen target is still observable -- this is
+        # the signal used to size demand for possible follow-up resolution
+        # rules, so a second spelling silently sharing the first's log line
+        # would undercount it.
+        # mutable-ok: grow-only log-dedup ledger, intentionally accumulates across requests
+        self._canonical_resolution_logged: set[tuple[str, str]] = set()  # mutable-ok: grow-only log-dedup ledger
         self._init_routing_groups(None)
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
@@ -10264,6 +10285,7 @@ class Router:
         self._cached_get_model_group_info.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
+        self._canonical_model_index = None
 
     def _invalidate_access_groups_cache(self) -> None:
         """Invalidate the cached access groups.
@@ -10720,6 +10742,62 @@ class Router:
         - None, if model is not in model group alias
         """
         return resolve_model_group_alias(self.model_group_alias, model)
+
+    def _get_canonical_model_index(self) -> Mapping[tuple[str, str], str | None]:
+        """The ``(provider, canonical_name) -> model group`` index, built on demand.
+
+        Rebuilt when the model list changes (the index is dropped by
+        ``_invalidate_model_group_info_cache``) or when ``litellm.model_cost``
+        mutates, since identity attestation reads it.
+        """
+        cost_generation: Final = get_model_cost_mutation_generation()
+        if self._canonical_model_index is None or self._canonical_model_index_cost_generation != cost_generation:
+            try:
+                self._canonical_model_index = build_canonical_index(self.model_list)
+            except Exception as exc:  # noqa: BLE001  # index construction must never brick a router; degrade to 'strict'
+                verbose_router_logger.error("canonical-resolution: index build failed, disabling feature: %s", exc)
+                self._canonical_model_index = MappingProxyType({})
+            self._canonical_model_index_cost_generation = cost_generation
+        return self._canonical_model_index
+
+    def resolve_canonical_model_name(self, model: str, request_team_id: str | None = None) -> str | None:
+        """The model group that provably serves ``model`` under another spelling.
+
+        Returns None unless every one of these holds:
+        - ``router_general_settings.model_name_resolution`` is ``"canonical"``
+        - ``model`` is not already served (``is_recognized_model``)
+        - no team route, pattern/wildcard route, or ``default_deployment`` would
+          take the request -- those are operator-configured catch-alls and must
+          keep winning
+        - a single model group matches ``model``'s canonical identity *on the
+          same provider*
+
+        Callers must treat a non-None result as authorization-relevant: the
+        target model group is what the key/team must be permitted to call.
+        """
+        if self.router_general_settings.model_name_resolution != "canonical":
+            return None
+        if not model or self.is_recognized_model(model):
+            return None
+        # Operator-configured catch-alls outrank inference.
+        if self.default_deployment is not None or len(self.pattern_router.patterns) > 0:
+            return None
+        if request_team_id is not None and request_team_id in self.team_pattern_routers:
+            return None
+        if model in self.deployment_names:
+            return None
+
+        target: Final = canonical_lookup(self._get_canonical_model_index(), model)
+        if target is None:
+            return None
+        # A target whose deployments have all been removed is not a live route.
+        if not self.model_name_to_deployment_indices.get(target):
+            return None
+        log_key: Final = (model, target)
+        if log_key not in self._canonical_resolution_logged:
+            self._canonical_resolution_logged.add(log_key)
+            verbose_router_logger.info("canonical-resolution: '%s' -> '%s'", model, target)
+        return target
 
     def _get_deployment_by_litellm_model(self, model: str) -> list:
         """

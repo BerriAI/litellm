@@ -767,6 +767,11 @@ class RouterGeneralSettings(BaseModel):
     pass_through_all_models: bool = Field(
         default=False
     )  # if passed a model not llm_router model list, pass through the request to litellm.acompletion/embedding
+    model_name_resolution: Literal["canonical", "strict"] = Field(
+        default="canonical"
+    )  # "canonical": an unknown requested model name that provably names an already-served model
+    # (same provider, cost-map-attested identity, e.g. dated vs undated spelling) is routed to the
+    # serving model group instead of failing. "strict": unknown names fail exactly as before.
 
 
 class RouterRateLimitErrorBasic(ValueError):

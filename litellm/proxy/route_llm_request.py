@@ -233,6 +233,73 @@ def get_team_id_from_data(data: dict) -> str | None:
     return None
 
 
+def _requested_model_metadata(
+    requested_model: str,
+) -> dict:  # mutable-ok: request metadata is consumed downstream as a plain dict
+    """A fresh metadata dict recording the client's original model spelling.
+
+    Downstream logging consumes request metadata as a plain mutable dict, so
+    this is deliberately not frozen.
+    """
+    return {"requested_model": requested_model}  # mutable-ok: request metadata is consumed downstream as a plain dict
+
+
+async def _canonical_target_is_allowed(
+    canonical_target: str,
+    llm_router: LitellmRouter,
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> bool:
+    """Whether the caller may call a canonically-resolved target model group.
+
+    AND-on-target: the caller must be permitted to call the *resolved* group.
+    The requested spelling having passed the earlier auth check is not enough --
+    without this, a key whose allowlist holds only a stale, unserved name would
+    ride the rewrite onto a deployment it was never granted. (Auth ran on the
+    requested string before routing, when the target group was not yet known.)
+
+    Uses ``can_key_call_resolved_model`` -- the same helper every other
+    post-resolution auth site uses (model_group_alias rewrites, realtime
+    endpoints, auto-router) -- so the key, team, team-member, and project
+    allowlists are all re-checked against the target. Checking only the key
+    (``can_key_call_model``) would leave a team whose allowlist holds a stale
+    unserved name able to ride the rewrite onto a deployment it was never
+    granted, since an unrestricted *key* on that team passes the key-level
+    check on its own.
+
+    A denial returns False rather than raising, so the request falls through to
+    the same 400 an unresolvable model gets today and the response reveals
+    nothing about the target's existence.
+
+    Absent key context fails CLOSED. Most ``route_request`` callers (image
+    generation, rerank, moderation, speech, transcription, realtime, Responses
+    WebSocket) are authenticated but do not currently forward
+    ``user_api_key_dict``, so treating "no key context" as "allowed" would run
+    the rewrite with no target authorization at all on exactly those paths.
+    Declining instead costs those endpoints only the convenience rewrite --
+    they behave as they do today, resolution simply never engages -- while
+    keeping the AND-on-target guarantee unconditional. Threading the key
+    through those call sites is the follow-up that re-enables resolution for
+    them; until then this must not be the hole through which the check is
+    skipped.
+    """
+    if user_api_key_dict is None:
+        return False
+    from litellm.proxy.auth.auth_checks import (
+        can_key_call_resolved_model,  # pyright: ignore[reportUnknownVariableType] - auth_checks is partially typed
+    )
+
+    try:
+        await can_key_call_resolved_model(
+            model=canonical_target,
+            llm_model_list=llm_router.model_list,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+    except Exception:  # noqa: BLE001  # any auth failure declines the rewrite; never widens access
+        return False
+    return True
+
+
 _shared_session_lock: asyncio.Lock | None = None
 
 
@@ -669,6 +736,50 @@ async def route_request(
 
     elif user_model is not None or route_type == "allm_passthrough_route":
         return getattr(litellm, f"{route_type}")(**data)
+
+    # Last resort before failing: the requested name may be a different spelling
+    # of a model this router already serves (e.g. a harness sending the dated
+    # 'claude-haiku-4-5-20251001' at a gateway that deploys it as
+    # 'anthropic/claude-haiku-4-5'). Resolution is same-provider and
+    # identity-attested only, and runs here -- after every configured route,
+    # including wildcards and default_deployment, has declined -- so it can only
+    # turn a hard failure into a success, never re-point working traffic.
+    requested_model: Final[object] = data.get("model")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType] - data is an untyped request dict
+    if llm_router is not None and isinstance(requested_model, str):
+        canonical_target: Final[object] = llm_router.resolve_canonical_model_name(
+            model=requested_model,
+            request_team_id=team_id,
+        )
+        # Require a real model-group name: a router stub that returns a
+        # non-string (e.g. a test double) must not be read as "resolved".
+        if isinstance(canonical_target, str) and canonical_target:
+            # AND-on-target: the caller must be allowed to call the *resolved*
+            # group. The requested spelling passing the earlier auth check is
+            # not enough -- without this, a key whose allowlist holds only a
+            # stale unserved name would ride the rewrite onto a deployment it
+            # was never granted. (Auth ran on the requested string before
+            # routing; the target group was not visible to it then.) On denial
+            # the rewrite is simply declined -- the request falls through to
+            # the same 400 it gets today, revealing nothing about the target.
+            target_allowed: Final = await _canonical_target_is_allowed(
+                canonical_target=canonical_target,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if target_allowed:
+                # Preserve the client's spelling for spend logs / debugging --
+                # after the rewrite it is otherwise invisible downstream.
+                metadata_field: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
+                existing_metadata: Final[object] = data.get(metadata_field)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType] - data is an untyped request dict
+                # `data` is rewritten in place here because every other route in
+                # this function does the same; see the rebind-ok notes below.
+                if isinstance(existing_metadata, dict):
+                    existing_metadata.setdefault("requested_model", requested_model)  # pyright: ignore[reportUnknownMemberType] - metadata dict is untyped
+                else:
+                    stamp: Final = _requested_model_metadata(requested_model)
+                    data[metadata_field] = stamp  # rebind-ok: in-place rewrite, as everywhere in route_request
+                data["model"] = canonical_target  # rebind-ok: in-place data rewrite, as everywhere in route_request
+                return getattr(llm_router, f"{route_type}")(**data)
 
     # if no route found then it's a bad request
     route_name: Final = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)

@@ -4120,6 +4120,30 @@ def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
     return fetched_model_count
 
 
+def _proxy_router_general_settings(
+    configured: RouterGeneralSettings | Mapping[str, Any] | None,
+) -> RouterGeneralSettings:
+    """The proxy's RouterGeneralSettings, preserving operator config.
+
+    ``async_only_mode`` is a proxy-runtime requirement -- only async clients are
+    initialised on this path -- so it is always forced on. Every other field the
+    operator set under ``router_settings.router_general_settings`` is kept.
+
+    Before this existed the proxy passed a hardcoded
+    ``RouterGeneralSettings(async_only_mode=True)`` as an explicit keyword
+    alongside ``**router_params``, so an operator who set the key in config hit
+    "got multiple values for keyword argument" at startup and had no way to set
+    proxy-side router general settings at all (e.g. ``model_name_resolution``).
+    """
+    if configured is None:
+        return RouterGeneralSettings(async_only_mode=True)
+    settings: Final = (
+        RouterGeneralSettings(**configured) if isinstance(configured, Mapping) else configured.model_copy()
+    )
+    settings.async_only_mode = True
+    return settings
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -5396,13 +5420,18 @@ class ProxyConfig:
                     verbose_proxy_logger.warning(
                         "Key '%s' is not a valid argument for Router.__init__(). Ignoring this key.", k
                     )
+        # `async_only_mode` is a proxy-runtime requirement (only async clients are
+        # initialised here), so it is forced on. Everything else the operator set
+        # under `router_settings.router_general_settings` -- e.g.
+        # `model_name_resolution: strict` -- is preserved; passing the key in
+        # config used to collide with this keyword and raise TypeError at startup.
+        router_params["router_general_settings"] = _proxy_router_general_settings(
+            router_params.get("router_general_settings")
+        )
         router = litellm.Router(
             **router_params,
             assistants_config=assistants_config,
             search_tools=search_tools,
-            router_general_settings=RouterGeneralSettings(
-                async_only_mode=True  # only init async clients
-            ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
         )
 
@@ -5858,9 +5887,10 @@ class ProxyConfig:
                     verbose_proxy_logger.debug("_model_list: %s", _model_list)
                     llm_router = litellm.Router(
                         model_list=_model_list,
-                        router_general_settings=RouterGeneralSettings(
-                            async_only_mode=True  # only init async clients
-                        ),
+                        # DB-sourced model list: no config router_settings in scope
+                        # here, so this is the proxy default (async_only_mode on,
+                        # everything else at its RouterGeneralSettings default).
+                        router_general_settings=_proxy_router_general_settings(None),
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
                     )

@@ -3515,6 +3515,10 @@ def _check_model_access_helper(
     return True
 
 
+# Read-only stand-in for an absent model_group_alias map.
+_EMPTY_ALIAS_MAP: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def _can_object_call_model(
     model: str | list[str],
     llm_router: Router | None,
@@ -3571,6 +3575,34 @@ def _can_object_call_model(
             models=models,
             team_model_aliases=team_model_aliases,
             team_id=team_id,
+        ):
+            return True
+
+    # Canonical resolution: if the requested model has no manual alias but
+    # *provably* serves the same model as something in the request's
+    # allowed-models list, that's a match. Crucially, this is NOT OR-semantics
+    # (as with manual aliases, where the admin blessed the alias itself). It's
+    # AND-on-target: the target must be explicitly allowed, and the raw
+    # requested name being in the allowlist grants nothing. This prevents a key
+    # allowed ["stale-deployment-name"] from gaining access to a different
+    # deployment via a canonical rewrite.
+    if llm_router and model not in (llm_router.model_group_alias or _EMPTY_ALIAS_MAP):
+        canonical_target: Final[object] = llm_router.resolve_canonical_model_name(
+            model=model,
+            request_team_id=team_id,
+        )
+        # Require a real model-group name; a non-string from a router stub must
+        # never be treated as a grant.
+        if (
+            isinstance(canonical_target, str)
+            and canonical_target
+            and _check_model_access_helper(
+                model=canonical_target,
+                llm_router=llm_router,
+                models=models,
+                team_model_aliases=team_model_aliases,
+                team_id=team_id,
+            )
         ):
             return True
 
