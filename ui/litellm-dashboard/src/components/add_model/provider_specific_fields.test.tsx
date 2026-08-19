@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Form } from "antd";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
+import { MountedFormHost } from "../../../tests/mounted-form-host";
 import ProviderSpecificFields from "./provider_specific_fields";
 
 vi.mock("../networking", async () => {
@@ -129,9 +129,9 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <MountedFormHost>
           <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
-        </Form>
+        </MountedFormHost>
       </QueryClientProvider>,
     );
 
@@ -144,9 +144,9 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <MountedFormHost>
           <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
-        </Form>
+        </MountedFormHost>
       </QueryClientProvider>,
     );
 
@@ -165,9 +165,9 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <MountedFormHost>
           <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
-        </Form>
+        </MountedFormHost>
       </QueryClientProvider>,
     );
 
@@ -182,9 +182,9 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <MountedFormHost>
           <ProviderSpecificFields selectedProvider={"Hosted_Vllm" as Providers} />
-        </Form>
+        </MountedFormHost>
       </QueryClientProvider>,
     );
 
@@ -200,9 +200,9 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <MountedFormHost>
           <ProviderSpecificFields selectedProvider={Providers.Azure} />
-        </Form>
+        </MountedFormHost>
       </QueryClientProvider>,
     );
 
@@ -231,9 +231,9 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <MountedFormHost>
           <ProviderSpecificFields selectedProvider={Providers.Azure} />
-        </Form>
+        </MountedFormHost>
       </QueryClientProvider>,
     );
 
@@ -256,9 +256,9 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <MountedFormHost>
           <ProviderSpecificFields selectedProvider={Providers.Azure} />
-        </Form>
+        </MountedFormHost>
       </QueryClientProvider>,
     );
 
@@ -281,9 +281,9 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <MountedFormHost>
           <ProviderSpecificFields selectedProvider={Providers.Azure} />
-        </Form>
+        </MountedFormHost>
       </QueryClientProvider>,
     );
 
@@ -316,9 +316,9 @@ describe("ProviderSpecificFields", () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <Form>
+        <MountedFormHost>
           <ProviderSpecificFields selectedProvider={Providers.Azure} />
-        </Form>
+        </MountedFormHost>
       </QueryClientProvider>,
     );
 
