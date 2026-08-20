@@ -19,7 +19,7 @@ from litellm.secret_managers.main import str_to_bool
 
 
 def main() -> int:
-    enforce_prisma_migration_check: Final = str_to_bool(os.environ.get("ENFORCE_PRISMA_MIGRATION_CHECK")) is not False
+    enforce_prisma_migration_check: Final = str_to_bool(os.getenv("ENFORCE_PRISMA_MIGRATION_CHECK")) is not False
     run_server_args: Final = (
         ("--skip_server_startup", "--enforce_prisma_migration_check")
         if enforce_prisma_migration_check
