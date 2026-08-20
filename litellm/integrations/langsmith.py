@@ -168,17 +168,18 @@ class LangsmithLogger(CustomBatchLogger):
         return outputs
 
     def _ensure_required_ids(self, data: dict, run_id: str | None):
-        if "id" not in data or data["id"] is None:
-            run_id = str(uuid.uuid4())
-            data["id"] = run_id
+        resolved_run_id: Final = data.get("id") or run_id or str(uuid.uuid4())
+        data["id"] = resolved_run_id
 
-        if "trace_id" not in data or data["trace_id"] is None:
-            if run_id is not None and isinstance(run_id, str):
-                data["trace_id"] = run_id
+        # LangSmith rejects a root run whose trace_id differs from the run id in
+        # dotted_order, so a caller-supplied trace_id can only be honored on a
+        # child run or alongside a caller-supplied dotted_order
+        is_root_run: Final = data.get("parent_run_id") is None and data.get("dotted_order") is None
+        if is_root_run or data.get("trace_id") is None:
+            data["trace_id"] = resolved_run_id
 
-        if "dotted_order" not in data or data["dotted_order"] is None:
-            if run_id is not None and isinstance(run_id, str):
-                data["dotted_order"] = self.make_dot_order(run_id=run_id)
+        if data.get("dotted_order") is None:
+            data["dotted_order"] = self.make_dot_order(run_id=resolved_run_id)
 
     def _prepare_log_data(
         self,

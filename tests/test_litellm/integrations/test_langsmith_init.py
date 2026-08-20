@@ -434,3 +434,81 @@ class TestLangsmithRedactUserApiKeyInfo:
         )
 
         assert data["inputs"]["metadata"]["user_api_key_hash"] == "abc123"
+
+
+class TestLangsmithRootRunIds:
+    """Regression tests for LIT-5878 / #37269: LangSmith 400s a root run whose
+    trace_id is not the first part of dotted_order, which happened whenever a
+    request carried a trace/session header (metadata["trace_id"]) but no run id."""
+
+    def _logger(self):
+        return LangsmithLogger(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+        )
+
+    def _prepare(self, request_metadata):
+        payload = {
+            "id": "slp-1",
+            "response": {"choices": []},
+            "metadata": {},
+            "startTime": 1.0,
+            "endTime": 2.0,
+            "request_tags": [],
+            "error_str": None,
+            "status": "success",
+            "response_cost": 0.0,
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+        return self._logger()._prepare_log_data(
+            kwargs={
+                "litellm_params": {"metadata": request_metadata},
+                "standard_logging_object": payload,
+            },
+            response_obj=None,
+            start_time=1.0,
+            end_time=2.0,
+            credentials={
+                "LANGSMITH_API_KEY": "test-key",
+                "LANGSMITH_PROJECT": "test-project",
+                "LANGSMITH_BASE_URL": "https://api.smith.langchain.com",
+            },
+        )
+
+    def test_header_trace_id_does_not_desync_root_run_dotted_order(self):
+        data = self._prepare({"trace_id": "7ca28818-f1eb-4ba0-baa0-a71fa5da654a"})
+
+        assert data["trace_id"] == data["id"]
+        assert data["dotted_order"].endswith(data["trace_id"])
+
+    def test_root_run_without_ids_is_self_consistent(self):
+        data = self._prepare({})
+
+        assert data["trace_id"] == data["id"]
+        assert data["dotted_order"].endswith(data["id"])
+
+    def test_child_run_keeps_caller_trace_id(self):
+        data = self._prepare(
+            {
+                "trace_id": "trace-1",
+                "parent_run_id": "parent-1",
+                "run_id": "child-1",
+            }
+        )
+
+        assert data["trace_id"] == "trace-1"
+        assert data["id"] == "child-1"
+
+    def test_caller_supplied_dotted_order_and_trace_id_are_untouched(self):
+        data = self._prepare(
+            {
+                "trace_id": "trace-1",
+                "run_id": "run-1",
+                "dotted_order": "20260820T000000000000Ztrace-1.20260820T000001000000Zrun-1",
+            }
+        )
+
+        assert data["trace_id"] == "trace-1"
+        assert data["dotted_order"] == "20260820T000000000000Ztrace-1.20260820T000001000000Zrun-1"
