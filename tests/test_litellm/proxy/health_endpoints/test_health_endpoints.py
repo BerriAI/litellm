@@ -148,7 +148,8 @@ async def test_db_health_transport_error_never_raises(transport_error):
 
     assert result["status"] == "disconnected"
     mock_prisma.attempt_db_reconnect.assert_called_once_with(
-        reason="health_readiness_check"
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
     )
 
 
@@ -180,7 +181,8 @@ async def test_db_health_transport_error_reconnect_succeeds(transport_error):
 
     assert result["status"] == "connected"
     mock_prisma.attempt_db_reconnect.assert_called_once_with(
-        reason="health_readiness_check"
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
     )
     assert mock_prisma.health_check.call_count == 2
 

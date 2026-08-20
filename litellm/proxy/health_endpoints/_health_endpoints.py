@@ -1348,7 +1348,10 @@ async def _db_health_readiness_check():
         if PrismaDBExceptionHandler.is_database_transport_error(e):
             try:
                 verbose_proxy_logger.warning("_db_health_readiness_check: health_check failed, attempting reconnect")
-                await prisma_client.attempt_db_reconnect(reason="health_readiness_check")
+                await prisma_client.attempt_db_reconnect(
+                    reason="health_readiness_check",
+                    timeout_seconds=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                )
                 await asyncio.wait_for(
                     prisma_client.health_check(),
                     timeout=DB_READINESS_CHECK_TIMEOUT_SECONDS,
