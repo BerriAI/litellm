@@ -19,7 +19,7 @@ from litellm.llms.cerebras.chat import CerebrasConfig
         ("prediction", {"type": "content", "content": "expected"}),
     ],
 )
-def test_cerebras_preserves_supported_parameters(parameter, value):
+def test_cerebras_preserves_supported_parameters(parameter: str, value: object) -> None:
     config = CerebrasConfig()
 
     mapped = config.map_openai_params(
@@ -32,7 +32,7 @@ def test_cerebras_preserves_supported_parameters(parameter, value):
     assert mapped == {parameter: value}
 
 
-def test_cerebras_does_not_alias_max_completion_tokens():
+def test_cerebras_does_not_alias_max_completion_tokens() -> None:
     config = CerebrasConfig()
 
     mapped = config.map_openai_params(
