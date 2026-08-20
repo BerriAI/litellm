@@ -4,6 +4,8 @@ from typing import Any, cast
 
 import pytest
 
+import litellm
+
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
@@ -633,6 +635,94 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
         {"role": "system", "content": "Use the corrected result."},
         {"role": "user", "content": "Continue."},
     ]
+
+
+def _translate_with_metadata(
+    model: str, metadata: dict[str, Any], custom_llm_provider: str | None
+) -> dict[str, Any]:
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": model,
+            "max_tokens": 100,
+            "metadata": metadata,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        custom_llm_provider=custom_llm_provider,
+    )
+    return cast(dict[str, Any], openai_request)
+
+
+def test_translate_anthropic_to_openai_maps_user_id_to_prompt_cache_key_for_openai():
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, "openai")
+    assert openai_request["user"] == "session-abc"
+    assert openai_request["prompt_cache_key"] == "session-abc"
+
+
+def test_translate_anthropic_to_openai_truncates_prompt_cache_key_but_keeps_full_user():
+    long_id = "".join(str(i % 10) for i in range(100))
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": long_id}, "openai")
+    assert openai_request["user"] == long_id
+    assert openai_request["prompt_cache_key"] == long_id[:64]
+    assert len(openai_request["prompt_cache_key"]) == 64
+
+
+@pytest.mark.parametrize("model", ["azure/my-gpt-5-deployment", "my-gpt-5-deployment"])
+def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: str):
+    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, "azure")
+    assert openai_request["prompt_cache_key"] == "session-abc"
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider",
+    [
+        ("gemini/gemini-2.5-pro", "gemini"),
+        ("vertex_ai/gemini-2.5-pro", "vertex_ai"),
+        ("anthropic/claude-sonnet-4-5", "anthropic"),
+        ("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
+        ("no-such-model-lit5875", "no-such-provider-lit5875"),
+    ],
+)
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_when_provider_lacks_it(
+    model: str, custom_llm_provider: str
+):
+    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, custom_llm_provider)
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_chained_litellm_proxy():
+    assert "prompt_cache_key" in litellm.get_supported_openai_params(
+        model="xai", custom_llm_provider="litellm_proxy"
+    )
+    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": "session-abc"}, "litellm_proxy")
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_without_provider():
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, None)
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+@pytest.mark.parametrize("user_id", ["", None])
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_empty_or_null_user_id(user_id: str | None):
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": user_id}, "openai")
+    assert openai_request["user"] == user_id
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_without_metadata_sets_neither_user_nor_prompt_cache_key():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "openai/gpt-5.6-luna",
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        custom_llm_provider="openai",
+    )
+    assert "user" not in openai_request
+    assert "prompt_cache_key" not in openai_request
 
 
 def test_translate_openai_content_to_anthropic_empty_function_arguments():
