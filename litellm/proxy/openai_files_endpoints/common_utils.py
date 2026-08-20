@@ -1160,8 +1160,17 @@ async def ensure_batch_response_managed_file_ids(
 
     for file_attr in ("output_file_id", "error_file_id"):
         raw_file_id = getattr(response, file_attr, None)
-        if not raw_file_id or _is_base64_encoded_unified_file_id(raw_file_id):
+        if not raw_file_id:
             continue
+        if _is_base64_encoded_unified_file_id(raw_file_id):
+            try:
+                managed_file = await ManagedFileRepository(prisma_client).table.find_first(
+                    where={"unified_file_id": raw_file_id}
+                )
+                if managed_file:
+                    continue
+            except Exception:
+                continue
         try:
             new_unified_file_id = managed_files_obj.get_unified_output_file_id(
                 output_file_id=raw_file_id,
