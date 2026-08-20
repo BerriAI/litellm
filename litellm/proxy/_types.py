@@ -809,6 +809,8 @@ class LiteLLMRoutes(enum.Enum):
         "/model/new",
         "/model/update",
         "/model/delete",
+        # Read-only dry-run of the /model/new complexity-router validator; same audience as /model/new
+        "/auto_router/validate_complexity_router_config",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
@@ -832,6 +834,10 @@ class LiteLLMRoutes(enum.Enum):
         # Team guardrail submissions - endpoint scopes results to caller's teams (non-admin)
         "/guardrails/submissions",
         "/guardrails/submissions/{guardrail_id}",
+        # Auto-router dry runs - both gate like the /model/new write they rehearse:
+        # proxy admin, or team admin naming their own team via team_id
+        "/auto_router/test_routing",
+        "/auto_router/validate_complexity_router_config",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
