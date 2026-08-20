@@ -423,6 +423,58 @@ class TestDeleteTeamModelAlias:
         assert len(mock_db.update_calls) == 0
         assert await user_api_key_cache.async_get_cache(cache_key) == {"cached-alias": "cached-model"}
 
+    @pytest.mark.asyncio
+    async def test_delete_team_model_alias_evicts_when_one_update_fails(self):
+        """A row that committed must not stay readable from cache because a sibling update raised"""
+        from litellm.proxy.common_utils.user_api_key_cache import (
+            UserApiKeyCache,
+            team_model_aliases_cache_key,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_team_model_alias,
+        )
+
+        model_aliases_list = [
+            {
+                "id": 1,
+                "model_aliases": {"alias1": "public_model_1"},
+                "updated_by": "test_user",
+                "created_by": "test_user",
+            },
+            {
+                "id": 2,
+                "model_aliases": {"alias2": "public_model_1"},
+                "updated_by": "test_user",
+                "created_by": "test_user",
+            },
+        ]
+
+        class FailingSecondUpdateDB(MockPrismaDB):
+            async def update(self, where, data):
+                if where == {"id": 2}:
+                    raise Exception("db write failed")
+                return await super().update(where=where, data=data)
+
+        mock_prisma = MockPrismaClient(team_exists=True)
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_modeltable = FailingSecondUpdateDB(model_aliases_list)
+        user_api_key_cache = UserApiKeyCache()
+        for model_id in (1, 2):
+            await user_api_key_cache.async_set_cache(
+                key=team_model_aliases_cache_key(model_id),
+                value={"cached-alias": "public_model_1"},
+            )
+
+        with pytest.raises(Exception, match="db write failed"):
+            await delete_team_model_alias(
+                public_model_name="public_model_1",
+                prisma_client=mock_prisma,
+                user_api_key_cache=user_api_key_cache,
+            )
+
+        for model_id in (1, 2):
+            assert await user_api_key_cache.async_get_cache(team_model_aliases_cache_key(model_id)) is None
+
 
 class TestClearCache:
     """

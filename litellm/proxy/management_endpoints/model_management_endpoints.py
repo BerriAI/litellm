@@ -1709,8 +1709,10 @@ async def delete_team_model_alias(
                     data={"model_aliases": json.dumps(model_aliases)},
                 )
             )
-    await asyncio.gather(*tasks)
-    await evict_and_broadcast(alias_cache_keys, user_api_key_cache)
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        await evict_and_broadcast(alias_cache_keys, user_api_key_cache)
 
     return removed_model_aliases
 

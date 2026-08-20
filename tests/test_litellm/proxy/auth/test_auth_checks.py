@@ -1383,6 +1383,36 @@ async def test_get_team_model_aliases_passes_json_serializable_query_args():
     assert json.loads(model_table.serialized_where) == {"id": 11}
 
 
+@pytest.mark.asyncio
+async def test_get_team_model_aliases_caches_the_absence_of_aliases():
+    """A team without aliases must not add a db read to every authenticated request."""
+
+    class _CountingModelTable:
+        def __init__(self):
+            self.calls = 0
+
+        async def find_unique(self, *, where, include=None):
+            self.calls += 1
+            return None
+
+    model_table = _CountingModelTable()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_modeltable = model_table
+    cache = UserApiKeyCache()
+
+    for _ in range(3):
+        assert (
+            await get_team_model_aliases(
+                model_id=12,
+                prisma_client=prisma_client,
+                user_api_key_cache=cache,
+            )
+            is None
+        )
+
+    assert model_table.calls == 1
+
+
 # Vector Store Auth Check Tests
 
 

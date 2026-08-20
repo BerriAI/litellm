@@ -2459,26 +2459,27 @@ async def get_team_model_aliases(
         cache_key
     )
     if cached is not None:
-        return _TEAM_MODEL_ALIASES_ADAPTER.validate_python(cached)
+        return _TEAM_MODEL_ALIASES_ADAPTER.validate_python(cached) or None
 
     row: Final = await _model_aliases_table(ModelTableRepository(prisma_client)).find_unique(
         where={"id": model_id}  # mutable-ok: prisma json-serializes query args, and a mappingproxy is not serializable
     )
-    if row is None or row.model_aliases is None:
-        return None
-
-    raw_aliases: Final = row.model_aliases
+    raw_aliases: Final = row.model_aliases if row is not None else None
     aliases: Final = (
-        _TEAM_MODEL_ALIASES_ADAPTER.validate_json(raw_aliases)
-        if isinstance(raw_aliases, (str, bytes, bytearray))
-        else _TEAM_MODEL_ALIASES_ADAPTER.validate_python(raw_aliases)
+        {}  # mutable-ok: the empty case is cached and returned under the same dict contract
+        if raw_aliases is None
+        else (
+            _TEAM_MODEL_ALIASES_ADAPTER.validate_json(raw_aliases)
+            if isinstance(raw_aliases, (str, bytes, bytearray))
+            else _TEAM_MODEL_ALIASES_ADAPTER.validate_python(raw_aliases)
+        )
     )
     await user_api_key_cache.async_set_cache(  # pyright: ignore[reportUnknownMemberType] # cache API has untyped kwargs
         key=cache_key,
         value=aliases,
         ttl=60,
     )
-    return aliases
+    return aliases or None
 
 
 async def get_team_model_aliases_for_team(
