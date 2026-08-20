@@ -55,6 +55,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
 
 from .auth_checks import (
+    EmailLinkingRefusedError,
     _allowed_routes_check,
     allowed_routes_check,
     get_actual_routes,
@@ -531,6 +532,27 @@ class JWTHandler:
         except KeyError:
             user_email = default_value
         return user_email
+
+    def get_email_verified(self, token: dict, default_value: bool) -> bool:
+        """
+        Returns whether the token's email claim is verified.
+
+        Set via 'user_email_verified_jwt_field' in the config (defaults to the
+        standard OIDC 'email_verified' claim). Gates email-based fuzzy user
+        matching/linking - see `auth_checks._decide_email_fuzzy_match`.
+        """
+        try:
+            if self.litellm_jwtauth.user_email_verified_jwt_field is not None:
+                email_verified = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.user_email_verified_jwt_field,
+                    default=default_value,
+                )
+            else:
+                email_verified = default_value
+        except KeyError:
+            email_verified = default_value
+        return bool(email_verified)
 
     def get_object_id(self, token: dict, default_value: str | None) -> str | None:
         try:
@@ -1417,14 +1439,15 @@ class JWTAuthManager:
     async def get_user_info(
         jwt_handler: JWTHandler,
         jwt_valid_token: dict,
-    ) -> tuple[str | None, str | None, bool | None]:
-        """Get user email and validation status"""
+    ) -> tuple[str | None, str | None, bool | None, bool]:
+        """Get user email, validation status, and email-verified status"""
         user_email: Final = jwt_handler.get_user_email(token=jwt_valid_token, default_value=None)
         valid_user_email = None
         if jwt_handler.is_enforced_email_domain():
             valid_user_email = False if user_email is None else jwt_handler.is_allowed_domain(user_email=user_email)
         user_id: Final = jwt_handler.get_user_id(token=jwt_valid_token, default_value=user_email)
-        return user_id, user_email, valid_user_email
+        email_verified: Final = jwt_handler.get_email_verified(token=jwt_valid_token, default_value=False)
+        return user_id, user_email, valid_user_email, email_verified
 
     @staticmethod
     def _canonical_user_id_from_db(
@@ -1456,6 +1479,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         route: str,
         org_alias: str | None = None,
+        email_verified: bool = False,
     ) -> tuple[
         LiteLLM_UserTable | None,
         LiteLLM_OrganizationTable | None,
@@ -1508,20 +1532,29 @@ class JWTAuthManager:
 
         user_object: LiteLLM_UserTable | None = None
         if user_id:
-            user_object = (
-                await get_user_object(
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email),
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_email=user_email,
-                    sso_user_id=user_id,
+            try:
+                user_object = (
+                    await get_user_object(
+                        user_id=user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        user_id_upsert=jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email),
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                        user_email=user_email,
+                        sso_user_id=user_id,
+                        email_verified=email_verified,
+                    )
+                    if user_id
+                    else None
                 )
-                if user_id
-                else None
-            )
+            except EmailLinkingRefusedError as e:
+                raise ProxyException(
+                    message=f"JWT subject does not match the existing user for this email. {e}",
+                    type=ProxyErrorTypes.auth_error,
+                    param="user_email",
+                    code=403,
+                ) from e
 
         end_user_object: LiteLLM_EndUserTable | None = None
         if end_user_id:
@@ -2059,7 +2092,9 @@ class JWTAuthManager:
         object_id = jwt_handler.get_object_id(token=jwt_valid_token, default_value=None)
 
         # Get basic user info
-        user_id, user_email, valid_user_email = await JWTAuthManager.get_user_info(jwt_handler, jwt_valid_token)
+        user_id, user_email, valid_user_email, email_verified = await JWTAuthManager.get_user_info(
+            jwt_handler, jwt_valid_token
+        )
 
         # Get IDs
         org_id: Final = jwt_handler.get_org_id(token=jwt_valid_token, default_value=None)
@@ -2216,6 +2251,7 @@ class JWTAuthManager:
             proxy_logging_obj=proxy_logging_obj,
             route=route,
             org_alias=org_alias,
+            email_verified=email_verified,
         )
 
         # Derive org_id from org_object if resolved by alias

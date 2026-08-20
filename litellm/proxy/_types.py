@@ -2502,6 +2502,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=False,
         description="Public model hub for users to see what models they have access to, supported openai params, etc.",
     )
+    sso_email_linking_policy: Literal["strict", "create_new"] = Field(
+        default="strict",
+        description=(
+            "Policy for SSO/JWT email-based fuzzy user matching when the IdP subject doesn't match an existing "
+            "user_id/sso_user_id. 'strict' (default) refuses (403) any match against an already-bound or "
+            "proxy_admin row. 'create_new' silently provisions a new non-admin user instead of linking in that case."
+        ),
+    )
     pass_through_request_timeout: float | None = Field(
         default=None,
         description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
@@ -4554,6 +4562,14 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     )
     user_id_jwt_field: str | None = None
     user_email_jwt_field: str | None = None
+    user_email_verified_jwt_field: str | None = Field(
+        default="email_verified",
+        description=(
+            "The field in the JWT token that stores whether the user's email is verified. Used to gate "
+            "email-based fuzzy user matching/linking. Defaults to the standard OIDC 'email_verified' claim; "
+            "set to None to never trust email-based linking for this issuer."
+        ),
+    )
     user_allowed_email_domain: str | None = None
     user_roles_jwt_field: str | None = None
     user_allowed_roles: list[str] | None = None

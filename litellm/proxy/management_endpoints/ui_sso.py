@@ -86,7 +86,11 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
+from litellm.proxy.auth.auth_checks import (
+    EmailLinkingRefusedError,
+    ExperimentalUIJWTToken,
+    get_user_object,
+)
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
     _has_user_setup_sso,
@@ -1176,6 +1180,10 @@ def generic_response_convertor(
 
     generic_user_role_attribute_name: Final = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
 
+    generic_user_email_verified_attribute_name: Final = os.getenv(
+        "GENERIC_USER_EMAIL_VERIFIED_ATTRIBUTE", "email_verified"
+    )
+
     generic_user_extra_attributes: Final = os.getenv("GENERIC_USER_EXTRA_ATTRIBUTES", None)
 
     verbose_proxy_logger.debug(
@@ -1275,6 +1283,7 @@ def generic_response_convertor(
         team_ids=all_teams,
         user_role=user_role,
         extra_fields=extra_fields,
+        email_verified=bool(get_nested_value(response, generic_user_email_verified_attribute_name, default=False)),
     )
 
 
@@ -1728,12 +1737,30 @@ def get_disabled_non_admin_personal_key_creation():
     return bool("proxy_admin" in allowed_user_roles)
 
 
+def _email_verified_from_sso_result(result: "CustomOpenID | OpenID | dict") -> bool:
+    """
+    Whether the IdP-asserted email on `result` is verified, for gating
+    email-based fuzzy user linking (see `auth_checks._decide_email_fuzzy_match`).
+
+    `CustomOpenID` (Microsoft, Generic/OIDC) carries an explicit `email_verified`
+    flag set at parse time. A bare `fastapi_sso.OpenID` is only ever produced by
+    the Google branch, whose SSO handler already rejects unverified emails
+    before returning a result, so that case is implicitly verified.
+    """
+    if isinstance(result, CustomOpenID):
+        return result.email_verified
+    if isinstance(result, dict):
+        return bool(result.get("email_verified", False))
+    return True
+
+
 async def get_existing_user_info_from_db(
     user_id: str | None,
     user_email: str | None,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    email_verified: bool = False,
 ) -> LiteLLM_UserTable | None:
     try:
         user_info = await get_user_object(
@@ -1745,7 +1772,10 @@ async def get_existing_user_info_from_db(
             parent_otel_span=None,
             proxy_logging_obj=proxy_logging_obj,
             sso_user_id=user_id,
+            email_verified=email_verified,
         )
+    except EmailLinkingRefusedError:
+        raise
     except Exception as e:
         verbose_proxy_logger.debug("Error getting user object: %s", e)
         user_info = None
@@ -1778,6 +1808,7 @@ async def get_user_info_from_db(
         user_email = normalize_email(
             getattr(result, "email", None) if not isinstance(result, dict) else result.get("email", None)
         )
+        email_verified: Final = _email_verified_from_sso_result(result)
 
         user_info: LiteLLM_UserTable | NewUserResponse | None = None
 
@@ -1788,6 +1819,7 @@ async def get_user_info_from_db(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                email_verified=email_verified,
             )
             if user_info is not None:
                 break
@@ -1811,6 +1843,8 @@ async def get_user_info_from_db(
         )
 
         return user_info
+    except EmailLinkingRefusedError:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("[Non-Blocking] Error trying to add sso user to db: %s", e)
 
@@ -2262,15 +2296,21 @@ async def _complete_cli_sso_callback_session(
 
     user_id: Final = parsed_openid_result.get("user_id")
     user_email: Final = parsed_openid_result.get("user_email")
-    user_info: Final = await get_user_info_from_db(
-        result=result,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-        user_email=user_email,
-        user_defined_values=user_defined_values,
-        alternate_user_id=user_id,
-    )
+    try:
+        user_info: Final = await get_user_info_from_db(
+            result=result,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            user_email=user_email,
+            user_defined_values=user_defined_values,
+            alternate_user_id=user_id,
+        )
+    except EmailLinkingRefusedError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=f"SSO subject does not match the existing user for this email. {e}",
+        ) from e
     if user_info is None:
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
     if not user_info.user_id:
@@ -3508,15 +3548,21 @@ class SSOAuthenticationHandler:
             received_response=received_response,
         )
 
-        user_info = await get_user_info_from_db(
-            result=result,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            user_email=user_email,
-            user_defined_values=user_defined_values,
-            alternate_user_id=user_id,
-        )
+        try:
+            user_info = await get_user_info_from_db(
+                result=result,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                user_email=user_email,
+                user_defined_values=user_defined_values,
+                alternate_user_id=user_id,
+            )
+        except EmailLinkingRefusedError as e:
+            raise HTTPException(
+                status_code=403,
+                detail=f"SSO subject does not match the existing user for this email. {e}",
+            ) from e
 
         # Sync user role from JWT claims via jwt_litellm_role_map (if configured).
         # This ensures SSO users get the same role mapping as API/JWT users.
@@ -4280,6 +4326,10 @@ class MicrosoftSSOHandler:
             last_name=response.get(MICROSOFT_USER_LAST_NAME_ATTRIBUTE),
             team_ids=team_ids,
             user_role=user_role,
+            # `mail` comes from the tenant-managed Graph API directory, not a
+            # self-asserted end-user claim, so it's trustworthy for email-based
+            # fuzzy user linking.
+            email_verified=True,
         )
         verbose_proxy_logger.debug("Microsoft SSO OpenID Response: %s", openid_response)
         return openid_response

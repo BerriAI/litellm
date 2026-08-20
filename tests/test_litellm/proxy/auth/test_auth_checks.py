@@ -3347,6 +3347,7 @@ async def test_get_fuzzy_user_object_case_insensitive_email():
         prisma_client=mock_prisma,
         sso_user_id=None,
         user_email="test@example.com",  # Lowercase search
+        email_verified=True,
     )
 
     # Verify user was found despite case difference

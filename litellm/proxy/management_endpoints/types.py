@@ -57,3 +57,4 @@ class CustomOpenID(OpenID):
     team_ids: list[str]
     user_role: LitellmUserRoles | None = None
     extra_fields: dict[str, Any] | None = None
+    email_verified: bool = False
