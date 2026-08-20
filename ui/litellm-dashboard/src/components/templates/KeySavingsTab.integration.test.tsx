@@ -87,6 +87,7 @@ describe("KeySavingsTab", () => {
     expect(screen.getByTestId("summary-card-compression-savings")).toHaveTextContent("$2.00");
     expect(screen.getByTestId("summary-card-compression-savings")).toHaveTextContent("1,000 tokens compressed");
     expect(screen.getByTestId("summary-card-prompt-caching-savings")).toHaveTextContent("$1.00");
+    expect(screen.getByTestId("summary-card-auto-router-savings")).toHaveTextContent("$3.00");
     expect(screen.getByTestId("summary-card-cache-hit-rate")).toHaveTextContent("25.0%");
     expect(screen.getByTestId("summary-card-cache-hit-rate")).toHaveTextContent("2,000 prompt tokens");
   });
