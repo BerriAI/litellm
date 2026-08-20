@@ -741,6 +741,32 @@ class TestBlockRequestsForModelsWithoutPricing:
             assert litellm.block_requests_for_models_without_pricing is True
 
     @pytest.mark.asyncio
+    async def test_periodic_db_sync_applies_flag_to_peer_worker(self):
+        """The ~10s reconcile loop runs _init_non_llm_objects_in_db on every worker; it must apply
+        the persisted flag so peers converge without a restart."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        config_record = SimpleNamespace(
+            param_value={"block_requests_for_models_without_pricing": True, "unsafe_key": "x"}
+        )
+        with (
+            patch.object(litellm, "block_requests_for_models_without_pricing", False),
+            patch.object(
+                ProxyConfig,
+                "_should_load_db_object",
+                side_effect=lambda object_type: object_type == "config_overrides",
+            ),
+            patch.object(ProxyConfig, "_init_hashicorp_vault_config_override", AsyncMock()),
+            patch("litellm.proxy.proxy_server.get_config_param", AsyncMock(return_value=config_record)),
+        ):
+            await ProxyConfig()._init_non_llm_objects_in_db(prisma_client=MagicMock())
+
+            assert litellm.block_requests_for_models_without_pricing is True
+            assert not hasattr(litellm, "unsafe_key")
+
+    @pytest.mark.asyncio
     async def test_patch_requires_store_model_in_db(self):
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
