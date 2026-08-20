@@ -318,7 +318,9 @@ def test_gemini_image_generation_cost_no_web_search_when_absent():
         ("SOMETHING_UNKNOWN", None),
     ],
 )
-def test_map_traffic_type_to_service_tier(traffic_type, expected_service_tier):
+def test_map_traffic_type_to_service_tier(
+    traffic_type: str | None, expected_service_tier: str | None
+):
     """
     Gemini/Vertex usageMetadata.trafficType maps to the LiteLLM service_tier
     that selects flex/priority cost keys. ON_DEMAND_FLEX (Vertex's flex opt-in
