@@ -1,4 +1,4 @@
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { InputNumber, Select as AntdSelect, Switch, Typography } from "antd";
 import React from "react";
@@ -43,7 +43,7 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
           <div className="flex items-center gap-2">
             <Text className="font-medium">Semantic keyword matching</Text>
             <SimpleTooltip content="Recognize related phrasing beyond exact keyword matches by comparing embeddings instead of plain text. Overrides direct keyword matching">
-              <InfoCircleOutlined className="text-gray-400" />
+              <Info className="size-4 text-gray-400" />
             </SimpleTooltip>
           </div>
           <Text className="text-gray-500 text-sm">

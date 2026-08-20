@@ -1,10 +1,4 @@
-import {
-  CheckCircleOutlined,
-  CodeOutlined,
-  PlayCircleOutlined,
-  RollbackOutlined,
-  SaveOutlined,
-} from "@ant-design/icons";
+import { CircleCheck, CirclePlay, Code, Save, Undo2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -100,11 +94,11 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline">
-              <RollbackOutlined />
+              <Undo2 />
               Revert
             </Button>
             <Button>
-              <SaveOutlined />
+              <Save />
               Save as v{parseInt(version.replace("v", ""), 10) + 1}
             </Button>
           </div>
@@ -214,7 +208,7 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-              <CodeOutlined className="text-gray-500" />
+              <Code className="size-4 text-gray-500" />
               Custom Code Override
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">Replace the built-in guardrail with custom evaluation code</p>
@@ -247,13 +241,13 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
 
         <div className="flex items-center gap-3">
           <Button disabled={rerunStatus === "running"} aria-busy={rerunStatus === "running"} onClick={handleRerun}>
-            {rerunStatus === "running" ? null : <PlayCircleOutlined />}
+            {rerunStatus === "running" ? null : <CirclePlay />}
             {rerunStatus === "running" ? "Running on 10 samples..." : "Re-run on failing logs"}
           </Button>
 
           {rerunStatus === "success" && (
             <span className="text-sm text-green-600 flex items-center gap-2">
-              <CheckCircleOutlined /> 7/10 would now pass with new config
+              <CircleCheck className="size-4" /> 7/10 would now pass with new config
             </span>
           )}
 
