@@ -79,7 +79,7 @@ const CodeInterpreterTool: React.FC<CodeInterpreterToolProps> = ({
                 href={GITHUB_FEATURE_REQUEST_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-info hover:text-info underline"
+                className="text-info hover:text-info/80 underline"
               >
                 Request support for other providers
               </a>

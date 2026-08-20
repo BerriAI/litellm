@@ -758,7 +758,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             <div className="mb-1 px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Not listed?
             </div>
-            <SelectItem value={CUSTOM_AGENT_TYPE} className="focus:bg-warning/10 dark:focus:**:text-amber-400">
+            <SelectItem value={CUSTOM_AGENT_TYPE} className="focus:bg-warning/10">
               <span className="flex items-center gap-3">
                 <LayoutGrid className="size-4.5 shrink-0 text-warning" />
                 <span className="block">
@@ -877,7 +877,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       <div>
         {/* Agent name chip */}
         <div className="mb-6 flex justify-center">
-          <Badge className="h-auto gap-1.5 bg-purple-100 px-3 py-1 text-sm text-purple-700">
+          <Badge className="h-auto gap-1.5 bg-purple-100 px-3 py-1 text-sm text-purple-700 dark:bg-purple-950 dark:text-purple-300">
             <Bot className="size-3.5" />
             {agentName}
           </Badge>
@@ -906,7 +906,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div
             className={`cursor-pointer rounded-lg border-2 p-4 transition-colors ${
               keyAssignOption === "create_new"
-                ? "border-indigo-600 bg-indigo-50"
+                ? "border-info bg-info/10"
                 : "border-border bg-background hover:border-muted-foreground/40"
             }`}
             onClick={() => setKeyAssignOption("create_new")}
@@ -916,7 +916,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                 <RadioGroupItem value="create_new" aria-label="Create a new key for this agent" />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <Key className="size-4 text-indigo-600" />
+                    <Key className="size-4 text-info" />
                     <span className="font-medium text-foreground">Create a new key for this agent</span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">A dedicated key scoped to this agent.</p>
@@ -943,7 +943,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div
             className={`cursor-pointer rounded-lg border-2 p-4 transition-colors ${
               keyAssignOption === "existing_key"
-                ? "border-indigo-600 bg-indigo-50"
+                ? "border-info bg-info/10"
                 : "border-border bg-background hover:border-muted-foreground/40"
             }`}
             onClick={() => setKeyAssignOption("existing_key")}
@@ -993,7 +993,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       <CircleCheck className="mb-4 size-12 text-success" />
       <h3 className="mb-2 text-xl font-semibold text-foreground">Agent Created!</h3>
       <div className="mb-4 flex justify-center">
-        <Badge className="h-auto gap-1.5 bg-purple-100 px-3 py-1 text-sm text-purple-700">
+        <Badge className="h-auto gap-1.5 bg-purple-100 px-3 py-1 text-sm text-purple-700 dark:bg-purple-950 dark:text-purple-300">
           <Bot className="size-3.5" />
           {createdAgentName}
         </Badge>

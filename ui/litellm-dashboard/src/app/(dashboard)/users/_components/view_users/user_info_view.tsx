@@ -428,7 +428,7 @@ export default function UserInfoView({
             <Button
               variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center text-destructive border-destructive hover:text-destructive hover:border-destructive"
+              className="flex items-center text-destructive border-destructive hover:bg-destructive/10"
             >
               <Trash2 />
               Delete User

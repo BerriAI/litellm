@@ -486,7 +486,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
               <div className="flex items-center">
                 <span className="text-xs text-muted-foreground truncate max-w-[150px]">{record.invitation_link}</span>
                 <CopyToClipboard text={record.invitation_link} onCopy={() => toast.success("Invitation link copied!")}>
-                  <button className="ml-1 text-info text-xs hover:text-info">Copy</button>
+                  <button className="ml-1 text-info text-xs hover:text-info/80">Copy</button>
                 </CopyToClipboard>
               </div>
             </div>

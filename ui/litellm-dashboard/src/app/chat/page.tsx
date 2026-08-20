@@ -518,7 +518,7 @@ export default function ChatConversationPage() {
             variant="ghost"
             size="icon-xs"
             onClick={() => setStorageBannerDismissed(true)}
-            className="text-warning hover:bg-warning/15 hover:text-warning"
+            className="text-warning hover:bg-warning/15 "
           >
             <X className="size-3.5" />
           </Button>

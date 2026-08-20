@@ -421,7 +421,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
             <div
               key={suggestion.template_id}
               className={`rounded-xl border-2 transition-all ${
-                isSelected ? "border-info bg-blue-50/60 shadow-xs" : "border-border hover:border-border hover:shadow-xs"
+                isSelected ? "border-info bg-blue-50/60 shadow-xs" : "border-border hover:border-ring hover:shadow-xs"
               }`}
             >
               <div className="p-4 cursor-pointer" onClick={() => toggleTemplate(suggestion.template_id)}>
@@ -890,7 +890,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                 ))}
               </div>
               {attackExamples.length < MAX_EXAMPLES && (
-                <button onClick={handleAddExample} className="text-sm text-info hover:text-info mt-2 font-medium">
+                <button onClick={handleAddExample} className="text-sm text-info hover:text-info/80 mt-2 font-medium">
                   + Add another example
                 </button>
               )}

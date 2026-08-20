@@ -123,7 +123,7 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
             type="button"
             onClick={() => onConfirm(isApprove ? undefined : reviewNotes || undefined)}
             className={`flex-1 text-white text-sm font-medium py-2 rounded-md transition-colors ${
-              isApprove ? "bg-success hover:bg-success" : "bg-destructive hover:bg-destructive"
+              isApprove ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"
             }`}
           >
             {isApprove ? "Approve" : "Reject"}
@@ -235,7 +235,7 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
                 await onSave();
                 setExpanded(false);
               }}
-              className="px-4 py-1.5 text-sm font-medium text-white bg-info hover:bg-info disabled:opacity-50 rounded-md transition-colors"
+              className="px-4 py-1.5 text-sm font-medium text-white bg-info hover:bg-info/80 disabled:opacity-50 rounded-md transition-colors"
             >
               {isSaving ? "Saving…" : "Save Rules"}
             </button>
@@ -322,7 +322,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs bg-success hover:bg-success/80 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Approve
                 </button>
@@ -341,7 +341,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               <button
                 type="button"
                 onClick={onApprove}
-                className="text-xs bg-success hover:bg-success text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                className="text-xs bg-success hover:bg-success/80 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
               >
                 Re-approve
               </button>
@@ -383,7 +383,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs bg-success hover:bg-success/80 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Approve
                 </button>
@@ -392,7 +392,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs bg-success hover:bg-success/80 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Re-approve
                 </button>

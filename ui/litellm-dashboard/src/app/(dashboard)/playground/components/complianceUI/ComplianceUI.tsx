@@ -749,7 +749,7 @@ export default function ComplianceUI({
                 <button
                   type="button"
                   onClick={() => setShowGuardrailDropdown(!showGuardrailDropdown)}
-                  className="w-full flex items-center justify-between border border-border rounded-lg px-3 py-2 text-sm text-left hover:border-border transition-colors"
+                  className="w-full flex items-center justify-between border border-border rounded-lg px-3 py-2 text-sm text-left hover:border-ring transition-colors"
                 >
                   <span className={selectedGuardrails.length > 0 ? "text-foreground" : "text-muted-foreground/70"}>
                     {selectedGuardrails.length > 0 ? `${selectedGuardrails.length} selected` : "None selected"}
@@ -815,7 +815,7 @@ export default function ComplianceUI({
                 <button
                   type="button"
                   onClick={() => batchAbortControllerRef.current?.abort()}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap bg-destructive text-white hover:bg-destructive"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap bg-destructive text-white hover:bg-destructive/80"
                 >
                   <Square className="w-3.5 h-3.5" /> Stop
                 </button>
@@ -824,7 +824,7 @@ export default function ComplianceUI({
                   type="button"
                   onClick={runTests}
                   disabled={selectedPromptIds.size === 0 || disabledPersonalKeyCreation}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || disabledPersonalKeyCreation ? "bg-muted text-muted-foreground/70 cursor-not-allowed" : "bg-info text-white hover:bg-info"}`}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || disabledPersonalKeyCreation ? "bg-muted text-muted-foreground/70 cursor-not-allowed" : "bg-info text-white hover:bg-info/80"}`}
                 >
                   <Play className="w-3.5 h-3.5" /> Simulate ({selectedPromptIds.size})
                 </button>
@@ -879,7 +879,7 @@ export default function ComplianceUI({
                     <button
                       type="button"
                       onClick={selectAll}
-                      className="text-[11px] font-medium text-info hover:text-info"
+                      className="text-[11px] font-medium text-info hover:text-info/80"
                     >
                       Select All
                     </button>
@@ -974,7 +974,7 @@ export default function ComplianceUI({
                     <button
                       type="button"
                       onClick={downloadCsvTemplate}
-                      className="flex items-center gap-1 text-[10px] font-medium text-info hover:text-info"
+                      className="flex items-center gap-1 text-[10px] font-medium text-info hover:text-info/80"
                     >
                       <Download className="w-3 h-3" /> Download Template
                     </button>
@@ -1069,7 +1069,7 @@ export default function ComplianceUI({
                             e.stopPropagation();
                             toggleFrameworkPrompts(fw);
                           }}
-                          className="text-[10px] font-medium text-info hover:text-info px-1.5 py-0.5 rounded-sm hover:bg-info/10 shrink-0"
+                          className="text-[10px] font-medium text-info px-1.5 py-0.5 rounded-sm hover:bg-info/10 shrink-0"
                         >
                           {fwSelectedCount === fwPromptCount ? "Clear" : "All"}
                         </button>
@@ -1124,7 +1124,7 @@ export default function ComplianceUI({
                                       <button
                                         type="button"
                                         onClick={() => toggleCategoryPrompts(category)}
-                                        className="text-[10px] font-medium text-info hover:text-info shrink-0 whitespace-nowrap"
+                                        className="text-[10px] font-medium text-info hover:text-info/80 shrink-0 whitespace-nowrap"
                                       >
                                         {allCatSelected ? "Clear" : "Select all"}
                                       </button>
@@ -1316,7 +1316,7 @@ export default function ComplianceUI({
                     type="button"
                     onClick={runQuickTest}
                     disabled={!quickTestInput.trim() || isQuickTesting || disabledPersonalKeyCreation}
-                    className={`w-full mt-2 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${!quickTestInput.trim() || isQuickTesting || disabledPersonalKeyCreation ? "bg-muted text-muted-foreground/70 cursor-not-allowed" : "bg-info text-white hover:bg-info"}`}
+                    className={`w-full mt-2 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${!quickTestInput.trim() || isQuickTesting || disabledPersonalKeyCreation ? "bg-muted text-muted-foreground/70 cursor-not-allowed" : "bg-info text-white hover:bg-info/80"}`}
                   >
                     {isQuickTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}{" "}
                     {testButtonLabel}
