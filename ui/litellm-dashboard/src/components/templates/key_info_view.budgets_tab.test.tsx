@@ -190,6 +190,14 @@ const ORG_UNCONFIGURED: KeyBudgetEntry = {
   source: "organization.budget_id",
 };
 
+// Longest note the endpoint can emit: 276 characters over three clauses, reachable only on an
+// end_user row where reservation tightened the operator and a custom auth callable is configured.
+// The reservation clause lands only on team, tag and end_user, so this is a real ceiling.
+const WORST_CASE_NOTE =
+  "the reservation layer blocks this scope as soon as spend reaches the limit, before the read-time " +
+  "check would trip; only enforced on LLM routes that name this end user; a custom auth callable can " +
+  "set a request-scoped end user cap that overrides this one and is not visible here";
+
 const ALL_BUDGETS = [KEY_UNLIMITED, USER_WITHIN_BUDGET, TEAM_SOFT_OVER, TEAM_MEMBER_BLOCKING, ORG_UNCONFIGURED];
 
 const mockBudgets = (budgets: KeyBudgetEntry[]) => {
@@ -271,6 +279,32 @@ describe("KeyInfoView Budgets tab", () => {
     expect(softRow).toHaveTextContent(
       "alert only, never blocks; compared against recorded spend rather than the live counter",
     );
+  });
+
+  it("renders the longest note the endpoint can emit without dropping any of it", async () => {
+    const endUser: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "end_user",
+      entity_type: "end_user",
+      entity_id: "customer-42",
+      entity_label: "customer-42",
+      max_budget: 25,
+      spend: 25,
+      remaining: 0,
+      source: "budget_table:b-end-user",
+      status: "exceeded",
+      note: WORST_CASE_NOTE,
+    };
+    mockBudgets([endUser]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const note = panel.getByText(WORST_CASE_NOTE);
+    expect(note).toBeInTheDocument();
+    // jsdom has no layout, so nothing here can prove the text is visually unclipped. Asserting the
+    // absence of the clipping utilities is the only mechanical guard against re-truncating the note.
+    expect(note).not.toHaveClass("truncate");
+    expect(note.className).not.toMatch(/line-clamp|overflow-hidden|whitespace-nowrap/);
+    expect(note).not.toHaveAttribute("title");
   });
 
   it("explains why two rows on identical numbers get opposite statuses", async () => {
