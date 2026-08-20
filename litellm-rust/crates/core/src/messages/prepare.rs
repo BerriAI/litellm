@@ -1,4 +1,8 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::call_lifecycle::CallLifecycleContext;
 use crate::error::{CoreError, CoreResult};
+use crate::logging::CallLogger;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
@@ -50,6 +54,9 @@ pub(super) fn prepare_messages_call(
             headers.push((name.to_string(), value.to_string()));
         }
     }
+    if !has_header(&headers, "content-type") {
+        headers.push(("content-type".to_string(), "application/json".to_string()));
+    }
 
     let url = config.complete_url(request.api_base, &model, &env_lookup)?;
     let typed_request = serde_json::from_value(request.body).map_err(|err| {
@@ -62,6 +69,17 @@ pub(super) fn prepare_messages_call(
         ))
     })?;
 
+    let call_id = request
+        .litellm_call_id
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos());
+            format!("messages-{nanos}")
+        });
+    let context =
+        CallLifecycleContext::new("messages", model.clone(), provider.to_string(), call_id);
     Ok(ProviderMessagesRequest {
         provider: provider.to_string(),
         model,
@@ -70,5 +88,6 @@ pub(super) fn prepare_messages_call(
         body,
         upstream_headers: headers,
         timeout: request.timeout,
+        logger: std::sync::Arc::new(CallLogger::new(&context, request.logging_sink)),
     })
 }

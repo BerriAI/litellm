@@ -2341,7 +2341,7 @@ class BaseLLMHTTPHandler:
         request_body: dict,
         timeout: float | httpx.Timeout | None,
     ) -> AnthropicMessagesResponse | None:
-        if custom_llm_provider not in ("azure_ai", "anthropic"):
+        if custom_llm_provider not in ("azure_ai", "anthropic", "bedrock"):
             return None
         if litellm_params.get("rust") is not True and not BaseLLMHTTPHandler._rust_env_enabled():
             return None

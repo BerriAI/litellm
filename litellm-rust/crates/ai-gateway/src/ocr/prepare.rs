@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7,6 +8,8 @@ use super::hooks::OcrLifecycleHooks;
 use super::types::{OcrRequest, PreparedOcrRequest};
 use crate::integrations::custom_guardrail::CustomGuardrailRunner;
 use crate::integrations::custom_logger::CustomLoggerRunner;
+use litellm_core::call_lifecycle::CallLifecycleContext;
+use litellm_core::logging::CallLogger;
 
 pub(crate) struct PreparedOcrCall {
     pub(crate) request: PreparedOcrRequest,
@@ -26,6 +29,12 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
     let model = provider_info.model.to_string();
     let custom_llm_provider = provider_info.custom_llm_provider.to_string();
 
+    let context = CallLifecycleContext::new(
+        "ocr",
+        request.model,
+        custom_llm_provider.clone(),
+        call_id.clone(),
+    );
     PreparedOcrCall {
         request: PreparedOcrRequest {
             model,
@@ -37,6 +46,7 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
             extra_headers: request.extra_headers,
             optional_params: request.optional_params,
             timeout: request.timeout,
+            logger: Arc::new(CallLogger::new(&context, request.logging_sink)),
         },
         hooks: OcrLifecycleHooks::new(
             CustomLoggerRunner::new(request.callbacks),

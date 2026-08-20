@@ -106,16 +106,16 @@ impl RealTimeStreaming {
     /// `litellm_call_id`, replacing the gateway-generated fallback.
     fn on_session(&mut self, event: &RealtimeEvent) {
         let session = event.data.get("session").and_then(Value::as_object);
-        if let Some(id) = session.and_then(|s| s.get("id")).and_then(Value::as_str) {
-            if !id.is_empty() {
-                self.id = id.to_string();
-                self.litellm_call_id = id.to_string();
-            }
+        if let Some(id) = session.and_then(|s| s.get("id")).and_then(Value::as_str)
+            && !id.is_empty()
+        {
+            self.id = id.to_string();
+            self.litellm_call_id = id.to_string();
         }
-        if let Some(model) = session.and_then(|s| s.get("model")).and_then(Value::as_str) {
-            if !model.is_empty() {
-                self.model = model.to_string();
-            }
+        if let Some(model) = session.and_then(|s| s.get("model")).and_then(Value::as_str)
+            && !model.is_empty()
+        {
+            self.model = model.to_string();
         }
     }
 

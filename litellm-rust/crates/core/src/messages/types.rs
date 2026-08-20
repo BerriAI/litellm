@@ -1,5 +1,7 @@
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::logging::{CallLogger, LogSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -13,6 +15,8 @@ pub struct MessagesRequest<'a> {
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    pub litellm_call_id: Option<&'a str>,
+    pub logging_sink: Option<Arc<dyn LogSink>>,
 }
 
 pub(super) struct ProviderMessagesRequest {
@@ -23,6 +27,13 @@ pub(super) struct ProviderMessagesRequest {
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) timeout: Option<Duration>,
+    pub(super) logger: Arc<CallLogger>,
+}
+
+pub struct MessagesStreamResponse {
+    pub provider: String,
+    pub response: reqwest::Response,
+    pub logger: Arc<CallLogger>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -69,6 +80,7 @@ pub struct AnthropicMessage {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnthropicMessagesRequest {
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub model: String,
     pub messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,6 +131,7 @@ pub struct AnthropicMessagesResponse {
     #[serde(rename = "type")]
     pub message_type: String,
     pub role: String,
+    #[serde(default)]
     pub model: String,
     pub content: Vec<Value>,
     // Anthropic always includes stop_reason / stop_sequence, null until the turn
