@@ -11,18 +11,24 @@ token file and tell the user what to do about it.
 
 A write is only reported as stored once it has been read back, because keyring's
 null backend, which `keyring --disable` and headless CI images both select,
-accepts every write and keeps nothing.
+accepts every write and keeps nothing. Writes are also pre-flighted with a
+throwaway value, because a keychain can answer neither way and block forever.
 """
 
 import os
+import threading
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Final, Protocol, TypeAlias
 
 KEYRING_SERVICE: Final = "litellm-cli"
 KEYRING_ACCOUNT: Final = "credential"
+KEYRING_PREFLIGHT_ACCOUNT: Final = "credential-preflight"
 DISABLE_KEYRING_ENV_VAR: Final = "LITELLM_CLI_DISABLE_KEYRING"
 
 _DISABLED_VALUES: Final = frozenset(("1", "true", "yes", "on"))
+_PREFLIGHT_VALUE: Final = "preflight"
+_PREFLIGHT_TIMEOUT_SECONDS: Final = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,9 +76,9 @@ class KeyringDiscardsWrites:
     pass
 
 
-KeyringUnusable: TypeAlias = KeyringNotInstalled | KeyringDisabled | KeyringUnreachable | KeyringDiscardsWrites
+KeyringUnusable: TypeAlias = KeyringNotInstalled | KeyringDisabled | KeyringUnreachable
 SecretRead: TypeAlias = SecretFound | SecretMissing | KeyringUnusable
-SecretWrite: TypeAlias = SecretStored | KeyringUnusable
+SecretWrite: TypeAlias = SecretStored | KeyringUnusable | KeyringDiscardsWrites
 SecretErase: TypeAlias = SecretErased | SecretStranded | KeyringUnusable
 
 
@@ -113,9 +119,42 @@ def _keyring_api() -> KeyringApi | KeyringNotInstalled | KeyringDisabled:
     return KeyringNotInstalled() if api is None else api
 
 
+def _answers_a_write(api: KeyringApi, timeout_seconds: float) -> bool:
+    """Whether the keychain answers a write at all, asked with a value worth nothing.
+
+    macOS derives the login keychain from `$HOME`, and `set_password` against a HOME with no usable
+    one blocks forever with no timeout of its own. Containers, CI images, `sudo -H`, and service
+    accounts all run there, and reads answer normally, so nothing cheaper tells them apart. Asking
+    with a throwaway value keeps a keychain that never answers from taking `lite login` down with
+    it, and keeps the real credential out of a store that might accept it long after we gave up.
+    A keychain that refuses the probe outright still answered it, so only silence counts against it.
+    """
+    answered: Final = threading.Event()
+
+    def ask() -> None:
+        with suppress(Exception):
+            api.set_password(KEYRING_SERVICE, KEYRING_PREFLIGHT_ACCOUNT, _PREFLIGHT_VALUE)
+        answered.set()
+
+    threading.Thread(target=ask, daemon=True, name="litellm-cli-keyring-preflight").start()
+    return answered.wait(timeout_seconds)
+
+
+def _forget_the_preflight(api: KeyringApi) -> None:
+    """Take the throwaway probe back out.
+
+    A backend that kept nothing has nothing to remove, and the probe is worth nothing either way,
+    so a keychain that refuses to give it up costs the caller nothing.
+    """
+    with suppress(Exception):
+        api.delete_password(KEYRING_SERVICE, KEYRING_PREFLIGHT_ACCOUNT)
+
+
 @dataclass(frozen=True, slots=True)
 class KeyringVault:
     """The OS keychain, reached through the optional `keyring` package."""
+
+    preflight_timeout_seconds: float = _PREFLIGHT_TIMEOUT_SECONDS
 
     def read(self) -> SecretRead:
         api: Final = _keyring_api()
@@ -134,10 +173,16 @@ class KeyringVault:
         and `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring` select, raises nothing to
         distinguish itself. Reading the value back is the only way to tell it apart from a keychain
         that really stored the credential, and the caller is about to drop its own copy on our word.
+
+        The keychain is pre-flighted first, because one that blocks rather than answering would
+        otherwise hang `lite login` outright.
         """
         api: Final = _keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
+        if not _answers_a_write(api, self.preflight_timeout_seconds):
+            return KeyringUnreachable()
+        _forget_the_preflight(api)
         try:
             api.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, blob)
         except Exception:  # noqa: BLE001  # a keychain that refuses the write falls back to the token file
@@ -153,7 +198,7 @@ class KeyringVault:
         the caller knows whether this machine ever put a secret in a keychain.
         """
         match self.read():
-            case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable() | KeyringDiscardsWrites() as unusable:
+            case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable() as unusable:
                 return unusable
             case SecretMissing():
                 return SecretErased()
