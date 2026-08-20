@@ -664,6 +664,35 @@ class ClassificationOutcome(NamedTuple):
     classifier_cost: float | None = None
 
 
+class _SessionAffinityPin(NamedTuple):
+    model: str
+    tier: ComplexityTier | None
+
+
+def _parse_session_affinity_pin(value: object) -> _SessionAffinityPin | None:
+    if isinstance(value, str):
+        return _SessionAffinityPin(model=value, tier=None)
+    parts: Final[tuple[object, object] | None] = (
+        (value.get("model"), value.get("tier"))
+        if isinstance(value, Mapping)
+        else (value[0], value[1])
+        if isinstance(value, (list, tuple)) and len(value) == 2
+        else None
+    )
+    if parts is None:
+        return None
+    model, tier_value = parts
+    if not isinstance(model, str):
+        return None
+    tier: Final = ComplexityTier(tier_value) if isinstance(tier_value, str) else None
+    return _SessionAffinityPin(model=model, tier=tier)
+
+
+def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None) -> Mapping[str, str | None]:
+    tier_value: Final = _tier_name(tier) if tier is not None else None
+    return {"model": model, "tier": tier_value}  # mutable-ok: cache requires JSON mapping
+
+
 class ComplexityRouter(CustomLogger):
     """
     Complexity router that classifies requests and routes to appropriate models.
@@ -1079,7 +1108,7 @@ class ComplexityRouter(CustomLogger):
         classifier_model: str | None = None,
         classifier_cost: float | None = None,
         conversation_continuing: bool = True,
-        tier_litellm_params: dict[str, object] | None = None,  # mutable-ok: Routing metadata mapping
+        tier_litellm_params: Mapping[str, object] | None = None,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -1463,10 +1492,12 @@ class ComplexityRouter(CustomLogger):
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
-    def _litellm_params_for_model(self, tier: ComplexityTier, model: str) -> dict[str, object]:  # mutable-ok: Request mapping
-        entries: Final = self.config.tier_model_configs.get(tier.value, ())
+    def _litellm_params_for_model(self, tier: ComplexityTier | str | None, model: str) -> Mapping[str, object]:
+        if tier is None:
+            return MappingProxyType({})
+        entries: Final = self.config.tier_model_configs.get(_tier_name(tier), ())
         entry: Final = next((candidate for candidate in entries if candidate.model_name == model), None)
-        return dict(entry.litellm_params) if entry is not None else {}  # mutable-ok: Request mapping copy
+        return entry.litellm_params if entry is not None else MappingProxyType({})
 
     @staticmethod
     def _pick_from_tier_value(model: str | list[str], tier_key: str) -> str:
@@ -2079,9 +2110,10 @@ class ComplexityRouter(CustomLogger):
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
         if cache_key is not None:
-            pinned_model: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
-            if isinstance(pinned_model, str):
-                routed_model: str | None = pinned_model
+            pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
+            pinned_pin: Final = _parse_session_affinity_pin(pinned_value)
+            if pinned_pin is not None:
+                routed_model: str | None = pinned_pin.model
                 pin_escalation_keyword: str | None = None
                 if self.escalation_keywords:
                     user_message: Final = (
@@ -2090,16 +2122,21 @@ class ComplexityRouter(CustomLogger):
                     if user_message is not None:
                         pin_escalation_keyword = self._matched_escalation_keyword(user_message)
                     if pin_escalation_keyword is not None:
-                        routed_model = self._escalated_pin(pinned_model)
+                        routed_model = self._escalated_pin(pinned_pin.model)
                 if routed_model is not None:
-                    escalated: Final = routed_model != pinned_model
+                    escalated: Final = routed_model != pinned_pin.model
+                    resolved_pin_tier: Final = (
+                        pinned_pin.tier
+                        if not escalated and pinned_pin.tier is not None
+                        else self._tier_for_model(routed_model)
+                    )
                     # The floor outranks the pin because plan mode is a transient state of the
                     # session, not a request to move it: the turns carrying the sentinel route at
                     # the floor, and the stored pin deliberately keeps the session's own model so
                     # the first turn after plan mode exits auto-routes exactly as it would have.
                     # Escalation is the opposite on purpose -- an explicit ask to re-pin higher.
                     pin_plan_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
-                    pinned_tier: Final = self._tier_for_model(routed_model) if pin_plan_sentinel is not None else None
+                    pinned_tier: Final = resolved_pin_tier if pin_plan_sentinel is not None else None
                     plan_floored: Final = (
                         pinned_tier is not None and self._apply_plan_mode_floor(pinned_tier) != pinned_tier
                     )
@@ -2110,7 +2147,7 @@ class ComplexityRouter(CustomLogger):
                     # pin mid-conversation just because it outlives the original write.
                     await self.litellm_router_instance.cache.async_set_cache(
                         key=cache_key,
-                        value=session_model,
+                        value=_session_affinity_cache_value(session_model, resolved_pin_tier),
                         ttl=self.config.session_affinity_ttl_seconds,
                     )
                     if self.config.adaptive:
@@ -2129,9 +2166,8 @@ class ComplexityRouter(CustomLogger):
                     verbose_router_logger.info(
                         "ComplexityRouter: routing decision cause=%s, routed_model=%s", cause, routed_model
                     )
-                    session_tier_litellm_params: Final = self._litellm_params_for_model(
-                        self._tier_for_model(routed_model) or ComplexityTier.MEDIUM, routed_model
-                    )
+                    routed_pin_tier: Final = self._tier_for_model(routed_model) if plan_floored else resolved_pin_tier
+                    session_tier_litellm_params: Final = self._litellm_params_for_model(routed_pin_tier, routed_model)
                     has_original_messages: Final = messages is not None and len(messages) > 0
                     return self._with_session_deployment_affinity(
                         PreRoutingHookResponse(
@@ -2141,7 +2177,7 @@ class ComplexityRouter(CustomLogger):
                             routing_decision=self._build_routing_decision(
                                 routed_model=routed_model,
                                 cause=cause,
-                                tier=self._tier_for_model(routed_model),
+                                tier=routed_pin_tier,
                                 matched_keyword=pin_plan_sentinel if plan_floored else None,
                                 escalation_keyword=pin_escalation_keyword,
                                 escalated=escalated,
@@ -2173,7 +2209,10 @@ class ComplexityRouter(CustomLogger):
         if pinnable and cache_key is not None and response is not None:
             await self.litellm_router_instance.cache.async_set_cache(
                 key=cache_key,
-                value=response.model,
+                value=_session_affinity_cache_value(
+                    response.model,
+                    response.routing_decision.get("tier") if response.routing_decision is not None else None,
+                ),
                 ttl=self.config.session_affinity_ttl_seconds,
             )
         return self._with_session_deployment_affinity(response)
