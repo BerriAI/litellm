@@ -18,6 +18,7 @@ import fastapi
 import orjson
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -106,6 +107,11 @@ except ImportError as e:
     enterprise_custom_auth = None
 
 user_api_key_service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
+_TEAM_MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
+
+
+class _TeamModelAliasesRow(BaseModel):
+    model_aliases: object = None
 
 
 def _normalize_public_auth_route(route: str) -> str:
@@ -1060,6 +1066,44 @@ async def _read_request_body_deferring_parse_failure(
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
+async def _get_team_model_aliases(
+    model_id: int,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> dict[str, str] | None:  # mutable-ok: UserAPIKeyAuth.team_model_aliases requires a dict
+    cache_key: Final = f"team_model_aliases:{model_id}"
+    cached: Final[object] = await user_api_key_cache.async_get_cache(  # pyright: ignore[reportAny] # cache API is untyped
+        cache_key
+    )
+    if cached is not None:
+        return _TEAM_MODEL_ALIASES_ADAPTER.validate_python(cached)
+
+    row_value: Final[object] = (  # pyright: ignore[reportAny] # generated table result is dynamic
+        await prisma_client.db.litellm_modeltable.find_unique(  # pyright: ignore[reportAny] # generated table API is dynamic
+            where={"id": model_id},  # mutable-ok: Prisma find_unique requires a dict
+        )
+    )
+    if row_value is None:
+        return None
+
+    row: Final = _TeamModelAliasesRow.model_validate(row_value, from_attributes=True)
+    raw_aliases: Final = row.model_aliases
+    if raw_aliases is None:
+        return None
+
+    aliases: Final = (
+        _TEAM_MODEL_ALIASES_ADAPTER.validate_json(raw_aliases)
+        if isinstance(raw_aliases, (str, bytes, bytearray))
+        else _TEAM_MODEL_ALIASES_ADAPTER.validate_python(raw_aliases)
+    )
+    await user_api_key_cache.async_set_cache(  # pyright: ignore[reportUnknownMemberType] # cache API has untyped kwargs
+        key=cache_key,
+        value=aliases,
+        ttl=60,
+    )
+    return aliases
+
+
 async def _record_unparsable_body_failure(
     user_api_key_dict: UserAPIKeyAuth,
     body_parse_exception: ProxyException,
@@ -1378,6 +1422,17 @@ async def _user_api_key_auth_builder(
                         team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
                         team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
                         team_models=(team_object.models if team_object is not None else []),
+                        team_model_aliases=(
+                            await _get_team_model_aliases(
+                                model_id=team_object.model_id,
+                                prisma_client=prisma_client,
+                                user_api_key_cache=user_api_key_cache,
+                            )
+                            if team_object is not None
+                            and team_object.model_id is not None
+                            and prisma_client is not None
+                            else None
+                        ),
                         user_role=(
                             LitellmUserRoles(user_object.user_role)
                             if user_object is not None and user_object.user_role is not None
