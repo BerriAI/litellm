@@ -1595,6 +1595,16 @@
       "count": 1
     }
   },
+  "src/components/add_model/ClassificationMethodConfig.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/components/add_model/ComplexityRouterConfig.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
   "src/components/add_model/RouterConfigBuilder.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
