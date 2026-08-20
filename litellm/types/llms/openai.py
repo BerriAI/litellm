@@ -71,6 +71,7 @@ from pydantic import (
 )
 from typing_extensions import (
     NotRequired,
+    ReadOnly,
     Required,
     TypedDict,
     override,
@@ -510,6 +511,15 @@ class ChatCompletionCachedContent(TypedDict):
     ttl: NotRequired[Literal["5m", "1h"]]
 
 
+class PromptCacheBreakpoint(TypedDict):
+    mode: ReadOnly[Literal["explicit"]]
+
+
+class PromptCacheOptions(TypedDict, total=False):
+    mode: ReadOnly[Literal["implicit", "explicit"]]
+    ttl: ReadOnly[Literal["30m"]]
+
+
 class ChatCompletionThinkingBlock(TypedDict, total=False):
     type: Required[Literal["thinking"]]
     thinking: str
@@ -729,7 +739,7 @@ class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total
 
 class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
-    content: str | Iterable[ChatCompletionTextObject]
+    content: str | Iterable[ChatCompletionTextObject | ChatCompletionImageObject]
     tool_call_id: str
 
 
@@ -917,6 +927,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     seed: int
     service_tier: str
     safety_identifier: str
+    prompt_cache_key: str  # writable-ok: the /v1/messages adapter assigns it after construction
     stop: str | list[str]
     stream_options: dict
     temperature: float
@@ -929,6 +940,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     user: str
     metadata: dict  # litellm specific param
     reasoning_effort: str  # OpenAI o1/o3 reasoning parameter
+    output_config: Mapping[str, object]  # Anthropic adaptive-thinking effort, bridged for Bedrock Claude
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):
@@ -1147,6 +1159,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     max_tool_calls: int | None
     prompt_cache_key: str | None
     prompt_cache_retention: str | None
+    prompt_cache_options: ReadOnly[PromptCacheOptions | None]
     stream_options: ResponsesAPIStreamOptions | None
     top_logprobs: int | None
     partial_images: int | None  # Number of partial images to generate (1-3) for streaming image generation

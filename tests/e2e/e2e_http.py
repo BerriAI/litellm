@@ -75,6 +75,8 @@ class NetworkError(BaseModel):
 
 class UnauthorizedError(BaseModel):
     kind: Literal["unauthorized"] = "unauthorized"
+    # litellm 401s for key auth, model access, and tag routing alike, so keep the body to tell them apart.
+    body: str = ""
 
 
 class RateLimitedError(BaseModel):
@@ -219,6 +221,17 @@ def require_successful_call(result: StreamingResponse) -> None:
     )
 
 
+def assert_client_error(result: StreamingResponse, context: str) -> None:
+    assert 400 <= result.status_code < 500, (
+        f"{context}: expected 4xx, got {result.status_code}: {result.body[:300]}"
+    )
+
+
+def assert_auth_denied(result: StreamingResponse, context: str) -> None:
+    assert result.status_code in (401, 403), (
+        f"{context}: expected 401/403, got {result.status_code}: {result.body[:300]}"
+    )
+
 def _headers(headers: BaseModel) -> dict[str, str]:
     dumped: dict[str, object] = headers.model_dump(by_alias=True, exclude_none=True)
     return {key: str(value) for key, value in dumped.items()}
@@ -278,7 +291,7 @@ def _classify[R: BaseModel](
     resp: requests.Response, response_type: type[R]
 ) -> Result[R]:
     if resp.status_code == 401:
-        return UnauthorizedError()
+        return UnauthorizedError(body=resp.text)
     if resp.status_code == 429:
         return RateLimitedError(body=resp.text)
     if not resp.ok:

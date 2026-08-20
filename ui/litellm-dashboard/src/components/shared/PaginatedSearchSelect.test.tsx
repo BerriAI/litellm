@@ -38,7 +38,7 @@ describe("PaginatedSearchSelect", () => {
 
     const input = screen.getByRole("combobox");
     await user.click(input);
-    await user.type(input, "gamma");
+    fireEvent.change(input, { target: { value: "gamma" } });
 
     await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith("gamma"));
 

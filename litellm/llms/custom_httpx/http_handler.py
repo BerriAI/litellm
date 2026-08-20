@@ -7,12 +7,13 @@ import ssl
 import sys
 import threading
 import time
-from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from http.cookiejar import CookieJar, DefaultCookiePolicy
+from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias, TypedDict
 
 import certifi
 import httpx
-from aiohttp import ClientSession, TCPConnector
+from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import RequestFiles
 
@@ -61,8 +62,23 @@ except Exception:
 # https://docs.aiohttp.org/en/stable/client_reference.html#aiohttp.TCPConnector
 _AIOHTTP_SUPPORTS_SOCKET_FACTORY: Final = "socket_factory" in inspect.signature(TCPConnector.__init__).parameters
 
+_AddrInfo: TypeAlias = tuple[int | socket.AddressFamily, int | socket.SocketKind, int, str, tuple[object, ...]]
 
-def _build_aiohttp_keepalive_socket_factory() -> Callable[[tuple[Any, ...]], socket.socket] | None:
+_RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes]
+
+
+class _TCPConnectorKwargs(TypedDict, total=False):
+    local_addr: tuple[str, int] | None
+    ssl: "ssl.SSLContext | bool"
+    keepalive_timeout: float
+    ttl_dns_cache: int
+    enable_cleanup_closed: bool
+    limit: int
+    limit_per_host: int
+    socket_factory: Callable[[_AddrInfo], socket.socket]
+
+
+def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.socket] | None:
     """
     Build a socket_factory that enables SO_KEEPALIVE on aiohttp TCP sockets.
 
@@ -77,7 +93,7 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[tuple[Any, ...]], soc
     if not AIOHTTP_SO_KEEPALIVE or not _AIOHTTP_SUPPORTS_SOCKET_FACTORY:
         return None
 
-    def factory(addr_info: tuple[Any, ...]) -> socket.socket:
+    def factory(addr_info: _AddrInfo) -> socket.socket:
         family, type_, proto = addr_info[0], addr_info[1], addr_info[2]
         sock: Final = socket.socket(family=family, type=type_, proto=proto)
         sock.setblocking(False)
@@ -144,6 +160,15 @@ def _handler_may_close_client(client_refcount: int, owns_client: bool) -> bool:
     return owns_client and client_refcount <= _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER
 
 
+def blocked_cookie_jar() -> CookieJar:
+    """A jar that stores no response cookie and sends none, for httpx clients.
+
+    LiteLLM's outbound clients are pooled and shared by every caller, so a cookie one
+    upstream sets would be replayed to every other upstream on a matching domain.
+    """
+    return CookieJar(policy=DefaultCookiePolicy(allowed_domains=()))
+
+
 _STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS: Final = 5.0
 _STREAMING_ERROR_BODY_READ_EXECUTOR: Final = concurrent.futures.ThreadPoolExecutor(
     max_workers=50,
@@ -153,8 +178,8 @@ _STREAMING_ERROR_BODY_READ_EXECUTOR: Final = concurrent.futures.ThreadPoolExecut
 
 def _prepare_request_data_and_content(
     data: dict | str | bytes | None = None,
-    content: Any = None,
-) -> tuple[dict | Mapping | None, Any]:
+    content: _RequestContent | None = None,
+) -> tuple[dict | Mapping | None, _RequestContent | None]:
     """
     Helper function to route data/content parameters correctly for httpx requests
 
@@ -518,7 +543,7 @@ class AsyncHTTPHandler:
     def __init__(
         self,
         timeout: float | httpx.Timeout | None = None,
-        event_hooks: Mapping[str, list[Callable[..., Any]]] | None = None,
+        event_hooks: Mapping[str, list[Callable[..., object]]] | None = None,
         concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
         client_alias: str | None = None,  # name for client in logs
         ssl_verify: VerifyTypes | None = None,
@@ -556,7 +581,7 @@ class AsyncHTTPHandler:
     def create_client(
         self,
         timeout: float | httpx.Timeout | None,
-        event_hooks: Mapping[str, list[Callable[..., Any]]] | None,
+        event_hooks: Mapping[str, list[Callable[..., object]]] | None,
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
@@ -587,6 +612,7 @@ class AsyncHTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
+            cookies=blocked_cookie_jar(),
             follow_redirects=True,
         )
 
@@ -637,7 +663,7 @@ class AsyncHTTPHandler:
         stream: bool = False,
         logging_obj: LiteLLMLoggingObject | None = None,
         files: RequestFiles | None = None,
-        content: Any = None,
+        content: _RequestContent | None = None,
     ):
         start_time: Final = time.time()
         try:
@@ -680,7 +706,7 @@ class AsyncHTTPHandler:
             end_time: Final = time.time()
             time_delta: Final = round(end_time - start_time, 3)
             headers = {}
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[httpx.Response | None] = getattr(e, "response", None)
             if error_response is not None:
                 for key, value in error_response.headers.items():
                     headers[f"response_headers-{key}"] = value
@@ -705,7 +731,7 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
-        content: Any = None,
+        content: _RequestContent | None = None,
     ):
         try:
             if timeout is None:
@@ -744,7 +770,7 @@ class AsyncHTTPHandler:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
             headers = {}
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[httpx.Response | None] = getattr(e, "response", None)
             if error_response is not None:
                 for key, value in error_response.headers.items():
                     headers[f"response_headers-{key}"] = value
@@ -769,7 +795,7 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
-        content: Any = None,
+        content: _RequestContent | None = None,
     ):
         try:
             if timeout is None:
@@ -808,7 +834,7 @@ class AsyncHTTPHandler:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
             headers = {}
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[httpx.Response | None] = getattr(e, "response", None)
             if error_response is not None:
                 for key, value in error_response.headers.items():
                     headers[f"response_headers-{key}"] = value
@@ -833,7 +859,7 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
-        content: Any = None,
+        content: _RequestContent | None = None,
     ):
         try:
             if timeout is None:
@@ -884,7 +910,7 @@ class AsyncHTTPHandler:
         params: dict | None = None,
         headers: dict | None = None,
         stream: bool = False,
-        content: Any = None,
+        content: _RequestContent | None = None,
     ):
         """
         Making POST request for a single connection client.
@@ -982,7 +1008,7 @@ class AsyncHTTPHandler:
     def _get_ssl_connector_kwargs(
         ssl_verify: bool | None = None,
         ssl_context: ssl.SSLContext | None = None,
-    ) -> dict[str, Any]:
+    ) -> _TCPConnectorKwargs:
         """
         Helper method to get SSL connector initialization arguments for aiohttp TCPConnector.
 
@@ -993,7 +1019,7 @@ class AsyncHTTPHandler:
         Returns:
             Dict with appropriate SSL configuration for TCPConnector
         """
-        connector_kwargs: Final[dict[str, Any]] = {
+        connector_kwargs: Final[_TCPConnectorKwargs] = {
             "local_addr": ("0.0.0.0", 0) if litellm.force_ipv4 else None,
         }
 
@@ -1043,7 +1069,7 @@ class AsyncHTTPHandler:
 
         verbose_logger.debug("Creating AiohttpTransport...")
 
-        transport_connector_kwargs: Final = {
+        transport_connector_kwargs: Final[_TCPConnectorKwargs] = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
             **connector_kwargs,
@@ -1063,6 +1089,7 @@ class AsyncHTTPHandler:
         def session_factory() -> ClientSession:
             return ClientSession(
                 connector=TCPConnector(**transport_connector_kwargs),
+                cookie_jar=DummyCookieJar(),
                 trust_env=trust_env,
             )
 
@@ -1132,6 +1159,7 @@ class HTTPHandler:
             verify=ssl_config,
             cert=cert,
             headers=default_headers,
+            cookies=blocked_cookie_jar(),
             follow_redirects=True,
         )
 
@@ -1199,7 +1227,7 @@ class HTTPHandler:
         stream: bool = False,
         timeout: float | httpx.Timeout | None = None,
         files: dict | RequestFiles | None = None,
-        content: Any = None,
+        content: _RequestContent | None = None,
         logging_obj: LiteLLMLoggingObject | None = None,
     ):
         try:
@@ -1252,7 +1280,7 @@ class HTTPHandler:
         headers: dict | None = None,
         stream: bool = False,
         timeout: float | httpx.Timeout | None = None,
-        content: Any = None,
+        content: _RequestContent | None = None,
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
@@ -1302,7 +1330,7 @@ class HTTPHandler:
         headers: dict | None = None,
         stream: bool = False,
         timeout: float | httpx.Timeout | None = None,
-        content: Any = None,
+        content: _RequestContent | None = None,
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
@@ -1351,7 +1379,7 @@ class HTTPHandler:
         headers: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
-        content: Any = None,
+        content: _RequestContent | None = None,
     ):
         try:
             # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
