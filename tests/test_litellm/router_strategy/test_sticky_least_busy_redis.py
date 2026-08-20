@@ -938,7 +938,7 @@ class TestNonBlockingCacheDelta:
 
     The helper defers the Redis write onto the running event loop and returns
     None immediately on the loop path; the Redis-sourced new value is delivered
-    to the caller's ``on_result`` async callback once the deferred write lands.
+    to the caller's ``on_result`` callback once the deferred write lands.
     """
 
     def test_falls_back_to_sync_without_loop(self):
@@ -952,7 +952,7 @@ class TestNonBlockingCacheDelta:
 
         seen: list = []
 
-        async def on_result(new_value):
+        def on_result(new_value):
             seen.append(new_value)
 
         result = handler._non_blocking_cache_delta(
@@ -1022,7 +1022,7 @@ class TestNonBlockingCacheDelta:
         async def main():
             seen: list = []
 
-            async def on_result(new_value):
+            def on_result(new_value):
                 seen.append(new_value)
 
             result = handler._non_blocking_cache_delta(
@@ -1056,7 +1056,7 @@ class TestNonBlockingCacheDelta:
         async def main():
             seen: list = []
 
-            async def on_result(new_value):
+            def on_result(new_value):
                 seen.append(new_value)
 
             handler._non_blocking_cache_delta(

@@ -872,6 +872,16 @@ def run_server(
     use_v2_migration_resolver: bool,
     reload: bool,
 ):
+    # Install native-crash diagnostics early. No-op unless
+    # LITELLM_CRASH_DIAGNOSTICS=1 is set, so this is safe to call
+    # unconditionally and enables per-deployment.
+    try:
+        from litellm.proxy import crash_diagnostics
+
+        crash_diagnostics.install()
+    except Exception:
+        pass
+
     if cli_args:
         if cli_args == ("xai-oauth", "login"):
             from litellm.llms.xai.oauth import XAIOAuthAuthenticator

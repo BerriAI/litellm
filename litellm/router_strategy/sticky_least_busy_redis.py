@@ -32,7 +32,7 @@ to pure least-busy routing with random tie-breaking (no stickiness).
 import asyncio
 import hashlib
 import random
-from typing import Awaitable, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
@@ -471,7 +471,7 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
         value: int,
         ttl: Optional[int],
         action: str = "increment",
-        on_result: Optional[Callable[[Optional[float]], Awaitable[None]]] = None,
+        on_result: Optional[Callable[[Optional[float]], None]] = None,
     ) -> Optional[float]:
         """
         Synchronous entry point for a request-count delta (increment/decrement).
@@ -481,11 +481,13 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
         the pre-fix ``increment_cache`` semantics. The write is deferred onto the
         running event loop so a slow Redis can never block the request hot path.
 
-        ``on_result`` is an optional async callback invoked with the Redis-sourced
-        new value (or ``None`` on failure) once the deferred write completes. It
-        carries the caller-specific downstream logic (metrics, TTL refresh,
-        logging) so that logic runs with the authoritative Redis value in scope.
-        On the synchronous fallback path it is driven to completion inline.
+        ``on_result`` is an optional **synchronous** callback invoked with the
+        Redis-sourced new value (or ``None`` on failure) once the deferred write
+        completes. It carries the caller-specific downstream logic (metrics, TTL
+        refresh, logging) so that logic runs with the authoritative Redis value
+        in scope. The callback body must be purely synchronous (no ``await``) so
+        it can run equally on the running-loop deferred path and on the no-loop
+        fallback path — where it is called inline.
 
         Only ``redis_cache.async_increment`` is used on the deferred path (not
         ``DualCache.async_increment_cache``) so the in-memory cache is not touched
@@ -506,7 +508,7 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
                 result = None
             if on_result is not None:
                 try:
-                    asyncio.run(on_result(result))
+                    on_result(result)
                 except Exception as cb_err:
                     verbose_router_logger.error(
                         f"StickyLeastBusyRedis {action} on_result callback error: {cb_err}"
@@ -538,7 +540,7 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
                 new_value = None
             if on_result is not None:
                 try:
-                    await on_result(new_value)
+                    on_result(new_value)
                 except Exception as cb_err:
                     verbose_router_logger.error(
                         f"StickyLeastBusyRedis {action} on_result callback error: {cb_err}"
@@ -583,7 +585,7 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
             cache_key = self._get_request_count_cache_key(model_group, dep_id)
             stream = kwargs.get("stream", False)
 
-            async def _on_increment_result(new_value: Optional[float]) -> None:
+            def _on_increment_result(new_value: Optional[float]) -> None:
                 self._refresh_cache_ttl(cache_key)
                 self._routing_in_flight.labels(model_group, dep_id).inc()
                 verbose_router_logger.debug(
@@ -636,7 +638,7 @@ class StickyLeastBusyRedisLoggingHandler(CustomLogger):
                 "litellm_call_id"
             )
 
-            async def _on_decrement_result(new_value: Optional[float]) -> None:
+            def _on_decrement_result(new_value: Optional[float]) -> None:
                 self._refresh_cache_ttl(cache_key)
                 self._routing_in_flight.labels(model_group, dep_id).dec()
                 verbose_router_logger.debug(

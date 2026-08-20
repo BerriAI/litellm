@@ -5223,7 +5223,11 @@ def _extract_response_obj_and_hidden_params(
     if init_response_obj is None:
         response_obj = {}
     elif isinstance(init_response_obj, BaseModel):
+        from litellm._crash_marks import mark as _crash_mark
+
+        _crash_mark("model_dump:start _extract_response_obj_and_hidden_params")
         response_obj = init_response_obj.model_dump()
+        _crash_mark("model_dump:done _extract_response_obj_and_hidden_params")
         hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
