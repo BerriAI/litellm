@@ -25,6 +25,15 @@ DOCKERFILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]*Dockerfile[A-Za-z0-9_.-]*")
 COMMENT_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
 GLOB_CHARS = frozenset("*?")
 
+# Trees whose jobs are sharded with no catch-all bucket, so every child that holds
+# tests has to be named by some shard or it runs nowhere. A child listed here is
+# itself decomposed one level deeper and is checked through its own entry.
+SHARDED_ROOTS: tuple[str, ...] = (
+    "tests/proxy_unit_tests",
+    "tests/test_litellm",
+    "tests/test_litellm/proxy",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class AllowEntry:
@@ -107,18 +116,30 @@ def _built_dockerfile_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
     )
 
 
-def _glob_to_regex(token: str) -> re.Pattern[str]:
+def _glob_to_regex(token: str, *, subtree: bool) -> re.Pattern[str]:
     parts = re.split(r"(\*\*/|\*\*|\*|\?)", token)
     translated = "".join(
         {"**/": r"(?:.*/)?", "**": r".*", "*": r"[^/]*", "?": r"[^/]"}.get(part, re.escape(part)) for part in parts
     )
-    return re.compile(rf"{translated}(?:/.*)?$")
+    return re.compile(rf"{translated}(?:/.*)?$" if subtree else rf"{translated}$")
 
 
 def _token_covers(token: str, relative_path: str) -> bool:
     if GLOB_CHARS & set(token):
-        return _glob_to_regex(token).match(relative_path) is not None
+        return _glob_to_regex(token, subtree=True).match(relative_path) is not None
     return relative_path == token or relative_path.startswith(f"{token}/")
+
+
+def _token_names(token: str, relative_path: str) -> bool:
+    """Whether the token names this path itself, rather than merely containing it.
+
+    A sharded tree has no catch-all bucket, so the ancestor token the census is happy
+    with (`tests/x` standing in for everything below it) is exactly what would let a
+    newly added child ride along without a shard.
+    """
+    if GLOB_CHARS & set(token):
+        return _glob_to_regex(token, subtree=False).match(relative_path) is not None
+    return token == relative_path
 
 
 def _test_files() -> tuple[str, ...]:
@@ -164,6 +185,45 @@ def _describe(paths: tuple[str, ...]) -> str:
     names = ", ".join(path.rsplit("/", 1)[1] for path in paths[:3])
     suffix = f", +{len(paths) - 3} more" if len(paths) > 3 else ""
     return f"{len(paths)} test file(s) invoked by no job: {names}{suffix}"
+
+
+def _holds_tests(directory: pathlib.Path) -> bool:
+    return any(directory.rglob("test_*.py"))
+
+
+def _shard_children(root: str, repo_root: pathlib.Path = REPO_ROOT) -> tuple[str, ...]:
+    """Children of a sharded root that carry tests, so each one needs its own shard.
+
+    A directory earns an entry by containing a test file rather than by being named
+    `test_*`, which is what keeps fixture directories (`test_configs`, `expected_*`)
+    out without a hand-maintained list of exceptions.
+    """
+    return tuple(
+        sorted(
+            child.relative_to(repo_root).as_posix()
+            for child in (repo_root / root).iterdir()
+            if not child.name.startswith(".")
+            and (
+                _holds_tests(child)
+                if child.is_dir()
+                else child.name.startswith("test_") and child.suffix == ".py"
+            )
+        )
+    )
+
+
+def _unassigned_shard_children(
+    tokens: frozenset[str],
+    roots: tuple[str, ...] = SHARDED_ROOTS,
+    repo_root: pathlib.Path = REPO_ROOT,
+) -> tuple[Finding, ...]:
+    return tuple(
+        Finding(subject=child, detail=f"holds tests but no shard of {root} names it")
+        for root in roots
+        if (repo_root / root).is_dir()
+        for child in _shard_children(root, repo_root)
+        if child not in roots and not any(_token_names(token, child) for token in tokens)
+    )
 
 
 def _uncovered_dockerfiles(allowlist: Allowlist, tokens: frozenset[str]) -> tuple[Finding, ...]:
@@ -229,7 +289,26 @@ def _report(title: str, findings: tuple[Finding, ...], remedy: str) -> None:
     _write("")
 
 
+def _check_shards() -> int:
+    findings = _unassigned_shard_children(_invoked_test_tokens(_all_scalars()))
+    if findings:
+        _report(
+            "test directories and files that no shard claims",
+            findings,
+            "Add each to the shard it belongs to. A directory that is itself split across "
+            "several shards belongs in SHARDED_ROOTS instead, so its own children get checked.",
+        )
+        return 1
+
+    counted = sum(len(_shard_children(root)) for root in SHARDED_ROOTS if (REPO_ROOT / root).is_dir())
+    _write(f"OK: all {counted} test children across {len(SHARDED_ROOTS)} sharded trees are assigned to a shard.")
+    return 0
+
+
 def main() -> int:
+    if "--shards" in sys.argv[1:]:
+        return _check_shards()
+
     allowlist = _load_allowlist()
     scalars = _all_scalars()
 
