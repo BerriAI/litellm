@@ -3721,7 +3721,7 @@ class TestMetadataNoneHandling:
 
         # Attempting 'in' on None raises TypeError
         with pytest.raises(TypeError):
-            "model_group" in kwargs.get("metadata", {})
+            _ = "model_group" in kwargs.get("metadata", {})
 
     def test_litellm_params_metadata_none(self):
         """litellm_params.get("metadata") or {} should handle None value."""
