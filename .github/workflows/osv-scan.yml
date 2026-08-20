@@ -37,8 +37,21 @@ jobs:
           chmod +x "$RUNNER_TEMP/osv-scanner"
 
       - name: Scan lockfiles
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
+          lockfiles=(-L ui/litellm-dashboard/package-lock.json)
+
+          # Fork PRs cannot modify uv.lock (enforced by guard-fork-dependency-changes.yml),
+          # so scanning the unchanged base lockfile here only makes unrelated fork PRs
+          # fail when the scheduled scan finds dependency drift. Canonical PRs and the
+          # daily scheduled run continue to scan both lockfiles.
+          if [[ "$EVENT_NAME" != "pull_request" || "$HEAD_REPOSITORY" == "$REPOSITORY" ]]; then
+            lockfiles+=(-L uv.lock)
+          fi
+
           "$RUNNER_TEMP/osv-scanner" scan source \
             --config osv-scanner.toml \
-            -L uv.lock \
-            -L ui/litellm-dashboard/package-lock.json
+            "${lockfiles[@]}"

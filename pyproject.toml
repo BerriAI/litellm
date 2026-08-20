@@ -23,7 +23,7 @@ dependencies = [
     "tokenizers>=0.21.0,<1.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
-    "aiohttp>=3.14.3,<4.0",
+    "aiohttp>=3.10,<4.0",
     "pydantic>=2.10.0,<3.0.0",
     "jsonschema>=4.0.0,<5.0",
 ]
@@ -55,13 +55,13 @@ proxy = [
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
-    "cryptography>=50.0.0,<51.0",
+    "cryptography>=48.0.1,<49.0",
     "pynacl>=1.6.2,<2.0",
     "websockets>=15.0.1,<16.0",
     "boto3>=1.43.1,<2.0",
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
-    "mcp>=1.28.1,<2.0",
+    "mcp>=1.26.0,<2.0",
     "litellm-proxy-extras==0.4.74",
     "litellm-enterprise==0.1.45",
     "RestrictedPython>=8.1,<9.0",
@@ -101,7 +101,7 @@ semantic-router = [
     "semantic-router>=0.1.15,<1.0; python_version < '3.14'",
     "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
 ]
-mlflow = ["mlflow>=3.15.0,<4.0"]
+mlflow = ["mlflow>=3.11.1,<4.0"]
 grpc = [
     # Newest non-yanked release older than the 30-day cutoff.
     "grpcio==1.78.0",
@@ -129,12 +129,12 @@ proxy-runtime = [
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
     "opentelemetry-instrumentation-fastapi==0.49b0",
-    "ddtrace>=4.8.2,<5.0",
+    "ddtrace>=2.19.0,<3.0",
     "sentry-sdk>=2.21.0,<3.0",
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.15.0,<7.0; python_version < '3.14'",
+    "pypdf>=6.12.0,<7.0; python_version < '3.14'",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
@@ -201,7 +201,7 @@ ci = [
     # protobuf, Pillow is a compiled C extension).
     "tenacity==8.5.0",
     "google-generativeai==0.8.6",
-    "Pillow==12.3.0",
+    "Pillow==12.2.0",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",
@@ -240,20 +240,12 @@ build-backend = "uv_build"
 [tool.uv]
 constraint-dependencies = [
     "tornado>=6.5.6",
-    "aiohttp>=3.14.3,<4.0",
+    "aiohttp>=3.14.1,<4.0",
     "packaging>=24.0",
-    "gitpython>=3.1.58",
-    "h2>=4.4.1",
-    "httplib2>=0.32.0",
-    "pyasn1>=0.6.4",
-    "setuptools>=83.0.0",
-    "soupsieve>=2.8.4",
-    "sqlparse>=0.6.0",
 ]
 override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
     "packaging>=24.0",
-    "cryptography>=50.0.0,<51.0",
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
