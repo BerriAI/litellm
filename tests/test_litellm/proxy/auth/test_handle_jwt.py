@@ -4630,7 +4630,7 @@ async def test_find_team_with_model_access_loads_aliases_before_restricted_team_
             return_value=team,
         ),
         patch(
-            "litellm.proxy.auth.handle_jwt.get_team_model_aliases",
+            "litellm.proxy.auth.handle_jwt.get_team_model_aliases_for_team",
             new_callable=AsyncMock,
             return_value={"claude-opus-5": "FW-Kimi-K3"},
         ) as mock_get_aliases,
@@ -5010,7 +5010,7 @@ async def test_resolve_db_team_fallback_loads_aliases_before_restricted_team_sel
             return_value=team,
         ),
         patch(
-            "litellm.proxy.auth.handle_jwt.get_team_model_aliases",
+            "litellm.proxy.auth.handle_jwt.get_team_model_aliases_for_team",
             new_callable=AsyncMock,
             return_value={"claude-opus-5": "FW-Kimi-K3"},
         ) as mock_get_aliases,

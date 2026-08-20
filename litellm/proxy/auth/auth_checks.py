@@ -2480,6 +2480,20 @@ async def get_team_model_aliases(
     return aliases
 
 
+async def get_team_model_aliases_for_team(
+    team_object: LiteLLM_TeamTable | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> dict[str, str] | None:  # mutable-ok: delegates UserAPIKeyAuth.team_model_aliases dict contract
+    if team_object is None or team_object.model_id is None or prisma_client is None:
+        return None
+    return await get_team_model_aliases(
+        model_id=team_object.model_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
 async def _get_team_object_from_user_api_key_cache(
     team_id: str,
     prisma_client: PrismaClient,

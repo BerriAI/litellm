@@ -49,7 +49,7 @@ from litellm.proxy.auth.auth_checks import (
     get_end_user_object,
     get_jwt_key_mapping_object,
     get_project_object,
-    get_team_model_aliases,
+    get_team_model_aliases_for_team,
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
@@ -1379,16 +1379,10 @@ async def _user_api_key_auth_builder(
                         team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
                         team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
                         team_models=(team_object.models if team_object is not None else []),
-                        team_model_aliases=(
-                            await get_team_model_aliases(
-                                model_id=team_object.model_id,
-                                prisma_client=prisma_client,
-                                user_api_key_cache=user_api_key_cache,
-                            )
-                            if team_object is not None
-                            and team_object.model_id is not None
-                            and prisma_client is not None
-                            else None
+                        team_model_aliases=await get_team_model_aliases_for_team(
+                            team_object=team_object,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
                         ),
                         user_role=(
                             LitellmUserRoles(user_object.user_role)
