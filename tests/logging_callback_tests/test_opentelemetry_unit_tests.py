@@ -213,3 +213,157 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         mock_span.set_attribute.assert_called_with(
             ErrorAttributes.ERROR_MESSAGE, "Fallback error message"
         )
+
+
+class TestGenAiSystemNeverNone:
+    """
+    Regression pin for #36759.
+
+    `gen_ai.system` previously reached the OTLP exporter as `None` from the
+    metrics path (`_record_metrics`) and the semantic-log events path
+    (`_emit_semantic_logs`, per-message and per-choice events). The OTLP
+    protobuf encoder raises `Invalid type <class 'NoneType'> of value None`
+    on every record, which the OTel SDK catches and logs at ERROR level
+    with a full stack trace — one per span/metric/event. In production this
+    was observed driving CloudWatch Logs ingestion from ~0.05 GB/day to
+    100+ GB/day under normal traffic.
+
+    The fix routes the `provider` value through `cast_as_primitive_value_type()`
+    (already used by the safe span-attribute path) before it is assigned to
+    `gen_ai.system` in the three unguarded call sites. The helper returns
+    `""` for `None`, so the OTLP encoder never sees a `None`.
+    """
+
+    def _make_otel(self, metrics_disabled: bool = True):
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        # Disable real histogram init / real logger init; the regression
+        # is in attribute construction, not in the OTel SDK.
+        if metrics_disabled:
+            otel._operation_duration_histogram = None
+            otel._token_usage_histogram = None
+            otel._cost_histogram = None
+            otel._time_to_first_token_histogram = None
+            otel._time_per_output_token_histogram = None
+        return otel
+
+    def test_record_metrics_casts_none_provider_to_empty_string(self):
+        from datetime import datetime
+
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = self._make_otel(metrics_disabled=False)
+        captured: dict = {}
+
+        def fake_record(_duration, attributes=None):
+            captured["attributes"] = attributes
+
+        otel._operation_duration_histogram = MagicMock()
+        otel._operation_duration_histogram.record = fake_record
+        otel._token_usage_histogram = None
+        otel._cost_histogram = None
+
+        kwargs = {
+            "model": "gpt-4",
+            "litellm_params": {"custom_llm_provider": None},
+            "standard_logging_object": None,
+        }
+        response_obj: dict = {"usage": None}
+        otel._record_metrics(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        attrs = captured["attributes"]
+        assert attrs is not None
+        # The regression pin: gen_ai.system must be a primitive, never None.
+        # OTLP encoder raises on None and logs a stack trace per record.
+        assert attrs["gen_ai.system"] is not None
+        assert isinstance(attrs["gen_ai.system"], (str, bool, int, float))
+        # And the helper's documented behaviour is the empty string for None.
+        assert attrs["gen_ai.system"] == ""
+
+    def test_emit_semantic_logs_casts_none_provider_for_prompt_and_completion_events(self):
+        """
+        Regression pin for #36759: the per-message (gen_ai.content.prompt)
+        and per-choice (gen_ai.content.completion) event paths must route
+        the `provider` value through the same `cast_as_primitive_value_type`
+        guard as the metrics and span-attribute paths.
+        """
+        from datetime import datetime
+
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = self._make_otel(metrics_disabled=True)
+        otel.config.enable_events = True
+
+        captured_attrs: list = []
+
+        def fake_emit(log_record):
+            captured_attrs.append(log_record.attributes)
+
+        class _FakeLogger:
+            def emit(self, log_record):
+                fake_emit(log_record)
+
+        fake_logger_provider = MagicMock()
+        fake_logger_provider.get_logger = MagicMock(return_value=_FakeLogger())
+        otel._logger_provider = fake_logger_provider
+
+        # Stub SdkLogRecord to a value object so `_emit_semantic_logs`
+        # can build one without a real OTel SDK. Accepts and discards
+        # keyword args we don't care about (trace_flags, severity_text, ...).
+        class _FakeLogRecord:
+            def __init__(self, timestamp, trace_id, span_id, severity_number, body, attributes, **kwargs):
+                self.timestamp = timestamp
+                self.trace_id = trace_id
+                self.span_id = span_id
+                self.severity_number = severity_number
+                self.body = body
+                self.attributes = attributes
+
+        otel._otel_log_types = MagicMock(return_value=(_FakeLogRecord, type("S", (), {"INFO": "INFO"})()))
+
+        # The legacy (non-experimental) codepath is the default and the one
+        # the per-message + per-choice event branches live on.
+
+        kwargs = {
+            "model": "gpt-4",
+            "litellm_params": {"custom_llm_provider": None},
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
+        }
+        response_obj = {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "hello"},
+                }
+            ]
+        }
+        fake_span = MagicMock()
+        fake_span.get_span_context.return_value = MagicMock(trace_id=1, span_id=2)
+
+        otel._emit_semantic_logs(
+            kwargs=kwargs, response_obj=response_obj, span=fake_span
+        )
+
+        # Every emitted event must carry a primitive `gen_ai.system`,
+        # never None. Before the fix the per-message and per-choice
+        # events passed the raw `provider` (None) straight through.
+        assert captured_attrs, "expected semantic-log events to be emitted"
+        for attrs in captured_attrs:
+            assert "gen_ai.system" in attrs
+            assert attrs["gen_ai.system"] is not None, (
+                f"gen_ai.system must not be None; got {attrs!r}"
+            )
+            assert isinstance(attrs["gen_ai.system"], (str, bool, int, float))
+        # And at least one prompt event and one completion event were emitted.
+        event_names = {a.get("event_name") for a in captured_attrs}
+        assert "gen_ai.content.prompt" in event_names
+        assert "gen_ai.content.completion" in event_names
