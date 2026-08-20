@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from datadog_mcp import register_datadog_mcp
+from datadog_mcp import SEARCH_LOGS_TOOL, register_datadog_mcp
 from e2e_config import unique_marker
 from e2e_http import NoBody, unwrap
 from lifecycle import ResourceManager
@@ -59,6 +59,7 @@ class TestKeyUpdatePreservesMcpGrants:
         client.await_registered(server_id)
         key = _mcp_key(client, resources, [server_id])
         assert _key_mcp_servers(client, key) == [server_id]
+        tool_before = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
 
         unwrap(
             client.proxy.transport.post(
@@ -82,6 +83,14 @@ class TestKeyUpdatePreservesMcpGrants:
         assert servers == [server_id], (
             f"a max_budget-only /key/update dropped the key's MCP servers "
             f"(PR #34452 regression): {info.object_permission}"
+        )
+
+        # The stored row surviving is not the thing the customer noticed; they noticed a key
+        # that still authenticated but listed no tools. Assert the grant still resolves.
+        tools_after = unwrap(client.list_tools(key)).tool_names_for_server(server_id)
+        assert tool_before in tools_after, (
+            f"the key stopped seeing {tool_before!r} after a budget-only update; the stored "
+            f"grant survived but tool discovery did not: {tools_after}"
         )
 
     @pytest.mark.covers("mcp.key_update.api_key.stale_server_ids_dropped")
