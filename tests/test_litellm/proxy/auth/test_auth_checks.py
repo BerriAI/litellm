@@ -6646,6 +6646,27 @@ def test_model_has_no_cost_mapping_non_token_price_from_litellm_params_is_false(
     assert model_has_no_cost_mapping(model="custom-tts", llm_router=router) is False
 
 
+@pytest.mark.parametrize("zero_cost_key", ["input_cost_per_second", "input_cost_per_token"])
+def test_model_has_no_cost_mapping_explicit_zero_price_is_false(zero_cost_key):
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-group",
+                "litellm_params": {
+                    "model": UNPRICED_UNDERLYING_MODEL,
+                    "api_key": "sk-test",
+                    zero_cost_key: 0.0,
+                },
+            }
+        ]
+    )
+
+    assert model_has_no_cost_mapping(model="free-group", llm_router=router) is False
+
+
 async def _run_common_checks(
     model: Optional[str], llm_router: Optional["Router"], route: str = "/chat/completions"
 ) -> bool:
