@@ -80,8 +80,8 @@ def _write_metadata_only_file(home):
     return path
 
 
-def _blob(base_url=SERVER, key="sk-vault", jwt_token=""):
-    return json.dumps({"base_url": base_url, "key": key, "jwt_token": jwt_token})
+def _blob(base_url=SERVER, key="sk-vault", jwt_token="", timestamp=0.0):
+    return json.dumps({"base_url": base_url, "key": key, "jwt_token": jwt_token, "timestamp": timestamp})
 
 
 _REAL_MKSTEMP = tempfile.mkstemp
@@ -203,6 +203,37 @@ class TestLoadCliToken:
         resurrect the stale key or scrub the only copy of the fresh one."""
         path = _write_legacy_file(isolated_home, key="sk-fresh")
         vault = secret_vault_factory(blob=_blob(key="sk-stale"))
+
+        record = load_cli_token(vault=vault)
+
+        assert record.key == "sk-fresh"
+        assert json.loads(vault.blob)["key"] == "sk-fresh"
+        assert "key" not in json.loads(path.read_text())
+
+    def test_a_login_the_file_could_not_record_is_the_one_that_gets_used(
+        self, isolated_home, secret_vault_factory
+    ):
+        """A login the keychain took and the file could not be pointed at afterwards leaves the
+        superseded secret sitting on disk in front of the fresh one. Serving the file's copy would
+        put a credential the user just replaced, and may well have just revoked, back into every
+        request, and would overwrite the keychain with it on the way past."""
+        path = _write_legacy_file(isolated_home, key="sk-superseded", timestamp=1000.0)
+        vault = secret_vault_factory(blob=_blob(key="sk-fresh", timestamp=2000.0))
+
+        record = load_cli_token(vault=vault)
+
+        assert record.key == "sk-fresh"
+        assert record.timestamp == 2000.0
+        assert json.loads(vault.blob)["key"] == "sk-fresh"
+        assert "key" not in json.loads(path.read_text())
+
+    def test_a_secret_written_to_disk_after_the_keychain_entry_still_wins(
+        self, isolated_home, secret_vault_factory
+    ):
+        """The other direction of the same rule, which is the common one: a login that fell back to
+        the file because the keychain refused it is newer than whatever the keychain kept."""
+        path = _write_legacy_file(isolated_home, key="sk-fresh", timestamp=2000.0)
+        vault = secret_vault_factory(blob=_blob(key="sk-stale", timestamp=1000.0))
 
         record = load_cli_token(vault=vault)
 

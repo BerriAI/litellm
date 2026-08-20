@@ -105,7 +105,8 @@ class CliTokenSecret(BaseModel):
 
     `base_url` is duplicated from the metadata file purely as a pairing tag: a
     secret minted for one server is never handed to another, even if the
-    metadata file is edited underneath us.
+    metadata file is edited underneath us. `timestamp` is the sign-in this
+    secret came from, which is what decides it against a secret still on disk.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -113,6 +114,7 @@ class CliTokenSecret(BaseModel):
     base_url: str
     key: str
     jwt_token: str = ""
+    timestamp: float = 0.0
 
 
 def get_cli_token_file_path() -> str:
@@ -145,11 +147,7 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     staged: Final = _stage_token_file(_without_secret(record))
     if isinstance(staged, CredentialNotSaved):
         return staged
-    outcome: Final = (
-        SecretStored()
-        if record.key is None
-        else vault.write(_encode_secret(record.base_url, record.key, record.jwt_token))
-    )
+    outcome: Final = SecretStored() if record.key is None else vault.write(_encode_secret(record, record.key))
     if isinstance(outcome, SecretStored):
         return outcome if _commit_token_file(staged) else CredentialNotRecorded()
     discard_staged_json(staged)
@@ -330,19 +328,24 @@ def _resolve_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecor
 def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -> CliTokenRecord | None:
     """Resolve the credential when both stores hold one.
 
-    A secret still on disk is the fresher of the two, because it is only left there when the
-    keychain write that should have removed it failed, so it outranks the vault entry.
+    The sign-in each secret came from decides it, because either store can be the stale one. A
+    secret is usually left on disk by a keychain that would not take it, which makes the file the
+    fresher of the two. It is the older one when a login the keychain did take could not replace
+    the file afterwards, and serving that one would put a superseded credential back in use.
     """
-    if record.key is not None:
-        return _migrate_file_secret(record, vault)
-    try:
-        secret: Final = CliTokenSecret.model_validate_json(blob)
-    except ValidationError:
-        return _migrate_file_secret(record, vault)
-    if secret.base_url != record.base_url:
+    secret: Final = _decode_secret(blob, record.base_url)
+    if secret is None or (record.key is not None and secret.timestamp <= record.timestamp):
         return _migrate_file_secret(record, vault)
     _scrub_file_secret(record)
-    return record.model_copy(update=MappingProxyType({"key": secret.key, "jwt_token": secret.jwt_token}))
+    return record.model_copy(
+        update=MappingProxyType(
+            {
+                "key": secret.key,
+                "jwt_token": secret.jwt_token,
+                "timestamp": max(secret.timestamp, record.timestamp),
+            }
+        )
+    )
 
 
 def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord | None:
@@ -363,7 +366,7 @@ def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliToken
     staged: Final = _stage_scrubbed_file(record)
     if staged is None:
         return record
-    if not isinstance(vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)), SecretStored):
+    if not isinstance(vault.write(_encode_secret(record, record.key)), SecretStored):
         discard_staged_json(staged)
         return record
     if not _commit_token_file(staged) and not _overwrite_file_secret(record):
@@ -422,8 +425,19 @@ def _without_secret(record: CliTokenRecord) -> CliTokenRecord:
     return record.model_copy(update=MappingProxyType({"key": None, "jwt_token": ""}))
 
 
-def _encode_secret(base_url: str, key: str, jwt_token: str) -> str:
-    return CliTokenSecret(base_url=base_url, key=key, jwt_token=jwt_token).model_dump_json()
+def _encode_secret(record: CliTokenRecord, key: str) -> str:
+    return CliTokenSecret(
+        base_url=record.base_url, key=key, jwt_token=record.jwt_token, timestamp=record.timestamp
+    ).model_dump_json()
+
+
+def _decode_secret(blob: str, base_url: str) -> CliTokenSecret | None:
+    """The keychain entry, when it is one this metadata file may be paired with"""
+    try:
+        secret: Final = CliTokenSecret.model_validate_json(blob)
+    except ValidationError:
+        return None
+    return secret if secret.base_url == base_url else None
 
 
 def _write_token_file(record: CliTokenRecord) -> None:

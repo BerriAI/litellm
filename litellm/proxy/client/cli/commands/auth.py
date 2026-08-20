@@ -131,8 +131,9 @@ def storage_notice(outcome: SecretSave) -> str:
         case CredentialNotRecorded():
             return (
                 f"Signed in, and the credential is in your OS keychain, but {path} could not be "
-                "replaced, so this machine may still be using your previous login. Run 'lite login' "
-                "again once that path is writable, or 'lite logout' to clear both."
+                "replaced, so it still describes your previous login and may still hold its "
+                "credential. Run 'lite login' again once that path is writable, or 'lite logout' "
+                "to clear both."
             )
 
 
