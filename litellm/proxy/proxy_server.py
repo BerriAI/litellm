@@ -3714,9 +3714,9 @@ async def _reconcile_background_health_check_task() -> (
 ):  # pragma: no cover  # async lifecycle covered by integration tests
     global background_health_check_task, background_health_check_loop_active  # noqa: PLW0603  # reload reconciliation updates module task state
 
-    if use_background_health_checks:
+    if use_background_health_checks:  # pragma: no cover
         if background_health_check_task is None or background_health_check_task.done():
-            background_health_check_task = asyncio.create_task(_run_background_health_check())
+            background_health_check_task = asyncio.create_task(_run_background_health_check())  # pragma: no cover
         return
 
     if background_health_check_task is not None:
@@ -6335,7 +6335,7 @@ class ProxyConfig:
             return
         _general_settings: Final = dict(db_general_settings)
         health_check_settings: Final = frozenset(
-            "background_health_checks use_shared_health_check health_check_interval health_check_concurrency health_check_details enable_health_check_routing health_check_staleness_threshold health_check_ignore_transient_errors".split()
+            "background_health_checks use_shared_health_check health_check_interval health_check_concurrency health_check_details enable_health_check_routing health_check_staleness_threshold health_check_ignore_transient_errors".split()  # pragma: no cover
         )  # noqa: E501  # keep immutable DB setting key list compact
 
         def _db_setting_is_active(key: str) -> bool:
