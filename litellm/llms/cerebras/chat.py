@@ -6,6 +6,10 @@ this is OpenAI compatible - no translation needed / occurs
 
 from typing import Final
 
+from openai.types.chat.chat_completion_prediction_content_param import (
+    ChatCompletionPredictionContentParam,
+)
+
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.utils import supports_reasoning
 
@@ -32,10 +36,10 @@ class CerebrasConfig(OpenAIGPTConfig):
     top_logprobs: int | None = None
     frequency_penalty: float | None = None
     presence_penalty: float | None = None
-    logit_bias: dict | None = None
+    logit_bias: dict[str, float] | None = None
     service_tier: str | None = None
     prompt_cache_key: str | None = None
-    prediction: dict | None = None
+    prediction: ChatCompletionPredictionContentParam | None = None
 
     def __init__(
         self,
@@ -56,10 +60,10 @@ class CerebrasConfig(OpenAIGPTConfig):
         top_logprobs: int | None = None,
         frequency_penalty: float | None = None,
         presence_penalty: float | None = None,
-        logit_bias: dict | None = None,
+        logit_bias: dict[str, float] | None = None,
         service_tier: str | None = None,
         prompt_cache_key: str | None = None,
-        prediction: dict | None = None,
+        prediction: ChatCompletionPredictionContentParam | None = None,
     ) -> None:
         locals_: Final = locals().copy()
         for key, value in locals_.items():
