@@ -173,9 +173,9 @@ export function MCPServerPermissions({
                         {toolsForServer.length === 1 ? "tool" : "tools"}
                       </span>
                       {isExpanded ? (
-                        <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground/70 ml-0.5" />
+                        <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                       ) : (
-                        <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground/70 ml-0.5" />
+                        <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                       )}
                     </div>
                   )}
@@ -231,9 +231,9 @@ export function MCPServerPermissions({
                         <span className="text-xs font-medium text-muted-foreground">{toolCount}</span>
                         <span className="text-xs text-muted-foreground">{toolCount === 1 ? "tool" : "tools"}</span>
                         {isExpanded ? (
-                          <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground/70 ml-0.5" />
+                          <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                         ) : (
-                          <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground/70 ml-0.5" />
+                          <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground ml-0.5" />
                         )}
                       </div>
                     )}
@@ -260,7 +260,7 @@ export function MCPServerPermissions({
         </div>
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
-          <ServerIcon className="h-4 w-4 text-muted-foreground/70" />
+          <ServerIcon className="h-4 w-4 text-muted-foreground" />
           <p className="text-muted-foreground text-sm">No MCP servers, access groups, or toolsets configured</p>
         </div>
       )}

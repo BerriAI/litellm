@@ -151,7 +151,7 @@ export function GuardrailsOverview({
         <span
           className={
             row.original.avgLatency == null
-              ? "text-muted-foreground/70"
+              ? "text-muted-foreground"
               : row.original.avgLatency > 150
                 ? "text-destructive"
                 : row.original.avgLatency > 50
