@@ -64,7 +64,11 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
+from litellm.litellm_core_utils.ptu_pricing import (
+    is_ptu_cost_attribution_enabled,
+    ptu_config_error,
+    zeroed_ptu_pricing,
+)
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -7701,9 +7705,11 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
-            zeroed_pricing: Final = (
-                zeroed_ptu_pricing(_model_info, _litellm_params) if _model_info.get("db_model") is not True else None
-            )
+            config_sourced: Final = _model_info.get("db_model") is not True
+            ptu_error: Final = ptu_config_error(_model_info, model_name=_model_name) if config_sourced else None
+            if ptu_error is not None and is_ptu_cost_attribution_enabled():
+                raise ValueError(ptu_error)
+            zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
                 **(
                     _litellm_params
@@ -9192,7 +9198,7 @@ class Router:
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
-        merged_model_info: Final = copy.copy(model_info)
+        merged_model_info: Final = copy.deepcopy(model_info)
         if user_model_info:
             for key, value in user_model_info.items():
                 if value is not None:
@@ -9243,7 +9249,7 @@ class Router:
         litellm_model_name_model_info: ModelInfo | None = None
 
         try:
-            custom_model_info = litellm.model_cost.get(model_id)
+            custom_model_info = copy.deepcopy(litellm.model_cost.get(model_id))
         except Exception:
             pass
 
@@ -9258,9 +9264,8 @@ class Router:
                 base_model: Final = custom_model_info.get("base_model", None)
                 if base_model is not None:
                     ## update litellm model info with base model info
-                    base_model_info: Final = litellm.get_model_info(model=base_model)
+                    base_model_info: Final = copy.deepcopy(litellm.get_model_info(model=base_model))
                     if base_model_info is not None:
-                        custom_model_info = custom_model_info or {}
                         # Base model provides defaults, custom model info overrides
                         custom_model_info = _update_dictionary(
                             cast(dict, base_model_info),
@@ -9276,13 +9281,13 @@ class Router:
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
-                    cast(dict, litellm_model_name_model_info).copy(),
+                    copy.deepcopy(cast(dict, litellm_model_name_model_info)),
                     custom_model_info,
                 ),
             )
         elif litellm_model_name_model_info is not None:
             # (2) Built-in only — no custom pricing to merge
-            model_info = litellm_model_name_model_info
+            model_info = copy.deepcopy(litellm_model_name_model_info)
         elif custom_model_info is not None:
             # (3) Custom only — model not in built-in cost map yet
             # custom_model_info already includes base_model defaults at this point, if applicable
