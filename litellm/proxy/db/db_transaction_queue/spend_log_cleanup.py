@@ -224,6 +224,12 @@ class SpendLogCleanup:
 
     @staticmethod
     def _group_deadline(overall_deadline: float, groups_remaining: int) -> float:
+        """
+        Give each pending cleanup group an equal share of the time left.
+
+        A single group keeps the whole run budget, while a persistent backlog
+        on an earlier group cannot starve a later group.
+        """
         if groups_remaining == 1:
             return overall_deadline
         current_time: Final = time.monotonic()
@@ -624,12 +630,10 @@ class SpendLogCleanup:
                     return
 
             deadline: Final = time.monotonic() + self.run_budget_seconds
-            configured_group_count: Final = sum(
-                (
-                    int(delete_spend_logs and self.retention_seconds is not None),
-                    int(autorouter_retention_seconds is not None),
-                    int(health_check_retention_seconds is not None),
-                )
+            configured_group_count: Final = (
+                int(delete_spend_logs and self.retention_seconds is not None)
+                + int(autorouter_retention_seconds is not None)
+                + int(health_check_retention_seconds is not None)
             )
 
             spend_log_results: Final = (
@@ -640,11 +644,8 @@ class SpendLogCleanup:
                 if delete_spend_logs and self.retention_seconds is not None
                 else ()
             )
-            remaining_groups_after_spend_logs: Final = sum(
-                (
-                    int(autorouter_retention_seconds is not None),
-                    int(health_check_retention_seconds is not None),
-                )
+            remaining_groups_after_spend_logs: Final = int(autorouter_retention_seconds is not None) + int(
+                health_check_retention_seconds is not None
             )
             session_results: Final = (
                 await self._clean_session_rollup(
@@ -659,7 +660,7 @@ class SpendLogCleanup:
                 await self._clean_health_checks(
                     prisma_client,
                     health_check_retention_seconds,
-                    self._group_deadline(deadline, 1),
+                    deadline,
                 )
                 if health_check_retention_seconds is not None
                 else ()
