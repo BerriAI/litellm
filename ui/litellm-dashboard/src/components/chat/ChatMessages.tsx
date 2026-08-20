@@ -11,6 +11,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
+import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import { ChatMessage } from "./types";
 
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
@@ -248,6 +249,12 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
           <MCPEventsDisplay events={mcpEvents} />
         </div>
       )}
+
+      <ResponseMetrics
+        timeToFirstToken={message.timeToFirstToken}
+        totalLatency={message.totalLatency}
+        usage={message.usage}
+      />
     </div>
   );
 }
@@ -275,7 +282,7 @@ function CopyButton({ text }: { text: string }) {
                 variant="ghost"
                 size="icon-xs"
                 onClick={handleCopy}
-                className={copied ? "text-emerald-600" : "text-muted-foreground hover:text-foreground"}
+                className={copied ? "text-success" : "text-muted-foreground hover:text-foreground"}
               >
                 {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
               </Button>

@@ -36,6 +36,17 @@ The base URL is resolved in this order of precedence:
 3. `base_url` from `~/.litellm/config.json`
 4. `http://localhost:4000`
 
+### Hiding commands from the listings
+
+Deployments that hand `lite` to end users often want to advertise only part of it. Store the commands to keep out of the listings, comma separated:
+
+```bash
+lite config set hidden_commands codex,opencode
+lite config unset hidden_commands   # list everything again
+```
+
+Hidden commands drop out of both `lite --help` and the interactive shell's "Available commands" block, and stay runnable so existing scripts keep working
+
 ## Global Options
 
 - `--version`, `-v`: Print the LiteLLM Proxy client and server version and exit.
@@ -509,6 +520,20 @@ lite up
 This is a one-time file patch and restore, not a live traffic interceptor. A Claude Code session already running before `lite up` started keeps whatever `ANTHROPIC_BASE_URL` and token it loaded at its own startup, and a session still running when `lite up` stops keeps routing through the proxy until it exits; only sessions *started* while the patch is in effect are affected, and only *new* sessions after a restore go back to Anthropic directly.
 
 Cursor is not supported: it has no equivalent file-based config to hot-patch this way, since its model routing lives in its own app storage and is configured through its GUI.
+
+#### Making It Permanent at Login
+
+`lite up` holds the patch only for as long as it runs. To wire Claude Code up once and leave it that way, pass `--config-claude` to `lite login`:
+
+```bash
+lite --base-url https://your-proxy.example.com login --config-claude
+```
+
+It writes the same two settings `lite up` does, `env.ANTHROPIC_BASE_URL` and `apiKeyHelper`, but persistently: there is no backup, nothing to restore, and no foreground process to keep alive. Every other key in `~/.claude/settings.json` is preserved, the file is created if it does not exist, and it is written atomically with owner-only permissions. Plain `lite login` is unchanged; nothing happens to your Claude Code config unless you pass the flag.
+
+Because the credential is reached through `apiKeyHelper` rather than copied into the file, a later `lite login` refreshes it with no further action: Claude Code re-runs the helper on every request and picks up whatever token the most recent login stored. Nothing secret is written to `settings.json`.
+
+Run it again to point Claude Code at a different proxy; the base URL and the helper are both rewritten. `lite up` and `--config-claude` manage the same file, so the flag refuses to run while a `lite up` session holds a backup, and tells you to run `lite down` first, rather than writing settings that `lite up` would silently revert when it stops.
 
 ### QA Complexity-Based Auto-Routing Against Your Real Proxy
 
