@@ -29,6 +29,7 @@ const TEST_TS_FILES_THAT_RENDER_REACT: readonly string[] = [
 ];
 
 const jsdomTier = {
+  pool: "threads" as const,
   environment: "./tests/jsdomFetchEnv.ts",
   setupFiles: ["tests/setupTests.ts"],
   globals: true,
@@ -45,6 +46,7 @@ const config: ViteUserConfig = {
         ...sharedViteConfig,
         test: {
           name: "unit",
+          pool: "threads",
           environment: "node",
           setupFiles: ["tests/setup.unit.ts"],
           globals: true,
