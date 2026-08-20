@@ -216,19 +216,10 @@ class McpChatTool(BaseModel):
     allowed_tools: list[str] | None = None
 
 
-class StreamOptions(BaseModel):
-    """OpenAI `stream_options`: `include_usage` asks for a final usage-only SSE
-    frame, which is where the proxy's `include_cost_in_streaming_usage` setting
-    injects `usage.cost`."""
-
-    include_usage: bool = True
-
-
 class ChatBody(BaseModel):
     model: str
     messages: list[ChatMessage]
     stream: bool = False
-    stream_options: StreamOptions | None = None
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
     temperature: float | None = None
@@ -331,9 +322,6 @@ class CompletionTokensDetails(BaseModel):
 
 
 class Usage(BaseModel):
-    """`cost` exists only on streaming usage frames from a proxy running with
-    `include_cost_in_streaming_usage: true`; providers never send it."""
-
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
@@ -341,7 +329,6 @@ class Usage(BaseModel):
     cache_creation_input_tokens: int | None = None
     prompt_tokens_details: PromptTokensDetails | None = None
     completion_tokens_details: CompletionTokensDetails | None = None
-    cost: float | None = None
 
 
 class ChatResponse(BaseModel):
@@ -462,7 +449,6 @@ class AnthropicMessagesResponse(BaseModel):
     for triage."""
 
     model_config = ConfigDict(extra="allow")
-    id: str | None = None
     model: str | None = None
     content: list[AnthropicContentBlock] | None = None
     choices: list[ChatChoice] | None = None
