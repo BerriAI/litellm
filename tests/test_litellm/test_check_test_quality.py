@@ -454,3 +454,50 @@ def test_a_snapshot_entry_is_suppressible_with_a_reason(tmp_path):
         'original_state["drop_params"] = litellm.drop_params  # test-quality-ok: owned by the SDK config surface',
     )
     assert _conftest_codes(tmp_path, source) == ["TQ007", "TQ007"]
+
+
+_NAMED_MAPPING_CONFTEST = """import litellm
+import pytest
+
+_SCALAR_DEFAULTS = {
+    "num_retries": None,
+    "set_verbose": False,
+}
+_EXTRA_ATTRS = ("api_base", "drop_params")
+
+
+@pytest.fixture(autouse=True)
+def restore_globals():
+    original_state = {}
+    for attr in _SCALAR_DEFAULTS:
+        original_state[attr] = getattr(litellm, attr)
+    for attr in _EXTRA_ATTRS:
+        original_state[attr] = getattr(litellm, attr)
+    yield
+    for attr, value in original_state.items():
+        setattr(litellm, attr, value)
+"""
+
+
+def test_a_save_loop_over_a_module_level_dict_counts_its_keys(tmp_path):
+    # The two largest inventories in the repo name their list instead of spelling it
+    # out, so a rule that only reads literal iterables sees neither.
+    reported = [v.message.split("`")[1] for v in checker.check_file(_written(tmp_path, _NAMED_MAPPING_CONFTEST))]
+    assert sorted(reported) == [
+        "litellm.api_base",
+        "litellm.drop_params",
+        "litellm.num_retries",
+        "litellm.set_verbose",
+    ]
+
+
+def test_a_named_iterable_that_is_not_a_module_constant_is_skipped_quietly(tmp_path):
+    source = _NAMED_MAPPING_CONFTEST.replace("for attr in _EXTRA_ATTRS:", "for attr in dir(litellm):")
+    reported = [v.message.split("`")[1] for v in checker.check_file(_written(tmp_path, source))]
+    assert sorted(reported) == ["litellm.num_retries", "litellm.set_verbose"]
+
+
+def _written(tmp_path, source, name="conftest.py"):
+    path = tmp_path / name
+    path.write_text(source, encoding="utf-8")
+    return path

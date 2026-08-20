@@ -52,7 +52,10 @@ TQ007   A module global that a conftest saves before every test and restores aft
         The save/restore list is a hand-maintained inventory of the leaks the suite
         already knows about, so it is allowed to shrink and never to grow: a new entry
         means one more global whose lifetime the tests manage instead of the code owning
-        it. Give the consumers an injection seam rather than another snapshot line.
+        it. Give the consumers an injection seam rather than another snapshot line. The
+        names are read from the keys the conftest assigns directly and from whatever the
+        save loop iterates, including a module-level tuple or dict it names rather than
+        spells out.
 
 Every rule is suppressible with `# test-quality-ok: <reason>` on the reported
 line, following the repo's `*-ok: <reason>` convention. A suppression without a
@@ -565,7 +568,30 @@ def _snapshot_dict_subscripts(node: ast.AST) -> Iterator[ast.Subscript]:
             yield inner
 
 
+def _module_constants(tree: ast.Module) -> Mapping[str, ast.expr]:
+    return MappingProxyType({
+        target.id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    })
+
+
+def _string_members(node: ast.expr) -> Iterator[tuple[str, int]]:
+    """The string names a collection literal holds: a tuple/list's items, a dict's keys."""
+    elements: Final = (
+        node.elts if isinstance(node, (ast.Tuple, ast.List)) else node.keys if isinstance(node, ast.Dict) else ()
+    )
+    yield from (
+        (element.value, element.lineno)
+        for element in elements
+        if isinstance(element, ast.Constant) and isinstance(element.value, str)
+    )
+
+
 def _snapshotted_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
+    constants: Final = _module_constants(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             yield from (
@@ -573,13 +599,12 @@ def _snapshotted_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
                 for subscript in _snapshot_dict_subscripts(node)
                 if isinstance(subscript.slice, ast.Constant) and isinstance(subscript.slice.value, str)
             )
-        elif isinstance(node, ast.For) and isinstance(node.iter, (ast.Tuple, ast.List)):
-            if any(True for statement in node.body for _ in _snapshot_dict_subscripts(statement)):
-                yield from (
-                    (element.value, element.lineno)
-                    for element in node.iter.elts
-                    if isinstance(element, ast.Constant) and isinstance(element.value, str)
-                )
+        elif isinstance(node, ast.For) and any(
+            True for statement in node.body for _ in _snapshot_dict_subscripts(statement)
+        ):
+            iterable: Final = constants.get(node.iter.id) if isinstance(node.iter, ast.Name) else node.iter
+            if iterable is not None:
+                yield from _string_members(iterable)
 
 
 def iter_conftest_inventory_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
