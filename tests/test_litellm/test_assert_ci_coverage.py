@@ -209,3 +209,67 @@ def test_character_class_globs_match_the_letter_shards_circleci_uses():
 def test_the_repo_as_it_stands_has_no_unrecorded_slice_gap():
     findings = coverage._deselected_everywhere(coverage._load_allowlist())
     assert [f.subject for f in findings] == []
+
+
+def _allowlist(*, tests: tuple[str, ...] = (), dockerfiles: tuple[str, ...] = ()):
+    return coverage.Allowlist(
+        test_paths=(coverage.AllowEntry(paths=tests, reason="r"),) if tests else (),
+        dockerfiles=(coverage.AllowEntry(paths=dockerfiles, reason="r"),) if dockerfiles else (),
+    )
+
+
+def test_an_allowlist_path_whose_file_is_gone_is_reported():
+    # Deleting a suite without deleting its entry leaves a permanent exemption for a
+    # path nothing can ever match, which reads as coverage the repo does not have.
+    findings = coverage._stale_allowlist_paths(
+        _allowlist(tests=("tests/gone/test_a.py",)),
+        test_files=("tests/live/test_b.py",),
+        dockerfiles=(),
+    )
+    assert [f.subject for f in findings] == ["tests/gone/test_a.py"]
+    assert "test_paths" in findings[0].detail
+
+
+def test_an_allowlist_path_that_still_matches_a_file_is_left_alone():
+    findings = coverage._stale_allowlist_paths(
+        _allowlist(tests=("tests/live/test_b.py",)),
+        test_files=("tests/live/test_b.py",),
+        dockerfiles=(),
+    )
+    assert findings == ()
+
+
+def test_a_directory_entry_survives_while_any_file_below_it_remains():
+    findings = coverage._stale_allowlist_paths(
+        _allowlist(tests=("tests/live",)),
+        test_files=("tests/live/nested/test_b.py",),
+        dockerfiles=(),
+    )
+    assert findings == ()
+
+
+def test_a_glob_entry_matching_nothing_is_reported_like_any_other():
+    findings = coverage._stale_allowlist_paths(
+        _allowlist(tests=("tests/live/test_z*.py",)),
+        test_files=("tests/live/test_b.py",),
+        dockerfiles=(),
+    )
+    assert [f.subject for f in findings] == ["tests/live/test_z*.py"]
+
+
+def test_a_stale_dockerfile_entry_is_named_under_its_own_section():
+    findings = coverage._stale_allowlist_paths(
+        _allowlist(dockerfiles=("docker/Dockerfile.gone",)),
+        test_files=(),
+        dockerfiles=("docker/Dockerfile.database",),
+    )
+    assert [(f.subject, "dockerfiles" in f.detail) for f in findings] == [("docker/Dockerfile.gone", True)]
+
+
+def test_the_repo_as_it_stands_has_no_stale_allowlist_entry():
+    findings = coverage._stale_allowlist_paths(
+        coverage._load_allowlist(),
+        test_files=coverage._test_files(),
+        dockerfiles=coverage._dockerfiles(),
+    )
+    assert [f.subject for f in findings] == []

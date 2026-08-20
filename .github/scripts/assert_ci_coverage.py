@@ -368,6 +368,25 @@ def _uncovered_dockerfiles(allowlist: Allowlist, tokens: frozenset[str]) -> tupl
     )
 
 
+def _stale_allowlist_paths(
+    allowlist: Allowlist,
+    *,
+    test_files: tuple[str, ...],
+    dockerfiles: tuple[str, ...],
+) -> tuple[Finding, ...]:
+    sections: Final[tuple[tuple[str, tuple[AllowEntry, ...], tuple[str, ...]], ...]] = (
+        ("test_paths", allowlist.test_paths, test_files),
+        ("dockerfiles", allowlist.dockerfiles, dockerfiles),
+    )
+    return tuple(
+        Finding(subject=path, detail=f"listed under '{section}' but matches no file the census looks at")
+        for section, entries, candidates in sections
+        for entry in entries
+        for path in entry.paths
+        if not any(_token_covers(path, candidate) for candidate in candidates)
+    )
+
+
 def _parse_entry(item: object, section: str) -> AllowEntry:
     if not isinstance(item, dict):
         raise SystemExit(f"{ALLOWLIST_FILE.name}: '{section}' entries must be mappings")
@@ -465,7 +484,14 @@ def main() -> int:
 
     test_findings = _uncovered_tests(allowlist, _invoked_test_tokens(scalars))
     dockerfile_findings = _uncovered_dockerfiles(allowlist, _built_dockerfile_tokens(scalars))
+    stale_findings = _stale_allowlist_paths(allowlist, test_files=_test_files(), dockerfiles=_dockerfiles())
 
+    if stale_findings:
+        _report(
+            "allowlist entries that exempt nothing",
+            stale_findings,
+            "Delete each from .github/ci-coverage-allowlist.yml; the file it named is gone or was renamed.",
+        )
     if test_findings:
         _report(
             "test files that no CI job invokes",
@@ -478,7 +504,7 @@ def main() -> int:
             dockerfile_findings,
             "Build each in a workflow, or list it in .github/ci-coverage-allowlist.yml with a reason.",
         )
-    if test_findings or dockerfile_findings:
+    if stale_findings or test_findings or dockerfile_findings:
         return 1
 
     _write(
