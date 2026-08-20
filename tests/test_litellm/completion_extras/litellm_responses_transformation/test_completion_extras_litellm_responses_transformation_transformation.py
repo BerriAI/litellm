@@ -3485,3 +3485,120 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
     post_kwargs = mock_post.call_args.kwargs
     request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
     assert request_body["tool_choice"] == expected_wire_tool_choice
+
+
+def _make_incomplete_reasoning_only_response(reason):
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    return ResponsesAPIResponse(
+        id="resp_incomplete",
+        created_at=1760144904,
+        error=None,
+        incomplete_details={"reason": reason} if reason else None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.6-sol",
+        object="response",
+        output=[{"type": "reasoning", "id": "rs_1", "summary": [], "content": []}],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=16,
+        previous_response_id=None,
+        reasoning={"effort": "high"},
+        status="incomplete",
+        text={"format": {"type": "text"}},
+        truncation="disabled",
+        usage=ResponseAPIUsage(
+            input_tokens=37,
+            input_tokens_details=None,
+            output_tokens=16,
+            output_tokens_details={"reasoning_tokens": 16},
+            total_tokens=53,
+            cost=None,
+        ),
+        user=None,
+        store=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "reason,expected_finish_reason",
+    [("max_output_tokens", "length"), ("content_filter", "content_filter")],
+)
+def test_transform_response_incomplete_reasoning_only_output(reason, expected_finish_reason):
+    """A reasoning model can spend every output token on reasoning, leaving no
+    message item. That must surface as an empty choice with the mapped
+    finish_reason, not a ValueError that callers turn into a 500."""
+    handler = LiteLLMResponsesTransformationHandler()
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    result = handler.transform_response(
+        model="gpt-5.6-sol",
+        raw_response=_make_incomplete_reasoning_only_response(reason),
+        model_response=_make_empty_model_response(),
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.6-sol"},
+        messages=[{"role": "user", "content": "compute something long"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == expected_finish_reason
+    assert result.choices[0].message.content == ""
+    assert result.usage.prompt_tokens == 37
+    assert result.usage.completion_tokens == 16
+
+
+def test_transform_response_unknown_items_without_incomplete_details_still_raises():
+    handler = LiteLLMResponsesTransformationHandler()
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    with pytest.raises(ValueError, match="Unknown items"):
+        handler.transform_response(
+            model="gpt-5.6-sol",
+            raw_response=_make_incomplete_reasoning_only_response(None),
+            model_response=_make_empty_model_response(),
+            logging_obj=logging_obj,
+            request_data={"model": "gpt-5.6-sol"},
+            messages=[{"role": "user", "content": "compute something long"}],
+            optional_params={},
+            litellm_params={},
+            encoding=Mock(),
+        )
+
+
+@pytest.mark.parametrize(
+    "reason,expected_finish_reason",
+    [("max_output_tokens", "length"), ("content_filter", "content_filter")],
+)
+def test_response_incomplete_stream_event_emits_mapped_finish_reason(reason, expected_finish_reason):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    chunk = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_incomplete",
+            "status": "incomplete",
+            "incomplete_details": {"reason": reason},
+            "output": [{"type": "reasoning", "id": "rs_1", "summary": [], "content": []}],
+            "usage": {"input_tokens": 37, "output_tokens": 16, "total_tokens": 53},
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert len(result.choices) > 0
+    assert result.choices[0].finish_reason == expected_finish_reason

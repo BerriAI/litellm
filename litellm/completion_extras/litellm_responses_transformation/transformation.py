@@ -59,6 +59,7 @@ if TYPE_CHECKING:
         ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
+        ResponsesAPIResponse,
     )
     from litellm.types.utils import Choices
 
@@ -155,6 +156,28 @@ def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFuncti
     if choice_type == "custom":
         return ToolChoiceCustomParam(type="custom", name=name)
     return ToolChoiceFunctionParam(type="function", name=name)
+
+
+def _incomplete_reason_to_finish_reason(reason: str | None) -> str:
+    return "content_filter" if reason == "content_filter" else "length"
+
+
+def _empty_incomplete_choice(raw_response: "ResponsesAPIResponse", output_items: Sequence[object]) -> "Choices":
+    """An incomplete response can carry no message output at all (e.g. every output
+    token spent on reasoning). Chat completions models this as an empty assistant
+    message with finish_reason length/content_filter, not as an error."""
+    from litellm.types.utils import Choices, Message
+
+    incomplete_reason: Final = (
+        raw_response.incomplete_details.reason if raw_response.incomplete_details is not None else None
+    )
+    if incomplete_reason is None:
+        raise ValueError(f"Unknown items in responses API response: {output_items}")
+    return Choices(
+        message=Message(role="assistant", content=""),
+        finish_reason=_incomplete_reason_to_finish_reason(incomplete_reason),
+        index=0,
+    )
 
 
 def _reasoning_item_to_response_input(
@@ -758,16 +781,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 )
 
         # Convert response output to choices using the static helper
-        choices: Final = self._convert_response_output_to_choices(
+        converted_choices: Final = self._convert_response_output_to_choices(
             output_items=output_items,
             handle_raw_dict_callback=self._handle_raw_dict_response_item,
         )
 
-        if len(choices) == 0:
-            if raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None:
-                raise ValueError(f"{model} unable to complete request: {raw_response.incomplete_details.reason}")
-            else:
-                raise ValueError(f"Unknown items in responses API response: {output_items}")
+        choices: Final = converted_choices or [_empty_incomplete_choice(raw_response, output_items)]
 
         setattr(model_response, "choices", choices)
 
@@ -1392,7 +1411,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
-        elif event_type == "response.completed":
+        elif event_type in ("response.completed", "response.incomplete"):
             # Response is fully complete - now we can signal is_finished=True
             # This ensures we don't prematurely end the stream before tool_calls arrive
 
@@ -1407,7 +1426,13 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 if isinstance(item, dict)
             )
 
-            finish_reason: Final = "tool_calls" if has_function_calls else "stop"
+            incomplete_details: Final = (response_data.get("incomplete_details") or {}) if response_data else {}
+            terminal_finish_reason: Final = (
+                "stop"
+                if event_type == "response.completed"
+                else _incomplete_reason_to_finish_reason(incomplete_details.get("reason"))
+            )
+            finish_reason: Final = "tool_calls" if has_function_calls else terminal_finish_reason
 
             # Extract reasoning items with encrypted_content for round-tripping
             completed_reasoning_items: list[_BuiltReasoningItem] | None = None
