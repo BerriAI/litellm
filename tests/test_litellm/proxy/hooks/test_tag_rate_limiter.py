@@ -24,6 +24,7 @@ from litellm.proxy.hooks.tag_rate_limiter import (
     _extract_key_hash,
     _extract_team_id,
     _fixed_length_identity,
+    _BACKGROUND_RELEASE_TASKS,
     _inflight_key,
     _partition_key,
     _PENDING_CONCURRENCY_KEYS_FIELD,
@@ -483,6 +484,79 @@ async def test_filter_deployments_routing_group_does_not_collide_across_differen
         request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     assert result == [healthy[1]]
+
+
+def test_resolve_any_dedups_identical_signature_across_member_model_names():
+    """
+    A real routing-group hop presents every member simultaneously (Router
+    resolves the group name to its full member list for one filtering pass,
+    then picks exactly one afterwards), and resolve_any is called once for
+    that one hop with every member's model_name as a candidate. Two members
+    declaring the identical concurrency signature must resolve to one shared
+    entry for that hop, not two: `async_filter_deployments` checks and
+    atomically increments every entry `resolve_any` returns as belonging to
+    this one hop, so two entries here means the hop reserves capacity twice
+    (once per member) even though only one deployment will actually serve --
+    over-charging the caller's own usage and risking a false 429 against a
+    sibling member that was never over its own limit.
+
+    Admission-level round-trip tests can't distinguish this from "two
+    separate entries with identical limits, always incremented together":
+    every hop that presents the same member set moves both buckets in
+    lockstep regardless of whether they're actually one shared entry or two,
+    so the dedup can only be verified directly at this level.
+    """
+    concurrency_limits = {
+        "concurrency_limits": {
+            "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+        }
+    }
+    index = _build_limits_index(
+        [
+            _deployment("backend-a", "dep-a", concurrency_limits),
+            _deployment("backend-b", "dep-b", concurrency_limits),
+        ]
+    )
+    resolved = index.resolve_any("my-group", team_id=None, candidate_model_names=("backend-a", "backend-b"))
+    assert len(resolved) == 1
+    assert resolved[0].unit == "concurrency"
+    assert resolved[0].entry.limit == 1
+
+
+def test_resolve_any_keeps_divergent_signatures_across_member_model_names_separate():
+    """
+    Companion to the dedup test above: members that genuinely disagree on
+    the limit for the same tag_id+name must not be silently collapsed --
+    which of two different limits would even apply isn't knowable at this
+    admission-time hook, before a specific deployment is picked, so both
+    stay as their own entries (today's pre-existing behavior for a
+    divergent config, left unchanged by the identical-signature dedup).
+    """
+    index = _build_limits_index(
+        [
+            _deployment(
+                "backend-a",
+                "dep-a",
+                {
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    }
+                },
+            ),
+            _deployment(
+                "backend-b",
+                "dep-b",
+                {
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 2, "period_seconds": 300}]
+                    }
+                },
+            ),
+        ]
+    )
+    resolved = index.resolve_any("my-group", team_id=None, candidate_model_names=("backend-a", "backend-b"))
+    assert len(resolved) == 2
+    assert {c.entry.limit for c in resolved} == {1, 2}
 
 
 @pytest.mark.asyncio
@@ -1031,6 +1105,96 @@ async def test_concurrency_slot_released_on_success_frees_capacity(time_controll
     }
     await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
     await asyncio.sleep(0)
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_background_release_tasks_registry_holds_a_reference_until_done():
+    """
+    async_log_success_event fires its release via a bare asyncio.create_task
+    (unlike failure/disconnect, which await it directly) to keep the hot
+    success path from waiting on a Redis round trip. asyncio.create_task's
+    own docs warn the event loop only holds a *weak* reference to a task, so
+    one with no other referrer can be garbage collected before it runs --
+    and by the time it would run here, its keys are already popped out of
+    model_call_details, so a collected task's release is unrecoverable, not
+    merely delayed. _BACKGROUND_RELEASE_TASKS exists to hold a strong
+    reference for exactly as long as the task is pending, then release it via
+    the task's own done-callback -- exercised directly here (an Event gate
+    gives a deterministic pending window; going through the real
+    async_log_success_event doesn't, since its own further awaits let a fast
+    in-memory release resolve before a test could ever observe it pending).
+    """
+    assert len(_BACKGROUND_RELEASE_TASKS) == 0
+    gate = asyncio.Event()
+
+    async def _pending_release():
+        await gate.wait()
+
+    task = asyncio.create_task(_pending_release())
+    _BACKGROUND_RELEASE_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_RELEASE_TASKS.discard)
+
+    assert task in _BACKGROUND_RELEASE_TASKS
+
+    gate.set()
+    await task
+
+    # The done-callback removes it -- the registry doesn't grow unbounded
+    # across requests.
+    assert task not in _BACKGROUND_RELEASE_TASKS
+    assert len(_BACKGROUND_RELEASE_TASKS) == 0
+
+
+@pytest.mark.asyncio
+async def test_success_event_release_is_wired_through_the_background_registry(time_controller):
+    """
+    End-to-end check that async_log_success_event's fire-and-forget release
+    is genuinely wired through _BACKGROUND_RELEASE_TASKS, not a bare
+    unreferenced asyncio.create_task -- the registry must be empty again once
+    the (fast, in-memory) release has had a chance to run, and the release
+    itself must have actually happened.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 0,
+        "response_cost": 0,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+
+    # The registry was actually populated: proves the release ran through
+    # _BACKGROUND_RELEASE_TASKS, not a bare unreferenced asyncio.create_task
+    # (which would never touch this set at all, and an "empty at the end"
+    # check alone can't tell the two apart -- an empty registry throughout
+    # would satisfy that just as well as one that filled and drained).
+    assert len(_BACKGROUND_RELEASE_TASKS) == 1
+
+    # Two ticks: one for the release task itself to finish (it may already be
+    # done by the time async_log_success_event returns, given that method's
+    # own further awaits), and one for its done-callback -- scheduled via
+    # call_soon when the task completes -- to actually run and discard it.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert len(_BACKGROUND_RELEASE_TASKS) == 0
 
     result = await limiter.async_filter_deployments(
         model="grp",

@@ -75,6 +75,19 @@ _UNIT_TO_RATE_LIMIT_TYPE: Final[Mapping[_LimitUnit, RateLimitType]] = MappingPro
 # every one of these call sites just to immediately call `.get()` on it.
 _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
+# `asyncio.create_task`'s own docs: "Save a reference to the result of this
+# function, to avoid a task disappearing mid-execution. The event loop only
+# keeps weak references to tasks. A task that isn't referenced elsewhere may
+# get garbage collected at any time, even before it's done." The success path
+# below deliberately fires-and-forgets its release (unlike the failure/
+# disconnect paths, which await it directly) to keep the hot success-response
+# path from waiting on a Redis round trip; by the time that background task
+# would run, its keys have already been popped out of model_call_details, so
+# a collected task's release is unrecoverable, not just delayed. Holding a
+# strong reference here until the task's own completion callback discards it
+# is the standard fix.
+_BACKGROUND_RELEASE_TASKS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: see comment above
+
 # Single-key atomic check-and-increment. Deliberately one key per script call
 # (never a batch of differently-hash-tagged keys in one call): every tag_rl
 # key carries its own self-contained {..} hash tag so unrelated buckets never
@@ -357,15 +370,37 @@ class _LimitsIndex:
         stamped with the `model_name` it actually came from (`resolved_group`)
         so hashing stays namespaced per underlying group even when the
         candidates span more than one `model_name`.
+
+        Members declaring the identical signature and scope are deduped to
+        one shared entry: only one deployment in the group ends up actually
+        serving a given hop, but every member's own `model_name` is resolved
+        independently above, so an undeduped union would check and charge
+        every member's bucket for that one hop -- request/concurrency
+        capacity a caller never actually used, and a false 429 for a sibling
+        member that was never over its own limit. Divergent configs across
+        model_names (different limit/period/scope for the same tag_id+name)
+        are left as separate entries, same as before this dedup: resolving
+        that ambiguity needs knowing which deployment will be picked, which
+        isn't known yet at this admission-time hook.
         """
         direct: Final = self.resolve(model, team_id)
         if direct:
             return direct
-        return tuple(
-            replace(limit, resolved_group=name)
-            for name in frozenset(candidate_model_names)
-            for limit in self.by_model_name.get(name, ())
-        )
+        deduped: Final[dict[tuple[object, ...], _ConfiguredLimit]] = {}  # mutable-ok: see docstring above
+        for name in frozenset(candidate_model_names):
+            for limit in self.by_model_name.get(name, ()):
+                key = (
+                    limit.unit,
+                    limit.entry.tag_id,
+                    limit.entry.name,
+                    limit.entry.limit,
+                    limit.entry.period_seconds,
+                    limit.entry.scope_by_key_hash,
+                    limit.deployment_scope,
+                    limit.team_scope,
+                )
+                deduped.setdefault(key, replace(limit, resolved_group=name))  # mutable-ok: see docstring above
+        return tuple(deduped.values())
 
 
 def _team_alias_key(deployment: Mapping[str, object]) -> tuple[str, str] | None:
@@ -1178,7 +1213,9 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         release_keys: Final = self._pop_pending_concurrency_keys(kwargs)
         if release_keys:
-            asyncio.create_task(self._release_keys(release_keys))
+            release_task: Final = asyncio.create_task(self._release_keys(release_keys))
+            _BACKGROUND_RELEASE_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_RELEASE_TASKS's own docstring
+            release_task.add_done_callback(_BACKGROUND_RELEASE_TASKS.discard)
 
         if self.llm_router is None:
             return
