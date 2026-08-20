@@ -30,6 +30,7 @@ import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
 import { hydrateKeywordTierRules, serializeKeywordTierRules } from "../add_model/complexity_router_keywords";
 import {
   hydrateDimensionWeights,
+  hydrateReasoningOverrideMinScore,
   hydrateTierBoundaries,
   hydrateTokenThresholds,
 } from "../add_model/heuristic_scoring_knobs";
@@ -84,6 +85,7 @@ const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tier_boundaries",
   "token_thresholds",
   "dimension_weights",
+  "reasoning_override_min_score",
 ]);
 
 // Managed only when the caller passes the corresponding state. A caller that does not render
@@ -200,6 +202,10 @@ export const buildUpdatedComplexityRouterConfig = (
     ...(scorerRuns && value.tier_boundaries !== undefined && { tier_boundaries: value.tier_boundaries }),
     ...(scorerRuns && value.token_thresholds !== undefined && { token_thresholds: value.token_thresholds }),
     ...(scorerRuns && value.dimension_weights !== undefined && { dimension_weights: value.dimension_weights }),
+    ...(scorerRuns &&
+      value.reasoning_override_min_score !== undefined && {
+        reasoning_override_min_score: value.reasoning_override_min_score,
+      }),
   };
 };
 
@@ -367,6 +373,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           tier_boundaries: hydrateTierBoundaries(parsedConfig.tier_boundaries),
           token_thresholds: hydrateTokenThresholds(parsedConfig.token_thresholds),
           dimension_weights: hydrateDimensionWeights(parsedConfig.dimension_weights),
+          reasoning_override_min_score: hydrateReasoningOverrideMinScore(parsedConfig.reasoning_override_min_score),
           session_affinity:
             typeof parsedConfig.session_affinity === "boolean"
               ? parsedConfig.session_affinity

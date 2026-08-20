@@ -180,19 +180,11 @@ describe("TopKeyView", () => {
     expect(tableViewButton).toHaveClass("bg-blue-100");
   });
 
-  it("should call setTopKeysLimit when limit is changed via Segmented control", async () => {
+  it("should call setTopKeysLimit when limit is changed via the segmented control", async () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
 
-    const limit10Radio = screen.getByRole("radio", { name: "10" });
-    const limit10Label = limit10Radio.closest("label");
-    if (limit10Label) {
-      await user.click(limit10Label);
-    } else {
-      // Fallback: click the div with title="10"
-      const limit10Div = screen.getByTitle("10");
-      await user.click(limit10Div);
-    }
+    await user.click(screen.getByRole("radio", { name: "10" }));
 
     expect(mockSetTopKeysLimit).toHaveBeenCalledWith(10);
   });

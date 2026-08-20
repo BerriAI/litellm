@@ -24053,6 +24053,11 @@ export interface components {
              */
             master_key?: string | null;
             /**
+             * Max Batch File Size Mb
+             * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
+             */
+            max_batch_file_size_mb?: number | null;
+            /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
              */
@@ -27566,6 +27571,8 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Endpoint Uplift Multiplier */
+            regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
@@ -32481,6 +32488,11 @@ export interface components {
              */
             reasoning_keywords?: string[] | null;
             /**
+             * Reasoning Override Min Score
+             * @description Minimum weighted score a request must reach before 2+ reasoning markers may promote it to the reasoning tier. Unset tracks tier_boundaries.simple_medium, so the override never rescues a request the scorer placed in the cheapest tier; 0 restores the unconditional override
+             */
+            reasoning_override_min_score?: number | null;
+            /**
              * Reminder Markers
              * @description Override the delimiter pairs used to recognize and strip harness-injected reminder blocks before classification. A harness that wraps injected context differently per agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than adds to, the built-in default of ('<system-reminder>', '</system-reminder>'), so a harness that also emits that pair lists it too. Matching is case-insensitive.
              */
@@ -33502,6 +33514,8 @@ export interface components {
             escalation_keyword?: string;
             /** Matched Keyword */
             matched_keyword?: string;
+            /** Reasoning Override Min Score */
+            reasoning_override_min_score?: number;
             /** Request Type */
             request_type?: string;
             /** Routed Model */
@@ -36731,6 +36745,8 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Endpoint Uplift Multiplier */
+            regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */

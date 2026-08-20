@@ -153,7 +153,7 @@ describe("Guardrail Info", () => {
       expect(getByText("Guardrail Settings")).toBeInTheDocument();
     });
 
-    await userEvent.hover(within(container).getByRole("img", { name: "info-circle" }));
+    await userEvent.hover(within(container).getByRole("img", { name: "Config guardrail details" }));
 
     expect(await findByText("Guardrail is defined in the config file and cannot be edited.")).toBeInTheDocument();
   });

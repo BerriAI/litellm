@@ -1,8 +1,8 @@
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
-import { UploadOutlined } from "@ant-design/icons";
 import { Input } from "@/components/ui/input";
 import { Col, Input as AntdInput, Row, Select, Typography, Upload, UploadProps } from "antd";
 import { Button } from "@/components/ui/button";
+import { Upload as UploadIcon } from "lucide-react";
 import React from "react";
 import { useFormContext } from "react-hook-form";
 import { antdRequired } from "../common_components/antdFormRules";
@@ -257,7 +257,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
           }}
         >
           <Button variant="outline">
-            <UploadOutlined />
+            <UploadIcon />
             Click to Upload
           </Button>
         </Upload>

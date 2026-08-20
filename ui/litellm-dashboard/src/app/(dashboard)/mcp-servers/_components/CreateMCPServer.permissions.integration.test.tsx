@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
 import CreateMCPServer from "./CreateMCPServer";
-import { selectAntOption } from "./testUtils";
+import { selectOption } from "./testUtils";
 
 vi.mock("@/components/networking", () => ({
   createMCPServer: vi.fn(),
@@ -58,25 +58,29 @@ const defaultProps = {
 
 const getServerNameInput = () => document.getElementById("server_name") as HTMLInputElement;
 
-const switchFor = (labelText: string): HTMLElement => {
-  const label = screen.getByText(labelText);
-  const row = label.closest(".flex.items-start.justify-between");
-  const control = row?.querySelector("button[role='switch']");
-  if (control === null || control === undefined) {
-    throw new Error(`no switch found for "${labelText}"`);
+// The switches live behind a collapsed panel, so they only reach the accessibility tree once an
+// operator expands it.
+const expandPermissionPanel = async (): Promise<void> => {
+  const trigger = screen.getByRole("button", { name: /Permission Management/ });
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    await userEvent.setup({ delay: null }).click(trigger);
   }
-  return control as HTMLElement;
+};
+
+const switchFor = async (labelText: string): Promise<HTMLElement> => {
+  await expandPermissionPanel();
+  return screen.getByRole("switch", { name: labelText });
 };
 
 const fillMinimalHttpServer = async (name: string) => {
-  await selectAntOption("Transport Type", "Streamable HTTP");
+  await selectOption("Transport Type", "Streamable HTTP");
   await waitFor(() => {
     expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
   });
   const user = userEvent.setup({ delay: null });
   await user.type(getServerNameInput(), name);
   await user.type(screen.getByPlaceholderText("https://your-mcp-server.com"), "https://example.com/mcp");
-  await selectAntOption("Authentication", "None");
+  await selectOption("Authentication", "None");
 };
 
 const submitAndReadPayload = async () => {
@@ -120,8 +124,9 @@ describe("CreateMCPServer permission toggles reaching the payload", () => {
     render(<CreateMCPServer {...defaultProps} />);
     await fillMinimalHttpServer("Perm_Server");
 
+    const allowAllKeys = await switchFor("Allow All LiteLLM Keys");
     await act(async () => {
-      fireEvent.click(switchFor("Allow All LiteLLM Keys"));
+      fireEvent.click(allowAllKeys);
     });
 
     const payload = await submitAndReadPayload();
@@ -133,7 +138,7 @@ describe("CreateMCPServer permission toggles reaching the payload", () => {
     render(<CreateMCPServer {...defaultProps} />);
     await fillMinimalHttpServer("Perm_Server");
 
-    const internalOnly = switchFor("Internal network only");
+    const internalOnly = await switchFor("Internal network only");
     expect(internalOnly).toHaveAttribute("aria-checked", "false");
 
     await act(async () => {

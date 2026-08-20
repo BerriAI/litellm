@@ -1739,18 +1739,18 @@ def _make_batch_input_bytes(n_rows: int, padding: int = 200) -> bytes:
     return ("\n".join(rows)).encode("utf-8")
 
 
-def test_iter_batch_input_entries_matches_dict_list():
+def test_iter_batch_output_entries_matches_dict_list():
     from litellm.batches.batch_utils import (
         _get_file_content_as_dictionary,
-        _iter_batch_input_entries,
+        _iter_batch_output_entries,
     )
 
     raw = _make_batch_input_bytes(50)
-    streamed = list(_iter_batch_input_entries(raw))
+    streamed = list(_iter_batch_output_entries(raw))
     assert streamed == _get_file_content_as_dictionary(raw)
     assert streamed[0]["custom_id"] == "request-0"
     # tolerant of blank lines and a missing trailing newline
-    assert list(_iter_batch_input_entries(raw + b"\n\n")) == streamed
+    assert list(_iter_batch_output_entries(raw + b"\n\n")) == streamed
 
 
 def test_streaming_count_peak_below_dict_list():
@@ -1759,7 +1759,7 @@ def test_streaming_count_peak_below_dict_list():
 
     from litellm.batches.batch_utils import (
         _get_file_content_as_dictionary,
-        _iter_batch_input_entries,
+        _iter_batch_output_entries,
     )
 
     raw = _make_batch_input_bytes(8000)
@@ -1777,7 +1777,7 @@ def test_streaming_count_peak_below_dict_list():
     def _stream():
         count = 0
         models: set = set()
-        for entry in _iter_batch_input_entries(raw):
+        for entry in _iter_batch_output_entries(raw):
             count += 1
             model = (entry.get("body") or {}).get("model")
             if model:

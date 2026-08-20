@@ -971,8 +971,8 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityCall).toHaveBeenCalled();
       });
 
-      // Should still render the data from the paginated fallback
-      expect(screen.getByText("1,500")).toBeInTheDocument();
+      // Should still render the data from the paginated fallback, which lands a render after the call
+      expect(await screen.findByText("1,500")).toBeInTheDocument();
     });
 
     it("should stop showing the previous range's paginated pages while a new range is in flight", async () => {
