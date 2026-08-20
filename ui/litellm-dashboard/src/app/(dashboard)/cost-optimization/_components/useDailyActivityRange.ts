@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 
 import { userDailyActivityAggregatedCall, userDailyActivityCall } from "@/components/networking";
 import { DailyData } from "@/components/UsagePage/types";
-import { all_admin_roles } from "@/utils/roles";
+import { spendScopeUserId } from "@/utils/roles";
 import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -71,5 +71,5 @@ export const useDailyActivityRange = (
   userRole: string,
 ): DailyActivityRange =>
   useScopedDailyActivityRange(accessToken, {
-    userId: all_admin_roles.includes(userRole) ? null : userId,
+    userId: spendScopeUserId(userRole, userId),
   });

@@ -8,7 +8,7 @@ import SummaryCard from "@/components/shared/SummaryCard";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles } from "@/utils/roles";
+import { hasProxyWideSpendView, spendScopeUserId } from "@/utils/roles";
 import {
   autorouterOf,
   cacheHitRatio,
@@ -39,12 +39,12 @@ interface KeySavingsTabProps {
 }
 
 const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, userId, userRole }) => {
-  // Admins read the whole key. For anyone else the endpoint requires the caller's own user_id
-  // and applies it alongside the key filter, so the figures cover only that viewer's requests
-  // on this key -- said plainly in the scope note below rather than left to be misread as the total.
-  const isAdminViewer = all_admin_roles.includes(userRole);
+  // Proxy admins read the whole key. For anyone else the endpoint applies the caller's own user_id
+  // alongside the key filter, so the figures cover only that viewer's requests on this key -- said
+  // plainly in the scope note below rather than left to be misread as the key's total.
+  const readsWholeKey = hasProxyWideSpendView(userRole);
   const activity = useScopedDailyActivityRange(accessToken, {
-    userId: isAdminViewer ? null : userId,
+    userId: spendScopeUserId(userRole, userId),
     apiKey: keyToken,
   });
 
@@ -105,6 +105,14 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
 
   const isLoading = loading || isFetchingMore;
   const hasRows = results.length > 0;
+  const chartProps = {
+    data: overTime,
+    index: "date",
+    categories: SAVINGS_SERIES,
+    colors: SAVINGS_COLORS,
+    valueFormatter: usd,
+    showLegend: false,
+  };
 
   return (
     <div className="w-full space-y-6">
@@ -113,7 +121,7 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
-      {!isAdminViewer && (
+      {!readsWholeKey && (
         <p className="text-sm text-muted-foreground" data-testid="key-savings-scope-note">
           Showing your own requests on this key. A key shared across a team will have spend from other members that is
           not counted here.
@@ -165,34 +173,19 @@ const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, us
           </CardAction>
         </CardHeader>
         <CardContent>
-          {!hasRows ? (
-            // Distinguishes "still fetching" from "this key genuinely had no traffic": an empty
-            // chart alone reads as a broken panel, and a $0.00 tile reads as a real zero.
+          {/* Distinguishes "still fetching" from "this key genuinely had no traffic": an empty
+              chart alone reads as a broken panel, and a $0.00 tile reads as a real zero. */}
+          {!hasRows && (
             <p className="py-12 text-center text-sm text-muted-foreground" data-testid="key-savings-empty">
               {isLoading ? "Loading savings..." : "No usage recorded for this key in this range."}
             </p>
-          ) : accumulation === "cumulative" ? (
-            <AreaChart
-              data={overTime}
-              index="date"
-              categories={SAVINGS_SERIES}
-              colors={SAVINGS_COLORS}
-              valueFormatter={usd}
-              showLegend={false}
-              showDots={overTime.length <= MAX_POINTS_WITH_DOTS}
-            />
-          ) : (
-            // Not stacked: auto-router can go negative on a cold-cache write, and stacking
-            // would draw that below the axis while the rest of the bar still read as the total.
-            <BarChart
-              data={overTime}
-              index="date"
-              categories={SAVINGS_SERIES}
-              colors={SAVINGS_COLORS}
-              valueFormatter={usd}
-              showLegend={false}
-            />
           )}
+          {hasRows && accumulation === "cumulative" && (
+            <AreaChart {...chartProps} showDots={overTime.length <= MAX_POINTS_WITH_DOTS} />
+          )}
+          {/* Not stacked: auto-router can go negative on a cold-cache write, and stacking would
+              draw that below the axis while the rest of the bar still read as the total. */}
+          {hasRows && accumulation !== "cumulative" && <BarChart {...chartProps} />}
         </CardContent>
       </Card>
     </div>

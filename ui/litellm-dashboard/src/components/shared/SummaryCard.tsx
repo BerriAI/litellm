@@ -19,15 +19,17 @@ export interface SummaryCardProps {
  * Shared by the proxy-wide Cost Optimization usage tab and the per-key savings tab so both
  * surfaces present the same figures identically.
  */
+const slugOf = (label: string): string => label.toLowerCase().replace(/\s+/g, "-");
+
 const SummaryCard = ({ label, value, hint, info }: SummaryCardProps) => (
-  <Card>
+  <Card data-testid={`summary-card-${slugOf(label)}`}>
     <CardHeader className="flex flex-row items-center justify-between space-y-0">
       <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
       {info && (
         <Popover>
           <PopoverTrigger
             aria-label={`How ${label.toLowerCase()} is calculated`}
-            data-testid={`summary-card-info-${label.toLowerCase().replace(/\s+/g, "-")}`}
+            data-testid={`summary-card-info-${slugOf(label)}`}
             className="cursor-pointer text-muted-foreground hover:text-foreground"
           >
             <Info className="size-3.5" />
