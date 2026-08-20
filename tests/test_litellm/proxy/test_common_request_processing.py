@@ -5519,6 +5519,91 @@ class TestStreamingClientDisconnectBilling:
 
         proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
+    async def _bill_and_collect_success_event(self, prepare=None):
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await self._start_partial_stream()
+            if prepare is not None:
+                prepare(response)
+            billed = await _bill_partial_streamed_spend_on_disconnect(
+                {"litellm_logging_obj": response.logging_obj}, response
+            )
+            assert billed is True
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+        finally:
+            litellm.callbacks = original_callbacks
+        assert len(recorder.success_events) == 1
+        return recorder.success_events[0]
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_prices_alias_restamped_chunks_at_real_model(self):
+        assert "openai/my-public-alias" not in litellm.model_cost
+
+        def restamp_chunks_to_alias(response):
+            for chunk in response.chunks:
+                chunk.model = "my-public-alias"
+
+        event = await self._bill_and_collect_success_event(restamp_chunks_to_alias)
+
+        assert event["response_obj"].model == "gpt-4o-mini"
+        standard_logging_object = event["kwargs"]["standard_logging_object"]
+        assert standard_logging_object["response_cost"] > 0.0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_zero_fills_missing_cache_fields(self):
+        event = await self._bill_and_collect_success_event()
+
+        usage = event["response_obj"].usage
+        assert getattr(usage, "cache_creation_input_tokens", None) == 0
+        assert getattr(usage, "cache_read_input_tokens", None) == 0
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_keeps_cache_values_recovered_from_chunks(self):
+        from litellm.types.utils import (
+            Delta,
+            ModelResponseStream,
+            StreamingChoices,
+            Usage,
+        )
+
+        def append_usage_chunk(response):
+            response.chunks.append(
+                ModelResponseStream(
+                    id=response.chunks[0].id,
+                    model="gpt-4o-mini",
+                    object="chat.completion.chunk",
+                    choices=[
+                        StreamingChoices(
+                            finish_reason=None,
+                            index=0,
+                            delta=Delta(content=" and more", role="assistant"),
+                        )
+                    ],
+                    usage=Usage(
+                        prompt_tokens=40,
+                        completion_tokens=5,
+                        total_tokens=45,
+                        cache_read_input_tokens=7,
+                        cache_creation_input_tokens=3,
+                    ),
+                )
+            )
+
+        event = await self._bill_and_collect_success_event(append_usage_chunk)
+
+        usage = event["response_obj"].usage
+        assert getattr(usage, "cache_read_input_tokens", None) == 7
+        assert getattr(usage, "cache_creation_input_tokens", None) == 3
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 7
+
 
 def _apply_stream_usage_tracking(
     data: dict,

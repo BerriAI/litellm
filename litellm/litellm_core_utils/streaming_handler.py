@@ -2315,10 +2315,18 @@ class CustomStreamWrapper:
         if self.logging_obj is None or not self.chunks:
             return
         try:
-            partial_response: Final = litellm.stream_chunk_builder(chunks=self.chunks)
+            partial_response: Final = litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages if isinstance(self.messages, list) else None,
+            )
+            if partial_response is None:
+                return
             usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
             if usage is None:
                 return
+            if self.model:
+                partial_response.model = self.model
+            zero_fill_missing_cache_usage_fields(usage)
             self.logging_obj.model_call_details["combined_usage_object"] = usage
             self.logging_obj.model_call_details["response_cost"] = (
                 self.logging_obj._response_cost_calculator(result=partial_response) or 0.0
@@ -2437,6 +2445,15 @@ class CustomStreamWrapper:
                 return chunk[_length_of_sse_data_prefix:]
 
         return chunk
+
+
+def zero_fill_missing_cache_usage_fields(usage: Usage) -> None:
+    if getattr(usage, "cache_creation_input_tokens", None) is None:
+        usage.cache_creation_input_tokens = 0  # rebind-ok: in-place zero-fill is the contract
+    if getattr(usage, "cache_read_input_tokens", None) is None:
+        usage.cache_read_input_tokens = 0  # rebind-ok: in-place zero-fill is the contract
+    if usage.prompt_tokens_details is None:
+        usage.prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=0)  # rebind-ok: zero-fill in place
 
 
 _TokenDetails = TypeVar("_TokenDetails", PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper)
