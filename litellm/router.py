@@ -52,7 +52,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
@@ -10570,6 +10570,64 @@ class Router:
             return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
         raise ValueError("Either messages or input must be provided to count tokens")
 
+    def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
+        """The deployment's declared context window, or None when it declares none or cannot be resolved."""
+        try:
+            model_info: Final = self.get_router_model_info(
+                deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
+                received_model_name=model,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_max_input_tokens: skipping deployment. Got - %s", e
+            )
+            return None
+        max_input_tokens: Final = model_info.get("max_input_tokens")
+        return max_input_tokens if isinstance(max_input_tokens, int) else None
+
+    def _pre_call_checks_need_token_count(
+        self, model: str, healthy_deployments: Sequence[Mapping[str, object]]
+    ) -> bool:
+        """Whether any healthy deployment declares a context window that a token count could exceed.
+
+        Resolves each deployment the way ``_pre_call_checks`` does, so one unmappable deployment
+        cannot hide a later one that does declare a limit.
+        """
+        return any(
+            self._deployment_max_input_tokens(model, deployment) is not None for deployment in healthy_deployments
+        )
+
+    async def _acount_pre_call_check_tokens(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        messages: Sequence[Mapping[str, str]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> int | None:
+        """Count input tokens off the event loop, so a multi-MB prompt cannot stall the proxy.
+
+        Returns None when no deployment limits its context window, and when counting fails. The
+        caller pairs this with ``skip_inline_token_count`` so neither case puts the count back on
+        the loop: a failed count leaves the deployments unfiltered, exactly as before.
+        """
+        if messages is None and input is None:
+            return None
+        raw_instructions: Final = request_kwargs.get("instructions") if request_kwargs else None
+        try:
+            if not self._pre_call_checks_need_token_count(model, healthy_deployments):
+                return None
+            return await asyncify(self._count_pre_call_check_tokens)(
+                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
+                input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
+                instructions=raw_instructions if isinstance(raw_instructions, str) else None,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
+            verbose_router_logger.error(
+                "litellm.router.py::_acount_pre_call_check_tokens: failed to count tokens. Got - %s", e
+            )
+            return None
+
     def _pre_call_checks(
         self,
         model: str,
@@ -10577,6 +10635,8 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         request_kwargs: dict | None = None,
+        input_token_count: int | None = None,
+        skip_inline_token_count: bool = False,
     ):
         """
         Filter out model in model group, if:
@@ -10598,7 +10658,9 @@ class Router:
         # Token counting (tiktoken) is the dominant on-loop cost for large prompts.
         # Only count when a deployment actually declares max_input_tokens, and count
         # at most once; for model groups with no context-window limit it is skipped.
-        input_tokens: int | None = None
+        # Async callers pass the count in, already computed off the event loop, and set
+        # skip_inline_token_count so a failed off-loop count is not retried back on the loop.
+        input_tokens: int | None = input_token_count
 
         _context_window_error = False
         _potential_error_str = ""
@@ -10633,6 +10695,8 @@ class Router:
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
                 if isinstance(max_input_tokens, int) and has_countable_input:
                     if input_tokens is None:
+                        if skip_inline_token_count:
+                            return _returned_deployments
                         try:
                             input_tokens = self._count_pre_call_check_tokens(
                                 messages=messages, input=input, instructions=instructions
@@ -11115,12 +11179,21 @@ class Router:
         )
 
         if self.enable_pre_call_checks and (messages is not None or input is not None):
+            deployments_to_check: Final = cast(list[dict], healthy_deployments)
             healthy_deployments = self._pre_call_checks(
                 model=model,
-                healthy_deployments=cast(list[dict], healthy_deployments),
+                healthy_deployments=deployments_to_check,
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                input_token_count=await self._acount_pre_call_check_tokens(
+                    model=model,
+                    healthy_deployments=deployments_to_check,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                ),
+                skip_inline_token_count=True,
             )
         # check if user wants to do tag based routing
         healthy_deployments = await get_deployments_for_tag(

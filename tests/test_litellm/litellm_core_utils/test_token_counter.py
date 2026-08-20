@@ -1,5 +1,6 @@
 #### What this tests ####
 #    This tests litellm.token_counter.token_counter() function
+import importlib
 import os
 import sys
 import time
@@ -7,6 +8,7 @@ import traceback
 from unittest.mock import MagicMock
 
 import pytest
+import tiktoken
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -16,6 +18,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
+import litellm.constants
+from litellm.litellm_core_utils.token_counter import _get_tiktoken_count_function
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
 from tests.test_litellm.litellm_core_utils.messages_with_counts import (
@@ -52,6 +56,73 @@ def test_token_counter_basic():
         )
         == 19
     )
+
+
+def test_token_counter_large_repeated_text_is_fast():
+    messages = [{"role": "user", "content": [{"type": "text", "text": "A" * 1024 * 1024}]}]
+
+    start_time = time.perf_counter()
+    tokens = token_counter_new(model="us.anthropic.claude-sonnet-4-6", messages=messages)
+    elapsed = time.perf_counter() - start_time
+
+    assert elapsed < 2, f"Token counting took too long: {elapsed:.2f}s"
+    assert tokens > 0
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Short text",
+        "This is a normal message with punctuation, numbers, and a few words.",
+    ],
+)
+def test_token_counter_short_text_matches_tiktoken(text):
+    encoding = tiktoken.get_encoding("cl100k_base")
+    expected = len(encoding.encode(text, disallowed_special=()))
+
+    assert token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text) == expected
+
+
+def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
+    text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
+    encoding = tiktoken.get_encoding("cl100k_base")
+    expected = len(encoding.encode(text, disallowed_special=()))
+
+    actual = token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text)
+
+    assert abs(actual - expected) <= 4
+
+
+@pytest.mark.parametrize(
+    "configured",
+    ["0", "-1", "-1024", "not-an-int", "", "   ", "999999999", "inf", "1e9"],
+)
+def test_invalid_chunk_size_config_stays_usable(monkeypatch, configured):
+    """A misconfigured chunk size must not raise, count zero, or restore the quadratic encode cost."""
+    monkeypatch.setenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS", configured)
+    try:
+        reloaded = importlib.reload(litellm.constants)
+        chunk_size = reloaded.TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
+        assert 1 <= chunk_size <= reloaded.TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS
+
+        encoding = tiktoken.get_encoding("cl100k_base")
+        count_tokens = _get_tiktoken_count_function(
+            lambda text: len(encoding.encode(text, disallowed_special=())),
+            chunk_size=chunk_size,
+        )
+        assert count_tokens("The quick brown fox jumps over the lazy dog. " * 40) > 0
+    finally:
+        monkeypatch.delenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS")
+        importlib.reload(litellm.constants)
+
+
+def test_valid_chunk_size_config_is_honoured(monkeypatch):
+    monkeypatch.setenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS", "2048")
+    try:
+        assert importlib.reload(litellm.constants).TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS == 2048
+    finally:
+        monkeypatch.delenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS")
+        importlib.reload(litellm.constants)
 
 
 def test_token_counter_with_prefix():

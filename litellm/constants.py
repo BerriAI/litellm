@@ -3,7 +3,7 @@ import sys
 from types import MappingProxyType
 from typing import Final, Literal
 
-from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_or_none
+from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
 
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
@@ -323,6 +323,17 @@ DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_MOCK_RE
 DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT", 20))
 MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES: Final = int(os.getenv("MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES", 768))
 MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES: Final = int(os.getenv("MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES", 2000))
+# tiktoken's BPE merge loop is quadratic in the length of a single regex piece, so a long run of one
+# repeated character (dot leaders, whitespace, zero-padded base64) can take minutes on a multi-MB payload.
+# Encoding in chunks makes the cost linear, at a drift of at most ~1 token per chunk boundary. The upper
+# bound keeps a misconfigured chunk size from restoring the quadratic cost this exists to remove.
+TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS: Final = 4096
+TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS: Final = get_env_int_in_range(
+    "TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS",
+    default=1024,
+    minimum=1,
+    maximum=TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS,
+)
 MAX_TILE_WIDTH: Final = int(os.getenv("MAX_TILE_WIDTH", 512))
 MAX_TILE_HEIGHT: Final = int(os.getenv("MAX_TILE_HEIGHT", 512))
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS: Final = float(os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000))
