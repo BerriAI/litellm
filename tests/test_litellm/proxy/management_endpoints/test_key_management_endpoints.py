@@ -17110,7 +17110,8 @@ async def test_key_budgets_probe_every_request_model_that_maps_onto_a_per_model_
     assert all(row.entity_label == "gpt-5" and row.source == "key.model_max_budget[gpt-5]" for row in rows.values())
     assert rows["openai/gpt-5"].spend == 6.0
     assert rows["openai/gpt-5"].status == "exceeded"
-    assert rows["gpt-5"].spend is None
+    assert rows["gpt-5"].spend == 0.0
+    assert rows["gpt-5"].spend_state == "no_counter"
     assert rows["gpt-5"].status == "ok", "a model with no counter of its own is not over the cap"
 
 
@@ -17220,11 +17221,14 @@ async def test_key_budgets_warn_on_every_row_when_custom_auth_skips_the_read_tim
 
 
 @pytest.mark.asyncio
-async def test_key_budgets_never_pair_a_missing_spend_state_with_a_number():
+async def test_key_budgets_only_blank_the_numbers_on_the_state_that_means_we_do_not_know():
     """
-    `spend_state` is the only thing that stops a blank cell rendering as `$0.00` at 0% of the meter,
-    so a row that says the number is missing must not also carry one, or anything derived from one.
+    The two non-live states are not the same kind of absence. A counter that does not exist yet is
+    enforced as zero, so the row carries that zero and the full headroom, and `spend_state` is what
+    says the zero is not a reading. A failed read knows nothing, so it carries nothing: sending zero
+    there would render as untouched headroom on a budget that may well be exhausted.
     """
+
     async def _explode(**kwargs):
         raise RuntimeError("redis is down")
 
@@ -17238,8 +17242,12 @@ async def test_key_budgets_never_pair_a_missing_spend_state_with_a_number():
     states = {e.spend_state for e in budgets}
     assert states == {"live", "no_counter", "unavailable"}, f"all three states must occur here, saw {states}"
     for entry in budgets:
-        assert (entry.spend is None) == (entry.spend_state != "live"), entry
+        assert (entry.spend is None) == (entry.spend_state == "unavailable"), entry
         assert entry.spend is not None or entry.remaining is None, entry
+        if entry.spend_state == "no_counter":
+            assert entry.spend == 0.0, entry
+            assert entry.remaining == entry.max_budget, entry
+            assert entry.status != "exceeded", entry
 
 
 @pytest.mark.asyncio
@@ -17266,7 +17274,8 @@ async def test_key_budgets_tell_a_cold_per_model_counter_apart_from_a_budget_tha
         )
 
     cold_entry = next(e for e in cold_budgets if e.scope == "key_model" and e.entity_id == "gpt-5")
-    assert cold_entry.spend is None
+    assert cold_entry.spend == 0.0, "the cap is compared against zero until a counter exists, so report zero"
+    assert cold_entry.remaining == cold_entry.max_budget
     assert cold_entry.spend_state == "no_counter"
     assert cold_entry.notes == warm_entry.notes, "a cold counter is the same budget, so it earns no extra caveat"
     assert _MODEL_BUDGET_NOTE in cold_entry.notes

@@ -3828,9 +3828,10 @@ async def key_budgets_fn(
         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
           but places no limit on it
         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
-          counter, not the periodically-synced database column
-        - spend_state: str - Whether `spend` is `live`, missing because no counter exists yet
-          (`no_counter`), or missing because the read failed (`unavailable`)
+          counter, not the periodically-synced database column. `null` only when the read failed
+        - spend_state: str - Whether `spend` came from a counter (`live`), is the zero that will be
+          enforced because no counter has been created yet (`no_counter`), or is missing because the
+          read failed (`unavailable`)
         - remaining: float | None - `max_budget - spend`, when both are known
         - comparison: str - The operator the enforcing check uses, which differs per scope
         - budget_duration / budget_reset_at / window_start: When spend next resets to zero

@@ -537,9 +537,15 @@ def _collapse_shared_counters(pairs: tuple[_ReadPlan, ...]) -> tuple[_ReadPlan, 
 
 
 def _model_reading(hit: ModelSpendHit | None) -> _SpendReading:
-    """Per-model budgets are cache-only, so a missing counter means untouched rather than unreadable."""
+    """
+    A missing per-model counter is reported as no spend, because that is what will be enforced.
+
+    The check reading it treats the absence as untouched headroom rather than as an error, so zero is
+    the number the cap will actually be compared against. ``spend_state`` still says the counter does
+    not exist, which is the part a reader needs to tell this apart from a counter that says zero.
+    """
     if hit is None:
-        return _SpendReading(value=None, state="no_counter")
+        return _SpendReading(value=0.0, state="no_counter")
     return _SpendReading(value=hit.spend, state="live", counter_model=hit.model)
 
 
