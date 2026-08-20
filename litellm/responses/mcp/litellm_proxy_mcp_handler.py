@@ -72,6 +72,28 @@ class LiteLLM_Proxy_MCP_Handler:
     """
 
     @staticmethod
+    def _prepare_follow_up_call_params(params: Mapping[str, Any]) -> dict[str, Any]:
+        """Copy request params without state owned by the previous LLM call.
+
+        MCP auto-execution keeps the trace identifier so chained rounds remain
+        correlated, but each provider call must create its own logging object and
+        call identifier. Reusing either makes success dispatch one-shot and drops
+        spend rows for later rounds.
+        """
+        follow_up_params = dict(params)
+        follow_up_params.pop("litellm_logging_obj", None)
+        follow_up_params.pop("litellm_call_id", None)
+
+        nested_params = follow_up_params.get("litellm_params")
+        if isinstance(nested_params, dict):
+            nested_params = dict(nested_params)
+            nested_params.pop("litellm_logging_obj", None)
+            nested_params.pop("litellm_call_id", None)
+            follow_up_params["litellm_params"] = nested_params
+
+        return follow_up_params
+
+    @staticmethod
     def _get_parent_request_tags(kwargs: dict[str, Any] | None) -> list[str]:
         """Tags from the parent LLM request, using the same extraction logic as standard logging (incl. User-Agent)."""
         if not kwargs:
@@ -702,13 +724,19 @@ class LiteLLM_Proxy_MCP_Handler:
                         },
                     }
                 ]
-                tool_logging_call_id = litellm_call_id or str(uuid.uuid4())
+                # SpendLogs.request_id is unique. The parent LLM call ID is
+                # therefore metadata, not the tool execution's call ID: reusing
+                # it causes all but the first MCP tool row to be skipped by the
+                # database's duplicate protection.
+                tool_logging_call_id = str(uuid.uuid4())
                 logging_metadata: dict[str, object] = {
                     "tool_call_id": tool_call_id,
                     "tool_name": sanitized_tool_name,
                     "server_name": server_name,
                     "headers": logging_safe_headers,
                 }
+                if litellm_call_id:
+                    logging_metadata["parent_litellm_call_id"] = litellm_call_id
                 logging_request_data = {
                     "model": f"MCP: {tool_name}",
                     "metadata": logging_metadata,

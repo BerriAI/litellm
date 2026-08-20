@@ -453,7 +453,9 @@ async def acompletion_with_mcp(
                 )
 
                 # Make follow-up call with streaming
-                follow_up_call_args: Final = dict(self.base_call_args)
+                follow_up_call_args: Final = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+                    self.base_call_args
+                )
                 follow_up_call_args["messages"] = follow_up_messages
                 follow_up_call_args["stream"] = True
                 # Ensure follow-up call doesn't trigger MCP handler again
@@ -625,7 +627,9 @@ async def acompletion_with_mcp(
     )
 
     # Make follow-up call with original stream setting
-    follow_up_call_args: Final = dict(base_call_args)
+    follow_up_call_args: Final = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+        base_call_args
+    )
     follow_up_call_args["messages"] = follow_up_messages
     follow_up_call_args["stream"] = stream
 

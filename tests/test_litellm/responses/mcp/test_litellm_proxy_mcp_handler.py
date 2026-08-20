@@ -410,7 +410,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
 
 
 @pytest.mark.asyncio
-async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_function_setup(
+async def test_execute_tool_calls_uses_unique_call_ids_and_preserves_parent_context(
     monkeypatch,
 ):
     """
@@ -420,10 +420,10 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     _setup_proxy_logging(monkeypatch)
     call_tool_mock = _setup_mcp_call_environment(monkeypatch)
 
-    captured = {}
+    captured = []
 
     def fake_function_setup(*_args, **kwargs):
-        captured.update(kwargs)
+        captured.append(kwargs)
         return None, None
 
     # NOTE: Don't patch via dotted string path here because `litellm.responses`
@@ -435,7 +435,10 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
-    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+    tool_calls = [
+        {"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}},
+        {"id": "call-2", "function": {"name": tool_name, "arguments": "{}"}},
+    ]
 
     await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
@@ -446,10 +449,36 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     )
 
     # Ensure the tool call was attempted (sanity)
-    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_count == 2
+    assert len(captured) == 2
+    assert captured[0]["litellm_call_id"] != captured[1]["litellm_call_id"]
+    assert all(item["litellm_call_id"] != "cid" for item in captured)
+    assert all(item["litellm_trace_id"] == "tid" for item in captured)
+    assert all(item["metadata"]["parent_litellm_call_id"] == "cid" for item in captured)
 
-    assert captured.get("litellm_call_id") == "cid"
-    assert captured.get("litellm_trace_id") == "tid"
+
+def test_prepare_follow_up_call_params_resets_per_call_logging_state():
+    original = {
+        "model": "gpt-4",
+        "litellm_call_id": "parent-call",
+        "litellm_logging_obj": object(),
+        "litellm_trace_id": "trace-1",
+        "litellm_params": {
+            "litellm_call_id": "nested-parent-call",
+            "litellm_logging_obj": object(),
+            "metadata": {"team": "legal"},
+        },
+    }
+
+    follow_up = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(original)
+
+    assert "litellm_call_id" not in follow_up
+    assert "litellm_logging_obj" not in follow_up
+    assert "litellm_call_id" not in follow_up["litellm_params"]
+    assert "litellm_logging_obj" not in follow_up["litellm_params"]
+    assert follow_up["litellm_trace_id"] == "trace-1"
+    assert follow_up["litellm_params"]["metadata"] == {"team": "legal"}
+    assert original["litellm_call_id"] == "parent-call"
 
 
 @pytest.mark.asyncio
