@@ -81,6 +81,8 @@ import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPa
 
 const ICON = { strokeWidth: 1.75 } as const;
 
+const LOGO_CLASS_NAME = "h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7";
+
 interface SidebarProps {
   setPage: (page: string) => void;
   defaultSelectedKey: string;
@@ -603,6 +605,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   const logoSrc = logoUrl || `${baseUrl}/get_image`;
+  const darkLogoSrc = logoUrl || `${baseUrl}/get_image?theme=dark`;
 
   return (
     <Sidebar collapsed={collapsed}>
@@ -610,11 +613,8 @@ const Sidebar_: React.FC<SidebarProps> = ({
         <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
           <div className="flex min-w-0 items-center gap-2">
             <Link href={migratedHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
-              <img
-                src={logoSrc}
-                alt="LiteLLM"
-                className="h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7"
-              />
+              <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
+              <img src={darkLogoSrc} alt="" aria-hidden className={cn(LOGO_CLASS_NAME, "hidden dark:block")} />
             </Link>
             {version && (
               <Badge
