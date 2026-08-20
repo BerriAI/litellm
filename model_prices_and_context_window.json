@@ -25564,6 +25564,7 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
@@ -25809,6 +25810,7 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_pdf_input": true,
