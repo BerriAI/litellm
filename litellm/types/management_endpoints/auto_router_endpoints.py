@@ -27,6 +27,22 @@ class RequestComplexityRouterConfig(ComplexityRouterConfig):
     )
 
 
+class ComplexityRouterConfigValidationRequest(BaseModel):
+    """A complexity-router config to validate without saving, so a form can surface the
+    backend's own verdict inline instead of a raw 400 at write time."""
+
+    complexity_router_config: Mapping[str, object]
+    team_id: str | None = Field(
+        default=None,
+        description="Team the router is being created for. Required for a team admin, who may only validate their own team's routers",
+    )
+
+
+class ComplexityRouterConfigValidationResponse(BaseModel):
+    valid: bool
+    error: str | None = None
+
+
 class AutoRouterRoutingTestRequest(BaseModel):
     """A single prompt to classify against a complexity-router config that need not be saved yet."""
 
@@ -60,7 +76,7 @@ class AutoRouterRoutingTestResponse(BaseModel):
 
     routed_model: str = Field(description="The model group the router picked")
     routed_model_configured: bool = Field(
-        description="Whether routed_model is a model group this proxy actually serves",
+        description="Whether routed_model is a model group available to the caller, scoped to team_id when given. Never confirms models the caller could not use",
     )
     routing_decision: StandardLoggingRoutingDecision = Field(
         description="The decision record this request would have written to its log row",

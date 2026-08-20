@@ -225,14 +225,72 @@ def test_get_image_without_theme_still_serves_the_light_jpeg(client, monkeypatch
 
 
 def test_get_image_dark_theme_keeps_serving_a_custom_ui_logo(client, monkeypatch, tmp_path):
-    """A custom UI_LOGO_PATH has no dark variant yet, so dark mode must fall back to the
-    admin's own logo rather than replacing it with LiteLLM's."""
+    """With no UI_LOGO_PATH_DARK set, dark mode falls back to the admin's own light logo
+    rather than replacing their branding with LiteLLM's."""
     custom_logo = tmp_path / "custom.png"
     custom_logo.write_bytes(PNG_SIGNATURE + b"custom-logo-marker")
     monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo))
     response = client.get("/get_image", params={"theme": "dark"})
     shape = {"status": response.status_code, "body": response.content}
     assert shape == {"status": 200, "body": PNG_SIGNATURE + b"custom-logo-marker"}
+
+
+def test_get_image_dark_theme_prefers_the_dark_custom_logo(client, monkeypatch, tmp_path):
+    """UI_LOGO_PATH_DARK outranks UI_LOGO_PATH when the dark logo is requested."""
+    light_logo = tmp_path / "light.png"
+    light_logo.write_bytes(PNG_SIGNATURE + b"light-marker")
+    dark_logo = tmp_path / "dark.png"
+    dark_logo.write_bytes(PNG_SIGNATURE + b"dark-marker")
+    monkeypatch.setenv("UI_LOGO_PATH", str(light_logo))
+    monkeypatch.setenv("UI_LOGO_PATH_DARK", str(dark_logo))
+
+    response = client.get("/get_image", params={"theme": "dark"})
+
+    shape = {"status": response.status_code, "body": response.content}
+    assert shape == {"status": 200, "body": PNG_SIGNATURE + b"dark-marker"}
+
+
+def test_get_image_unusable_dark_logo_falls_back_to_the_light_custom_logo(client, monkeypatch, tmp_path):
+    """A broken UI_LOGO_PATH_DARK must not drop the admin all the way to LiteLLM's own
+    logo while their light logo is still perfectly serviceable."""
+    light_logo = tmp_path / "light.png"
+    light_logo.write_bytes(PNG_SIGNATURE + b"light-marker")
+    monkeypatch.setenv("UI_LOGO_PATH", str(light_logo))
+    monkeypatch.setenv("UI_LOGO_PATH_DARK", str(tmp_path / "missing.png"))
+
+    response = client.get("/get_image", params={"theme": "dark"})
+
+    shape = {"status": response.status_code, "body": response.content}
+    assert shape == {"status": 200, "body": PNG_SIGNATURE + b"light-marker"}
+
+
+def test_get_image_light_theme_ignores_the_dark_custom_logo(client, monkeypatch, tmp_path):
+    """The dark logo must never leak into a light-mode request."""
+    light_logo = tmp_path / "light.png"
+    light_logo.write_bytes(PNG_SIGNATURE + b"light-marker")
+    dark_logo = tmp_path / "dark.png"
+    dark_logo.write_bytes(PNG_SIGNATURE + b"dark-marker")
+    monkeypatch.setenv("UI_LOGO_PATH", str(light_logo))
+    monkeypatch.setenv("UI_LOGO_PATH_DARK", str(dark_logo))
+
+    response = client.get("/get_image")
+
+    shape = {"status": response.status_code, "body": response.content}
+    assert shape == {"status": 200, "body": PNG_SIGNATURE + b"light-marker"}
+
+
+def test_get_image_dark_logo_alone_still_serves_the_bundled_light_logo_in_light_mode(client, monkeypatch):
+    """Setting only UI_LOGO_PATH_DARK leaves light mode on the bundled default."""
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+    monkeypatch.setenv("UI_LOGO_PATH_DARK", "https://cdn.example.invalid/logo-dark.png")
+
+    response = client.get("/get_image")
+
+    shape = {
+        "status": response.status_code,
+        "media_type": response.headers.get("content-type", "").split(";")[0],
+    }
+    assert shape == {"status": 200, "media_type": "image/jpeg"}
 
 
 def test_get_image_redirects_remote_url(client, monkeypatch):

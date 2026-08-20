@@ -9,7 +9,7 @@ and following LiteLLM testing patterns and best practices.
 import importlib
 import os
 import sys
-from typing import Dict
+from typing import Any, Dict
 from unittest.mock import Mock, patch
 
 # Add parent directory to path for imports

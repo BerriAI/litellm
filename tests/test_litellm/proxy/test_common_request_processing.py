@@ -3,7 +3,7 @@ import copy
 import datetime
 import json
 from types import SimpleNamespace
-from typing import AsyncGenerator, Callable, Optional
+from typing import AsyncGenerator, Callable, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx

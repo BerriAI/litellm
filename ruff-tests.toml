@@ -1,0 +1,15 @@
+# Lint config for the test tree, which ruff.toml excludes from `ruff check`.
+#
+# Deliberately one rule. F821 is the cheapest guard against a test that cannot fail:
+# a name that does not exist raises NameError, and a test whose body is wrapped in
+# `except Exception: pass` swallows that NameError and reports green. Widening this
+# select list means ratcheting thousands of pre-existing findings, so new rules go in
+# one at a time, each with its violations already fixed.
+#
+# No target-version here on purpose: it resolves from requires-python (>=3.10), so
+# 3.11-only builtins like BaseExceptionGroup are correctly flagged in a tree that
+# still has to run on 3.10.
+
+line-length = 120
+
+lint.select = ["F821"]

@@ -945,6 +945,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/validate_complexity_router_config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Complexity Router Config
+         * @description Validate a complexity-router config without saving it.
+         *
+         *     Runs the same check every write path runs (the router's own pydantic model), so a form can
+         *     show the backend's exact verdict while the operator is still editing rather than after a
+         *     rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
+         *     naming their own team. Nothing is created, routed, or billed.
+         */
+        post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/azure/{endpoint}": {
         parameters: {
             query?: never;
@@ -22058,7 +22083,7 @@ export interface components {
             routed_model: string;
             /**
              * Routed Model Configured
-             * @description Whether routed_model is a model group this proxy actually serves
+             * @description Whether routed_model is a model group available to the caller, scoped to team_id when given. Never confirms models the caller could not use
              */
             routed_model_configured: boolean;
             /** @description The decision record this request would have written to its log row */
@@ -23772,6 +23797,29 @@ export interface components {
              * @description Timezone for date handling
              */
             timezone?: string | null;
+        };
+        /**
+         * ComplexityRouterConfigValidationRequest
+         * @description A complexity-router config to validate without saving, so a form can surface the
+         *     backend's own verdict inline instead of a raw 400 at write time.
+         */
+        ComplexityRouterConfigValidationRequest: {
+            /** Complexity Router Config */
+            complexity_router_config: {
+                [key: string]: unknown;
+            };
+            /**
+             * Team Id
+             * @description Team the router is being created for. Required for a team admin, who may only validate their own team's routers
+             */
+            team_id?: string | null;
+        };
+        /** ComplexityRouterConfigValidationResponse */
+        ComplexityRouterConfigValidationResponse: {
+            /** Error */
+            error?: string | null;
+            /** Valid */
+            valid: boolean;
         };
         /**
          * ComplexityScorerDefaults
@@ -34691,6 +34739,11 @@ export interface components {
              * @description URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL
              */
             logo_url?: string | null;
+            /**
+             * Logo Url Dark
+             * @description URL or path to a custom logo image for dark mode. Can be a local file path or HTTP/HTTPS URL. Leave unset to reuse logo_url in dark mode
+             */
+            logo_url_dark?: string | null;
         };
         /**
          * UIThemeSettingsResponse
@@ -38152,6 +38205,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterRoutingTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_complexity_router_config_auto_router_validate_complexity_router_config_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComplexityRouterConfigValidationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplexityRouterConfigValidationResponse"];
                 };
             };
             /** @description Validation Error */
