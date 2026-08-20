@@ -2708,6 +2708,42 @@ def test_completion_custom_api_base_sends_no_prompt_cache_breakpoint_for_gpt_5_6
 
 
 @pytest.mark.usefixtures("_no_openai_api_base_override")
+def test_completion_custom_base_url_sends_no_prompt_cache_breakpoint_for_gpt_5_6():
+    from openai import OpenAI
+
+    client = OpenAI(api_key="fake-api-key", base_url="http://127.0.0.1:9/v1")
+    request_body = _openai_chat_create_kwargs(client, model="gpt-5.6", base_url="http://127.0.0.1:9/v1")
+
+    assert request_body["messages"][0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+    assert "prompt_cache_breakpoint" not in json.dumps(request_body["messages"])
+    assert "prompt_cache_options" not in json.dumps(request_body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_openai_api_base_override")
+async def test_acompletion_custom_base_url_sends_no_prompt_cache_breakpoint_for_gpt_5_6():
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key="fake-api-key", base_url="http://127.0.0.1:9/v1")
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_create:
+        with contextlib.suppress(Exception):
+            await litellm.acompletion(
+                model="gpt-5.6",
+                messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+                client=client,
+                base_url="http://127.0.0.1:9/v1",
+            )
+
+        mock_create.assert_called_once()
+        request_body = mock_create.call_args.kwargs
+
+    assert request_body["messages"][0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+    assert "prompt_cache_breakpoint" not in json.dumps(request_body["messages"])
+    assert "prompt_cache_options" not in json.dumps(request_body)
+
+
+@pytest.mark.usefixtures("_no_openai_api_base_override")
 def test_completion_default_api_base_sends_prompt_cache_breakpoint_for_gpt_5_6():
     from openai import OpenAI
 

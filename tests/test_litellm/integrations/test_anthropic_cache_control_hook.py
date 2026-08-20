@@ -2697,11 +2697,14 @@ class TestToolConfigSlotInOpenAIDialect:
 
 
 class TestPromptCacheBreakpointCapability:
-    """Eligibility comes from the model map's supports_prompt_cache_breakpoint flag, with the GPT version
-    rule only for models the map does not know (#37509)."""
+    """Eligibility comes from the model map's supports_prompt_cache_breakpoint flag when the entry carries one,
+    with the GPT version rule for unlisted models and for entries the published map has not flagged yet (#37509)."""
 
     @pytest.fixture(autouse=True)
-    def _fresh_model_info_cache(self):
+    def _bundled_model_map(self, monkeypatch):
+        bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
+        with open(bundled) as handle:
+            monkeypatch.setattr(litellm, "model_cost", json.load(handle))
         litellm.utils._cached_get_model_info_helper.cache_clear()
         yield
         litellm.utils._cached_get_model_info_helper.cache_clear()
@@ -2724,14 +2727,46 @@ class TestPromptCacheBreakpointCapability:
         monkeypatch.setitem(litellm.model_cost, "gpt-4.1", flagged)
         assert supports_openai_prompt_cache_breakpoint("gpt-4.1") is True
 
-    def test_listed_gpt_5_6_without_the_flag_is_not_eligible(self, monkeypatch):
+    def test_listed_gpt_5_6_without_the_flag_falls_back_to_the_version_rule(self, monkeypatch):
         unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}
         monkeypatch.setitem(litellm.model_cost, "gpt-5.6", unflagged)
+        assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is True
+        assert supports_openai_prompt_cache_breakpoint("openai/gpt-5.6") is True
+
+    def test_listed_model_flagged_false_is_not_eligible(self, monkeypatch):
+        monkeypatch.setitem(
+            litellm.model_cost, "gpt-5.6", {**litellm.model_cost["gpt-5.6"], "supports_prompt_cache_breakpoint": False}
+        )
         assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is False
 
-    def test_listed_gpt_model_without_the_flag_is_false(self):
+    def test_listed_gpt_model_without_the_flag_follows_the_version_rule(self):
         assert "supports_prompt_cache_breakpoint" not in litellm.model_cost["gpt-4.1"]
         assert supports_openai_prompt_cache_breakpoint("gpt-4.1") is False
+
+    def test_published_map_without_the_flag_still_injects_on_gpt_5_6(self, monkeypatch):
+        unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}
+        monkeypatch.setitem(litellm.model_cost, "gpt-5.6", unflagged)
+        points = [{"location": "message", "role": "system"}]
+
+        _, chat_messages, chat_params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": copy.deepcopy(points)},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert chat_messages[0]["content"] == [
+            {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        ]
+        assert chat_params["prompt_cache_options"] == {"mode": "explicit"}
+
+        kwargs = {"cache_control_injection_points": copy.deepcopy(points)}
+        _, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
+        )
+        assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert kwargs == {"prompt_cache_options": {"mode": "explicit"}}
 
     @pytest.mark.parametrize("model,expected", [("gpt-5.6-2026-01-01", True), ("gpt-5.5-preview-unlisted", False)])
     def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):

@@ -565,6 +565,24 @@ async def test_aresponses_regional_openai_api_base_marks_input_text():
 
 
 @pytest.mark.usefixtures("_no_openai_api_base_override")
+def test_responses_custom_base_url_sends_no_openai_markers():
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_pcb_gate_base_url", "gpt-5.6"), 200)
+
+        litellm.responses(
+            model="gpt-5.6",
+            api_key="fake-api-key",
+            base_url=_CUSTOM_API_BASE,
+            input=copy.deepcopy(_INJECTION_POINT_INPUT),
+            cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        )
+
+        body = _sent_body(mock_post)
+        assert body["input"] == _INJECTION_POINT_INPUT
+        assert "prompt_cache_options" not in body
+
+
+@pytest.mark.usefixtures("_no_openai_api_base_override")
 def test_responses_custom_api_base_sends_no_openai_markers():
     with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
         mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_pcb_gate_sync", "gpt-5.6"), 200)
