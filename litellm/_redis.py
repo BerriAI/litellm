@@ -577,10 +577,12 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
 
 def _async_credential_provider(redis_connect_func: object | None) -> CredentialProvider | None:
-    """``redis_connect_func`` runs the AUTH exchange with the blocking client API, so on an
-    async connection its ``send_command``/``read_response`` calls return coroutines nobody
-    awaits and every connect fails. Async paths authenticate through a ``CredentialProvider``
-    instead, which redis-py consults per connection so the token stays fresh."""
+    """The Azure AD and GCP IAM connect funcs run their AUTH exchange with the blocking client
+    API, so on an async connection their ``send_command``/``read_response`` calls return
+    coroutines nobody awaits and every connect fails. Async paths authenticate through a
+    ``CredentialProvider`` instead, which redis-py consults per connection so the token stays
+    fresh. Any other ``redis_connect_func`` is left where it is, since redis-py awaits it
+    itself when it is a coroutine function."""
     gcp_service_account: Final = getattr(redis_connect_func, "_gcp_service_account", None)
     if gcp_service_account is not None:
         return GCPIAMCredentialProvider(gcp_service_account)
@@ -588,12 +590,6 @@ def _async_credential_provider(redis_connect_func: object | None) -> CredentialP
     azure_credential: Final = getattr(redis_connect_func, "_azure_credential", None)
     if azure_credential is not None:
         return AzureADCredentialProvider(azure_credential, username=os.environ.get("REDIS_USERNAME") or None)
-
-    if redis_connect_func is not None:
-        verbose_logger.warning(
-            "REDIS: dropping redis_connect_func, which an async connection cannot run. "
-            "Configure Azure AD or GCP IAM auth so a credential provider handles the token instead."
-        )
 
     return None
 
@@ -625,11 +621,11 @@ def get_redis_async_client(
     **env_overrides,
 ) -> async_redis.Redis | async_redis.RedisCluster:
     redis_kwargs: Final = _get_redis_client_logic(**env_overrides)
-    credential_provider: Final = _async_credential_provider(redis_kwargs.pop("redis_connect_func", None))
+    credential_provider: Final = _async_credential_provider(redis_kwargs.get("redis_connect_func"))
     if credential_provider is not None:
         redis_kwargs["credential_provider"] = credential_provider
-        redis_kwargs.pop("username", None)
-        redis_kwargs.pop("password", None)
+        for superseded in ("redis_connect_func", "username", "password"):
+            redis_kwargs.pop(superseded, None)
 
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
@@ -693,11 +689,11 @@ def get_redis_connection_pool(
     **env_overrides,
 ) -> async_redis.BlockingConnectionPool | None:
     redis_kwargs: Final = _get_redis_client_logic(**env_overrides)
-    credential_provider: Final = _async_credential_provider(redis_kwargs.pop("redis_connect_func", None))
+    credential_provider: Final = _async_credential_provider(redis_kwargs.get("redis_connect_func"))
     if credential_provider is not None:
         redis_kwargs["credential_provider"] = credential_provider
-        redis_kwargs.pop("username", None)
-        redis_kwargs.pop("password", None)
+        for superseded in ("redis_connect_func", "username", "password"):
+            redis_kwargs.pop(superseded, None)
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
 
     if "startup_nodes" in redis_kwargs:
