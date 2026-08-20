@@ -384,12 +384,18 @@ class _LimitsIndex:
         are left as separate entries, same as before this dedup: resolving
         that ambiguity needs knowing which deployment will be picked, which
         isn't known yet at this admission-time hook.
+
+        Candidates are deduped in sorted order, not raw `frozenset` iteration
+        order: `frozenset` order depends on the process's hash seed, so two
+        workers resolving the identical candidate set could otherwise pick
+        different members as `resolved_group` and end up checking/accounting
+        against different Redis keys for what's meant to be one shared bucket.
         """
         direct: Final = self.resolve(model, team_id)
         if direct:
             return direct
         deduped: Final[dict[tuple[object, ...], _ConfiguredLimit]] = {}  # mutable-ok: see docstring above
-        for name in frozenset(candidate_model_names):
+        for name in sorted(frozenset(candidate_model_names)):
             for limit in self.by_model_name.get(name, ()):
                 key = (
                     limit.unit,
@@ -971,6 +977,7 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
             return healthy_deployments
 
         resolved_request_kwargs: Final = request_kwargs or _EMPTY_MAPPING
+        await self._release_stale_hop_reservations(resolved_request_kwargs)
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(resolved_request_kwargs)
         team_id: Final = _extract_team_id(resolved_request_kwargs, metadata_variable_name)
         candidate_model_names: Final = tuple(
@@ -1164,6 +1171,35 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
             except Exception as e:  # noqa: BLE001 - releasing a slot must never raise into the caller's request path
                 verbose_proxy_logger.warning("tag_rate_limiter: failed to release concurrency slot %s: %s", key, e)
 
+    async def _release_stale_hop_reservations(self, request_kwargs: Mapping[str, object]) -> None:
+        """
+        A concurrency reservation still queued when a *new* hop's admission
+        runs can only belong to an earlier hop of this same request that
+        already concluded and failed: Router awaits one hop's entire attempt
+        (call plus its own failure handling) before starting the next, and a
+        hop that instead succeeded ends the request there via
+        async_log_success_event, which already pops everything -- so
+        admission is never re-entered while an earlier hop's reservation is
+        still legitimately in flight.
+
+        LiteLLM only invokes a request's CustomLogger.async_log_failure_event
+        once per request, for whichever hop fails first (its internal
+        has_logged_async_failure dedup silently skips every later hop's own
+        failure), so every hop after that one would otherwise never release
+        its predecessor's key until _CONCURRENCY_MIN_SAFETY_TTL_SECONDS.
+        Releasing here, at the one point guaranteed to re-run before every
+        subsequent hop, closes that gap for every hop except a final one
+        whose own failure exhausts the retry chain -- that residual case
+        still self-heals via the same TTL floor.
+        """
+        logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+        model_call_details: Final = getattr(logging_obj, "model_call_details", None)
+        if not isinstance(model_call_details, dict):
+            return
+        release_keys: Final = self._pop_pending_concurrency_keys(model_call_details)
+        if release_keys:
+            await self._release_keys(release_keys)
+
     @staticmethod
     def _pop_pending_concurrency_keys(kwargs: Mapping[str, object]) -> tuple[tuple[str, _PartitionKey], ...]:
         # Snapshot then remove only those exact keys, never a blanket clear:
@@ -1232,7 +1268,21 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
 
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or _EMPTY_MAPPING
         team_id: Final = standard_logging_metadata.get("user_api_key_team_id")
-        key_hash: Final = standard_logging_metadata.get("user_api_key_hash")
+        # kwargs here is Logging.model_call_details, not the router's flat
+        # request kwargs admission sees: metadata/litellm_metadata are never
+        # top-level here, only nested under kwargs["litellm_params"] (see
+        # Logging.update_environment_variables).
+        litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
+        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(litellm_params_for_metadata)
+        # standard_logging_object.metadata.user_api_key_hash is only ever
+        # populated when the raw value happens to look like a SHA-256 hash
+        # (see litellm_logging.py's get_standard_logging_metadata), so it
+        # silently drops to None for any key whose hash doesn't pass that
+        # shape check even though admission's own _extract_key_hash reads
+        # the same field unconditionally -- reading straight from kwargs
+        # here instead keeps this bucket identical to the one admission
+        # already scoped the check against.
+        key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         # model_group is the caller-visible name, which Router deliberately
         # keeps distinct from the serving deployment's own model_name for a
         # routing-group call (see resolve_any's docstring). Passing only the
@@ -1266,16 +1316,12 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         if not configured:
             return
 
-        # kwargs here is Logging.model_call_details, not the router's flat
-        # request kwargs admission sees: metadata/litellm_metadata are never
-        # top-level here, only nested under kwargs["litellm_params"] (see
-        # Logging.update_environment_variables). Resolving the field name
-        # against kwargs itself always picks the "metadata" default, so on
-        # LITELLM_METADATA_ROUTES (/v1/messages, /responses, ...) this read
-        # the caller's native, tag-less metadata instead of the real,
-        # server-computed litellm_metadata.tags admission already used.
-        litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
-        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(litellm_params_for_metadata)
+        # Resolving the field name against kwargs itself always picks the
+        # "metadata" default, so on LITELLM_METADATA_ROUTES (/v1/messages,
+        # /responses, ...) this would read the caller's native, tag-less
+        # metadata instead of the real, server-computed litellm_metadata.tags
+        # admission already used -- metadata_variable_name above is already
+        # resolved against litellm_params_for_metadata to avoid that.
         tags: Final = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
         if not tags:
             return

@@ -1522,6 +1522,7 @@ async def _cancel_llm_call_on_client_disconnect(
 async def _await_llm_call_cancelling_on_disconnect(
     request: Request,
     llm_api_call: "asyncio.Future[_LlmCallT]",
+    request_data: Mapping[str, object],
 ) -> _LlmCallT:
     disconnect_event: Final = asyncio.Event()
     monitor: Final = asyncio.create_task(_cancel_llm_call_on_client_disconnect(request, llm_api_call, disconnect_event))
@@ -1529,6 +1530,14 @@ async def _await_llm_call_cancelling_on_disconnect(
         return await llm_api_call
     except asyncio.CancelledError:
         if disconnect_event.is_set():
+            # This cancellation never reaches litellm.utils.wrapper_async's own
+            # except block (asyncio.CancelledError is a BaseException, not an
+            # Exception, since Python 3.8), so async_log_failure_event never
+            # fires for it -- the same gap async_release_disconnect_state_hook
+            # was added for on the streaming path (see
+            # _finalize_streaming_generator_cleanup), just reached here via a
+            # cancelled non-streaming call instead of a mid-stream disconnect.
+            await _release_disconnect_state_on_all_callbacks(request_data)
             raise HTTPException(
                 status_code=499,
                 detail=_CLIENT_DISCONNECT_DETAIL,
@@ -2404,7 +2413,7 @@ class ProxyBaseLLMRequestProcessing:
 
         try:
             if general_settings.get("cancel_on_disconnect", False):
-                responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
+                responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses, self.data)
             else:
                 responses = await llm_responses
         finally:

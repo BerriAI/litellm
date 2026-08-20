@@ -3,6 +3,9 @@ Unit tests for tag-scoped token/request/dollar rate limiting.
 """
 
 import asyncio
+import os
+import subprocess
+import sys
 import uuid
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -559,6 +562,50 @@ def test_resolve_any_keeps_divergent_signatures_across_member_model_names_separa
     assert {c.entry.limit for c in resolved} == {1, 2}
 
 
+def test_resolve_any_picks_the_same_resolved_group_regardless_of_hash_seed():
+    """
+    Two members with an identical signature dedup to whichever one
+    `frozenset(candidate_model_names)` iterates first. Plain `frozenset`
+    iteration order for strings is seeded from `PYTHONHASHSEED`, which is
+    randomized per process by default, so two proxy worker processes (or the
+    same process across a restart) resolving the identical member set could
+    pick different members as `resolved_group` -- fragmenting what's meant to
+    be one shared Redis bucket into two. This can't be observed from within
+    one interpreter (a single process has one fixed seed for its lifetime),
+    so this spawns two real subprocesses pinned to seeds empirically known to
+    order these three names differently under a plain, unsorted frozenset --
+    see the bug report this regression-tests for the exact reproduction.
+    """
+    script = (
+        "from litellm.proxy.hooks.tag_rate_limiter import _build_limits_index\n"
+        "def _deployment(model_name, deployment_id, tag_rate_limits):\n"
+        "    return {'model_name': model_name, 'litellm_params': {'model': 'gpt-4o'},"
+        " 'model_info': {'id': deployment_id, 'tag_rate_limits': tag_rate_limits}}\n"
+        "limits = {'concurrency_limits': {'limits': [{'name': 'inflight', 'tag_id': 'end_user_id',"
+        " 'limit': 1, 'period_seconds': 300}]}}\n"
+        "index = _build_limits_index(["
+        "_deployment('backend-a', 'dep-a', limits),"
+        "_deployment('backend-b', 'dep-b', limits),"
+        "_deployment('backend-c', 'dep-c', limits)])\n"
+        "resolved = index.resolve_any('my-group', team_id=None,"
+        " candidate_model_names=('backend-a', 'backend-b', 'backend-c'))\n"
+        "print(resolved[0].resolved_group)\n"
+    )
+    # seed=1 and seed=3 are empirically confirmed to order these three
+    # literal strings differently under plain (unsorted) frozenset iteration.
+    results = {
+        seed: subprocess.run(
+            [sys.executable, "-c", script],
+            env={**os.environ, "PYTHONHASHSEED": seed},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        for seed in ("1", "3")
+    }
+    assert results["1"] == results["3"] == "backend-a"
+
+
 @pytest.mark.asyncio
 async def test_filter_deployments_per_entry_fail_open_when_tag_absent(time_controller):
     """
@@ -937,6 +984,59 @@ async def test_log_success_event_accounts_against_the_same_bucket_admission_chec
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
     )
+
+
+@pytest.mark.asyncio
+async def test_log_success_event_accounts_against_the_key_hash_admission_checked(time_controller):
+    """
+    Admission's `_extract_key_hash` reads `metadata.user_api_key` unconditionally
+    whenever scope_by_key_hash is set -- that field is already the hashed
+    token by the time it reaches this hook (see the function's own
+    docstring), regardless of its shape. `standard_logging_object.metadata`
+    only ever carries the derived `user_api_key_hash` field, and only when the
+    raw value happens to look like a SHA-256 hex digest (see
+    litellm_logging.py's get_standard_logging_metadata) -- a virtual key
+    represented any other way makes that field silently absent, so reading it
+    on the success side would account against key_hash=None while admission
+    scoped the check against the real value, letting usage silently bypass a
+    per-key limit whenever the key's own representation isn't SHA-256-shaped.
+    """
+    token_limits = {
+        "token_limits": {
+            "limits": [
+                {"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400, "scope_by_key_hash": True}
+            ]
+        }
+    }
+    router = litellm.Router(model_list=[_deployment("grp", "dep-1", token_limits)])
+    limiter = _make_limiter(time_controller)
+    limiter.update_variables(llm_router=router)
+
+    # "keyA" deliberately isn't SHA-256-shaped, so standard_logging_object's
+    # own redaction/derivation step would never populate user_api_key_hash
+    # for it -- it's simply absent, matching production for a key hash that
+    # doesn't pass that shape check.
+    kwargs = {
+        "metadata": {"tags": ["end_user_id:u1"], "user_api_key": "keyA"},
+        "standard_logging_object": {
+            "model_group": "grp",
+            "model_id": "dep-1",
+            "total_tokens": 42,
+            "response_cost": 0.01,
+            "metadata": {},
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    keyed_bucket = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash="keyA")
+    unkeyed_bucket = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash=None)
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=keyed_bucket, litellm_parent_otel_span=None))
+        == 42.0
+    )
+    assert await limiter.internal_usage_cache.async_get_cache(key=unkeyed_bucket, litellm_parent_otel_span=None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1608,6 +1708,45 @@ async def test_concurrency_released_for_every_hop_across_a_real_task_boundary(ti
         healthy_deployments=healthy,
         messages=None,
         request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_next_hops_admission_releases_a_prior_hops_leaked_reservation(time_controller):
+    """
+    Regression test for a leak that a success/failure-event-only release
+    strategy can never close: litellm's has_logged_async_failure dedup lets
+    exactly one hop's async_log_failure_event fire per logical request (see
+    test_concurrency_released_for_every_hop_across_a_real_task_boundary), so
+    a hop that fails *after* that one event has already fired gets no
+    failure event of its own at all -- not "delayed until the next event",
+    genuinely never. Only the next hop's own admission call is guaranteed to
+    run afterward, so release must happen there, not wait for some later
+    success/failure event that this specific hop will never get.
+
+    Concurrency limit of 1 makes this observable directly: if hop 2's
+    admission doesn't release hop 1's leaked reservation before checking its
+    own, it raises ProxyRateLimitError against a bucket that's actually free.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, _kwargs = _call_context(["end_user_id:u1"])
+
+    # Hop 1 admits (the only slot) and then fails with no failure event ever
+    # following it -- simulating every hop after litellm's one dedup-allowed
+    # failure event has already fired for an earlier hop of this request.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+
+    # Hop 2's own admission call must release hop 1's stale reservation
+    # before checking its own -- if it didn't, this raises ProxyRateLimitError.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
     assert result == healthy
 
