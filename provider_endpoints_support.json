@@ -2366,6 +2366,23 @@
         "interactions": true
       }
     },
+    "tiyuvta": {
+      "display_name": "tiyuvta (`tiyuvta`)",
+      "url": "https://inference.tiyuvta.ai/docs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "together_ai": {
       "display_name": "Together AI (`together_ai`)",
       "url": "https://docs.litellm.ai/docs/providers/togetherai",
