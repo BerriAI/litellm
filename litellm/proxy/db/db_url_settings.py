@@ -27,11 +27,15 @@ run alongside a password-auth reader (or a precomputed reader URL). Reader
 IAM is gated on the single global ``IAM_TOKEN_DB_AUTH`` flag — the chart
 only emits the reader IAM env vars when the writer also uses IAM auth.
 Reader-side fields fall back to the writer's user / name / schema / port /
-password when their ``*_READ_REPLICA`` counterpart is unset.
+password when their ``*_READ_REPLICA`` counterpart is unset, and to the
+writer's connection params (pool size, timeouts, pgbouncer mode) for the
+ones the reader URL does not pin itself.
 """
 
 import os
 import urllib.parse
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, cast
 
 from pydantic import AliasChoices, Field
@@ -48,6 +52,51 @@ _DEFAULT_PG_PORT: Final = "5432"
 # Prisma can actually connect with.
 SUPPORTED_DB_SCHEMES: Final[frozenset[str]] = frozenset({"postgresql", "postgres"})
 _MISSING_SCHEME: Final = "<missing scheme>"
+
+
+# An allowlist, deliberately not a denylist: only these pool and timeout params
+# follow the writer to the read replica, so nothing that decides which tables a
+# query resolves against (``schema``, or a ``search_path`` inside ``options``)
+# can ever repoint the reader. Without them the reader pool silently falls back
+# to Prisma's default size.
+CONNECTION_PARAM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "connection_limit",
+        "pool_timeout",
+        "connect_timeout",
+        "socket_timeout",
+        "pgbouncer",
+    }
+)
+
+
+def add_missing_query_params(url: str, params: Mapping[str, str | int | float]) -> str:
+    """Return ``url`` with the ``params`` it does not already carry appended.
+
+    Params the operator pinned on the URL win, so a hand-tuned replica URL keeps
+    its values. Returns the URL untouched when there is nothing to add, leaving
+    its existing encoding alone.
+    """
+    parsed: Final = urllib.parse.urlsplit(url)
+    existing: Final = tuple(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    pinned: Final = frozenset(key for key, _ in existing)
+    additions: Final = tuple((key, str(value)) for key, value in params.items() if key not in pinned)
+    if not additions:
+        return url
+    query: Final = urllib.parse.urlencode(existing + additions)
+    return urllib.parse.urlunsplit(parsed._replace(query=query))
+
+
+def reader_shareable_params(params: Mapping[str, str | int | float]) -> Mapping[str, str | int | float]:
+    """Return the subset of ``params`` the read replica is allowed to inherit."""
+    return MappingProxyType({key: value for key, value in params.items() if key in CONNECTION_PARAM_KEYS})
+
+
+def connection_params_from_url(url: str) -> Mapping[str, str | int | float]:
+    """Return the connection params on ``url`` that the read replica shares."""
+    return reader_shareable_params(
+        MappingProxyType({key: value for key, value in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)})
+    )
 
 
 def unsupported_db_scheme(database_url: str) -> str | None:
@@ -289,8 +338,14 @@ class DatabaseURLSettings(BaseSettings):
                 os.environ[_IAM_ENV_KEY] = "True"
             wrote_writer = True
 
-        reader_url: Final = self.build_reader_url()
+        # The reader inherits the writer's connection params (pool size, timeouts,
+        # pgbouncer mode). Without this the reader pool ignores the configured cap
+        # and falls back to Prisma's `num_physical_cpus * 2 + 1` default.
+        reader_url: Final = self.build_reader_url() or self.database_url_read_replica
         if reader_url is not None:
-            os.environ["DATABASE_URL_READ_REPLICA"] = reader_url
+            os.environ["DATABASE_URL_READ_REPLICA"] = add_missing_query_params(
+                reader_url,
+                connection_params_from_url(os.environ.get("DATABASE_URL", "")),
+            )
 
         return wrote_writer

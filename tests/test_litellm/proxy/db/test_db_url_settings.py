@@ -12,6 +12,7 @@ clobber a pre-existing ``DATABASE_URL_READ_REPLICA``. A pre-existing
 """
 
 import os
+import urllib.parse
 from unittest.mock import patch
 
 import pytest
@@ -365,6 +366,137 @@ def test_apply_to_env_accepts_pinned_postgres(monkeypatch):
 
     # Operator-pinned URL: nothing reassembled, no error.
     assert _apply() is False
+
+
+# ---------------------------------------------------------------------------
+# Connection params on the read replica
+# ---------------------------------------------------------------------------
+
+
+def test_reader_inherits_writer_connection_params(monkeypatch):
+    """The reader is a second pool: without the writer's params it sizes itself
+    from Prisma's default and the operator's cap is not enforced."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:p@writer.example.com:5432/db?connection_limit=3&pool_timeout=20&pgbouncer=true",
+    )
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db"
+    )
+
+    _apply()
+
+    query = urllib.parse.parse_qs(
+        urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query
+    )
+    assert query["connection_limit"] == ["3"]
+    assert query["pool_timeout"] == ["20"]
+    assert query["pgbouncer"] == ["true"]
+
+
+def test_reader_keeps_its_own_pinned_connection_params(monkeypatch):
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:p@writer.example.com:5432/db?connection_limit=3&pool_timeout=20",
+    )
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA",
+        "postgresql://u:p@reader.example.com:5432/db?connection_limit=50",
+    )
+
+    _apply()
+
+    query = urllib.parse.parse_qs(
+        urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query
+    )
+    assert query["connection_limit"] == ["50"]
+    assert query["pool_timeout"] == ["20"]
+
+
+def test_assembled_reader_url_inherits_writer_connection_params(monkeypatch):
+    """A reader assembled from the discrete DATABASE_*_READ_REPLICA vars must
+    carry the params too, and must not inherit the writer's schema."""
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db?connection_limit=3&schema=writer_schema"
+    )
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+    monkeypatch.setenv("DATABASE_PASSWORD", "s3cr3t")
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.example.com")
+
+    _apply()
+
+    reader_url = os.environ["DATABASE_URL_READ_REPLICA"]
+    assert reader_url.startswith("postgresql://litellm:s3cr3t@reader.example.com:5432/litellm_db?")
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(reader_url).query)
+    assert query["connection_limit"] == ["3"]
+    assert "schema" not in query
+
+
+def test_reader_does_not_inherit_writer_options(monkeypatch):
+    """A writer search_path must not follow the reader, or reader queries resolve
+    against the wrong schema."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:p@writer.example.com:5432/db?connection_limit=3&options=-c%20search_path%3Dwriter_schema",
+    )
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db")
+
+    _apply()
+
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query)
+    assert query["connection_limit"] == ["3"]
+    assert "options" not in query
+
+
+def test_reader_does_not_inherit_an_unvetted_writer_param(monkeypatch):
+    """Inheritance is an allowlist, so a param nobody vetted for the reader stays
+    on the writer. Flipping this to a denylist would let the next schema-affecting
+    param leak through by default."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:p@writer.example.com:5432/db?connection_limit=3&application_name=writer&novel_param=x",
+    )
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db")
+
+    _apply()
+
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query)
+    assert query["connection_limit"] == ["3"]
+    assert "application_name" not in query
+    assert "novel_param" not in query
+
+
+def test_reader_keeps_its_own_options_when_writer_params_are_appended(monkeypatch):
+    """Appending the writer's pool params must leave the reader's own search_path
+    intact, since that is what decides which tables its queries resolve against."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db?connection_limit=3")
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA",
+        "postgresql://u:p@reader.example.com:5432/db?options=-c%20search_path%3Dreader_schema",
+    )
+
+    _apply()
+
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query)
+    assert query["options"] == ["-c search_path=reader_schema"]
+    assert query["connection_limit"] == ["3"]
+
+
+def test_reader_url_left_alone_when_writer_has_no_params(monkeypatch):
+    """No params to inherit must mean the reader URL is not rewritten at all."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA",
+        "postgresql://u:p@reader.example.com:5432/db?options=-c%20search_path%3Dapp",
+    )
+
+    _apply()
+
+    assert (
+        os.environ["DATABASE_URL_READ_REPLICA"]
+        == "postgresql://u:p@reader.example.com:5432/db?options=-c%20search_path%3Dapp"
+    )
 
 
 def test_unsupported_db_scheme_message_names_var_and_scheme():
