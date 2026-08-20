@@ -497,11 +497,11 @@ async def update_block_requests_for_models_without_pricing(
         await proxy_config.save_config(new_config=config)
 
         litellm.block_requests_for_models_without_pricing = request.enabled
-        verbose_proxy_logger.info(f"Updated block_requests_for_models_without_pricing: {request.enabled}")
+        verbose_proxy_logger.info("Updated block_requests_for_models_without_pricing: %s", request.enabled)
 
         return BlockUnpricedModelsResponse(enabled=request.enabled)
     except Exception as e:  # noqa: BLE001  # any config persistence failure must surface as a 500 response, not a crash
-        verbose_proxy_logger.error(f"Error updating block_requests_for_models_without_pricing: {e!s}")
+        verbose_proxy_logger.error("Error updating block_requests_for_models_without_pricing: %s", e)
         raise HTTPException(
             status_code=500,
             detail={  # mutable-ok: HTTPException detail must be a plain mapping
