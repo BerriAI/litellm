@@ -101,40 +101,6 @@ def test_compliance_routes_open_to_non_admin_roles(role, route):
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
     ],
 )
-@pytest.mark.parametrize(
-    "route",
-    ["/auto_router/test_routing", "/auto_router/validate_complexity_router_config"],
-)
-def test_auto_router_dry_run_routes_reach_their_own_gate_for_non_admins(role, route):
-    """Team admins can save auto-router configs via the self-managed /model routes, so the
-    dry runs they iterate with must pass the route layer too. Both endpoints then enforce
-    the write's own gate themselves: proxy admin, or team admin naming their own team."""
-    user_obj = LiteLLM_UserTable(
-        user_id="test_user",
-        user_email="test@example.com",
-        user_role=role,
-    )
-    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=role)
-    request = MagicMock(spec=Request)
-    request.query_params = {}
-
-    RouteChecks.non_proxy_admin_allowed_routes_check(
-        user_obj=user_obj,
-        _user_role=role,
-        route=route,
-        request=request,
-        valid_token=valid_token,
-        request_data={},
-    )
-
-
-@pytest.mark.parametrize(
-    "role",
-    [
-        LitellmUserRoles.INTERNAL_USER.value,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
-    ],
-)
 def test_user_banner_read_open_to_non_admin_roles(role):
     """The dashboard banner renders for every authenticated user, so the read
     route must be reachable by non-admin roles."""
@@ -3424,9 +3390,13 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
         LitellmUserRoles.TEAM.value,
     ],
 )
-def test_validate_complexity_router_config_shares_model_new_audience(user_role):
-    """The dry-run validator serves whoever can draft a save on /model/new, no one
-    else: a role must get the same allow-or-403 from both routes, or the form's
+@pytest.mark.parametrize(
+    "dry_run_route",
+    ["/auto_router/test_routing", "/auto_router/validate_complexity_router_config"],
+)
+def test_auto_router_dry_runs_share_model_new_audience(user_role, dry_run_route):
+    """The dry runs serve whoever can draft a save on /model/new, no one else: a role
+    must get the same allow-or-403 from both layers' route check, or the form's
     pre-save call 403s for an operator whose save would have been accepted."""
 
     def outcome(route: str) -> str:
@@ -3454,7 +3424,7 @@ def test_validate_complexity_router_config_shares_model_new_audience(user_role):
         except HTTPException:
             return "rejected"
 
-    assert outcome("/auto_router/validate_complexity_router_config") == outcome("/model/new")
+    assert outcome(dry_run_route) == outcome("/model/new")
     # Anchor so parity cannot be satisfied by both routes 403ing for everyone
     if user_role == LitellmUserRoles.INTERNAL_USER.value:
-        assert outcome("/auto_router/validate_complexity_router_config") == "allowed"
+        assert outcome(dry_run_route) == "allowed"
