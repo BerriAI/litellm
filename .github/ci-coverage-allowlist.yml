@@ -39,30 +39,6 @@ test_paths:
       - tests/litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
       - tests/litellm/proxy/management_endpoints/test_common_utils.py
   - reason: >-
-      Legacy proxy suite superseded by the proxy shards; no job invokes it and whether it still
-      describes supported behaviour is unresolved
-    paths:
-      - tests/old_proxy_tests/tests/test_anthropic_context_caching.py
-      - tests/old_proxy_tests/tests/test_anthropic_sdk.py
-      - tests/old_proxy_tests/tests/test_async.py
-      - tests/old_proxy_tests/tests/test_gemini_context_caching.py
-      - tests/old_proxy_tests/tests/test_langchain_embedding.py
-      - tests/old_proxy_tests/tests/test_langchain_request.py
-      - tests/old_proxy_tests/tests/test_llamaindex.py
-      - tests/old_proxy_tests/tests/test_mistral_sdk.py
-      - tests/old_proxy_tests/tests/test_openai_embedding.py
-      - tests/old_proxy_tests/tests/test_openai_exception_request.py
-      - tests/old_proxy_tests/tests/test_openai_request.py
-      - tests/old_proxy_tests/tests/test_openai_request_with_traceparent.py
-      - tests/old_proxy_tests/tests/test_openai_simple_embedding.py
-      - tests/old_proxy_tests/tests/test_openai_tts_request.py
-      - tests/old_proxy_tests/tests/test_pass_through_langfuse.py
-      - tests/old_proxy_tests/tests/test_q.py
-      - tests/old_proxy_tests/tests/test_simple_traceparent_openai.py
-      - tests/old_proxy_tests/tests/test_vertex_sdk_forward_headers.py
-      - tests/old_proxy_tests/tests/test_vtx_embedding.py
-      - tests/old_proxy_tests/tests/test_vtx_sdk_embedding.py
-  - reason: >-
       No job invokes this suite and its files mix pure transformation tests with ones driving live
       vendor vector stores, so assigning them needs a per-file decision
     paths:
@@ -91,6 +67,14 @@ test_paths:
       - tests/load_tests/test_otel_load_test.py
       - tests/load_tests/test_vertex_embeddings_load_test.py
       - tests/load_tests/test_vertex_load_tests.py
+  - reason: >-
+      A local-only agent rig: test_a2a_completion_bridge.py needs a LangGraph server on
+      localhost:2024 and test_a2a.py drives a live A2A endpoint, so neither can run in a
+      pull request job. Until 2026-08-20 the CircleCI agent job hid them behind a grep -v
+      that this census could not see; the glob now excludes them structurally and this entry
+      is the decision on the record. Revisit when the A2A bridge gets a recorded-wire fixture
+    paths:
+      - tests/agent_tests/local_only_agent_tests
   - reason: >-
       Third-party integration tests that skip themselves without OCI configuration or sandbox
       credentials, neither of which a pull request job holds
