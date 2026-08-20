@@ -6838,12 +6838,15 @@ export interface paths {
          *           but places no limit on it
          *         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
          *           counter, not the periodically-synced database column
+         *         - spend_state: str - Whether `spend` is `live`, missing because no counter exists yet
+         *           (`no_counter`), or missing because the read failed (`unavailable`)
          *         - remaining: float | None - `max_budget - spend`, when both are known
          *         - comparison: str - The operator the enforcing check uses, which differs per scope
          *         - budget_duration / budget_reset_at / window_start: When spend next resets to zero
          *         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
          *         - status: str - `unlimited`, `ok` or `exceeded`
-         *         - note: str | None - A caveat worth knowing before trusting the row
+         *         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
+         *           to branch on, a `severity` of `info` or `warning`, and human-facing `text`
          *
          *     Example Curl:
          *     ```
@@ -7529,12 +7532,15 @@ export interface paths {
          *           but places no limit on it
          *         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
          *           counter, not the periodically-synced database column
+         *         - spend_state: str - Whether `spend` is `live`, missing because no counter exists yet
+         *           (`no_counter`), or missing because the read failed (`unavailable`)
          *         - remaining: float | None - `max_budget - spend`, when both are known
          *         - comparison: str - The operator the enforcing check uses, which differs per scope
          *         - budget_duration / budget_reset_at / window_start: When spend next resets to zero
          *         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
          *         - status: str - `unlimited`, `ok` or `exceeded`
-         *         - note: str | None - A caveat worth knowing before trusting the row
+         *         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
+         *           to branch on, a `severity` of `info` or `warning`, and human-facing `text`
          *
          *     Example Curl:
          *     ```
@@ -26355,8 +26361,11 @@ export interface components {
             entity_type: components["schemas"]["Litellm_EntityType"];
             /** Max Budget */
             max_budget?: number | null;
-            /** Note */
-            note?: string | null;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: components["schemas"]["KeyBudgetNote"][];
             /** Remaining */
             remaining?: number | null;
             /**
@@ -26369,12 +26378,35 @@ export interface components {
             /** Spend */
             spend?: number | null;
             /**
+             * Spend State
+             * @enum {string}
+             */
+            spend_state: "live" | "no_counter" | "unavailable";
+            /**
              * Status
              * @enum {string}
              */
             status: "unlimited" | "ok" | "exceeded";
             /** Window Start */
             window_start?: string | null;
+        };
+        /**
+         * KeyBudgetNote
+         * @description One caveat about a budget row. Branch on ``code``; ``text`` is free to be reworded.
+         */
+        KeyBudgetNote: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "alert_only" | "custom_auth_may_override_end_user_cap" | "end_user_route_only" | "model_budget_fails_open" | "per_model_counters" | "project_spend_not_tracked" | "request_tags_add_budgets" | "reservation_blocks_at_limit" | "rolling_window" | "throttled_instead_of_blocked" | "user_budget_not_applied_to_team_key";
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "info" | "warning";
+            /** Text */
+            text: string;
         };
         /**
          * KeyBudgetsResponse

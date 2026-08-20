@@ -2,7 +2,7 @@
 
 import type { ColumnDef } from "@tanstack/react-table";
 
-import type { KeyBudgetEntry } from "@/app/(dashboard)/hooks/keys/useKeyBudgets";
+import type { KeyBudgetEntry, KeyBudgetNote, KeyBudgetNoteCode } from "@/app/(dashboard)/hooks/keys/useKeyBudgets";
 import {
   CellTooltip,
   DateCell,
@@ -31,12 +31,55 @@ const SCOPE_LABELS: Record<string, string> = {
 
 const isAlertOnly = (entry: KeyBudgetEntry): boolean => entry.enforcement === "soft";
 
-export const isBlockingRow = (entry: KeyBudgetEntry): boolean => entry.status === "exceeded" && !isAlertOnly(entry);
+/**
+ * Whether a note means the row is dead: it cannot reject a request no matter what the numbers say.
+ * Keyed by `code` rather than by `severity` because severity does not track this reliably, and
+ * exhaustive over the union so a code added server-side fails this build until it is classified.
+ * `alert_only` is not dead, it restates the `enforcement` column and a soft budget that is over
+ * still outranks healthy rows. `end_user_route_only` is not dead either, it scopes which requests
+ * the row applies to.
+ */
+const CODE_KILLS_ROW: Readonly<Record<KeyBudgetNoteCode, boolean>> = {
+  alert_only: false,
+  custom_auth_may_override_end_user_cap: false,
+  end_user_route_only: false,
+  model_budget_fails_open: true,
+  per_model_counters: false,
+  project_spend_not_tracked: true,
+  request_tags_add_budgets: false,
+  reservation_blocks_at_limit: false,
+  rolling_window: false,
+  throttled_instead_of_blocked: false,
+  user_budget_not_applied_to_team_key: true,
+};
 
-const STATUS_ORDER: Record<string, number> = { exceeded: 0, ok: 1, unlimited: 2 };
+/** Severity is the fallback for a code this build predates, never the primary signal. */
+const noteKillsRow = (note: KeyBudgetNote): boolean => {
+  const classified: boolean | undefined = CODE_KILLS_ROW[note.code];
+  return classified ?? note.severity === "info";
+};
 
-export const severityRank = (entry: KeyBudgetEntry): number =>
-  (STATUS_ORDER[entry.status] ?? STATUS_ORDER.unlimited) * 2 + (isAlertOnly(entry) ? 1 : 0);
+export const cannotTrip = (entry: KeyBudgetEntry): boolean => entry.notes.some(noteKillsRow);
+
+export const isBlockingRow = (entry: KeyBudgetEntry): boolean =>
+  entry.status === "exceeded" && !isAlertOnly(entry) && !cannotTrip(entry);
+
+/** Ascending relevance to "what stopped my request", so a row that cannot answer it sorts last. */
+export const rowRank = (entry: KeyBudgetEntry): number => {
+  if (entry.status === "unlimited") return 3;
+  if (cannotTrip(entry)) return 4;
+  if (isBlockingRow(entry)) return 0;
+  if (entry.status === "exceeded") return 1;
+  return 2;
+};
+
+/**
+ * Only `live` and `no_counter` carry a number worth drawing. Any other state, including one the
+ * server adds after this ships, is rendered as unknown rather than as a confident zero: overstating
+ * a spend is the failure that matters here, and a new state is by definition not the normal one.
+ */
+const spendIsReadable = (entry: KeyBudgetEntry): boolean =>
+  entry.spend_state === "live" || entry.spend_state === "no_counter";
 
 const COMPARISON_GLYPH: Record<string, string> = { ">=": "≥", ">": ">" };
 
@@ -54,6 +97,7 @@ export const budgetThresholdRule = (entry: KeyBudgetEntry): string | null => {
 
 const statusPresentation = (entry: KeyBudgetEntry): { tone: StatusTone; label: string } => {
   if (entry.status === "unlimited") return { tone: "neutral", label: "Unlimited" };
+  if (cannotTrip(entry)) return { tone: "neutral", label: "Cannot trip" };
   if (entry.status !== "exceeded") return { tone: "success", label: "Within budget" };
   return isAlertOnly(entry)
     ? { tone: "warning", label: "Exceeded (alert only)" }
@@ -77,7 +121,16 @@ function ScopeCell({ entry }: { entry: KeyBudgetEntry }) {
           {entity}
         </span>
       )}
-      {entry.note && <span className="text-xs text-muted-foreground italic">{entry.note}</span>}
+      {entry.notes.map((note) => (
+        <span
+          key={note.code}
+          className={
+            note.severity === "warning" ? "text-xs italic text-amber-600" : "text-xs italic text-muted-foreground"
+          }
+        >
+          {note.text}
+        </span>
+      ))}
     </div>
   );
 }
@@ -94,24 +147,19 @@ function EnforcementCell({ entry }: { entry: KeyBudgetEntry }) {
   );
 }
 
-/**
- * A null spend means the live counter could not be read, which `SpendBudgetCell` coerces to 0 and
- * draws as an empty meter. That renders a failed read as confident full headroom, so branch before
- * reaching it: an unknown number must not look like a healthy one.
- */
 function SpendCell({ entry }: { entry: KeyBudgetEntry }) {
   const rule = budgetThresholdRule(entry);
   return (
     <div className="flex flex-col gap-0.5">
-      {entry.spend == null ? (
+      {spendIsReadable(entry) ? (
+        <SpendBudgetCell spend={entry.spend} maxBudget={entry.max_budget} budgetDecimals={2} />
+      ) : (
         <span className="whitespace-nowrap text-xs">
           <span className="font-medium text-amber-600">Unknown</span>{" "}
           <span className="text-muted-foreground">
             {entry.max_budget == null ? "· Unlimited" : `of $${formatNumberWithCommas(entry.max_budget, 2)}`}
           </span>
         </span>
-      ) : (
-        <SpendBudgetCell spend={entry.spend} maxBudget={entry.max_budget} budgetDecimals={2} />
       )}
       {rule && <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{rule}</span>}
     </div>

@@ -7,11 +7,11 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { DataTable } from "@/components/shared/DataTable";
 
 import { parseErrorMessage } from "../shared/errorUtils";
-import { getKeyBudgetsTableColumns, isBlockingRow, severityRank } from "./KeyBudgetsTableColumns";
+import { getKeyBudgetsTableColumns, isBlockingRow, rowRank } from "./KeyBudgetsTableColumns";
 
 function BudgetRows({ budgets, isLoading }: { budgets: readonly KeyBudgetEntry[]; isLoading: boolean }) {
   const columns = useMemo(() => getKeyBudgetsTableColumns(), []);
-  const rows = useMemo(() => [...budgets].sort((a, b) => severityRank(a) - severityRank(b)), [budgets]);
+  const rows = useMemo(() => [...budgets].sort((a, b) => rowRank(a) - rowRank(b)), [budgets]);
 
   return (
     <DataTable

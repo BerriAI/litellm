@@ -4,6 +4,8 @@ import type { components } from "@/lib/http/schema";
 
 export type KeyBudgetsResponse = components["schemas"]["KeyBudgetsResponse"];
 export type KeyBudgetEntry = KeyBudgetsResponse["budgets"][number];
+export type KeyBudgetNote = KeyBudgetEntry["notes"][number];
+export type KeyBudgetNoteCode = KeyBudgetNote["code"];
 
 export const useKeyBudgets = (keyId: string | undefined) => {
   const { accessToken } = useAuthorized();

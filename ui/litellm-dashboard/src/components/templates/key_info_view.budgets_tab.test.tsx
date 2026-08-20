@@ -127,8 +127,21 @@ const UNCONFIGURED_BUDGET = {
   window_start: null,
   source: "key.max_budget",
   status: "unlimited",
-  note: null,
+  spend_state: "live",
+  notes: [],
 } as KeyBudgetEntry;
+
+const ALERT_ONLY_NOTE = {
+  code: "alert_only",
+  severity: "info",
+  text: "alert only, never blocks; compared against recorded spend rather than the live counter",
+} as const;
+
+const PROJECT_DEAD_NOTE = {
+  code: "project_spend_not_tracked",
+  severity: "info",
+  text: "project spend is never incremented today, so this budget cannot trip",
+} as const;
 
 const KEY_UNLIMITED: KeyBudgetEntry = {
   ...UNCONFIGURED_BUDGET,
@@ -162,7 +175,7 @@ const TEAM_SOFT_OVER: KeyBudgetEntry = {
   remaining: -400,
   source: "budget_table:b-soft",
   status: "exceeded",
-  note: "alert only, never blocks; compared against recorded spend rather than the live counter",
+  notes: [ALERT_ONLY_NOTE],
 };
 
 const TEAM_MEMBER_BLOCKING: KeyBudgetEntry = {
@@ -190,13 +203,36 @@ const ORG_UNCONFIGURED: KeyBudgetEntry = {
   source: "organization.budget_id",
 };
 
-// Longest note the endpoint can emit: 276 characters over three clauses, reachable only on an
-// end_user row where reservation tightened the operator and a custom auth callable is configured.
-// The reservation clause lands only on team, tag and end_user, so this is a real ceiling.
-const WORST_CASE_NOTE =
-  "the reservation layer blocks this scope as soon as spend reaches the limit, before the read-time " +
-  "check would trip; only enforced on LLM routes that name this end user; a custom auth callable can " +
-  "set a request-scoped end user cap that overrides this one and is not visible here";
+// The widest row the endpoint can emit: an end_user budget the reservation layer tightened, on a
+// proxy with a custom auth callable. Three notes rather than one sentence, in the server's order.
+const WORST_CASE_NOTES = [
+  {
+    code: "reservation_blocks_at_limit",
+    severity: "warning",
+    text:
+      "the reservation layer blocks this scope as soon as spend reaches the limit, " +
+      "before the read-time check would trip",
+  },
+  {
+    code: "end_user_route_only",
+    severity: "info",
+    text: "only enforced on LLM routes that name this end user",
+  },
+  {
+    code: "custom_auth_may_override_end_user_cap",
+    severity: "warning",
+    text: "a custom auth callable can set a request-scoped end user cap that overrides this one and is not visible here",
+  },
+] as const;
+
+// Longest single note the endpoint can emit, and so the real width constraint on the scope column.
+const LONGEST_SINGLE_NOTE = {
+  code: "per_model_counters",
+  severity: "warning",
+  text:
+    "per-model spend is counted separately for every request model that maps onto this cap, " +
+    "and each counter is compared against it on its own, so the highest is reported",
+} as const;
 
 const ALL_BUDGETS = [KEY_UNLIMITED, USER_WITHIN_BUDGET, TEAM_SOFT_OVER, TEAM_MEMBER_BLOCKING, ORG_UNCONFIGURED];
 
@@ -290,10 +326,10 @@ describe("KeyInfoView Budgets tab", () => {
       entity_label: "prod",
       max_budget: 1000,
       spend: null,
+      spend_state: "unavailable",
       remaining: null,
       source: "budget_table:b-tag",
       status: "ok",
-      note: "live spend could not be read",
     };
     mockBudgets([unreadable]);
     const panel = await renderAndOpenBudgetsTab();
@@ -306,7 +342,50 @@ describe("KeyInfoView Budgets tab", () => {
     expect(row).toHaveTextContent("Blocks at ≥ $1,000.00");
   });
 
-  it("renders the longest note the endpoint can emit without dropping any of it", async () => {
+  it("shows a genuine no-counter-yet zero as $0.00 with its meter, not as unknown", async () => {
+    const cold: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "key_model",
+      entity_type: "key",
+      entity_label: "claude-opus-5",
+      max_budget: 40,
+      spend: null,
+      spend_state: "no_counter",
+      remaining: 40,
+      source: "key.model_max_budget",
+      status: "ok",
+    };
+    mockBudgets([cold]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const row = rowFor(panel, "claude-opus-5");
+    expect(row).toHaveTextContent("$0.00 of $40.00");
+    expect(row).not.toHaveTextContent("Unknown");
+    expect(within(row).getByRole("meter")).toBeInTheDocument();
+  });
+
+  it("treats a spend state this build predates as unreadable rather than as a confident number", async () => {
+    const future: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "team",
+      entity_type: "team",
+      entity_label: "Platform",
+      max_budget: 500,
+      spend: 20,
+      remaining: 480,
+      source: "team.max_budget",
+      status: "ok",
+      spend_state: "reconciling" as KeyBudgetEntry["spend_state"],
+    };
+    mockBudgets([future]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const row = rowFor(panel, "Platform");
+    expect(row).toHaveTextContent("Unknown of $500.00");
+    expect(within(row).queryByRole("meter")).not.toBeInTheDocument();
+  });
+
+  it("renders every note on the widest row as its own line, none of them dropped", async () => {
     const endUser: KeyBudgetEntry = {
       ...UNCONFIGURED_BUDGET,
       scope: "end_user",
@@ -318,18 +397,67 @@ describe("KeyInfoView Budgets tab", () => {
       remaining: 0,
       source: "budget_table:b-end-user",
       status: "exceeded",
-      note: WORST_CASE_NOTE,
+      notes: [...WORST_CASE_NOTES],
     };
     mockBudgets([endUser]);
     const panel = await renderAndOpenBudgetsTab();
 
-    const note = panel.getByText(WORST_CASE_NOTE);
-    expect(note).toBeInTheDocument();
+    const rendered = WORST_CASE_NOTES.map((note) => panel.getByText(note.text));
+    expect(rendered).toHaveLength(3);
+    // Separate elements, not one joined blob, so each caveat can carry its own severity.
+    expect(new Set(rendered).size).toBe(3);
+
     // jsdom has no layout, so nothing here can prove the text is visually unclipped. Asserting the
-    // absence of the clipping utilities is the only mechanical guard against re-truncating the note.
-    expect(note).not.toHaveClass("truncate");
-    expect(note.className).not.toMatch(/line-clamp|overflow-hidden|whitespace-nowrap/);
-    expect(note).not.toHaveAttribute("title");
+    // absence of the clipping utilities is the only mechanical guard against re-truncating a note.
+    for (const note of rendered) {
+      expect(note).not.toHaveClass("truncate");
+      expect(note.className).not.toMatch(/line-clamp|overflow-hidden|whitespace-nowrap/);
+      expect(note).not.toHaveAttribute("title");
+    }
+  });
+
+  it("renders the longest single note the endpoint can emit without dropping any of it", async () => {
+    const perModel: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "key_model",
+      entity_type: "key",
+      entity_label: "claude-opus-5",
+      max_budget: 40,
+      spend: 12,
+      remaining: 28,
+      source: "key.model_max_budget",
+      status: "ok",
+      notes: [LONGEST_SINGLE_NOTE],
+    };
+    mockBudgets([perModel]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    expect(panel.getByText(LONGEST_SINGLE_NOTE.text)).toBeInTheDocument();
+  });
+
+  it("marks a budget that structurally cannot trip and sinks it below every live row", async () => {
+    const dead: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "project",
+      entity_type: "project",
+      entity_label: "checkout",
+      max_budget: 300,
+      spend: 0,
+      remaining: 300,
+      source: "project.budget_id",
+      status: "ok",
+      notes: [PROJECT_DEAD_NOTE],
+    };
+    mockBudgets([dead, TEAM_MEMBER_BLOCKING, USER_WITHIN_BUDGET, KEY_UNLIMITED]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const deadRow = rowFor(panel, "checkout");
+    expect(within(deadRow).getByText("Cannot trip")).toBeInTheDocument();
+    expect(within(deadRow).queryByText("Within budget")).not.toBeInTheDocument();
+    expect(deadRow).toHaveTextContent(PROJECT_DEAD_NOTE.text);
+
+    const [, ...dataRows] = panel.getAllByRole("row");
+    expect(dataRows[dataRows.length - 1]).toHaveTextContent("checkout");
   });
 
   it("explains why two rows on identical numbers get opposite statuses", async () => {
