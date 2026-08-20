@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.cli_keyring import (
 )
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
+    CredentialNotRecorded,
     CredentialNotSaved,
     SecretSave,
     clear_cli_token,
@@ -125,6 +126,12 @@ def storage_notice(outcome: SecretSave) -> str:
                 f"Signed in, but the credential could not be saved to {path}: {detail}. "
                 "Any login you already had is untouched. Run 'lite login' again once that path is "
                 "writable, or 'lite logout' to clear whatever is stored now."
+            )
+        case CredentialNotRecorded():
+            return (
+                f"Signed in, and the credential is in your OS keychain, but {path} could not be "
+                "replaced, so this machine may still be using your previous login. Run 'lite login' "
+                "again once that path is writable, or 'lite logout' to clear both."
             )
 
 
@@ -754,7 +761,7 @@ def login(ctx: click.Context, config_claude: bool):
             click.echo("\nLogin successful!")
             click.echo(f"JWT Token: {api_key[:20]}...")
             click.echo(storage_notice(stored))
-            if isinstance(stored, CredentialNotSaved):
+            if isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
                 return
             click.echo("You can now use the CLI without specifying --api-key")
 

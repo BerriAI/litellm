@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.cli_keyring import (
 )
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
+    CredentialNotRecorded,
     CredentialNotSaved,
     clear_cli_token,
     get_cli_token_file_path,
@@ -367,6 +368,37 @@ class TestSaveCliToken:
         assert isinstance(outcome, CredentialNotSaved)
         assert json.loads(vault.blob)["key"] == "sk-in-use"
         assert load_cli_token(vault=vault).key == "sk-in-use"
+
+    def test_a_keychain_write_the_file_cannot_be_pointed_at_is_reported_as_that(
+        self, isolated_home, secret_vault_factory
+    ):
+        """Staging the file can succeed and the replacement still fail, and that is the one path
+        where the keychain already took the new secret. Reporting it as a save that kept nothing
+        would send the user looking for a credential that is sitting in their keychain."""
+        vault = secret_vault_factory()
+        path = _token_file(isolated_home)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.mkdir()
+
+        outcome = save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-new"), vault=vault)
+
+        assert isinstance(outcome, CredentialNotRecorded)
+        assert json.loads(vault.blob)["key"] == "sk-new"
+
+    def test_the_credential_the_file_cannot_name_is_left_in_the_keychain(
+        self, isolated_home, secret_vault_factory
+    ):
+        """The keychain holds one entry, so the secret that was there went the moment this one
+        landed. Taking the new one back out would turn a login this machine may still be able to
+        use into no login at all, and it cannot restore the old one either way."""
+        vault = secret_vault_factory(blob=_blob(key="sk-in-use"))
+        path = _token_file(isolated_home)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.mkdir()
+
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-new"), vault=vault)
+
+        assert vault.blob is not None
 
     def test_a_failed_write_leaves_the_previous_credential_intact(self, isolated_home, secret_vault_factory, monkeypatch):
         path = _write_legacy_file(isolated_home)
