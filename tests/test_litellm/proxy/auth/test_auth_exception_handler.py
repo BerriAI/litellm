@@ -326,6 +326,36 @@ async def test_handle_authentication_error_genuine_auth_failure_stays_401(auth_e
 
 
 @pytest.mark.asyncio
+async def test_handle_authentication_error_without_prisma_keeps_auth_failure_401(monkeypatch):
+    monkeypatch.setitem(sys.modules, "prisma", None)
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                Exception("Invalid proxy server token passed"),
+                MagicMock(),
+                {},
+                "/v1/chat/completions",
+                None,
+                "sk-bad-key",
+            )
+
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
 async def test_handle_authentication_error_budget_exceeded():
     handler = UserAPIKeyAuthExceptionHandler()
 

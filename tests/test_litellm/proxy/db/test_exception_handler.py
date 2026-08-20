@@ -1,12 +1,10 @@
 import asyncio
-import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
-from fastapi import HTTPException, Request, status
 from prisma import errors as prisma_errors
 from prisma.errors import (
     ClientNotConnectedError,
@@ -21,12 +19,9 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
@@ -48,7 +43,7 @@ def test_is_database_infrastructure_error_prisma_connection_errors(prisma_error)
     infrastructure faults, so a caller is told the service failed rather than
     that its credentials did.
     """
-    assert PrismaDBExceptionHandler.is_database_infrastructure_error(prisma_error) == True
+    assert PrismaDBExceptionHandler.is_database_infrastructure_error(prisma_error)
 
 
 @pytest.mark.parametrize(
@@ -57,39 +52,24 @@ def test_is_database_infrastructure_error_prisma_connection_errors(prisma_error)
         PrismaError(),
         PrismaError("validation failed on query"),
         DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        UniqueViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        ForeignKeyViolationError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        MissingRequiredValueError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        UniqueViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        ForeignKeyViolationError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        MissingRequiredValueError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
         RawQueryError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
-        TableNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
-        RecordNotFoundError(
-            data={"user_facing_error": {"meta": {"table": "test_table"}}}
-        ),
+        TableNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
+        RecordNotFoundError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
     ],
 )
 def test_is_database_transport_error_non_connection_prisma_errors(prisma_error):
     """Data-layer errors should not trigger reconnect — DB is reachable when these occur."""
-    assert PrismaDBExceptionHandler.is_database_transport_error(prisma_error) == False
+    assert not PrismaDBExceptionHandler.is_database_transport_error(prisma_error)
 
 
 def test_is_database_connection_generic_errors():
     """
     Test non-Prisma error cases for database connection checking
     """
-    assert (
-        PrismaDBExceptionHandler.is_database_connection_error(
-            Exception("Regular error")
-        )
-        == False
-    )
+    assert not PrismaDBExceptionHandler.is_database_connection_error(Exception("Regular error"))
 
     # Test with ProxyException (DB connection)
     db_proxy_exception = ProxyException(
@@ -97,17 +77,11 @@ def test_is_database_connection_generic_errors():
         type=ProxyErrorTypes.no_db_connection,
         param="test-param",
     )
-    assert (
-        PrismaDBExceptionHandler.is_database_connection_error(db_proxy_exception)
-        == True
-    )
+    assert PrismaDBExceptionHandler.is_database_connection_error(db_proxy_exception)
 
     # Test with non-DB error
     regular_exception = Exception("Regular error")
-    assert (
-        PrismaDBExceptionHandler.is_database_connection_error(regular_exception)
-        == False
-    )
+    assert not PrismaDBExceptionHandler.is_database_connection_error(regular_exception)
 
 
 @pytest.mark.parametrize(
@@ -143,12 +117,7 @@ def test_is_database_service_unavailable_error_prisma_p1001_masquerades_as_datae
             }
         }
     )
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            p1001_as_dataerror
-        )
-        is True
-    )
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(p1001_as_dataerror) is True
 
 
 def test_is_prisma_data_error_only_true_for_dataerror():
@@ -196,12 +165,7 @@ def test_is_database_service_unavailable_error_cached_plan_escapes_as_503():
             }
         }
     )
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            cached_plan_error
-        )
-        is True
-    )
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(cached_plan_error) is True
 
 
 def test_is_database_service_unavailable_error_prisma_engine_malformed_payload():
@@ -229,10 +193,7 @@ def test_is_database_service_unavailable_error_prisma_engine_malformed_payload()
         prisma_engine_utils.handle_response_errors(None, malformed_payload)
 
     assert "no attribute 'get'" in str(exc_info.value)
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value)
-        is True
-    )
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value) is True
 
 
 def test_is_prisma_engine_internal_error_excludes_application_attributeerror():
@@ -247,23 +208,15 @@ def test_is_prisma_engine_internal_error_excludes_application_attributeerror():
     with pytest.raises(AttributeError) as exc_info:
         application_bug()
 
-    assert (
-        PrismaDBExceptionHandler.is_prisma_engine_internal_error(exc_info.value)
-        is False
-    )
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value)
-        is False
-    )
+    assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(exc_info.value) is False
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value) is False
 
 
 def test_is_prisma_engine_internal_error_excludes_data_layer_prisma_error():
     """A data-layer ``PrismaError`` (the DB IS reachable and rejected the data)
     must stay 401. These are always raised from prisma internals, so the check
     excludes any ``PrismaError`` by type before inspecting the traceback."""
-    data_layer_error = UniqueViolationError(
-        data={"user_facing_error": {"meta": {"table": "t"}}}
-    )
+    data_layer_error = UniqueViolationError(data={"user_facing_error": {"meta": {"table": "t"}}})
     try:
         raise data_layer_error
     except UniqueViolationError as e:
@@ -284,9 +237,7 @@ def test_is_database_service_unavailable_error_excludes_non_infra(error):
     """Data-layer errors (the DB IS reachable and answered) and generic
     non-DB errors must NOT be classified as service-unavailable, otherwise a
     genuine 401 would be masked as a transient 503."""
-    assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(error) is False
-    )
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(error) is False
 
 
 def _wrapped_like_get_user_object(original):
@@ -357,22 +308,14 @@ def test_is_database_service_unavailable_error_asyncpg(monkeypatch):
     monkeypatch.setitem(sys.modules, "asyncpg.exceptions", fake_exceptions)
 
     assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            PostgresConnectionError("connection reset")
-        )
+        PrismaDBExceptionHandler.is_database_service_unavailable_error(PostgresConnectionError("connection reset"))
         is True
     )
     assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            InterfaceError("connection was closed")
-        )
-        is True
+        PrismaDBExceptionHandler.is_database_service_unavailable_error(InterfaceError("connection was closed")) is True
     )
     assert (
-        PrismaDBExceptionHandler.is_database_service_unavailable_error(
-            UniqueViolationError("duplicate key")
-        )
-        is False
+        PrismaDBExceptionHandler.is_database_service_unavailable_error(UniqueViolationError("duplicate key")) is False
     )
 
 
@@ -382,7 +325,7 @@ def test_is_database_service_unavailable_error_asyncpg(monkeypatch):
     {"allow_requests_on_db_unavailable": True},
 )
 def test_should_allow_request_on_db_unavailable_true():
-    assert PrismaDBExceptionHandler.should_allow_request_on_db_unavailable() == True
+    assert PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
 
 
 @patch(
@@ -390,7 +333,7 @@ def test_should_allow_request_on_db_unavailable_true():
     {"allow_requests_on_db_unavailable": False},
 )
 def test_should_allow_request_on_db_unavailable_false():
-    assert PrismaDBExceptionHandler.should_allow_request_on_db_unavailable() == False
+    assert not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
 
 
 @patch(
@@ -429,6 +372,101 @@ def test_handle_db_exception_with_non_db_error():
     )
     with pytest.raises(litellm.BudgetExceededError):
         PrismaDBExceptionHandler.handle_db_exception(regular_error)
+
+
+# Test that every classifier degrades gracefully when the optional `prisma`
+# package isn't installed (a bare master-key-only deployment with no
+# DATABASE_URL never installs it). Before the fix, each of these methods did
+# an unconditional `import prisma`, so ANY auth failure -- including a plain
+# unauthenticated request -- crashed `_user_api_key_auth_builder` with
+# `ModuleNotFoundError: No module named 'prisma'`, turning a clean 401 into
+# an unrelated 500 for every misauthenticated or unauthenticated request.
+def _no_prisma():
+    return patch("litellm.proxy.db.exception_handler._try_import_prisma", return_value=None)
+
+
+def test_try_import_prisma_returns_module_when_available():
+    from litellm.proxy.db.exception_handler import _try_import_prisma
+
+    assert _try_import_prisma() is not None
+    assert _try_import_prisma().__name__ == "prisma"
+
+
+def test_try_import_prisma_returns_none_on_actual_import_error():
+    """Exercises the real `except ImportError` branch inside
+    `_try_import_prisma` itself, rather than mocking the helper -- setting
+    `sys.modules["prisma"] = None` is the standard way to make a subsequent
+    `import prisma` raise ImportError even though the package is actually
+    installed, reproducing what happens on a deployment where it truly
+    isn't."""
+    from litellm.proxy.db.exception_handler import _try_import_prisma
+
+    with patch.dict(sys.modules, {"prisma": None}):
+        assert _try_import_prisma() is None
+
+
+def test_is_database_connection_error_without_prisma_does_not_raise():
+    """The exact crash reproduction: a plain auth-failure exception (no
+    prisma-specific type at all) must classify to False, not raise
+    ModuleNotFoundError."""
+    with _no_prisma():
+        assert PrismaDBExceptionHandler.is_database_connection_error(Exception("No api key passed in.")) is False
+
+
+def test_is_database_connection_error_without_prisma_still_matches_non_prisma_types():
+    """DB_CONNECTION_ERROR_TYPES / ProxyException classification must not
+    regress just because prisma is unavailable -- those checks never needed
+    the prisma module in the first place."""
+    with _no_prisma():
+        db_proxy_exception = ProxyException(
+            message="DB Connection Error",
+            type=ProxyErrorTypes.no_db_connection,
+            param="test-param",
+        )
+        assert PrismaDBExceptionHandler.is_database_connection_error(db_proxy_exception) is True
+
+
+def test_is_database_infrastructure_error_without_prisma_preserves_non_prisma_types():
+    with _no_prisma():
+        assert PrismaDBExceptionHandler.is_database_infrastructure_error(Exception("No api key passed in.")) is False
+        assert (
+            PrismaDBExceptionHandler.is_database_infrastructure_error(httpx.ConnectError("connection refused")) is True
+        )
+        db_proxy_exception = ProxyException(
+            message="DB Connection Error",
+            type=ProxyErrorTypes.no_db_connection,
+            param="test-param",
+        )
+        assert PrismaDBExceptionHandler.is_database_infrastructure_error(db_proxy_exception) is True
+
+
+def test_is_prisma_data_error_without_prisma_does_not_raise():
+    with _no_prisma():
+        assert PrismaDBExceptionHandler.is_prisma_data_error(Exception("some error")) is False
+
+
+def test_is_database_transport_error_without_prisma_does_not_raise():
+    import httpx
+
+    with _no_prisma():
+        assert PrismaDBExceptionHandler.is_database_transport_error(Exception("No api key passed in.")) is False
+        # httpx.ConnectError is in DB_CONNECTION_ERROR_TYPES, which doesn't need prisma.
+        assert PrismaDBExceptionHandler.is_database_transport_error(httpx.ConnectError("connection refused")) is True
+
+
+def test_is_prisma_engine_internal_error_without_prisma_does_not_raise():
+    with _no_prisma():
+        assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(Exception("some error")) is False
+
+
+def test_is_database_service_unavailable_error_without_prisma_does_not_raise():
+    """End-to-end: the aggregate classifier called directly from the auth
+    exception handler on every auth failure must not raise when prisma is
+    unavailable."""
+    with _no_prisma():
+        assert (
+            PrismaDBExceptionHandler.is_database_service_unavailable_error(Exception("No api key passed in.")) is False
+        )
 
 
 def _permanent_prisma_faults():
