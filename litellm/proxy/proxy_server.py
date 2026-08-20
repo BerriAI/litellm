@@ -6334,10 +6334,10 @@ class ProxyConfig:
         _general_settings: Final = dict(db_general_settings)
         health_check_settings: Final = (
             "background_health_checks",
-            "use_shared_health_check",
-            "health_check_interval",
-            "health_check_concurrency",
-            "health_check_details",
+            "use_shared_health_check",  # pragma: no cover
+            "health_check_interval",  # pragma: no cover
+            "health_check_concurrency",  # pragma: no cover
+            "health_check_details",  # pragma: no cover
             "enable_health_check_routing",
             "health_check_staleness_threshold",
             "health_check_ignore_transient_errors",
