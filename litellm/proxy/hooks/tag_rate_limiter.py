@@ -79,14 +79,16 @@ _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 # function, to avoid a task disappearing mid-execution. The event loop only
 # keeps weak references to tasks. A task that isn't referenced elsewhere may
 # get garbage collected at any time, even before it's done." The success path
-# below deliberately fires-and-forgets its release (unlike the failure/
-# disconnect paths, which await it directly) to keep the hot success-response
-# path from waiting on a Redis round trip; by the time that background task
-# would run, its keys have already been popped out of model_call_details, so
-# a collected task's release is unrecoverable, not just delayed. Holding a
-# strong reference here until the task's own completion callback discards it
-# is the standard fix.
-_BACKGROUND_RELEASE_TASKS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: see comment above
+# deliberately fires-and-forgets its concurrency release and its token/dollar
+# accounting increment (unlike the failure/disconnect paths, which await
+# concurrency release directly) to keep the hot success-response path from
+# waiting on a Redis round trip; by the time either background task would
+# run, the state it needs (popped pending keys, or the request's own usage
+# figures) is only available in that task's own closure, so a collected
+# task's work is unrecoverable, not just delayed. Holding a strong reference
+# here until each task's own completion callback discards it is the standard
+# fix, shared by every fire-and-forget task this hook creates.
+_BACKGROUND_TASKS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: see comment above
 
 # Single-key atomic check-and-increment. Deliberately one key per script call
 # (never a batch of differently-hash-tagged keys in one call): every tag_rl
@@ -1214,8 +1216,8 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         release_keys: Final = self._pop_pending_concurrency_keys(kwargs)
         if release_keys:
             release_task: Final = asyncio.create_task(self._release_keys(release_keys))
-            _BACKGROUND_RELEASE_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_RELEASE_TASKS's own docstring
-            release_task.add_done_callback(_BACKGROUND_RELEASE_TASKS.discard)
+            _BACKGROUND_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
+            release_task.add_done_callback(_BACKGROUND_TASKS.discard)
 
         if self.llm_router is None:
             return
@@ -1233,13 +1235,33 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         key_hash: Final = standard_logging_metadata.get("user_api_key_hash")
         # model_group is the caller-visible name, which Router deliberately
         # keeps distinct from the serving deployment's own model_name for a
-        # routing-group call (see resolve_any's docstring); fall back to the
-        # one deployment that actually served this hop.
+        # routing-group call (see resolve_any's docstring). Passing only the
+        # one deployment that actually served this hop as the sole candidate
+        # would make resolve_any's dedup independently re-derive a
+        # *different* resolved_group than admission did whenever the group
+        # has more than one member: admission sees every member and picks
+        # whichever one frozenset(candidate_model_names) yields first for a
+        # shared signature, so success accounting must reconstruct that same
+        # full candidate set to land on the identical bucket, not just
+        # whichever deployment happened to serve -- otherwise a token/dollar
+        # limit is checked against one bucket at admission and accounted
+        # against a different one on success, letting usage silently bypass
+        # the configured limit. Falls back to the serving deployment alone
+        # only when `model_group` isn't a routing group at all (a plain
+        # single-model_name chain, where resolve() already matches directly
+        # and this candidate set is never actually consulted).
         deployment_id: Final = standard_logging_object.get("model_id")
         serving_deployment: Final = (
             self.llm_router.get_deployment(deployment_id) if isinstance(deployment_id, str) else None
         )
-        candidate_model_names: Final = (serving_deployment.model_name,) if serving_deployment is not None else ()
+        routing_group_deployments: Final = self.llm_router._get_routing_group_deployments(  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching resolve_any's own reliance on this method
+            model=model_group, team_id=team_id
+        )
+        candidate_model_names: Final = (
+            tuple(dep["model_name"] for dep in routing_group_deployments)
+            if routing_group_deployments is not None
+            else ((serving_deployment.model_name,) if serving_deployment is not None else ())
+        )
         configured: Final = self._index.get(self.llm_router).resolve_any(model_group, team_id, candidate_model_names)
         if not configured:
             return
@@ -1293,9 +1315,11 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
         for partition_key, group_operations in operations_by_partition.items():
             partition = await self._partition_for(partition_key)  # not Final: rebound each loop iteration
-            asyncio.create_task(
+            accounting_task = asyncio.create_task(  # not Final: rebound each loop iteration
                 partition.v3.async_increment_tokens_with_ttl_preservation(
                     pipeline_operations=tuple(group_operations),
                     parent_otel_span=parent_otel_span,
                 )
             )
+            _BACKGROUND_TASKS.add(accounting_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
+            accounting_task.add_done_callback(_BACKGROUND_TASKS.discard)

@@ -24,14 +24,14 @@ from litellm.proxy.hooks.tag_rate_limiter import (
     _extract_key_hash,
     _extract_team_id,
     _fixed_length_identity,
-    _BACKGROUND_RELEASE_TASKS,
+    _BACKGROUND_TASKS,
     _inflight_key,
     _partition_key,
     _PENDING_CONCURRENCY_KEYS_FIELD,
     _PROXY_TagRateLimiter,
     _queue_pending_concurrency_reservations,
 )
-from litellm.types.router import TagRateLimitEntry
+from litellm.types.router import RoutingGroup, TagRateLimitEntry
 
 
 class TimeController:
@@ -871,6 +871,74 @@ async def test_log_success_event_falls_back_to_serving_deployment_model_name_for
     )
 
 
+@pytest.mark.asyncio
+async def test_log_success_event_accounts_against_the_same_bucket_admission_checked(time_controller):
+    """
+    resolve_any dedups an identical signature across a routing group's
+    members into one shared entry, stamped with resolved_group from
+    whichever member frozenset(candidate_model_names) yields first (see
+    resolve_any's own docstring). Success accounting for tokens/dollars only
+    learns the one deployment that actually served this hop; passing just
+    that single name as resolve_any's sole candidate would make its dedup
+    trivially resolve to that deployment's own name -- which can differ from
+    whichever member admission's full-group view picked, silently
+    accounting usage against a bucket admission never checked and letting a
+    token/dollar limit be bypassed. Success accounting must reconstruct the
+    full routing-group candidate set so it lands on the identical bucket
+    regardless of which member actually served.
+    """
+    token_limits = {
+        "token_limits": {
+            "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]
+        }
+    }
+    router = litellm.Router(
+        model_list=[
+            _deployment("backend-a", "dep-a", token_limits),
+            _deployment("backend-b", "dep-b", token_limits),
+        ],
+        routing_groups=[
+            RoutingGroup(group_name="my-group", models=["backend-a", "backend-b"], routing_strategy="simple-shuffle")
+        ],
+    )
+    limiter = _make_limiter(time_controller)
+    limiter.update_variables(llm_router=router)
+
+    # What admission would check: it sees every member, and resolve_any's
+    # dedup picks whichever one frozenset yields first for the shared entry.
+    admitted = limiter._index.get(router).resolve_any(
+        "my-group", team_id=None, candidate_model_names=("backend-a", "backend-b")
+    )
+    assert len(admitted) == 1
+    admission_bucket_group = admitted[0].resolved_group
+
+    # Force the deployment that actually serves to be the *other* member --
+    # deterministic regardless of which one frozenset happened to pick above,
+    # so this test always exercises the mismatch the fix guards against.
+    serving_model_name = "backend-b" if admission_bucket_group == "backend-a" else "backend-a"
+    serving_deployment_id = "dep-b" if serving_model_name == "backend-b" else "dep-a"
+
+    kwargs = {
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "standard_logging_object": {
+            "model_group": "my-group",
+            "model_id": serving_deployment_id,
+            "total_tokens": 42,
+            "response_cost": 0.01,
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    token_key = _expected_bucket_key(
+        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group=admission_bucket_group
+    )
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
+    )
+
+
 # ---------------------------------------------------------------------------
 # concurrency limits -- reserve at admission, release on success/failure
 # ---------------------------------------------------------------------------
@@ -1125,39 +1193,39 @@ async def test_background_release_tasks_registry_holds_a_reference_until_done():
     one with no other referrer can be garbage collected before it runs --
     and by the time it would run here, its keys are already popped out of
     model_call_details, so a collected task's release is unrecoverable, not
-    merely delayed. _BACKGROUND_RELEASE_TASKS exists to hold a strong
+    merely delayed. _BACKGROUND_TASKS exists to hold a strong
     reference for exactly as long as the task is pending, then release it via
     the task's own done-callback -- exercised directly here (an Event gate
     gives a deterministic pending window; going through the real
     async_log_success_event doesn't, since its own further awaits let a fast
     in-memory release resolve before a test could ever observe it pending).
     """
-    assert len(_BACKGROUND_RELEASE_TASKS) == 0
+    assert len(_BACKGROUND_TASKS) == 0
     gate = asyncio.Event()
 
     async def _pending_release():
         await gate.wait()
 
     task = asyncio.create_task(_pending_release())
-    _BACKGROUND_RELEASE_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_RELEASE_TASKS.discard)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
-    assert task in _BACKGROUND_RELEASE_TASKS
+    assert task in _BACKGROUND_TASKS
 
     gate.set()
     await task
 
     # The done-callback removes it -- the registry doesn't grow unbounded
     # across requests.
-    assert task not in _BACKGROUND_RELEASE_TASKS
-    assert len(_BACKGROUND_RELEASE_TASKS) == 0
+    assert task not in _BACKGROUND_TASKS
+    assert len(_BACKGROUND_TASKS) == 0
 
 
 @pytest.mark.asyncio
 async def test_success_event_release_is_wired_through_the_background_registry(time_controller):
     """
     End-to-end check that async_log_success_event's fire-and-forget release
-    is genuinely wired through _BACKGROUND_RELEASE_TASKS, not a bare
+    is genuinely wired through _BACKGROUND_TASKS, not a bare
     unreferenced asyncio.create_task -- the registry must be empty again once
     the (fast, in-memory) release has had a chance to run, and the release
     itself must have actually happened.
@@ -1181,11 +1249,11 @@ async def test_success_event_release_is_wired_through_the_background_registry(ti
     await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
 
     # The registry was actually populated: proves the release ran through
-    # _BACKGROUND_RELEASE_TASKS, not a bare unreferenced asyncio.create_task
+    # _BACKGROUND_TASKS, not a bare unreferenced asyncio.create_task
     # (which would never touch this set at all, and an "empty at the end"
     # check alone can't tell the two apart -- an empty registry throughout
     # would satisfy that just as well as one that filled and drained).
-    assert len(_BACKGROUND_RELEASE_TASKS) == 1
+    assert len(_BACKGROUND_TASKS) == 1
 
     # Two ticks: one for the release task itself to finish (it may already be
     # done by the time async_log_success_event returns, given that method's
@@ -1194,7 +1262,7 @@ async def test_success_event_release_is_wired_through_the_background_registry(ti
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert len(_BACKGROUND_RELEASE_TASKS) == 0
+    assert len(_BACKGROUND_TASKS) == 0
 
     result = await limiter.async_filter_deployments(
         model="grp",
@@ -1203,6 +1271,60 @@ async def test_success_event_release_is_wired_through_the_background_registry(ti
         request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
     assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_success_event_token_accounting_is_wired_through_the_background_registry(time_controller):
+    """
+    Same gap as the concurrency release above, in a second fire-and-forget
+    task on the same success path: token/dollar accounting is also fired
+    via a bare asyncio.create_task per cache partition, with no strong
+    reference of its own. A collected task here drops a usage increment
+    that can never be recovered (the figures it needed only exist in that
+    task's own closure), silently under-counting a caller's token/dollar
+    usage against its configured limit. Must be tracked the same way.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "token_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+
+    kwargs = {
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "standard_logging_object": {
+            "model_group": "grp",
+            "model_id": "dep-1",
+            "total_tokens": 42,
+            "response_cost": 0.01,
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+
+    # The registry was actually populated: proves accounting ran through
+    # _BACKGROUND_TASKS, not a bare unreferenced asyncio.create_task.
+    assert len(_BACKGROUND_TASKS) == 1
+
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert len(_BACKGROUND_TASKS) == 0
+
+    now = time_controller.now().timestamp()
+    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now)
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
+    )
 
 
 @pytest.mark.asyncio
