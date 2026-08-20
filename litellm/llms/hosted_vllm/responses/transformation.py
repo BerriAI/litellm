@@ -6,10 +6,12 @@ so this config enables direct routing instead of falling back to
 the chat completions → responses conversion pipeline.
 """
 
-from typing import Optional
+from typing import Dict, Optional, Union
 
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.codex_compat import hoist_codex_additional_tools
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -67,6 +69,39 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return f"{api_base}/responses"
 
         return f"{api_base}/v1/responses"
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """Normalize Codex's `additional_tools` input item before forwarding.
+
+        vLLM either 400s on that item (0.25.x, via an unpicklable pydantic
+        ValidatorIterator) or ignores it and leaves the model with no tools at
+        all. Hoisting the inner tools into the standard `tools` array is what
+        makes Codex's code-mode tools reachable.
+        """
+        input, hoisted_tools, changed = hoist_codex_additional_tools(
+            input=input,
+            tools=response_api_optional_request_params.get("tools"),
+        )
+        if changed:
+            response_api_optional_request_params = {
+                **response_api_optional_request_params,
+                "tools": hoisted_tools,
+            }
+
+        return super().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def supports_native_websocket(self) -> bool:
         """Hosted vLLM does not support native WebSocket for Responses API"""
