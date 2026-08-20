@@ -10,7 +10,9 @@ computed from the wrong tier (or a mix) cannot match the expected numbers. The
 prompt is a fresh unique marker per run, keeping cached tokens out of the math.
 The response's own `service_tier` echo is asserted first: if OpenAI ever declined
 priority processing and served the default tier, the test fails there instead of
-producing a vacuous rate comparison.
+producing a vacuous rate comparison. Reasoning is requested explicitly with
+`reasoning_effort`, so the reasoning-rate assertion rests on a parameter the test
+sets rather than on whatever the model happens to do by default.
 """
 
 import pytest
@@ -37,6 +39,8 @@ INPUT_RATE = 4e-05
 OUTPUT_RATE = 8e-05
 PRIORITY_INPUT_RATE = 6e-05
 PRIORITY_OUTPUT_RATE = 1.6e-04
+
+REASONING_EFFORT = "high"
 
 
 class TestServiceTierPricing:
@@ -74,6 +78,7 @@ class TestServiceTierPricing:
                     ],
                     max_completion_tokens=4000,
                     service_tier="priority",
+                    reasoning_effort=REASONING_EFFORT,
                 ),
             )
         )
