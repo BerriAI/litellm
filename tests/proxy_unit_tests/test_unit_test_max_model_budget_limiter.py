@@ -11,6 +11,8 @@ import pytest
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy.hooks.model_max_budget_limiter import (
+    END_USER_SPEND_CACHE_KEY_PREFIX,
+    VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -558,3 +560,153 @@ async def test_async_log_success_event_skips_redis_push_without_redis(budget_lim
                 kwargs, response_obj=None, start_time=None, end_time=None
             )
             mock_push.assert_not_awaited()
+
+
+class _SharedRedisCache:
+    """Minimal Redis stand-in shared by multiple replicas' DualCache instances."""
+
+    def __init__(self, store):
+        self.store = store
+        self.get_count = 0
+
+    async def async_get_cache(self, key, **kwargs):
+        self.get_count += 1
+        return self.store.get(key)
+
+
+@pytest.mark.asyncio
+async def test_key_admission_uses_shared_redis_spend_across_replicas():
+    """
+    Regression for cross-replica model_max_budget bypass.
+
+    Two replicas each hold a stale pod-local spend below the cap while the shared
+    Redis counter is already above the cap. Both replicas must read the shared
+    Redis value and reject, instead of admitting off their local value.
+    """
+    budget = 100.0
+    pod_a_local_spend = 60.0
+    pod_b_local_spend = 60.0
+    shared_redis_spend = 120.0
+
+    model = "gpt-4"
+    budget_duration = "1d"
+    token = "test-key"
+    cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{token}:{model}:{budget_duration}"
+
+    shared_redis = _SharedRedisCache(store={cache_key: shared_redis_spend})
+
+    user_api_key = UserAPIKeyAuth(
+        token=token,
+        key_alias="test-alias",
+        model_max_budget={model: {"budget_limit": budget, "time_period": budget_duration}},
+    )
+
+    async def _make_pod(local_spend):
+        dual_cache = DualCache()
+        dual_cache.redis_cache = shared_redis
+        await dual_cache.async_set_cache(key=cache_key, value=local_spend, local_only=True)
+        assert await dual_cache.async_get_cache(key=cache_key, local_only=True) == local_spend
+        return _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+
+    pod_a = await _make_pod(pod_a_local_spend)
+    pod_b = await _make_pod(pod_b_local_spend)
+
+    for pod in (pod_a, pod_b):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await pod.is_key_within_model_budget(user_api_key, model)
+        assert exc_info.value.current_cost == shared_redis_spend
+
+    assert shared_redis.get_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_end_user_admission_uses_shared_redis_spend_across_replicas():
+    """
+    Same cross-replica bypass as above, exercised through the end-user path.
+    """
+    budget = 100.0
+    local_spend = 60.0
+    shared_redis_spend = 120.0
+
+    model = "gpt-4"
+    budget_duration = "1d"
+    end_user_id = "test-user"
+    cache_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{budget_duration}"
+
+    shared_redis = _SharedRedisCache(store={cache_key: shared_redis_spend})
+
+    async def _make_pod():
+        dual_cache = DualCache()
+        dual_cache.redis_cache = shared_redis
+        await dual_cache.async_set_cache(key=cache_key, value=local_spend, local_only=True)
+        return _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+
+    pod_a = await _make_pod()
+    pod_b = await _make_pod()
+
+    end_user_model_max_budget = {model: {"budget_limit": budget, "time_period": budget_duration}}
+    for pod in (pod_a, pod_b):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await pod.is_end_user_within_model_budget(end_user_id, end_user_model_max_budget, model)
+        assert exc_info.value.current_cost == shared_redis_spend
+
+
+@pytest.mark.asyncio
+async def test_admission_falls_back_to_local_spend_when_redis_unavailable():
+    """
+    When Redis is not configured, the limiter must still read the local spend so
+    single-instance deployments keep enforcing the budget.
+    """
+    budget = 100.0
+    model = "gpt-4"
+    budget_duration = "1d"
+    token = "test-key"
+    cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{token}:{model}:{budget_duration}"
+
+    dual_cache = DualCache()
+    assert dual_cache.redis_cache is None
+    await dual_cache.async_set_cache(key=cache_key, value=150.0, local_only=True)
+
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    user_api_key = UserAPIKeyAuth(
+        token=token,
+        key_alias="test-alias",
+        model_max_budget={model: {"budget_limit": budget, "time_period": budget_duration}},
+    )
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(user_api_key, model)
+
+
+@pytest.mark.asyncio
+async def test_admission_falls_back_to_local_spend_when_redis_returns_nothing():
+    """
+    Redis is configured but unreachable (its get swallows the error and returns
+    None). The limiter must fall back to the pod-local spend and keep enforcing
+    per-pod, rather than failing open and admitting every request.
+    """
+    budget = 100.0
+    local_spend = 150.0
+
+    model = "gpt-4"
+    budget_duration = "1d"
+    token = "test-key"
+    cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{token}:{model}:{budget_duration}"
+
+    unreachable_redis = _SharedRedisCache(store={})
+
+    dual_cache = DualCache()
+    dual_cache.redis_cache = unreachable_redis
+    await dual_cache.async_set_cache(key=cache_key, value=local_spend, local_only=True)
+
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    user_api_key = UserAPIKeyAuth(
+        token=token,
+        key_alias="test-alias",
+        model_max_budget={model: {"budget_limit": budget, "time_period": budget_duration}},
+    )
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await limiter.is_key_within_model_budget(user_api_key, model)
+    assert exc_info.value.current_cost == local_spend
+    assert unreachable_redis.get_count >= 1
