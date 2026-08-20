@@ -16,12 +16,13 @@ from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     KeyringDisabled,
+    KeyringDiscardsWrites,
     KeyringNotInstalled,
 )
 from litellm.litellm_core_utils.cli_token_utils import CliTokenRecord, save_cli_token
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.auth import (
-    KEYCHAIN_UNREACHABLE_MESSAGE,
+    DISABLE_KEYRING_ENV_VAR,
     get_stored_api_key,
     login,
     logout,
@@ -460,6 +461,20 @@ class TestLogoutCommand:
         assert "Logged out successfully" not in result.output
         assert "still in the OS keychain" in result.output
         assert "pip install 'litellm[cli]'" in result.output
+
+    def test_logout_does_not_call_an_unusable_keychain_clean(self, isolated_home, secret_vault_factory):
+        """A keychain-backed login, then a login that fell back to the file because the keychain had
+        become unusable, leaves the first entry live. The file's own secret says nothing about it,
+        so a clean bill of health here is the one answer that cannot be justified."""
+        _write_token_file(isolated_home, key="sk-in-file")
+        vault = secret_vault_factory(available=False, failure=KeyringDisabled())
+
+        result = self.runner.invoke(logout, obj={"secret_vault": vault})
+
+        assert result.exit_code == 0
+        assert "Logged out successfully" not in result.output
+        assert "could not be checked" in result.output
+        assert DISABLE_KEYRING_ENV_VAR in result.output
 
     def test_logout_warns_when_the_keychain_refuses_to_release_the_entry(
         self, isolated_home, secret_vault_factory
@@ -1003,6 +1018,19 @@ class TestKeychainBackedCommands:
         assert "No OS keychain available" not in result.output
         assert json.loads(token_file.read_text())["key"] == "sk-minted"
 
+    def test_login_keeps_the_credential_when_the_backend_keeps_nothing(
+        self, isolated_home, secret_vault_factory
+    ):
+        """A backend that accepts writes and stores nothing must not be reported as keychain
+        storage, because the file is then told to drop the only remaining copy."""
+        result = self._login(secret_vault_factory(available=False, failure=KeyringDiscardsWrites()))
+
+        token_file = isolated_home / ".litellm" / "token.json"
+        assert result.exit_code == 0
+        assert "Credential stored in your OS keychain." not in result.output
+        assert "keyring --enable" in result.output
+        assert json.loads(token_file.read_text())["key"] == "sk-minted"
+
     def test_login_names_the_kill_switch_instead_of_blaming_the_machine(
         self, isolated_home, secret_vault_factory
     ):
@@ -1061,7 +1089,8 @@ class TestKeychainBackedCommands:
         result = self.runner.invoke(print_token, obj=obj)
 
         assert result.exit_code == 1
-        assert KEYCHAIN_UNREACHABLE_MESSAGE in result.output
+        assert "could not be read" in result.output
+        assert "lite login" in result.output
 
     def test_whoami_flags_a_locked_keychain(self, isolated_home, secret_vault_factory):
         _write_home_json(
@@ -1074,7 +1103,34 @@ class TestKeychainBackedCommands:
         result = self.runner.invoke(whoami, obj=obj)
 
         assert "Authenticated" in result.output
-        assert KEYCHAIN_UNREACHABLE_MESSAGE in result.output
+        assert "could not be read" in result.output
+
+    def test_whoami_names_the_kill_switch_rather_than_a_missing_package(
+        self, isolated_home, secret_vault_factory
+    ):
+        """Every unreachable keychain used to be described as a locked one needing the keyring
+        package installed. Someone who set the kill switch has the package and an unlocked keychain,
+        so that advice sends them to fix two things that were never wrong."""
+        _write_token_file(isolated_home, key=None)
+        vault = secret_vault_factory(available=False, failure=KeyringDisabled())
+
+        result = self.runner.invoke(whoami, obj={"base_url": "https://test.example.com", "secret_vault": vault})
+
+        assert DISABLE_KEYRING_ENV_VAR in result.output
+        assert "pip install" not in result.output
+
+    def test_print_token_points_an_install_without_keyring_at_the_package(
+        self, isolated_home, secret_vault_factory
+    ):
+        _write_token_file(isolated_home, key=None)
+        vault = secret_vault_factory(available=False, failure=KeyringNotInstalled())
+        obj = {"base_url": "https://test.example.com", "secret_vault": vault}
+
+        result = self.runner.invoke(print_token, obj=obj)
+
+        assert result.exit_code == 1
+        assert "pip install 'litellm[cli]'" in result.output
+        assert DISABLE_KEYRING_ENV_VAR not in result.output
 
 
 class TestApiKeyPrecedence:

@@ -13,15 +13,17 @@ This module has no dependencies on proxy code and can be safely imported at the 
 """
 
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.litellm_core_utils.cli_keyring import (
     SYSTEM_KEYRING,
     KeyringDisabled,
+    KeyringDiscardsWrites,
     KeyringNotInstalled,
     KeyringUnreachable,
     SecretErase,
@@ -33,7 +35,23 @@ from litellm.litellm_core_utils.cli_keyring import (
     SecretVault,
     SecretWrite,
 )
-from litellm.litellm_core_utils.private_json import ensure_private_dir, write_private_json
+from litellm.litellm_core_utils.private_json import (
+    commit_staged_json,
+    discard_staged_json,
+    ensure_private_dir,
+    stage_private_json,
+    write_private_json,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialNotSaved:
+    """The credential was minted but no store would keep it, so this machine has none."""
+
+    detail: str
+
+
+SecretSave: TypeAlias = SecretWrite | CredentialNotSaved
 
 
 class CliTokenRecord(BaseModel):
@@ -85,14 +103,24 @@ def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | N
     return _resolve_secret(record, vault)
 
 
-def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretWrite:
-    """Store a freshly minted credential. Reports where its secret material ended up, and why"""
+def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
+    """Store a freshly minted credential. Reports where its secret material ended up, and why.
+
+    The token file is what makes a keychain-backed credential findable again, so a file that will
+    not be written takes the keychain copy down with it rather than leaving a live credential
+    stored under a machine that has no record of it.
+    """
     outcome: Final = (
         SecretStored()
         if record.key is None
         else vault.write(_encode_secret(record.base_url, record.key, record.jwt_token))
     )
-    _write_token_file(_without_secret(record) if isinstance(outcome, SecretStored) else record)
+    try:
+        _write_token_file(_without_secret(record) if isinstance(outcome, SecretStored) else record)
+    except OSError as error:
+        if record.key is not None and isinstance(outcome, SecretStored):
+            vault.erase()
+        return CredentialNotSaved(str(error))
     return outcome
 
 
@@ -105,24 +133,30 @@ def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretErase:
 
 
 def _nothing_left_behind(outcome: SecretErase) -> bool:
-    """Whether the keychain can be trusted to hold no credential of ours once the file is gone"""
+    """Whether the keychain can be trusted to hold no credential of ours once the file is gone.
+
+    A keychain that exists but is out of reach right now is never trusted, whatever the token file
+    looks like: the login that stored a secret there and the logout that cannot remove it are
+    separate runs, free to differ in whether the keychain was usable at the time.
+    """
     match outcome:
         case SecretErased():
             return True
-        case SecretStranded():
+        case SecretStranded() | KeyringDisabled() | KeyringUnreachable() | KeyringDiscardsWrites():
             return False
-        case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable():
-            return not _secret_lives_in_keychain()
+        case KeyringNotInstalled():
+            return _file_holds_its_own_secret()
 
 
-def _secret_lives_in_keychain() -> bool:
-    """Whether the token file is the metadata half of a pair whose secret half went to a keychain.
+def _file_holds_its_own_secret() -> bool:
+    """Whether the stored login keeps its secret in the token file, ruling out a keychain entry.
 
-    A file that still carries its own secret rules one out, which keeps `lite logout` quiet on the
-    machines that never had a keychain to begin with.
+    Sound only against a missing `keyring` package, the one way to lose the keychain that had to
+    hold at storage time too, since nothing here can reach a keychain without it. A file whose
+    secret half is absent went to a keychain by definition, and so rules nothing out.
     """
     record: Final = _read_token_file()
-    return record is not None and record.key is None and not record.jwt_token
+    return record is not None and record.key is not None
 
 
 def get_litellm_gateway_api_key(
@@ -179,7 +213,7 @@ def is_cli_token_fresh(token_data: CliTokenRecord, buffer_hours: float = 0.1) ->
 def _read_token_file() -> CliTokenRecord | None:
     try:
         raw: Final = Path(get_cli_token_file_path()).read_text()
-    except OSError:
+    except (OSError, ValueError):
         return None
     try:
         return CliTokenRecord.model_validate_json(raw)
@@ -193,7 +227,7 @@ def _resolve_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecor
             return _apply_vault_secret(record, blob, vault)
         case SecretMissing():
             return _migrate_file_secret(record, vault)
-        case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable():
+        case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable() | KeyringDiscardsWrites():
             return record
 
 
@@ -216,38 +250,46 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
 
 
 def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord | None:
-    """Move a file-held secret into the vault, but only if the file's copy can be taken away.
+    """Move a file-held secret into the vault, but only once the file's copy can be taken away.
 
-    Migrating without scrubbing would leave the credential live in two stores instead of one, so a
-    file that will not give its copy up rolls the vault write back rather than widening exposure.
+    The scrubbed file is staged first so a directory that will not accept it stops the migration
+    before the keychain is handed anything. Copying the credential into a second store and only
+    then discovering the first one cannot be cleaned would widen exposure instead of narrowing it,
+    which is the opposite of what moving it into the keychain is for.
     """
     if record.key is None:
         return None
-    if not isinstance(vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)), SecretStored):
+    staged: Final = _stage_scrubbed_file(record)
+    if staged is None:
         return record
-    if not _scrub_file_secret(record):
+    if not isinstance(vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)), SecretStored):
+        discard_staged_json(staged)
+        return record
+    if not _commit_scrubbed_file(staged):
         vault.erase()
     return record
 
 
 def _scrub_file_secret(record: CliTokenRecord) -> bool:
-    """Leave no secret material in the token file once the vault holds it.
-
-    A file that cannot be rewritten without the secret is removed instead. Signing in again costs
-    the user one command; a live credential left behind in cleartext costs them the credential.
-    """
+    """Leave no secret material in the token file once the vault holds it"""
     if record.key is None and not record.jwt_token:
         return True
+    staged: Final = _stage_scrubbed_file(record)
+    return staged is not None and _commit_scrubbed_file(staged)
+
+
+def _stage_scrubbed_file(record: CliTokenRecord) -> str | None:
+    path: Final = Path(get_cli_token_file_path())
     try:
-        _write_token_file(_without_secret(record))
+        ensure_private_dir(path.parent)
+        return stage_private_json(str(path), _without_secret(record).model_dump(exclude_none=True))
     except OSError:
-        return _discard_token_file()
-    return True
+        return None
 
 
-def _discard_token_file() -> bool:
+def _commit_scrubbed_file(staged: str) -> bool:
     try:
-        Path(get_cli_token_file_path()).unlink(missing_ok=True)
+        commit_staged_json(staged, get_cli_token_file_path())
     except OSError:
         return False
     return True
