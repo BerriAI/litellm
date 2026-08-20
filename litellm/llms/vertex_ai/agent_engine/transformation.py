@@ -252,8 +252,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """An agent emits one event per step. A partial is repeated in full by the event
         that finalises it, for its text and for its counts alike, so yielding it too
         would duplicate the answer and bill the same model call twice."""
-        for line in response_text.strip().split("\n"):
-            line = line.strip()
+        for line in (raw.strip() for raw in response_text.strip().split("\n")):
             if not line:
                 continue
 
