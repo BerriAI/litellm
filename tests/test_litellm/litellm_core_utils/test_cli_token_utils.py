@@ -528,6 +528,19 @@ class TestSaveCliToken:
         assert json.loads(vault.blob)["timestamp"] == 2000.0
         assert json.loads(_token_file(isolated_home).read_text())["timestamp"] == 2000.0
 
+    def test_a_login_is_stamped_past_the_keychain_the_file_could_not_keep_up_with(
+        self, isolated_home, secret_vault_factory
+    ):
+        """A login reported as CredentialNotRecorded leaves the keychain holding a later sign-in
+        than the file names, so the file alone is no longer the floor. A later login on a clock
+        that went back past that keychain entry still has to be the one served."""
+        _write_legacy_file(isolated_home, key="sk-superseded", timestamp=1000.0)
+        vault = secret_vault_factory(blob=_blob(key="sk-recorded", timestamp=2000.0), writable=False)
+
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-fresh", timestamp=1500.0), vault=vault)
+
+        assert load_cli_token(vault=vault).key == "sk-fresh"
+
 
 class TestScrubFailure:
     """A keychain that took the secret while the file kept it is the worst of both stores: the
