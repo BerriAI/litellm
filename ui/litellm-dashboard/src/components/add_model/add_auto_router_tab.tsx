@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
-import { Card, Select as AntdSelect } from "antd";
+import { Card } from "antd";
 import { ChevronDown, ChevronRight, CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -289,6 +290,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     [presetAvailability],
   );
 
+  const templateItems = React.useMemo(
+    () => [
+      ...sortedPresetOptions.map(({ preset }) => ({ value: preset.key, label: preset.label })),
+      { value: "custom", label: "Custom Configuration" },
+    ],
+    [sortedPresetOptions],
+  );
+
   const applyPrefill = (prefill: PresetPrefill) => {
     setComplexityRouterConfig(prefill.complexityRouterConfig);
     setCustomTechnicalKeywords(prefill.customTechnicalKeywords);
@@ -486,49 +495,52 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
             <div>
               <label className="block text-sm font-medium text-foreground mb-2">Template</label>
-              <AntdSelect
-                value={selectedPreset}
-                onChange={handlePresetChange}
-                placeholder="Choose a template or select Custom to define your own"
-                className="w-full"
-                optionLabelProp="label"
-                data-testid="template-selector"
+              <Select
+                items={templateItems}
+                value={selectedPreset ?? null}
+                onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
               >
-                {sortedPresetOptions.map(({ preset, availability: presetState }) => {
-                  const disabledHint = presetDisabledHint(presetState);
-                  const isDisabled = disabledHint !== null;
-                  const hintClass = isPresetHintAlarming(presetState)
-                    ? "text-red-500 dark:text-red-400"
-                    : "text-muted-foreground";
-                  const matchedHint =
-                    presetState.kind === "available" && presetState.viaDeployments ? "Matches your deployments" : null;
+                <SelectTrigger data-testid="template-selector" className="w-full">
+                  <SelectValue placeholder="Choose a template or select Custom to define your own" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sortedPresetOptions.map(({ preset, availability: presetState }) => {
+                    const disabledHint = presetDisabledHint(presetState);
+                    const hintClass = isPresetHintAlarming(presetState)
+                      ? "text-red-500 dark:text-red-400"
+                      : "text-muted-foreground";
+                    const matchedHint =
+                      presetState.kind === "available" && presetState.viaDeployments
+                        ? "Matches your deployments"
+                        : null;
 
-                  return (
-                    <AntdSelect.Option
-                      key={preset.key}
-                      value={preset.key}
-                      label={preset.label}
-                      disabled={isDisabled}
-                      title={disabledHint ?? preset.description}
-                    >
-                      <div>
-                        <div className="font-medium">{preset.label}</div>
-                        <div className="text-xs text-muted-foreground">{preset.description}</div>
-                        {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
-                        {matchedHint && (
-                          <div className="text-xs mt-1 text-green-600 dark:text-green-400">{matchedHint}</div>
-                        )}
-                      </div>
-                    </AntdSelect.Option>
-                  );
-                })}
-                <AntdSelect.Option value="custom" label="Custom Configuration">
-                  <div>
-                    <div className="font-medium">Custom Configuration</div>
-                    <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
-                  </div>
-                </AntdSelect.Option>
-              </AntdSelect>
+                    return (
+                      <SelectItem
+                        key={preset.key}
+                        value={preset.key}
+                        label={preset.label}
+                        disabled={disabledHint !== null}
+                        title={disabledHint ?? preset.description}
+                      >
+                        <div>
+                          <div className="font-medium">{preset.label}</div>
+                          <div className="text-xs text-muted-foreground">{preset.description}</div>
+                          {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                          {matchedHint && (
+                            <div className="text-xs mt-1 text-green-600 dark:text-green-400">{matchedHint}</div>
+                          )}
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
+                  <SelectItem value="custom" label="Custom Configuration">
+                    <div>
+                      <div className="font-medium">Custom Configuration</div>
+                      <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
               {modelsUnverifiable && (
                 <div className="text-xs mt-1 text-red-500 dark:text-red-400">
                   Could not load available models.{" "}

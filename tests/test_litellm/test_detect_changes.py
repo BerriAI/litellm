@@ -1,12 +1,13 @@
 """Regression tests for the GitHub Actions change-based job gating.
 
-`.github/scripts/detect_backend_changes.sh` decides whether a pull request's
-backend unit-test jobs do real work. It asks the API which files the pull
-request touches and hands them to `classify_changes.sh`. The contract locked in
-here:
+`.github/scripts/detect_changes.sh` decides whether a pull request's jobs do
+real work. It asks the API which files the pull request touches and hands them
+to `classify_changes.sh` under one category. The contract locked in here:
 
   * a UI-only pull request skips backend jobs even when the checked-out merge
     ref carries backend commits from the base branch
+  * the ui category is the mirror image: it skips when only backend files
+    changed, so a backend-only PR stops building and unit-testing the dashboard
   * anything the classification cannot resolve (no pull request, an API
     failure, a truncated file list, a broken classifier) runs the job
 """
@@ -19,7 +20,7 @@ import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / ".github" / "scripts" / "detect_backend_changes.sh"
+SCRIPT = REPO_ROOT / ".github" / "scripts" / "detect_changes.sh"
 CLASSIFIER = REPO_ROOT / ".circleci" / "scripts" / "classify_changes.sh"
 
 UI_FILE = "ui/litellm-dashboard/src/components/Teams.tsx"
@@ -84,6 +85,7 @@ def _run(
     changed_file_count: str | None = None,
     gh_exit_code: int = 0,
     classifier_body: str | None = None,
+    category: str | None = None,
 ) -> tuple[str, str]:
     """Run the script against a stubbed `gh`; returns (decision, stdout)."""
     bin_dir = tmp_path / "bin"
@@ -102,6 +104,10 @@ def _run(
     env["REPO"] = "BerriAI/litellm"
     env["PR_NUMBER"] = pr_number
     env["CHANGED_FILE_COUNT"] = changed_file_count if changed_file_count is not None else str(len(files))
+    if category is not None:
+        env["CATEGORY"] = category
+    else:
+        env.pop("CATEGORY", None)
 
     tree = _scripts_tree(tmp_path, classifier_body)
     result = subprocess.run(
@@ -187,3 +193,43 @@ def test_unexpected_classifier_output_runs(tmp_path: Path) -> None:
     )
     assert decision == "decision=run"
     assert "unexpected decision: maybe" in stdout
+
+
+def test_ui_category_skips_a_backend_only_pr(tmp_path: Path) -> None:
+    """The dashboard build and its unit tests cannot be affected by a pull request
+    that touches no `ui/` file, and the `client` category cannot express that
+    because it deliberately runs whenever the backend changes."""
+    decision, _ = _run(tmp_path, files=[BACKEND_FILE], category="ui")
+    assert decision == "decision=skip"
+
+
+def test_ui_category_runs_a_ui_only_pr(tmp_path: Path) -> None:
+    decision, _ = _run(tmp_path, files=[UI_FILE], category="ui")
+    assert decision == "decision=run"
+
+
+def test_ui_category_runs_a_mixed_pr(tmp_path: Path) -> None:
+    decision, _ = _run(tmp_path, files=[UI_FILE, BACKEND_FILE], category="ui")
+    assert decision == "decision=run"
+
+
+def test_absent_category_still_runs_a_backend_pr(tmp_path: Path) -> None:
+    """Callers that pass no category keep the pre-existing backend behaviour."""
+    assert _run(tmp_path, files=[BACKEND_FILE])[0] == "decision=run"
+
+
+def test_absent_category_still_skips_a_ui_pr(tmp_path: Path) -> None:
+    assert _run(tmp_path, files=[UI_FILE])[0] == "decision=skip"
+
+
+def test_ui_category_fails_open_when_the_api_fails(tmp_path: Path) -> None:
+    decision, stdout = _run(tmp_path, files=[], gh_exit_code=1, category="ui")
+    assert decision == "decision=run"
+    assert "detect-changes[ui]" in stdout
+
+
+def test_ui_category_runs_when_the_ui_workflows_themselves_change(tmp_path: Path) -> None:
+    """Without this the dashboard jobs would skip on the pull request that edits
+    them, shipping a workflow change nothing ever exercised."""
+    decision, _ = _run(tmp_path, files=[".github/workflows/test-litellm-ui-unit.yml"], category="ui")
+    assert decision == "decision=run"

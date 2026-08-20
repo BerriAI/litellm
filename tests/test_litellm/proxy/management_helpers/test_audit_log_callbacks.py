@@ -19,6 +19,7 @@ from litellm.proxy.management_helpers.audit_logs import (
     _build_audit_log_payload,
     _dispatch_audit_log_to_callbacks,
     create_audit_log_for_update,
+    is_audit_logging_enabled,
 )
 from litellm.types.utils import StandardAuditLogPayload
 
@@ -47,6 +48,34 @@ def _make_audit_log(
         updated_values=json.dumps({"name": "new-team"}),
         before_value=json.dumps({"name": "old-team"}),
     )
+
+
+@pytest.mark.parametrize(
+    ("premium_user", "configured_value", "environment_value", "expected"),
+    (
+        (True, None, None, True),
+        (True, False, None, False),
+        (True, None, "false", False),
+        (False, None, None, False),
+        (False, True, None, True),
+        (True, True, "false", True),
+    ),
+)
+def test_is_audit_logging_enabled_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    premium_user: bool,
+    configured_value: bool | None,
+    environment_value: str | None,
+    expected: bool,
+):
+    monkeypatch.setattr(litellm, "store_audit_logs", configured_value)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+    if environment_value is None:
+        monkeypatch.delenv("LITELLM_STORE_AUDIT_LOGS", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_STORE_AUDIT_LOGS", environment_value)
+
+    assert is_audit_logging_enabled() is expected
 
 
 class TestBuildAuditLogPayload:
@@ -185,12 +214,14 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         with (
             patch("litellm.proxy.proxy_server.premium_user", False),
             patch("litellm.store_audit_logs", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         ):
             audit_log = _make_audit_log()
             await create_audit_log_for_update(audit_log)
             await asyncio.sleep(0.1)
 
             mock_logger.async_log_audit_log_event.assert_not_called()
+            mock_prisma.db.litellm_auditlog.create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_dispatch_when_store_audit_logs_false(self):

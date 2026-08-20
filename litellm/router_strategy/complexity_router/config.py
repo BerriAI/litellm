@@ -5,10 +5,12 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
+from collections.abc import Mapping
 from enum import Enum
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
 
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
@@ -157,6 +159,44 @@ class ReminderMarkerPair(BaseModel):
         self.open = open_marker
         self.close = close_marker
         return self
+
+
+class ComplexityTierModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_name: str
+    litellm_params: Annotated[Mapping[str, object], SkipValidation()] = Field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    @field_validator("litellm_params", mode="before")
+    @classmethod
+    def _freeze_litellm_params(cls, value: Mapping[str, object]) -> Mapping[str, object]:
+        return MappingProxyType(dict(value))
+
+    @field_serializer("litellm_params")
+    def _serialize_litellm_params(self, value: Mapping[str, object]) -> Mapping[str, object]:
+        return dict(value)  # mutable-ok: Pydantic JSON serialization requires a concrete mapping
+
+
+def _normalize_tier_entries(
+    raw_value: object,
+    tier: str,
+) -> tuple[str | list[str], tuple[ComplexityTierModel, ...]]:
+    raw_entries: Final = raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,)
+    entries: Final = tuple(
+        ComplexityTierModel(model_name=entry) if isinstance(entry, str) else ComplexityTierModel.model_validate(entry)
+        for entry in raw_entries
+    )
+    model_names: Final = tuple(entry.model_name for entry in entries)
+    if len(model_names) != len(frozenset(model_names)):
+        raise ValueError(f"tier {tier} contains duplicate model_name values; each pool entry needs distinct parameters")
+    normalized: Final = (
+        entries[0].model_name
+        if not isinstance(raw_value, (list, tuple))
+        else list(model_names)  # mutable-ok: config.tiers must preserve its existing list contract
+    )
+    return normalized, entries
 
 
 # ─── Default Keyword Lists ───
@@ -424,6 +464,9 @@ class ComplexityRouterConfig(BaseModel):
             "Mapping of complexity tiers to a model or model pool. "
             "A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True"
         ),
+    )
+    tier_model_configs: Mapping[str, tuple[ComplexityTierModel, ...]] = Field(
+        default_factory=dict,
     )
 
     tier_definitions: tuple[TierDefinition, ...] | None = Field(
@@ -776,6 +819,55 @@ class ComplexityRouterConfig(BaseModel):
             else:
                 coerced[key] = item
         return coerced
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_tier_model_configs(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        raw_tiers: Final = value.get("tiers")
+        if not isinstance(raw_tiers, dict):
+            return value
+        existing_configs: Final = value.get("tier_model_configs")
+        normalized_entries: Final = MappingProxyType(
+            {tier: _normalize_tier_entries(raw_value, tier) for tier, raw_value in raw_tiers.items()}
+        )
+        normalized_tiers: Final = MappingProxyType(
+            {tier: normalized for tier, (normalized, _) in normalized_entries.items()}
+        )
+        incoming_params: Final = (
+            MappingProxyType(
+                {
+                    (tier, entry.model_name): entry.litellm_params
+                    for tier, entries in existing_configs.items()
+                    for entry in (ComplexityTierModel.model_validate(item) for item in entries)
+                }
+            )
+            if isinstance(existing_configs, dict)
+            else MappingProxyType({})
+        )
+        tier_model_configs: Final = MappingProxyType(
+            {
+                tier: tuple(
+                    entry.model_copy(
+                        update=MappingProxyType(
+                            {
+                                "litellm_params": incoming_params.get((tier, entry.model_name), entry.litellm_params),
+                            }
+                        )
+                    )
+                    for entry in entries
+                )
+                for tier, (_, entries) in normalized_entries.items()
+                if any(entry.litellm_params for entry in entries)
+                or (isinstance(existing_configs, dict) and tier in existing_configs)
+            }
+        )
+        return {  # mutable-ok: Pydantic before-validator requires a concrete mapping
+            **value,
+            "tiers": normalized_tiers,
+            "tier_model_configs": tier_model_configs,
+        }
 
     @field_validator("escalation_keywords")
     @classmethod

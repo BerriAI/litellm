@@ -271,9 +271,7 @@ describe("ModelSettingsModal", () => {
     renderWithProviders(<ModelSettingsModal {...defaultProps} />);
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    // eslint-disable-next-line local/no-antd-class-selectors -- antd Skeleton exposes no role, label or aria-busy to query the loading affordance by
-    const skeletons = document.querySelectorAll(".ant-skeleton");
-    expect(skeletons.length).toBeGreaterThan(0);
+    expect(screen.getByRole("status", { name: "Loading model settings" })).toBeInTheDocument();
   });
 
   it("should not call onSuccess when it is not provided", async () => {
