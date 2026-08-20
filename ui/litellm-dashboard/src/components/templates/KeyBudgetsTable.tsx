@@ -27,7 +27,7 @@ function BudgetRows({ budgets, isLoading }: { budgets: readonly KeyBudgetEntry[]
         noDataMessage="No budgets apply to this key."
         // Every row is two lines tall whatever it carries, so the table reads as a grid rather than
         // taking its height from whichever caveat happened to be longest.
-        rowClassName={(row) => cn("h-14", isBlockingRow(row.original) ? "bg-red-50 hover:bg-red-50" : "")}
+        rowClassName={(row) => cn("h-14", isBlockingRow(row.original) ? "bg-red-50 hover:bg-red-100" : "")}
         size="compact"
       />
     </>
