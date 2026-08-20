@@ -185,22 +185,19 @@ def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) ->
 
     A machine with no token file has no stored login to end, and `clear_cli_token` keeps one behind
     whenever the keychain is left unconfirmed, so a missing file is real evidence rather than the
-    absence of it. Past that, a keychain that exists but is out of reach right now is
-    never trusted, whatever the file looks like: the login that stored a secret there and the
-    logout that cannot remove it are separate runs, free to differ in whether the keychain was
-    usable at the time. The exception is a missing `keyring` package, which had to be missing when
-    the credential was stored too, so a file still holding its own secret proves no keychain was
-    ever involved. `SecretStranded` is the keychain answering for itself and outranks the file.
+    absence of it. Past that, a keychain that could not be reached is never trusted, whatever the
+    file looks like. Even a file holding its own secret says only that the login which wrote it had
+    no keychain to write to, and the login before it may well have had one: the entry that login
+    left outlives both the uninstalled package and the file that replaced it. `SecretStranded` is
+    the keychain answering for itself and outranks the file.
     """
     match outcome:
         case SecretErased():
             return True
         case SecretStranded():
             return False
-        case KeyringDisabled() | KeyringUnreachable():
+        case KeyringDisabled() | KeyringNotInstalled() | KeyringUnreachable():
             return record is None
-        case KeyringNotInstalled():
-            return record is None or record.key is not None
 
 
 def get_litellm_gateway_api_key(

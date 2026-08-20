@@ -582,15 +582,22 @@ class TestClearCliToken:
 
         assert clear_cli_token(vault=vault) == SecretErased()
 
-    def test_a_file_backed_login_logs_out_quietly_without_keyring(self, isolated_home, secret_vault_factory):
-        """The complement, and the one inference the file does support: nothing here can reach a
-        keychain without the package, so an install that lacks it and a file that still holds its
-        own secret between them account for the whole credential."""
-        _write_legacy_file(isolated_home)
-        vault = secret_vault_factory(available=False, failure=KeyringNotInstalled())
+    def test_a_file_backed_login_cannot_vouch_for_a_keychain_no_package_can_reach(
+        self, isolated_home, secret_vault_factory
+    ):
+        """Sign in with the keyring package installed, lose the package, then sign in again so the
+        second secret lands in the file. The first login's entry outlives both, and the file that
+        replaced it holds a secret of its own, which is the shape a logout must not read as proof
+        that no keychain was ever involved."""
+        vault = secret_vault_factory()
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-keychain"), vault=vault)
+        vault.available = False
+        vault.failure = KeyringNotInstalled()
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-in-file"), vault=vault)
 
-        assert clear_cli_token(vault=vault) == SecretErased()
-        assert not _token_file(isolated_home).exists()
+        assert clear_cli_token(vault=vault) == KeyringNotInstalled()
+        assert vault.blob is not None
+        assert "sk-in-file" not in _token_file(isolated_home).read_text()
 
     def test_is_safe_when_nothing_was_ever_stored(self, isolated_home, secret_vault_factory):
         assert clear_cli_token(vault=secret_vault_factory()) == SecretErased()
