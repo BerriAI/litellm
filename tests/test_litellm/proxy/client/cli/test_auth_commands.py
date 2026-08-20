@@ -492,6 +492,23 @@ class TestLogoutCommand:
         assert "still in the OS keychain" in result.output
         assert "Unlock your keychain" in result.output
 
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+    def test_logout_reports_a_token_file_it_cannot_remove(self, isolated_home, secret_vault_factory):
+        """`lite logout` on a read-only ~/.litellm used to end in a PermissionError traceback with
+        the credential still sitting in the file. The user has to be told what is left and where."""
+        _write_token_file(isolated_home, key="sk-in-file")
+        config_dir = isolated_home / ".litellm"
+        config_dir.chmod(0o500)
+        try:
+            result = self.runner.invoke(logout, obj={"secret_vault": secret_vault_factory()})
+        finally:
+            config_dir.chmod(0o700)
+
+        assert result.exit_code == 0
+        assert "Logged out successfully" not in result.output
+        assert "still in" in result.output
+        assert str(config_dir / "token.json") in result.output
+
     def test_logout_without_the_keyring_package_still_warns_about_a_file_held_secret(
         self, isolated_home, secret_vault_factory
     ):
