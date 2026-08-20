@@ -755,6 +755,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
+    "https://api.tokenlab.sh/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
 ]
@@ -822,6 +823,7 @@ openai_compatible_providers: Final[list] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
+    "tokenlab",  # TokenLab - JSON-configured provider
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
 ]
