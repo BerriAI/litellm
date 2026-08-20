@@ -126,6 +126,9 @@ class PassthroughEndpointRouter:
 
         ``deployment_key_to_vertex_credentials`` is only reachable when the caller names a project and location,
         which WebSocket clients never do, so DB-stored deployments need this lookup to be usable at all.
+
+        With no model to go on, only deployments that agree on a project and location answer: guessing between
+        two Vertex projects would mint a token for one and later send the other one's model name
         """
         llm_router: Final = self.llm_router_getter()
         if llm_router is None:
@@ -135,16 +138,22 @@ class PassthroughEndpointRouter:
             for deployment in (llm_router.get_model_list() or ())
             if (credentials := self._resolve_vertex_deployment_credentials(deployment["litellm_params"])) is not None
         )
-        if len(resolved) == 0:
-            return None
-        return next(
+        matched: Final = next(
             (
                 credentials
                 for deployment, credentials in resolved
                 if model is not None and self._deployment_matches_model(deployment, model)
             ),
-            resolved[0][1],
+            None,
         )
+        if matched is not None:
+            return matched
+        targets: Final = frozenset(
+            (credentials.vertex_project, credentials.vertex_location) for _, credentials in resolved
+        )
+        if len(targets) != 1:
+            return None
+        return resolved[0][1]
 
     def _resolve_vertex_deployment_credentials(
         self, litellm_params: LiteLLMParamsTypedDict
