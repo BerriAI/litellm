@@ -8391,3 +8391,23 @@ async def test_fetch_cli_sso_team_details_orders_by_alias_then_id():
         "Forge-Team-A-35551",
         "forge-team-b-35551",
     ]
+
+
+def test_cli_sso_team_sort_key_case_insensitive_with_id_tiebreaker():
+    """Directly exercise the sort key, including the alias-None and team_id-None
+    fallbacks, so ordering is stable regardless of how the DB row is shaped.
+    """
+    from litellm.proxy.management_endpoints import ui_sso as ui_sso_mod
+
+    CliSsoTeamDetail = ui_sso_mod.CliSsoTeamDetail
+    key = ui_sso_mod._cli_sso_team_sort_key
+
+    a = CliSsoTeamDetail(team_id="2", team_alias="Alpha", team_models=())
+    b = CliSsoTeamDetail(team_id="1", team_alias="alpha", team_models=())
+    c = CliSsoTeamDetail(team_id=None, team_alias=None, team_models=())
+
+    # Both `or ""` fallbacks are taken for c.
+    assert key(c) == ("", "")
+    # Case-insensitive alias equality falls back to team_id ("1" < "2");
+    # the alias-less team sorts first.
+    assert [t.team_id for t in sorted([a, b, c], key=key)] == [None, "1", "2"]
