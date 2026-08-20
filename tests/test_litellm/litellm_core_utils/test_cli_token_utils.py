@@ -870,6 +870,15 @@ class TestIsCliTokenFresh:
 
         assert is_cli_token_fresh(almost, buffer_hours=0.1) is False
 
+    def test_a_stamp_left_in_the_future_keeps_reporting_fresh_until_the_clock_catches_up(self):
+        """The stamp both orders the two stores and drives this shortcut, so a store left stamped
+        ahead of the clock hands that stamp to the next sign-in and keeps it looking fresh past the
+        expiry the gateway will actually enforce. Pinning that here so the shared stamp cannot stop
+        being a deliberate trade without this failing first."""
+        ahead = CliTokenRecord(timestamp=time.time() + CLI_JWT_EXPIRATION_HOURS * 3600)
+
+        assert is_cli_token_fresh(ahead) is True
+
 
 class _FakeKeyringModule:
     def __init__(self, stored=None, *, get_error=None, set_error=None, delete_error=None, discard=False):
