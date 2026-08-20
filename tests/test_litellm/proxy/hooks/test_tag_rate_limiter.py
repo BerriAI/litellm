@@ -2075,6 +2075,85 @@ async def test_redis_backed_cross_unit_rejection_does_not_leave_a_phantom_increm
     await redis_cache.async_delete_cache(key=request_key)
 
 
+@pytest.mark.asyncio
+async def test_redis_backed_token_admission_sees_increments_the_in_memory_cache_missed(time_controller):
+    """
+    Success accounting increments a token bucket straight through a Lua
+    script on redis_cache, bypassing DualCache/InternalUsageCache entirely --
+    that write never touches the in-memory layer. Once an earlier read has
+    backfilled that same key into the in-memory cache, DualCache's own
+    async_batch_get_cache treats that non-None in-memory hit as authoritative
+    and never re-checks Redis, so every later admission would see the same
+    frozen snapshot while the real Redis counter keeps climbing underneath
+    it, silently admitting traffic well past the configured token limit.
+    """
+    limiter, redis_cache = _redis_limiter(time_controller)
+    try:
+        await redis_cache.ping()
+    except Exception as e:
+        pytest.skip(f"Redis connection failed: {e!s}")
+
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {"token_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 100, "period_seconds": 60}]}},
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    tag = f"redis-stale-check-{uuid.uuid4().hex}"
+    request_kwargs = {"metadata": {"tags": [f"end_user_id:{tag}"]}}
+
+    async def _charge(tokens: float) -> None:
+        await limiter.async_log_success_event(
+            kwargs={
+                "metadata": {"tags": [f"end_user_id:{tag}"]},
+                "standard_logging_object": {
+                    "model_group": "grp",
+                    "model_id": "dep-1",
+                    "total_tokens": tokens,
+                    "response_cost": 0,
+                },
+            },
+            response_obj=None,
+            start_time=0,
+            end_time=0,
+        )
+        # The actual Redis increment is dispatched as a background task (see
+        # _BACKGROUND_TASKS), so it needs a beat to actually run.
+        await asyncio.sleep(0.05)
+
+    # First admission: bucket doesn't exist in Redis yet, so this read finds
+    # nothing to backfill into the in-memory cache either.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+    await _charge(90)
+
+    # Second admission: this read is the one that backfills the in-memory
+    # cache with the real (90) value read from Redis.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+    await _charge(90)  # real Redis total is now 180, well past the limit of 100
+
+    # Third admission must see the real (180) total and reject -- not the
+    # frozen 90 the in-memory cache captured on the previous read.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+    now = time_controller.now().timestamp()
+    token_key = _expected_bucket_key("grp", "tokens", "per_minute", "end_user_id", tag, 60, now)
+    await redis_cache.async_delete_cache(key=token_key)
+
+
 # ---------------------------------------------------------------------------
 # team_public_model_name alias -- index lookup must not miss
 # ---------------------------------------------------------------------------

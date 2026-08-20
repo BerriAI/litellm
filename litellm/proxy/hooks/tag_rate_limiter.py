@@ -1122,13 +1122,36 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
             # LIT010/Final-in-loop check forbids
             partition = await self._partition_for(partition_key)
             keys = [read_only_checks[i][2] for i in indices]  # mutable-ok: async_batch_get_cache needs a real list
-            current_values = await partition.internal_usage_cache.async_batch_get_cache(
-                keys=keys,
-                parent_otel_span=parent_otel_span,
-                local_only=False,
-            )
-            missing = [None] * len(keys)  # mutable-ok: async_batch_get_cache requires a real list; see above
-            resolved = current_values if current_values is not None else missing
+            redis_cache = partition.internal_usage_cache.dual_cache.redis_cache
+            if redis_cache is not None:
+                # async_log_success_event increments these buckets straight
+                # through a Lua script on this same redis_cache, bypassing
+                # DualCache/InternalUsageCache entirely -- so its in-memory
+                # layer never learns about that write. DualCache's own
+                # async_batch_get_cache treats any non-None in-memory hit as
+                # authoritative and never re-checks Redis for that key (see
+                # _reserve_redis_batch_keys), so once a key is backfilled
+                # in-memory it silently freezes for up to the in-memory TTL
+                # (10 minutes by default) while the real Redis counter keeps
+                # moving underneath it -- reading straight from Redis here,
+                # bypassing that in-memory layer, is the only way this
+                # read-then-later-increment split stays coherent.
+                # not `Final`: rebound each loop iteration, which basedpyright's
+                # LIT010/Final-in-loop check forbids; explicitly typed since
+                # RedisCache.async_batch_get_cache's own signature returns a
+                # bare, unparameterized dict
+                redis_values: dict[str, object] = await redis_cache.async_batch_get_cache(
+                    key_list=keys, parent_otel_span=parent_otel_span
+                )
+                resolved = [redis_values.get(key) for key in keys]  # mutable-ok: needs a real list
+            else:
+                current_values = await partition.internal_usage_cache.async_batch_get_cache(
+                    keys=keys,
+                    parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
+                missing = [None] * len(keys)  # mutable-ok: async_batch_get_cache requires a real list; see above
+                resolved = current_values if current_values is not None else missing
             for i, value in zip(indices, resolved):
                 values_by_index[i] = value  # mutable-ok: see comment above
 
