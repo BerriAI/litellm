@@ -929,6 +929,48 @@ class TestMCPServerManager:
         get_tools.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_database_reload_maps_only_openapi_servers(self):
+        """The DB reload runs on a timer, so the tool mapping it triggers for freshly
+        registered OpenAPI servers must not re-list tools upstream from every remote
+        server in the registry."""
+        manager = MCPServerManager()
+        openapi_row = LiteLLM_MCPServerTable(
+            server_id="openapi-1",
+            server_name="openapi_server",
+            alias="openapi_server",
+            url="https://openapi.example.com",
+            transport=MCPTransport.http,
+            spec_path="https://openapi.example.com/openapi.json",
+        )
+        remote_row = LiteLLM_MCPServerTable(
+            server_id="remote-1",
+            server_name="remote_server",
+            alias="remote_server",
+            url="https://remote.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        repository = MagicMock()
+        repository.table.find_many = AsyncMock(return_value=[openapi_row, remote_row])
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repository,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch.object(manager, "_register_openapi_tools", new=AsyncMock()),
+            patch.object(manager, "initialize_tool_name_to_mcp_server_name_mapping") as init_mapping,
+        ):
+            await manager.reload_servers_from_database()
+
+        init_mapping.assert_called_once()
+        mapped = init_mapping.call_args.kwargs["servers"]
+        assert [server.server_id for server in mapped] == ["openapi-1"]
+
+    @pytest.mark.asyncio
     async def test_load_servers_from_config_requires_oauth2_flow(self):
         """auth_type oauth2 without an explicit oauth2_flow is a config error: the
         credential shape is ambiguous (a DCR interactive server looks identical to M2M),

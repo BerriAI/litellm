@@ -2731,7 +2731,10 @@ class MCPServerManager:
                 base_url=server.url or "",
             )
             if initialize_mapping:
-                self.initialize_tool_name_to_mcp_server_name_mapping()
+                # OpenAPI tools are served from the local tool registry, so only this
+                # server needs re-mapping. Sweeping the whole registry would call
+                # list_tools upstream on every other (remote) MCP server.
+                self.initialize_tool_name_to_mcp_server_name_mapping(servers=(server,))
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         # The runtime registry is the allowlist for tool calls and health
@@ -5828,24 +5831,28 @@ class MCPServerManager:
     # End of Methods that call the upstream MCP servers
     #########################################################
 
-    def initialize_tool_name_to_mcp_server_name_mapping(self):
+    def initialize_tool_name_to_mcp_server_name_mapping(self, servers: Sequence[MCPServer] | None = None):
         """
-        On startup, initialize the tool name to MCP server name mapping
+        On startup, initialize the tool name to MCP server name mapping.
+
+        ``servers`` restricts the sweep to those servers. Callers that only registered
+        OpenAPI tools pass the affected servers so a re-registration does not re-list
+        tools upstream from every remote server in the registry.
         """
         try:
             if asyncio.get_running_loop():
-                asyncio.create_task(self._initialize_tool_name_to_mcp_server_name_mapping())
+                asyncio.create_task(self._initialize_tool_name_to_mcp_server_name_mapping(servers))
         except RuntimeError as e:  # no running event loop
             verbose_logger.exception(
                 "No running event loop - skipping tool name to MCP server name mapping initialization: %s", e
             )
 
-    async def _initialize_tool_name_to_mcp_server_name_mapping(self):
+    async def _initialize_tool_name_to_mcp_server_name_mapping(self, servers: Sequence[MCPServer] | None = None):
         """
         Call list_tools for each server and update the tool name to MCP server name mapping
         Note: This now handles prefixed tool names
         """
-        for server in self.get_registry().values():
+        for server in servers if servers is not None else tuple(self.get_registry().values()):
             if self._oauth_discovery_slot(server.server_id) is not None:
                 continue
             if server.needs_user_oauth_token:
@@ -5995,7 +6002,6 @@ class MCPServerManager:
         # Assign short prefixes against the full candidate set without
         # publishing the staged registry to concurrent callers.
         registered_registry: Final[dict[str, MCPServer]] = {}
-        registered_openapi_tools = False
         for server_id, new_server in new_registry.items():
             try:
                 self._assign_unique_short_prefix(new_server, registry=new_registry)
@@ -6004,8 +6010,6 @@ class MCPServerManager:
                 # prefix that lookups will use.
                 await self._maybe_register_openapi_tools(new_server, initialize_mapping=False)
                 registered_registry[server_id] = new_server
-                if new_server.spec_path:
-                    registered_openapi_tools = True
             except Exception as e:
                 verbose_logger.exception(
                     "Skipping MCP server %s (%s) during DB reload: %s",
@@ -6026,8 +6030,13 @@ class MCPServerManager:
         registered_servers: Final = tuple(registered_registry.values())
         self._reconcile_oauth_discovery_slots_for_servers(registered_servers)
         self._prime_oauth_metadata_discovery_for_servers(registered_servers)
-        if registered_openapi_tools:
-            self.initialize_tool_name_to_mcp_server_name_mapping()
+        openapi_servers: Final = tuple(server for server in registered_servers if server.spec_path)
+        if openapi_servers:
+            # This reload runs on a timer (``proxy_config_reload_interval_seconds``,
+            # 30s by default). Map only the OpenAPI servers, whose tools come from the
+            # local registry: a full sweep would list tools upstream from every remote
+            # MCP server on every reload.
+            self.initialize_tool_name_to_mcp_server_name_mapping(servers=openapi_servers)
 
         verbose_logger.debug("MCP registry refreshed (%s servers in registry)", len(registered_registry))
 
