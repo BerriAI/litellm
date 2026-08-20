@@ -54,14 +54,16 @@ Some suites need extra services the bare proxy does not start. The `logging/` OT
 
 ### Record and replay
 
-`E2E_FIXTURE_MODE=record` runs a suite against the live proxy as usual while writing every request/response pair to a fixture bundle (default `tests/e2e/.fixtures`, override with `E2E_FIXTURE_DIR`); `E2E_FIXTURE_MODE=replay` then runs the same suite entirely from that bundle, with no proxy traffic and no provider spend; the proxy liveness gate is skipped, so replay runs with no proxy up at all. Unset (or `live`) behaves exactly as before the knob existed
+Record/replay scopes to the proxy's provider-bound traffic only. In `E2E_FIXTURE_MODE=record` the harness boots a local provider-edge server, edge-wired tests register their deployments with an `api_base` pointing at it, and every provider call the proxy makes is forwarded verbatim and written to a fixture bundle (default `tests/e2e/.fixtures`, override with `E2E_FIXTURE_DIR`). `E2E_FIXTURE_MODE=replay` runs the same tests against the same live proxy and database, but the edge answers the proxy's provider calls from the bundle instead of the provider, so the run makes zero provider calls and spends nothing while key auth, routing, cost calculation, and spend-log writes all still execute for real. Unset (or `live`) behaves exactly as before the knob existed. Both record and replay need the proxy up; only the provider is taken out of the loop
 
 ```bash
-E2E_FIXTURE_MODE=record uv run pytest tests/e2e/llm_translation/ -v
-E2E_FIXTURE_MODE=replay uv run pytest tests/e2e/llm_translation/ -v
+E2E_FIXTURE_MODE=record uv run pytest tests/e2e/quota_management/spend_tracking/test_provider_edge_spend_e2e.py -v
+E2E_FIXTURE_MODE=replay uv run pytest tests/e2e/quota_management/spend_tracking/test_provider_edge_spend_e2e.py -v
 ```
 
-Replay fails hard (`ReplayMiss`) when the tests drift from the recording, and a bundle older than seven days fails at collection time naming its age; either way the fix is to re-record. See `CLAUDE.md` in this directory for the bundle format and the transport seam
+One sharp edge: a replayed response reuses the recorded provider response id, and that id is the primary key of `LiteLLM_SpendLogs`, so replaying against a database that still holds the record run's rows silently dedupes the spend writes and a spend assertion fails with zero rows. Run both commands above with `E2E_RESET_SPEND_LOGS=1` (and `DATABASE_URL` set in the pytest env) so each session truncates the spend log table after itself, or point replay at a fresh database
+
+Replay answers any provider call that drifted from the recording with an HTTP 599 whose body names the computed and closest recorded keys, so the test fails loudly instead of silently going live, and a bundle older than seven days fails at collection time naming its age; either way the fix is to re-record. Only tests that register edge-wired deployments participate: everything else hits its provider live in every mode, so record exactly the suite you replay. If the proxy runs in a container, set `E2E_PROVIDER_EDGE_ADVERTISE_HOST` (e.g. `host.docker.internal`) so the api_base the proxy stores can reach the edge on the pytest host, and `E2E_PROVIDER_EDGE_BIND_HOST=0.0.0.0` so the edge accepts it. See `CLAUDE.md` in this directory for the bundle format, the edge design, and the current limits (streaming, Bedrock, multipart)
 
 Tests marked `@pytest.mark.e2e` hard-fail when no proxy answers `/health/liveliness`, so a run that goes red with `No live proxy` at setup means the proxy isn't up; they never skip for a missing proxy, so an absent proxy can't be mistaken for a pass
 
