@@ -15,21 +15,21 @@ from litellm.litellm_core_utils.cli_keyring import (
     KEYRING_ACCOUNT,
     KEYRING_PREFLIGHT_ACCOUNT,
     KEYRING_SERVICE,
-    KeyringVault,
-    SecretFound,
-    SecretMissing,
     KeyringDisabled,
     KeyringDiscardsWrites,
     KeyringNotInstalled,
     KeyringUnreachable,
+    KeyringVault,
     SecretErased,
+    SecretFound,
+    SecretMissing,
     SecretStored,
     SecretStranded,
 )
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
-    CredentialNotRecorded,
     CredentialNotCleared,
+    CredentialNotRecorded,
     CredentialNotSaved,
     clear_cli_token,
     get_cli_token_file_path,
@@ -1109,3 +1109,29 @@ class TestKeyringVault:
         install_fake_keyring(_FakeKeyringModule(get_error=RuntimeError("locked")))
 
         assert KeyringVault().erase() == KeyringUnreachable()
+
+
+class TestIsCliTokenFreshWithExpiresAt:
+    """A ``lite login --pkce`` record carries the proxy's own ``expires_at``, which wins
+    over the age-based guess made from ``timestamp``."""
+
+    def test_future_expiry_is_fresh(self):
+        from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+
+        assert is_cli_token_fresh({"expires_at": time.time() + 3600, "timestamp": 0}) is True
+
+    def test_expiry_inside_the_buffer_is_stale(self):
+        from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+
+        assert is_cli_token_fresh({"expires_at": time.time() + 100}) is False
+        assert is_cli_token_fresh({"expires_at": time.time() + 100}, buffer_hours=0) is True
+
+    def test_past_expiry_is_stale_even_with_a_fresh_timestamp(self):
+        from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+
+        assert is_cli_token_fresh({"expires_at": time.time() - 1, "timestamp": time.time()}) is False
+
+    def test_non_numeric_expiry_falls_back_to_the_timestamp(self):
+        from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+
+        assert is_cli_token_fresh({"expires_at": "soon", "timestamp": time.time()}) is True

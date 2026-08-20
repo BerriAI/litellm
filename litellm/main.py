@@ -507,6 +507,7 @@ async def acompletion(
         custom_llm_provider=cast(str | None, custom_llm_provider),  # cast-ok: read from untyped kwargs
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
+        api_base=kwargs.get("api_base") or base_url,
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -5171,6 +5172,7 @@ def completion(
         custom_llm_provider=cast(str | None, kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
+        api_base=kwargs.get("api_base") or base_url,
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (

@@ -154,7 +154,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     <div className="relative group">
       {title && (
         <div className="flex items-center gap-2 mb-2">
-          <Code size={16} className="text-blue-600 dark:text-blue-400" />
+          <Code size={16} className="text-info" />
           <strong className="font-semibold text-foreground">{title}</strong>
         </div>
       )}
@@ -166,7 +166,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
             onClick={() => copyToClipboard(code, copyKey)}
             className={`absolute top-2 right-2 z-10 transition-all duration-200 ${
               copiedStates[copyKey]
-                ? "text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950 dark:border-green-800"
+                ? "text-success bg-success/10 border-success/20"
                 : "text-muted-foreground hover:text-foreground hover:bg-accent"
             }`}
           >
@@ -185,7 +185,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
   }> = ({ step, title, children }) => (
     <div className="flex gap-4">
       <div className="shrink-0">
-        <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-semibold dark:bg-blue-500">
+        <div className="w-8 h-8 bg-info text-white rounded-full flex items-center justify-center text-sm font-semibold">
           {step}
         </div>
       </div>
@@ -198,19 +198,19 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
   const LiteLLMProxyTab = () => (
     <div className="flex w-full flex-col gap-6">
-      <div className="bg-linear-to-r from-emerald-50 to-green-50 p-6 rounded-lg border border-emerald-100">
+      <div className="bg-linear-to-r from-success/15 to-success/5 p-6 rounded-lg border border-success/15">
         <div className="flex items-center gap-3 mb-3">
-          <Zap className="text-emerald-600" size={24} />
-          <h4 className="mb-0 text-xl font-semibold text-emerald-900">LiteLLM Proxy API Integration</h4>
+          <Zap className="text-success" size={24} />
+          <h4 className="mb-0 text-xl font-semibold text-success">LiteLLM Proxy API Integration</h4>
         </div>
-        <span className="text-emerald-700">
+        <span className="text-success">
           Connect to LiteLLM Proxy Responses API for seamless tool integration with multiple model providers
         </span>
       </div>
 
       <div className="flex w-full flex-col gap-6">
         <FeatureCard
-          icon={<KeyIcon className="text-emerald-600" size={16} />}
+          icon={<KeyIcon className="text-success" size={16} />}
           title="Virtual Key Setup"
           description="Configure your LiteLLM Proxy Virtual Key for authentication"
         >
@@ -223,7 +223,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         </FeatureCard>
 
         <FeatureCard
-          icon={<ServerIcon className="text-emerald-600" size={16} />}
+          icon={<ServerIcon className="text-success" size={16} />}
           title="MCP Server Information"
           description="Connection details for your LiteLLM MCP server"
         >
@@ -231,7 +231,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         </FeatureCard>
 
         <FeatureCard
-          icon={<Code className="text-emerald-600" size={16} />}
+          icon={<Code className="text-success" size={16} />}
           title="Implementation Example"
           description="Complete cURL example for using the LiteLLM Proxy Responses API"
           serverName={currentServer}
@@ -268,21 +268,19 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
   const OpenAITab = () => (
     <div className="flex w-full flex-col gap-6">
-      <div className="bg-linear-to-r from-blue-50 to-indigo-50 p-6 rounded-lg border border-blue-100 dark:from-blue-950 dark:to-indigo-950 dark:border-blue-900">
+      <div className="bg-linear-to-r from-info/15 to-info/5 p-6 rounded-lg border border-info/15">
         <div className="flex items-center gap-3 mb-3">
-          <Code className="text-blue-600 dark:text-blue-400" size={24} />
-          <h4 className="mb-0 text-xl font-semibold text-blue-900 dark:text-blue-100">
-            OpenAI Responses API Integration
-          </h4>
+          <Code className="text-info" size={24} />
+          <h4 className="mb-0 text-xl font-semibold text-info">OpenAI Responses API Integration</h4>
         </div>
-        <span className="text-blue-700 dark:text-blue-300">
+        <span className="text-info">
           Connect OpenAI Responses API to your LiteLLM MCP server for seamless tool integration
         </span>
       </div>
 
       <div className="flex w-full flex-col gap-6">
         <FeatureCard
-          icon={<KeyIcon className="text-blue-600 dark:text-blue-400" size={16} />}
+          icon={<KeyIcon className="text-info" size={16} />}
           title="API Key Setup"
           description="Configure your OpenAI API key for authentication"
         >
@@ -294,7 +292,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
                   href="https://platform.openai.com/api-keys"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-700 inline-flex items-center gap-1 dark:text-blue-400 dark:hover:text-blue-300"
+                  className="text-info hover:text-info/80 inline-flex items-center gap-1"
                 >
                   OpenAI platform <ExternalLinkIcon size={12} />
                 </a>
@@ -305,7 +303,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         </FeatureCard>
 
         <FeatureCard
-          icon={<ServerIcon className="text-blue-600 dark:text-blue-400" size={16} />}
+          icon={<ServerIcon className="text-info" size={16} />}
           title="MCP Server Information"
           description="Connection details for your LiteLLM MCP server"
         >
@@ -313,7 +311,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         </FeatureCard>
 
         <FeatureCard
-          icon={<Code className="text-blue-600 dark:text-blue-400" size={16} />}
+          icon={<Code className="text-info" size={16} />}
           title="Implementation Example"
           description="Complete cURL example for using the Responses API"
           serverName="Zapier Gmail"
@@ -350,12 +348,12 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
   const CursorTab = () => (
     <div className="flex w-full flex-col gap-6">
-      <div className="bg-linear-to-r from-purple-50 to-blue-50 p-6 rounded-lg border border-purple-100">
+      <div className="bg-linear-to-r from-purple-50 to-blue-50 p-6 rounded-lg border border-purple-100 dark:from-purple-950 dark:to-blue-950 dark:border-purple-900">
         <div className="flex items-center gap-3 mb-3">
-          <Terminal className="text-purple-600" size={24} />
-          <h4 className="mb-0 text-xl font-semibold text-purple-900">Cursor IDE Integration</h4>
+          <Terminal className="text-purple-600 dark:text-purple-400" size={24} />
+          <h4 className="mb-0 text-xl font-semibold text-purple-900 dark:text-purple-100">Cursor IDE Integration</h4>
         </div>
-        <span className="text-purple-700">
+        <span className="text-purple-700 dark:text-purple-300">
           Use tools directly from Cursor IDE with LiteLLM MCP. Enable your AI assistant to perform real-world tasks
           without leaving your coding environment.
         </span>
@@ -383,7 +381,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
                 <code className="bg-muted px-2 py-1 rounded-sm">Ctrl+S</code>
               </span>
               <FeatureCard
-                icon={<Code className="text-purple-600" size={16} />}
+                icon={<Code className="text-purple-600 dark:text-purple-400" size={16} />}
                 title="Configuration"
                 description="Cursor MCP configuration"
                 serverName="Zapier Gmail"
@@ -414,18 +412,18 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
   const StreamableHTTPTab = () => (
     <div className="flex w-full flex-col gap-6">
-      <div className="bg-linear-to-r from-green-50 to-teal-50 p-6 rounded-lg border border-green-100">
+      <div className="bg-linear-to-r from-success/15 to-success/5 p-6 rounded-lg border border-success/15">
         <div className="flex items-center gap-3 mb-3">
-          <Globe className="text-green-600 dark:text-green-400" size={24} />
-          <h4 className="mb-0 text-xl font-semibold text-green-900 dark:text-green-100">Streamable HTTP Transport</h4>
+          <Globe className="text-success" size={24} />
+          <h4 className="mb-0 text-xl font-semibold text-success">Streamable HTTP Transport</h4>
         </div>
-        <span className="text-green-700 dark:text-green-300">
+        <span className="text-success">
           Connect to LiteLLM MCP using HTTP transport. Compatible with any MCP client that supports HTTP streaming.
         </span>
       </div>
 
       <FeatureCard
-        icon={<Globe className="text-green-600 dark:text-green-400" size={16} />}
+        icon={<Globe className="text-success" size={16} />}
         title="Universal MCP Connection"
         description="Use this URL with any MCP client that supports HTTP transport"
       >
@@ -451,7 +449,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           <div className="mt-4">
             <Button
               variant="link"
-              className="p-0 h-auto text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+              className="p-0 h-auto text-info hover:text-info/80"
               nativeButton={false}
               render={
                 <a

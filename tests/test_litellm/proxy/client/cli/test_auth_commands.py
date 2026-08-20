@@ -17,11 +17,12 @@ from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     KeyringDisabled,
     KeyringNotInstalled,
+    SecretErased,
+    SecretStored,
 )
 from litellm.litellm_core_utils.cli_token_utils import CliTokenRecord, save_cli_token
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.auth import (
-    DISABLE_KEYRING_ENV_VAR,
     get_stored_api_key,
     login,
     logout,
@@ -253,9 +254,49 @@ class TestStoredApiKeyLookup:
 class TestLoginCommand:
     """Test login CLI command"""
 
+    @pytest.fixture(autouse=True)
+    def isolated_home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        return tmp_path
+
     def setup_method(self):
         """Setup for each test"""
         self.runner = CliRunner()
+
+    def test_login_replaces_a_pkce_record_and_revokes_its_refresh_token(self):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "ready",
+            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt",
+            "user_id": "test-user-123",
+            "team_id": "team-1",
+            "teams": ["team-1"],
+        }
+        _FakeSession.instances.clear()
+
+        with (
+            patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
+            patch("requests.get", return_value=mock_response),
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()) as mock_save,
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, obj={"base_url": "https://test.example.com"})
+
+        assert result.exit_code == 0, result.output
+        assert "Login successful!" in result.output
+        assert "Could not revoke" not in result.output
+        assert mock_save.call_args.args[0]["key"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
+        assert _FakeSession.instances[0].posts == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
 
     def test_login_success(self):
         """Test successful login flow with single team (JWT generated immediately)"""
@@ -613,6 +654,58 @@ class TestWhoamiCommand:
             assert result.exit_code == 0
             assert "Authenticated" in result.output
             assert "Unknown" in result.output  # Should show "Unknown" for missing fields
+
+    def test_whoami_pkce_record_shows_the_team_and_when_the_key_renews(self):
+        token_data = {
+            "key": "sk-cli",
+            "user_email": "unknown",
+            "user_id": "user-1",
+            "user_role": "cli",
+            "team_id": "team-alpha",
+            "timestamp": time.time() - 25 * 3600,
+            "expires_at": time.time() + 2 * 3600,
+            "refresh_token": "llm_srefresh_abc",
+        }
+
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+            result = self.runner.invoke(whoami)
+
+        assert result.exit_code == 0
+        assert "Team ID: team-alpha" in result.output
+        assert "Key expires in: 2.0 hours, renewed on next use" in result.output
+        assert "Warning" not in result.output
+
+    def test_whoami_expired_key_without_a_refresh_token_asks_for_a_new_login(self):
+        token_data = {
+            "key": "sk-cli",
+            "user_id": "user-1",
+            "timestamp": time.time() - 3600,
+            "expires_at": time.time() - 60,
+        }
+
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+            result = self.runner.invoke(whoami)
+
+        assert result.exit_code == 0
+        assert "Team ID" not in result.output
+        assert "Key expired. Run 'lite login' again" in result.output
+
+    def test_whoami_expired_pkce_record_that_could_not_be_renewed_asks_for_a_new_pkce_login(self):
+        token_data = {
+            "key": "sk-cli",
+            "user_id": "user-1",
+            "team_id": "team-alpha",
+            "timestamp": time.time() - 3600,
+            "expires_at": time.time() - 60,
+            "refresh_token": "llm_srefresh_spent",
+        }
+
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+            result = self.runner.invoke(whoami)
+
+        assert result.exit_code == 0
+        assert "Key expired. Run 'lite login --pkce' again" in result.output
+        assert "renewed on next use" not in result.output
 
     def test_whoami_no_timestamp(self):
         """Test whoami with token missing timestamp"""
@@ -1309,3 +1402,487 @@ class TestLoginConfigClaude:
         assert "could not configure Claude Code" in result.output
         assert "invalid JSON" in result.output
         assert "Authentication failed" not in result.output
+
+
+class _FakeHttpResponse:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = json.dumps(payload)
+        self.content = self.text.encode()
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSession:
+    """Stands in for ``requests.Session`` so the CLI's refresh and revoke calls can be observed."""
+
+    instances = []
+
+    def __init__(self):
+        self.posts = []
+        self.response = _FakeHttpResponse(200, {})
+        _FakeSession.instances.append(self)
+
+    def post(self, url, *, data=None, json=None, timeout, allow_redirects):
+        self.posts.append((url, data))
+        return self.response
+
+    def get(self, url, *, timeout):
+        raise AssertionError(f"unexpected GET {url}")
+
+
+PKCE_BASE_URL = "https://llm.example.com"
+PKCE_TOKEN_RESPONSE = {
+    "access_token": "sk-cli-rotated",
+    "token_type": "Bearer",
+    "expires_in": 3600,
+    "refresh_token": "llm_srefresh_rotated",
+    "user_id": "u1",
+    "team_id": "team-b",
+}
+
+
+def _pkce_record(**overrides):
+    return {
+        "base_url": PKCE_BASE_URL,
+        "key": "sk-cli-old",
+        "user_id": "u1",
+        "user_email": "unknown",
+        "user_role": "cli",
+        "auth_header_name": "Authorization",
+        "jwt_token": "",
+        "timestamp": time.time(),
+        "expires_at": time.time() + 30,
+        "refresh_token": "llm_srefresh_old",
+        "client_id": "llm_dcrc_abc",
+        "token_endpoint": f"{PKCE_BASE_URL}/token",
+        "revocation_endpoint": f"{PKCE_BASE_URL}/revoke",
+        "resource": PKCE_BASE_URL,
+        "team_id": "team-b",
+        **overrides,
+    }
+
+
+def _pkce_credential():
+    from litellm.proxy.client.cli.commands.pkce_login import PkceCredential
+
+    return PkceCredential(
+        access_token="sk-cli-fresh",
+        refresh_token="llm_srefresh_fresh",
+        expires_at=time.time() + 3600,
+        client_id="llm_dcrc_abc",
+        token_endpoint=f"{PKCE_BASE_URL}/token",
+        revocation_endpoint=f"{PKCE_BASE_URL}/revoke",
+        resource=PKCE_BASE_URL,
+        user_id="u1",
+        team_id="team-b",
+    )
+
+
+class TestPkceLoginCommand:
+    """``lite login --pkce`` swaps the proxy-mediated SSO poll for the browser PKCE flow."""
+
+    @pytest.fixture(autouse=True)
+    def isolated_home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        return tmp_path
+
+    def setup_method(self):
+        self.runner = CliRunner()
+        _FakeSession.instances.clear()
+
+    def test_pkce_login_saves_the_new_record_then_revokes_the_refresh_token_it_replaced(self):
+        posts_when_saved = []
+
+        def record_posts(record, **_):
+            posts_when_saved.append(list(_FakeSession.instances[0].posts))
+            return SecretStored()
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record(team_id="team-a")),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", side_effect=record_posts) as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL})
+
+        assert result.exit_code == 0, result.output
+        assert "Login successful!" in result.output
+        assert "Could not revoke" not in result.output
+        assert save.call_args.args[0]["refresh_token"] == "llm_srefresh_fresh"
+        assert save.call_args.args[0]["team_id"] == "team-b"
+        assert posts_when_saved == [[]]
+        assert _FakeSession.instances[0].posts == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+
+    def test_pkce_login_keeps_the_new_record_when_the_old_refresh_token_cannot_be_revoked(self):
+        class _FailingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(503, {"error": "temporarily_unavailable"})
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()) as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FailingSession),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL})
+
+        assert result.exit_code == 0, result.output
+        assert (
+            "Could not revoke the previous login's refresh token on the proxy (revocation failed with 503"
+            in result.output
+        )
+        assert "Login successful!" in result.output
+        assert save.call_args.args[0]["refresh_token"] == "llm_srefresh_fresh"
+
+    @pytest.mark.parametrize("previous", [None, {"key": "sk-classic", "base_url": PKCE_BASE_URL}])
+    def test_pkce_login_without_a_previous_refresh_token_makes_no_revocation_request(self, previous):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=previous),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()) as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL})
+
+        assert result.exit_code == 0, result.output
+        assert "Login successful!" in result.output
+        save.assert_called_once()
+        assert _FakeSession.instances[0].posts == []
+
+    def test_pkce_login_saves_the_refreshable_record_and_skips_the_sso_poll(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()) as run,
+            patch("litellm.proxy.client.cli.commands.auth._start_cli_sso_flow") as sso_start,
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()) as save,
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, ["--pkce"], obj={"base_url": f"{PKCE_BASE_URL}/"})
+
+        assert result.exit_code == 0, result.output
+        assert "Login successful!" in result.output
+        assert "JWT Token: sk-cli-fresh..." in result.output
+        sso_start.assert_not_called()
+        assert run.call_args.args[0] == f"{PKCE_BASE_URL}/"
+        saved = save.call_args.args[0]
+        assert saved["base_url"] == PKCE_BASE_URL
+        assert saved["key"] == "sk-cli-fresh"
+        assert saved["refresh_token"] == "llm_srefresh_fresh"
+        assert saved["client_id"] == "llm_dcrc_abc"
+        assert saved["token_endpoint"] == f"{PKCE_BASE_URL}/token"
+        assert saved["revocation_endpoint"] == f"{PKCE_BASE_URL}/revoke"
+        assert saved["resource"] == PKCE_BASE_URL
+        assert saved["user_id"] == "u1"
+        assert saved["team_id"] == "team-b"
+
+    def test_pkce_login_failure_is_reported_and_nothing_is_saved(self):
+        from litellm.proxy.client.cli.commands.pkce_login import PkceFailure
+
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.run_pkce_login",
+                return_value=PkceFailure("sign-in was not approved (access_denied): no details"),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=SecretStored()) as save,
+        ):
+            result = self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL})
+
+        assert result.exit_code == 0
+        assert "Authentication failed: sign-in was not approved (access_denied): no details" in result.output
+        save.assert_not_called()
+
+    def test_login_without_the_flag_never_touches_the_pkce_flow(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login") as run,
+            patch("litellm.proxy.client.cli.commands.auth._start_cli_sso_flow", side_effect=KeyboardInterrupt),
+        ):
+            result = self.runner.invoke(login, obj={"base_url": PKCE_BASE_URL})
+
+        assert "cancelled" in result.output
+        run.assert_not_called()
+
+
+class TestPkceLogoutCommand:
+    def setup_method(self):
+        self.runner = CliRunner()
+        _FakeSession.instances.clear()
+
+    def test_logout_revokes_the_refresh_token_before_clearing(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.clear_cli_token", return_value=SecretErased()) as clear,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        ):
+            result = self.runner.invoke(logout)
+
+        assert result.exit_code == 0
+        assert result.output == "Logged out successfully. Authentication token cleared.\n"
+        clear.assert_called_once()
+        assert _FakeSession.instances[0].posts == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+
+    def test_logout_still_clears_when_the_proxy_refuses_the_revocation(self):
+        class _RefusingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(401, {"error": "invalid_client"})
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.clear_cli_token", return_value=SecretErased()) as clear,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefusingSession),
+        ):
+            result = self.runner.invoke(logout)
+
+        assert result.exit_code == 0
+        assert (
+            "Could not revoke the refresh token on the proxy (revocation failed with 401: invalid_client); "
+            "it expires on its own." in result.output
+        )
+        assert "Logged out successfully" in result.output
+        clear.assert_called_once()
+
+    def test_logout_keeps_the_record_when_the_proxy_cannot_record_the_revocation(self):
+        class _UnavailableSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(
+                    503, {"error": "temporarily_unavailable", "error_description": "the record is unavailable"}
+                )
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.clear_cli_token", return_value=SecretErased()) as clear,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _UnavailableSession),
+        ):
+            result = self.runner.invoke(logout)
+
+        assert result.exit_code == 1
+        assert (
+            "Error: The proxy could not record the revocation (revocation failed with 503: the record is unavailable). "
+            "Nothing was cleared; run `lite logout` again shortly." in result.output
+        )
+        assert "Logged out successfully" not in result.output
+        clear.assert_not_called()
+
+    def test_logout_of_a_classic_token_makes_no_request(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value={"key": "sk-classic"}),
+            patch("litellm.proxy.client.cli.commands.auth.clear_cli_token", return_value=SecretErased()) as clear,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        ):
+            result = self.runner.invoke(logout)
+
+        assert result.output == "Logged out successfully. Authentication token cleared.\n"
+        clear.assert_called_once()
+        assert _FakeSession.instances[0].posts == []
+
+
+class TestPkcePrintToken:
+    """``lite print-token`` is Claude Code's apiKeyHelper, so a near-expiry PKCE key must be
+    refreshed silently and stdout must carry nothing but the key."""
+
+    def setup_method(self):
+        self.runner = CliRunner()
+        _FakeSession.instances.clear()
+
+    def test_print_token_refreshes_a_near_expiry_key_and_saves_the_rotation(self):
+        class _RefreshingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefreshingSession),
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout == "sk-cli-rotated\n"
+        assert _FakeSession.instances[0].posts[0][0] == f"{PKCE_BASE_URL}/token"
+        assert _FakeSession.instances[0].posts[0][1]["refresh_token"] == "llm_srefresh_old"
+        saved = save.call_args.args[0]
+        assert saved["key"] == "sk-cli-rotated"
+        assert saved["refresh_token"] == "llm_srefresh_rotated"
+
+    def test_print_token_prints_a_fresh_pkce_key_without_a_request(self):
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value=_pkce_record(expires_at=time.time() + 3600),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.stdout == "sk-cli-old\n"
+        assert _FakeSession.instances[0].posts == []
+
+    def test_print_token_fails_when_the_key_expired_and_refresh_is_refused(self):
+        class _RefusingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(400, {"error": "invalid_grant"})
+
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value=_pkce_record(expires_at=time.time() - 1),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefusingSession),
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert "Could not renew the key: token request failed with 400: invalid_grant" in result.output
+        assert "Key expired. Run 'lite login --pkce' again." in result.output
+        assert "Run 'lite login' again" not in result.output
+        save.assert_not_called()
+
+    def test_print_token_through_the_cli_group_renews_once_and_reports_a_refusal_once(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+        monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
+
+        class _RefusingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(
+                    400, {"error": "invalid_grant", "error_description": "the refresh token was already used"}
+                )
+
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value=_pkce_record(expires_at=time.time() - 1),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefusingSession),
+        ):
+            result = self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "auth", "print-token"])
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert sum(len(session.posts) for session in _FakeSession.instances) == 1
+        assert result.output.count("Could not renew the key") == 1
+        assert "Could not renew the key: token request failed with 400: the refresh token was already used" in result.output
+        assert "Key expired. Run 'lite login --pkce' again." in result.output
+        save.assert_not_called()
+
+    def test_print_token_through_the_cli_group_prints_the_key_the_group_renewed(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+        monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
+
+        class _RefreshingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefreshingSession),
+        ):
+            result = self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "auth", "print-token"])
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout == "sk-cli-rotated\n"
+        assert sum(len(session.posts) for session in _FakeSession.instances) == 1
+        assert save.call_count == 1
+
+    def test_print_token_invoked_bare_for_another_server_renews_once(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+        monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
+
+        class _RefreshingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefreshingSession),
+        ):
+            result = self.runner.invoke(cli, ["auth", "print-token"])
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout == "sk-cli-rotated\n"
+        assert sum(len(session.posts) for session in _FakeSession.instances) == 1
+        assert save.call_count == 1
+
+    def test_print_token_for_an_expired_classic_token_makes_no_request(self):
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={"key": "sk-classic", "timestamp": time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600},
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 1
+        assert "Token expired" in result.output
+        assert _FakeSession.instances == []
+
+
+class TestGetStoredApiKeyRefresh:
+    def test_get_stored_api_key_refreshes_a_near_expiry_pkce_key(self):
+        _FakeSession.instances.clear()
+
+        class _RefreshingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefreshingSession),
+        ):
+            assert get_stored_api_key(PKCE_BASE_URL) == "sk-cli-rotated"
+            assert get_stored_api_key("https://other.example.com") is None
+
+        assert save.call_count == 1
+        assert len(_FakeSession.instances) == 1
+
+    def test_get_stored_api_key_reports_a_refused_renewal_on_stderr_and_keeps_the_valid_key(self, capsys):
+        _FakeSession.instances.clear()
+
+        class _RefusingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(503, {"error": "temporarily_unavailable"})
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefusingSession),
+        ):
+            assert get_stored_api_key(PKCE_BASE_URL) == "sk-cli-old"
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == "Could not renew the key: token request failed with 503: temporarily_unavailable\n"
+        save.assert_not_called()

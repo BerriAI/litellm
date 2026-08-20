@@ -27,7 +27,7 @@ describe("Alert", () => {
     ["info", "text-info"],
     ["success", "text-success"],
     ["warning", "text-warning"],
-    ["error", "text-red-900"],
+    ["error", "text-destructive"],
     ["destructive", "text-destructive"],
   ] as const)("paints the %s variant with its own token color", (variant, tokenClass) => {
     render(<Alert variant={variant}>message</Alert>);

@@ -1,13 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
-import { Input, Switch } from "antd";
+import React, { useId, useState } from "react";
 import { toast } from "@/lib/toast";
 import { fetchClient } from "@/lib/http/api";
 import { ApiError } from "@/lib/http/client";
 import { ArrowLeft, ArrowRight, Check, Key, Link2, Lock, X } from "lucide-react";
 import { MCPServer } from "./types";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Switch } from "@/components/ui/switch";
 
 const byokSaveErrorMessage = (e: unknown): string => {
   if (e instanceof ApiError) {
@@ -29,6 +30,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
   const [apiKey, setApiKey] = useState("");
   const [saveKey, setSaveKey] = useState(true);
   const [loading, setLoading] = useState(false);
+  const apiKeyInputId = useId();
 
   const serverDisplayName = server.alias || server.server_name || "Service";
   const firstLetter = serverDisplayName.charAt(0).toUpperCase();
@@ -74,7 +76,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
             {step === 2 ? (
               <button
                 onClick={() => setStep(1)}
-                className="flex items-center gap-1 text-gray-500 hover:text-gray-800 text-sm"
+                className="flex items-center gap-1 text-muted-foreground hover:text-foreground text-sm"
               >
                 <ArrowLeft className="size-3.5" /> Back
               </button>
@@ -82,10 +84,10 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               <div />
             )}
             <div className="flex items-center gap-1.5">
-              <div className={`w-2 h-2 rounded-full ${step === 1 ? "bg-blue-500" : "bg-gray-300"}`} />
-              <div className={`w-2 h-2 rounded-full ${step === 2 ? "bg-blue-500" : "bg-gray-300"}`} />
+              <div className={`w-2 h-2 rounded-full ${step === 1 ? "bg-info" : "bg-border"}`} />
+              <div className={`w-2 h-2 rounded-full ${step === 2 ? "bg-info" : "bg-border"}`} />
             </div>
-            <button onClick={handleClose} className="text-gray-400 hover:text-gray-600">
+            <button onClick={handleClose} className="text-muted-foreground/70 hover:text-muted-foreground">
               <X className="size-4" />
             </button>
           </div>
@@ -97,29 +99,29 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                 <div className="w-14 h-14 rounded-xl bg-linear-to-br from-teal-400 to-cyan-600 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                   L
                 </div>
-                <ArrowRight className="size-4.5 text-gray-400" />
+                <ArrowRight className="size-4.5 text-muted-foreground/70" />
                 <div className="w-14 h-14 rounded-xl bg-linear-to-br from-blue-600 to-indigo-800 flex items-center justify-center text-white font-bold text-xl shadow-sm">
                   {firstLetter}
                 </div>
               </div>
 
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Connect {serverDisplayName}</h2>
-              <p className="text-gray-500 mb-6">
+              <h2 className="text-2xl font-bold text-foreground mb-2">Connect {serverDisplayName}</h2>
+              <p className="text-muted-foreground mb-6">
                 LiteLLM needs access to {serverDisplayName} to complete your request.
               </p>
 
               {/* How it works */}
-              <div className="bg-gray-50 rounded-xl p-4 text-left mb-4">
+              <div className="bg-muted rounded-xl p-4 text-left mb-4">
                 <div className="flex items-start gap-3">
                   <div className="mt-0.5">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-gray-500">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-muted-foreground">
                       <rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor" strokeWidth="2" />
                       <path d="M8 4v16M16 4v16" stroke="currentColor" strokeWidth="2" />
                     </svg>
                   </div>
                   <div>
-                    <p className="font-semibold text-gray-800 mb-1">How it works</p>
-                    <p className="text-gray-500 text-sm">
+                    <p className="font-semibold text-foreground mb-1">How it works</p>
+                    <p className="text-muted-foreground text-sm">
                       LiteLLM acts as a secure bridge. Your requests are routed through our MCP client directly to{" "}
                       {serverDisplayName}&apos;s API.
                     </p>
@@ -129,9 +131,9 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
 
               {/* Requested access */}
               {server.byok_description && server.byok_description.length > 0 && (
-                <div className="bg-gray-50 rounded-xl p-4 text-left mb-6">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-green-500">
+                <div className="bg-muted rounded-xl p-4 text-left mb-6">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-success">
                       <path d="M12 2L12 22M2 12L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                       <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
                     </svg>
@@ -139,8 +141,8 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                   </p>
                   <ul className="space-y-2">
                     {server.byok_description.map((item, i) => (
-                      <li key={i} className="flex items-center gap-2 text-sm text-gray-700">
-                        <Check className="size-3.5 shrink-0 text-green-500" />
+                      <li key={i} className="flex items-center gap-2 text-sm text-foreground">
+                        <Check className="size-3.5 shrink-0 text-success" />
                         {item}
                       </li>
                     ))}
@@ -154,35 +156,42 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               >
                 Continue to Authentication <ArrowRight className="size-4" />
               </button>
-              <button onClick={handleClose} className="mt-3 w-full text-gray-400 hover:text-gray-600 text-sm py-2">
+              <button
+                onClick={handleClose}
+                className="mt-3 w-full text-muted-foreground/70 hover:text-muted-foreground text-sm py-2"
+              >
                 Cancel
               </button>
             </div>
           ) : (
             <div>
               {/* Key icon */}
-              <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center mb-4">
-                <Key className="size-5 text-blue-400" />
+              <div className="w-12 h-12 rounded-full bg-info/10 flex items-center justify-center mb-4">
+                <Key className="size-5 text-info" />
               </div>
 
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Provide API Key</h2>
-              <p className="text-gray-500 mb-6">Enter your {serverDisplayName} API key to authorize this connection.</p>
+              <h2 className="text-2xl font-bold text-foreground mb-2">Provide API Key</h2>
+              <p className="text-muted-foreground mb-6">
+                Enter your {serverDisplayName} API key to authorize this connection.
+              </p>
 
               <div className="mb-4">
-                <label className="block text-sm font-semibold text-gray-800 mb-2">{serverDisplayName} API Key</label>
-                <Input.Password
+                <label htmlFor={apiKeyInputId} className="block text-sm font-semibold text-foreground mb-2">
+                  {serverDisplayName} API Key
+                </label>
+                <PasswordInput
+                  id={apiKeyInputId}
                   placeholder="Enter your API key"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  size="large"
-                  className="rounded-lg"
+                  groupClassName="rounded-lg"
                 />
                 {server.byok_api_key_help_url && (
                   <a
                     href={server.byok_api_key_help_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-500 hover:text-blue-700 text-sm mt-2 flex items-center gap-1"
+                    className="text-info hover:text-info/80 text-sm mt-2 flex items-center gap-1"
                   >
                     Where do I find my API key? <Link2 className="size-3.5" />
                   </a>
@@ -190,23 +199,23 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               </div>
 
               {/* Save toggle */}
-              <div className="bg-gray-50 rounded-xl p-4 flex items-center justify-between mb-4">
+              <div className="bg-muted rounded-xl p-4 flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-gray-500">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-muted-foreground">
                     <path
                       d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"
                       fill="currentColor"
                     />
                   </svg>
-                  <span className="text-sm font-medium text-gray-800">Save key for future use</span>
+                  <span className="text-sm font-medium text-foreground">Save key for future use</span>
                 </div>
-                <Switch checked={saveKey} onChange={setSaveKey} />
+                <Switch checked={saveKey} onCheckedChange={setSaveKey} aria-label="Save key for future use" />
               </div>
 
               {/* Security note */}
-              <div className="bg-blue-50 rounded-xl p-4 flex items-start gap-3 mb-6">
-                <Lock className="mt-0.5 size-4 shrink-0 text-blue-400" />
-                <p className="text-sm text-blue-700">
+              <div className="bg-info/10 rounded-xl p-4 flex items-start gap-3 mb-6">
+                <Lock className="mt-0.5 size-4 shrink-0 text-info" />
+                <p className="text-sm text-info">
                   Your key is stored securely and transmitted over HTTPS. It is never shared with third parties.
                 </p>
               </div>
@@ -214,7 +223,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               <button
                 onClick={handleAuthorize}
                 disabled={loading}
-                className="w-full bg-blue-500 hover:bg-blue-600 disabled:opacity-60 text-white font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                className="w-full bg-info hover:bg-info/80 disabled:opacity-60 text-white font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
               >
                 <Lock className="size-4" /> Connect &amp; Authorize
               </button>
