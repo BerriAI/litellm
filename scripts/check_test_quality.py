@@ -39,7 +39,9 @@ TQ005   `litellm.<attr> = ...` module-global mutation. The SDK's module globals 
         what the 491-line save/restore conftest exists to paper over. Inject the
         dependency or use a fixture that restores it.
 TQ006   A `pytest.skip` reached only when a credential-shaped environment variable is
-        absent. On a runner that does not hold that credential the guard fires every
+        absent. Absence is what the condition has to say: `not key`, `key is None`,
+        `"KEY" not in os.environ`. A skip taken when the credential is present is
+        somebody's deliberate branch and is left alone. On a runner that does not hold that credential the guard fires every
         time, so the test reports green having executed nothing and is indistinguishable
         from coverage that exists. Fake the provider at the HTTP boundary, or fail
         loudly, so a missing credential shows up as a missing credential. The gate is
@@ -482,13 +484,44 @@ def _credential_bindings(tree: ast.Module) -> Mapping[str, str]:
     })
 
 
+def _absence_operands(test: ast.expr) -> Iterator[ast.expr]:
+    """The subtrees of an `if` condition that are true when what they name is missing."""
+    for node in ast.walk(test):
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            yield node.operand
+        elif isinstance(node, ast.Compare) and _is_absent_from_environ(node):
+            yield node
+        elif isinstance(node, ast.Compare) and _is_compared_to_none(node):
+            yield node.left
+
+
+def _is_absent_from_environ(node: ast.Compare) -> bool:
+    return any(isinstance(op, ast.NotIn) for op in node.ops) and any(
+        _dotted_name(right) in ENVIRON_MAPPINGS for right in node.comparators
+    )
+
+
+def _is_compared_to_none(node: ast.Compare) -> bool:
+    return all(isinstance(op, (ast.Is, ast.Eq)) for op in node.ops) and any(
+        isinstance(right, ast.Constant) and right.value is None for right in node.comparators
+    )
+
+
 def _gating_credential(test: ast.expr, bindings: Mapping[str, str]) -> str | None:
-    direct: Final = tuple(key for key in _environ_keys(test) if CREDENTIAL_NAME_RE.search(key))
-    if direct:
-        return direct[0]
     return next(
-        (bindings[node.id] for node in ast.walk(test) if isinstance(node, ast.Name) and node.id in bindings),
+        (
+            credential
+            for operand in _absence_operands(test)
+            for credential in _named_credentials(operand, bindings)
+        ),
         None,
+    )
+
+
+def _named_credentials(node: ast.expr, bindings: Mapping[str, str]) -> Iterator[str]:
+    yield from (key for key in _environ_keys(node) if CREDENTIAL_NAME_RE.search(key))
+    yield from (
+        bindings[inner.id] for inner in ast.walk(node) if isinstance(inner, ast.Name) and inner.id in bindings
     )
 
 

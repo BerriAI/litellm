@@ -344,8 +344,6 @@ def test_a_skip_gated_on_a_missing_credential_is_flagged(tmp_path):
 
 
 def test_the_gate_is_followed_through_the_local_it_was_bound_to(tmp_path):
-    # `key = os.getenv(...)` then `if not key: skip` is the shape most of these use,
-    # so a rule that only reads the `if` test sees almost none of them.
     assert _codes(tmp_path, _BOUND_GATE) == ["TQ006"]
 
 
@@ -383,4 +381,19 @@ def test_the_credential_skip_is_suppressible_like_every_other_rule(tmp_path):
         'pytest.skip("no key")',
         'pytest.skip("no key")  # test-quality-ok: the live suite owns this one',
     )
+    assert _codes(tmp_path, source) == []
+
+
+def test_a_skip_taken_when_the_credential_is_present_is_left_alone(tmp_path):
+    source = _DIRECT_GATE.replace('if not os.getenv("ACME_API_KEY")', 'if os.getenv("ACME_API_KEY")')
+    assert _codes(tmp_path, source) == []
+
+
+def test_a_none_comparison_reads_as_absence(tmp_path):
+    source = _BOUND_GATE.replace("if not api_key:", "if api_key is None:")
+    assert _codes(tmp_path, source) == ["TQ006"]
+
+
+def test_a_membership_test_without_the_negation_is_left_alone(tmp_path):
+    source = _MEMBERSHIP_GATE.replace('"ACME_API_KEY" not in os.environ', '"ACME_API_KEY" in os.environ')
     assert _codes(tmp_path, source) == []
