@@ -20,6 +20,14 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 
+def test_log_filters_config_defaults():
+    from litellm.proxy._types import LogFiltersConfig
+
+    config = LogFiltersConfig()
+    assert config.excluded_uvicorn_access_paths == []
+    assert config.exclude_health_check_paths is True
+
+
 def test_audit_log_masking():
     from datetime import datetime
 
