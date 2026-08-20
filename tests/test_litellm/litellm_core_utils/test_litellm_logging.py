@@ -4960,7 +4960,7 @@ def test_pre_call_redacts_and_masks_raw_request(logging_obj):
     assert "key=*****" in raw_api_base
 
 
-def _streaming_logging_obj_with_callbacks(callbacks):
+def _streaming_logging_obj_with_callbacks(callbacks: list[CustomLogger]):
     from datetime import datetime
 
     obj = LitellmLogging(
