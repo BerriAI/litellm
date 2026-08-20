@@ -305,3 +305,82 @@ def test_unparseable_source_degrades_to_tq000(tmp_path):
 def test_every_violation_renders_as_path_line_code_message():
     rendered = checker.Violation(Path("tests/test_x.py"), 7, "TQ001", "nothing asserted").render()
     assert rendered == "tests/test_x.py:7: TQ001 nothing asserted"
+
+
+_DIRECT_GATE = """import os
+import pytest
+
+
+def test_live_call():
+    if not os.getenv("ACME_API_KEY"):
+        pytest.skip("no key")
+    assert call() == "ok"
+"""
+
+_BOUND_GATE = """import os
+import pytest
+
+
+def test_live_call():
+    api_key = os.getenv("ACME_API_KEY")
+    if not api_key:
+        pytest.skip("no key")
+    assert call() == "ok"
+"""
+
+_MEMBERSHIP_GATE = """import os
+import pytest
+
+
+def test_live_call():
+    if "ACME_API_KEY" not in os.environ:
+        pytest.skip("no key")
+    assert call() == "ok"
+"""
+
+
+def test_a_skip_gated_on_a_missing_credential_is_flagged(tmp_path):
+    assert _codes(tmp_path, _DIRECT_GATE) == ["TQ006"]
+
+
+def test_the_gate_is_followed_through_the_local_it_was_bound_to(tmp_path):
+    # `key = os.getenv(...)` then `if not key: skip` is the shape most of these use,
+    # so a rule that only reads the `if` test sees almost none of them.
+    assert _codes(tmp_path, _BOUND_GATE) == ["TQ006"]
+
+
+def test_a_membership_test_against_os_environ_gates_just_the_same(tmp_path):
+    assert _codes(tmp_path, _MEMBERSHIP_GATE) == ["TQ006"]
+
+
+def test_a_skip_gated_on_something_that_is_not_a_credential_is_left_alone(tmp_path):
+    source = _DIRECT_GATE.replace("ACME_API_KEY", "CI_RUNNER_OS")
+    assert _codes(tmp_path, source) == []
+
+
+def test_reading_a_credential_without_skipping_on_it_is_left_alone(tmp_path):
+    source = 'import os\n\n\ndef test_live_call():\n    assert call(os.getenv("ACME_API_KEY")) == "ok"\n'
+    assert _codes(tmp_path, source) == []
+
+
+def test_a_skip_outside_the_credential_branch_is_left_alone(tmp_path):
+    source = (
+        "import os\n"
+        "import pytest\n"
+        "\n"
+        "\n"
+        "def test_live_call():\n"
+        '    if not os.getenv("ACME_API_KEY"):\n'
+        "        configure()\n"
+        '    pytest.skip("unconditional")\n'
+        '    assert call() == "ok"\n'
+    )
+    assert _codes(tmp_path, source) == []
+
+
+def test_the_credential_skip_is_suppressible_like_every_other_rule(tmp_path):
+    source = _DIRECT_GATE.replace(
+        'pytest.skip("no key")',
+        'pytest.skip("no key")  # test-quality-ok: the live suite owns this one',
+    )
+    assert _codes(tmp_path, source) == []
