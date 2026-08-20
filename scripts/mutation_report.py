@@ -24,10 +24,14 @@ import tomllib
 from collections import defaultdict
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from fnmatch import fnmatch
 from pathlib import Path
 from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parent.parent
+# Written by scripts/mutation_diff_scope.py: the mutant-name globs this run was
+# asked to execute. Absent for a whole-folder run, which has no such contract.
+SCOPE_GLOBS_FILE = ROOT / "mutmut-scope-globs.txt"
 # Overridable so the report can be regenerated outside CI, where the project venv
 # `uv run --no-sync` expects may not exist.
 MUTMUT_INVOCATION = shlex.split(
@@ -80,6 +84,33 @@ def get_results() -> tuple[tuple[str, str], ...]:
     )
     matches = (RESULT_LINE.match(line) for line in proc.stdout.splitlines())
     return tuple((m.group(1), m.group(2)) for m in matches if m is not None)
+
+
+def scope_globs() -> tuple[str, ...]:
+    if not SCOPE_GLOBS_FILE.exists():
+        return ()
+    return tuple(
+        stripped
+        for line in SCOPE_GLOBS_FILE.read_text(encoding="utf-8").splitlines()
+        if (stripped := line.strip())
+    )
+
+
+def unchecked_in_scope(
+    results: tuple[tuple[str, str], ...], globs: tuple[str, ...]
+) -> tuple[str, ...]:
+    """In-scope mutants the run never got to.
+
+    mutmut swallows an interrupt and still exits 0, so its exit code cannot tell a
+    finished run from one that was killed halfway. What the run was asked to do is
+    the only reliable contract: any requested mutant left at `not checked` means
+    the score below covers less than the diff does.
+    """
+    return tuple(
+        name
+        for name, status in results
+        if status == "not checked" and any(fnmatch(name, glob) for glob in globs)
+    )
 
 
 def summarize(results: tuple[tuple[str, str], ...]) -> dict | None:
@@ -306,7 +337,12 @@ def render_meta_style_mutant(mutant: MutantName) -> str | None:
     return "\n".join(out)
 
 
-def render(config: dict, survivors: tuple[str, ...], stats: dict | None) -> str:
+def render(
+    config: dict,
+    survivors: tuple[str, ...],
+    stats: dict | None,
+    unchecked: tuple[str, ...] = (),
+) -> str:
     by_function: dict[tuple[str, str | None, str], list[tuple[str, MutantName]]] = defaultdict(list)
     for survivor in survivors:
         mutant = parse_mutant_name(survivor)
@@ -334,16 +370,28 @@ def render(config: dict, survivors: tuple[str, ...], stats: dict | None) -> str:
     else:
         out.append(f"- Survivors found: **{len(survivors)}**")
         out.append("- (no mutant results and no mutmut-cicd-stats.json)")
+    if unchecked:
+        out.append(f"- Never checked: **{len(unchecked)}** of the mutants this run asked for")
     out.append("")
 
-    if not survivors:
+    if unchecked:
         out.append(
-            "**No surviving mutants — the test suite caught every mutation.**"
-            if stats
-            else "**The mutation run produced no results at all. Treat this as a failed "
+            f"**The run stopped early: {len(unchecked)} in-scope mutants were never "
+            "checked, so the score above covers less than the diff does. Treat this "
+            "as a failed run.**"
+        )
+        out.append("")
+    elif not stats:
+        out.append(
+            "**The mutation run produced no results at all. Treat this as a failed "
             "run, not as a passing one: nothing was executed to survive.**"
         )
         out.append("")
+
+    if not survivors:
+        if stats and not unchecked:
+            out.append("**No surviving mutants — the test suite caught every mutation.**")
+            out.append("")
         return "\n".join(out)
 
     out.append("## Surviving mutants by function")
@@ -489,8 +537,9 @@ def main() -> int:
 
     results = get_results()
     stats = summarize(results) or fallback_stats()
+    unchecked = unchecked_in_scope(results, scope_globs())
     survivors = tuple(name for name, status in results if status == "survived")
-    report = render(config, survivors, stats)
+    report = render(config, survivors, stats, unchecked)
 
     out_path = ROOT / "mutation-report.md"
     out_path.write_text(report)
@@ -498,11 +547,19 @@ def main() -> int:
         f"Wrote {out_path} ({len(survivors)} survivor"
         f"{'s' if len(survivors) != 1 else ''}, {len(report)} chars)"
     )
+    # Survivors are advisory. A run that checked nothing, or stopped partway through
+    # what it was asked to check, is a broken run: reporting either as a clean sweep
+    # is how a crashed mutmut turns into a green pull request.
     if stats is None:
-        # Survivors are advisory, but a run that checked nothing is a broken run:
-        # reporting it as a clean sweep is how a crashed mutmut turns into a green PR.
         print(
             "error: mutmut reported no checked mutants; the run did not complete",
+            file=sys.stderr,
+        )
+        return 1
+    if unchecked:
+        print(
+            f"error: {len(unchecked)} in-scope mutants were never checked; "
+            f"the run did not complete (first: {unchecked[0]})",
             file=sys.stderr,
         )
         return 1

@@ -98,6 +98,9 @@ jobs:
         run: |
           uv pip uninstall pytest-retry || true
 
+      # mutmut catches an interrupt and still exits 0, so its exit code separates
+      # nothing. The report step is what decides: it fails when a mutant this run
+      # asked for was never checked.
       - name: Run mutmut on the changed functions
         if: steps.scope.outputs.has_scope == 'true'
         continue-on-error: true

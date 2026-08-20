@@ -113,3 +113,31 @@ def test_a_run_with_no_survivors_still_reports_the_clean_sweep():
 
     assert "caught every mutation" in rendered
     assert "Mutation score: **100.0%**" in rendered
+
+
+def test_in_scope_mutants_left_unchecked_are_what_marks_a_run_unfinished():
+    """A killed mutmut leaves the rest at `not checked`; only the requested ones count."""
+    results = (
+        ("litellm.router.xǁRouterǁpick__mutmut_1", "killed"),
+        ("litellm.router.xǁRouterǁpick__mutmut_2", "not checked"),
+        ("litellm.other.x_untouched__mutmut_1", "not checked"),
+    )
+
+    assert report.unchecked_in_scope(results, ("litellm.router.xǁRouterǁpick__mutmut_*",)) == (
+        "litellm.router.xǁRouterǁpick__mutmut_2",
+    )
+    assert report.unchecked_in_scope(results, ()) == ()
+
+
+def test_a_partial_run_is_not_reported_as_a_clean_sweep():
+    """3 of 27 mutants killed is not a 100% score; it is a run that stopped early."""
+    rendered = report.render(
+        {},
+        (),
+        {"total": 3, "killed": 3, "survived": 0},
+        ("litellm.router.xǁRouterǁpick__mutmut_4",),
+    )
+
+    assert "caught every mutation" not in rendered
+    assert "stopped early" in rendered
+    assert "Never checked: **1**" in rendered
