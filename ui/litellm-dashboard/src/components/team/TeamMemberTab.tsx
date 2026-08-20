@@ -1,6 +1,6 @@
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import MemberTable from "@/components/common_components/MemberTable";
 import { Member } from "@/components/networking";
 import { DateCell, MoneyCell } from "@/components/shared/table_cells";
@@ -102,9 +102,9 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Model Scope
-          <Tooltip content="Models this member can access. Empty means they inherit all team models.">
+          <SimpleTooltip content="Models this member can access. Empty means they inherit all team models.">
             <CircleHelp className="size-4" aria-label="Model scope information" />
-          </Tooltip>
+          </SimpleTooltip>
         </span>
       ),
       key: "model_scope",
@@ -123,9 +123,9 @@ export default function TeamMemberTab({
               </code>
             ))}
             {remaining > 0 && (
-              <Tooltip content={models.slice(2).join(", ")}>
+              <SimpleTooltip content={models.slice(2).join(", ")}>
                 <span className="text-muted-foreground">+{remaining} more</span>
-              </Tooltip>
+              </SimpleTooltip>
             )}
           </div>
         );
@@ -135,9 +135,9 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Current Cycle Spend (USD)
-          <Tooltip content="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
+          <SimpleTooltip content="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
             <CircleHelp className="size-4" aria-label="Current cycle spend information" />
-          </Tooltip>
+          </SimpleTooltip>
         </span>
       ),
       key: "spend",
@@ -149,9 +149,9 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Total Spend (USD)
-          <Tooltip content="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
+          <SimpleTooltip content="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
             <CircleHelp className="size-4" aria-label="Total spend information" />
-          </Tooltip>
+          </SimpleTooltip>
         </span>
       ),
       key: "total_spend",
@@ -173,9 +173,9 @@ export default function TeamMemberTab({
       title: (
         <span className="flex items-center gap-1">
           Team Member Rate Limits
-          <Tooltip content="Rate limits for this member's usage within this team.">
+          <SimpleTooltip content="Rate limits for this member's usage within this team.">
             <CircleHelp className="size-4" aria-label="Team member rate limits information" />
-          </Tooltip>
+          </SimpleTooltip>
         </span>
       ),
       key: "rate_limits",

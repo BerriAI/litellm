@@ -9,13 +9,14 @@ across pods or stop races; the hook reads active jobs through a short-TTL cache.
 import asyncio
 import hashlib
 import random
+import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
 from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator, model_validator
 
@@ -32,6 +33,7 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
@@ -55,7 +57,7 @@ _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 
 # The judge answers with a small JSON object; a tighter budget truncates the JSON
 # mid-object and the attempt is lost to an error row.
-JUDGE_MAX_OUTPUT_TOKENS: Final = 500
+JUDGE_MAX_OUTPUT_TOKENS: Final = 1500
 
 _MAX_ERROR_CHARS: Final = 500
 
@@ -305,16 +307,21 @@ Criteria: correctness, completeness, clarity, conciseness.
 Return ONLY valid JSON in this exact format, no other text:
 {
   "preference": "A" | "B" | "tie",
-  "confidence": <0.0 to 1.0>,
-  "reasoning": "<one sentence>"
+  "confidence": <0.0 to 1.0>
 }"""
 
 
 class PairwiseVerdict(BaseModel):
-    """The judge's blind A/B verdict, validated at the parse boundary."""
+    """The judge's blind A/B verdict: the response_format schema sent with the judge call
+    and the validation contract on its reply. Both fields are required and preference is
+    closed over the prompt's labels, so a malformed or truncated reply is an
+    unparseable-verdict error row, never a defaulted or fabricated verdict."""
 
-    preference: str = "tie"
-    confidence: float = 0.0
+    preference: Literal["A", "B", "tie"]
+    confidence: float
+
+
+PAIRWISE_JUDGE_RESPONSE_FORMAT: Final = type_to_response_format_param(PairwiseVerdict)
 
 
 def _sample_hits(request_id: str, job_id: str, percentage: float) -> bool:
@@ -323,6 +330,14 @@ def _sample_hits(request_id: str, job_id: str, percentage: float) -> bool:
     digest: Final = hashlib.sha256(f"{job_id}:{request_id}".encode()).digest()
     bucket: Final = int.from_bytes(digest[:8], "big") / float(2**64)
     return bucket * 100.0 < percentage
+
+
+def _failure_detail(e: BaseException) -> str:
+    """Exception class, message, and the raising frame, so an attempt's error row names
+    the faulty code path without needing debug logs on the pod."""
+    frames: Final = traceback.extract_tb(e.__traceback__)
+    location: Final = f" at {frames[-1].filename.rsplit('/', 1)[-1]}:{frames[-1].lineno}" if frames else ""
+    return f"{type(e).__name__}{location}: {e}"
 
 
 def _judge_call_cost(response: object) -> float:
@@ -764,7 +779,9 @@ class ShadowEvalLogger(CustomLogger):
         try:
             response: Final = await router.acompletion(
                 model=target_model,
-                messages=messages,  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
+                messages=[  # mutable-ok: provider transforms rewrite messages in place, so the router gets its own copy
+                    dict(m) for m in messages
+                ],  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
                 metadata=shadow_metadata,
                 num_retries=0,
                 fallbacks=[],  # mutable-ok: SDK kwarg; a failed shadow is a recorded error, never a spend multiplier
@@ -772,7 +789,7 @@ class ShadowEvalLogger(CustomLogger):
             )
         except Exception as e:  # noqa: BLE001  # provider errors become error rows, not crashes
             verbose_logger.debug("shadow_eval: router call failed: %s", e)
-            return _CallFailure(f"shadow router call failed: {e}")
+            return _CallFailure(f"shadow router call failed: {_failure_detail(e)}")
         text: Final = _chat_final_text(response)
         if not text:
             return _CallFailure("shadow router returned an empty response")
@@ -815,6 +832,7 @@ class ShadowEvalLogger(CustomLogger):
                 judge_messages,  # pyright: ignore[reportArgumentType]  # plain SDK message dicts
                 temperature=0,
                 max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
+                response_format=PAIRWISE_JUDGE_RESPONSE_FORMAT,
                 metadata=judge_metadata,
             )
         except Exception as e:  # noqa: BLE001  # judge outages become error rows, not crashes

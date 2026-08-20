@@ -230,7 +230,7 @@ async def anthropic_messages(
     )
 
     messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
-        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools, api_base=api_base
     )
 
     original_stream: Final = stream or kwargs.get("_websearch_interception_converted_stream", False)
@@ -422,7 +422,7 @@ def anthropic_messages_handler(
     )
 
     messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
-        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools
+        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools, api_base=api_base
     )
 
     metadata = validate_anthropic_api_metadata(metadata)

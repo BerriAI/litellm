@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { FlaskConical, Search } from "lucide-react";
 import GuardrailTestPanel from "./GuardrailTestPanel";
 import { applyGuardrail } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -105,10 +105,10 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
     setIsTesting(false);
 
     if (results.length > 0) {
-      NotificationsManager.success(`${results.length} guardrail${results.length > 1 ? "s" : ""} applied successfully`);
+      toast.success(`${results.length} guardrail${results.length > 1 ? "s" : ""} applied successfully`);
     }
     if (errors.length > 0) {
-      NotificationsManager.fromBackend(`${errors.length} guardrail${errors.length > 1 ? "s" : ""} failed`);
+      toast.fromError(`${errors.length} guardrail${errors.length > 1 ? "s" : ""} failed`);
     }
   };
 

@@ -130,6 +130,7 @@ class PricingBasis(NamedTuple):
 
     service_tier: str | None = None
     data_residency: str | None = None
+    vertex_location: str | None = None
 
 
 _STANDARD_RATES: Final = PricingBasis()
@@ -141,8 +142,8 @@ def _pricing_basis(cost_breakdown: Mapping[str, object] | None) -> PricingBasis:
     Rows written before this field shipped carry neither key, and there is no backfill:
     they price at standard rates, which is what they already did.
 
-    Both values survive a JSON round trip on the way here, so neither is guaranteed to be
-    a string. `generic_cost_per_token` calls `.lower()` on both without a type check, and
+    These values survive a JSON round trip on the way here, so none is guaranteed to be
+    a string. `generic_cost_per_token` calls `.lower()` on them without a type check, and
     the resulting `AttributeError` would be swallowed into a silent zero by the caller's
     `except`, so anything that is not a string is dropped here instead.
     """
@@ -150,9 +151,11 @@ def _pricing_basis(cost_breakdown: Mapping[str, object] | None) -> PricingBasis:
         return _STANDARD_RATES
     service_tier: Final = cost_breakdown.get("service_tier")
     data_residency: Final = cost_breakdown.get("data_residency")
+    vertex_location: Final = cost_breakdown.get("vertex_location")
     return PricingBasis(
         service_tier=service_tier if isinstance(service_tier, str) else None,
         data_residency=data_residency if isinstance(data_residency, str) else None,
+        vertex_location=vertex_location if isinstance(vertex_location, str) else None,
     )
 
 
@@ -193,6 +196,7 @@ def _cost_of_usage(
             service_tier=basis.service_tier,
             data_residency=basis.data_residency,
             model_info=model_info,
+            vertex_location=basis.vertex_location,
         )
     except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; degrade to zero savings
         verbose_proxy_logger.debug(

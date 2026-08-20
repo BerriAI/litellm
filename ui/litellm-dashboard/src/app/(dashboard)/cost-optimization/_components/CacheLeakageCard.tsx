@@ -40,7 +40,7 @@ const compareRows = (a: CacheLeakageRow, b: CacheLeakageRow, sort: SortState): n
 const InfoTooltip = ({ info }: { info: string }) => (
   <Tooltip>
     <TooltipTrigger render={<span className="inline-flex" aria-label={info} />}>
-      <Info className="h-3 w-3 text-gray-400" />
+      <Info className="h-3 w-3 text-muted-foreground" />
     </TooltipTrigger>
     <TooltipContent className="max-w-xs">{info}</TooltipContent>
   </Tooltip>
@@ -72,7 +72,7 @@ const SortableHead = ({
           className="inline-flex items-center gap-1 font-medium hover:text-foreground"
         >
           {label}
-          <Arrow className={`h-3 w-3 ${active ? "text-foreground" : "text-gray-400"}`} />
+          <Arrow className={`h-3 w-3 ${active ? "text-foreground" : "text-muted-foreground"}`} />
         </button>
         <InfoTooltip info={info} />
       </span>

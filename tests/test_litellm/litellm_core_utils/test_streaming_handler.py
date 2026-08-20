@@ -1606,6 +1606,104 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
     assert usage_chunks[-1].usage.cost == 0.00025
 
 
+@pytest.mark.asyncio
+async def test_openrouter_streaming_usage_only_chunk_without_stream_options():
+    """
+    Regression: OpenRouter's post-finish chunk has `choices: []`. When the caller did not
+    pass stream_options.include_usage it was dropped before cost tracking, so the
+    provider-reported cost never reached the assembled response.
+    """
+    import time
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.utils import ModelResponseListIterator
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056047,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(
+                finish_reason=None, index=0, delta=Delta(content="Hi", role="assistant")
+            )
+        ],
+        usage=None,
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056048,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=None,
+    )
+    usage_only_chunk = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056049,
+        model="openrouter/claude",
+        choices=[],
+        usage=Usage(
+            completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+        ),
+    )
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    previous_success_callback = litellm.success_callback
+    previous_async_success_callback = litellm._async_success_callback
+    litellm.success_callback = [mock_callback]
+    litellm._async_success_callback = [mock_callback]
+
+    stream_logging_obj = Logging(
+        model="openrouter/claude",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    stream_logging_obj.update_environment_variables(
+        model="openrouter/claude",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="openrouter",
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[chunk1, chunk2, usage_only_chunk]
+        ),
+        model="openrouter/claude",
+        custom_llm_provider="openrouter",
+        logging_obj=stream_logging_obj,
+    )
+
+    success_logged = asyncio.Event()
+    try:
+        with patch.object(
+            mock_callback,
+            "async_log_success_event",
+            new_callable=AsyncMock,
+            side_effect=lambda *args, **kwargs: success_logged.set(),
+        ) as mock_success_event:
+            collected_chunks = [chunk async for chunk in response]
+            await asyncio.wait_for(success_logged.wait(), timeout=30)
+    finally:
+        litellm.success_callback = previous_success_callback
+        litellm._async_success_callback = previous_async_success_callback
+
+    assert all(getattr(chunk, "usage", None) is None for chunk in collected_chunks)
+
+    mock_success_event.assert_called_once()
+    logged_kwargs = mock_success_event.call_args.kwargs["kwargs"]
+    assert logged_kwargs["response_cost"] == 0.00025
+    assert logged_kwargs["standard_logging_object"]["response_cost"] == 0.00025
+
+
 def test_openrouter_streaming_cost_propagates_to_hidden_params():
     """
     Verify that provider-reported cost from usage.cost flows into
@@ -1674,6 +1772,80 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
         complete_response._hidden_params
     )
     assert provider_cost == 0.00025
+
+
+def test_perplexity_streaming_dict_cost_propagates_to_hidden_params():
+    """
+    Regression: Perplexity reports usage.cost as a breakdown object, which used to
+    blow up the end of the stream with
+    `float() argument must be a string or a real number, not 'dict'`.
+    """
+    import litellm
+    from litellm.cost_calculator import get_response_cost_from_hidden_params
+
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-pplx",
+            created=1742056047,
+            model="perplexity/sonar",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hi", role="assistant"),
+                )
+            ],
+            usage=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-pplx",
+            created=1742056048,
+            model="perplexity/sonar",
+            choices=[
+                StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+            ],
+            usage=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-pplx",
+            created=1742056049,
+            model="perplexity/sonar",
+            choices=[
+                StreamingChoices(finish_reason=None, index=0, delta=Delta(content=""))
+            ],
+            usage=Usage(
+                completion_tokens=18,
+                prompt_tokens=12,
+                total_tokens=30,
+                cost={
+                    "input_tokens_cost": 0.000012,
+                    "output_tokens_cost": 0.000018,
+                    "request_cost": 0.005,
+                    "total_cost": 0.00503,
+                },
+            ),
+        ),
+    ]
+
+    complete_response = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "test"}]
+    )
+
+    assert complete_response is not None
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+
+    assert (
+        get_response_cost_from_hidden_params(complete_response._hidden_params)
+        == 0.00503
+    )
+
+
+def test_provider_reported_cost_ignores_unusable_shapes():
+    assert CustomStreamWrapper._resolve_provider_reported_cost(None) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost({}) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost({"total_cost": None}) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost(0.5) == 0.5
 
 
 def test_handle_special_delta_attributes(

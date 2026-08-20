@@ -841,6 +841,44 @@ def test_the_baseline_is_priced_on_the_basis_the_request_was_billed_at(basis, ex
     assert reported == pytest.approx(expected_multiplier * baseline - served)
 
 
+def test_the_baseline_is_priced_on_the_vertex_location_the_request_was_billed_at(monkeypatch):
+    """A request served from a regional Vertex endpoint was billed with the
+    regional-endpoint uplift, so the counterfactual single-model operator would
+    have paid it too. The served model carries no uplift field, so only the
+    baseline moves with the recorded location."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    gemini = litellm.get_model_info("gemini-3.5-flash", "vertex_ai")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    assert gemini.get("regional_endpoint_uplift_multiplier") == 1.1
+    assert haiku.get("regional_endpoint_uplift_multiplier") is None, "served model must not move with the basis"
+
+    usage = _usage(fresh=20_000, cached=0, written=0, out=1_000)
+    served = 20_000 * haiku["input_cost_per_token"] + 1_000 * haiku["output_cost_per_token"]
+    baseline = 20_000 * gemini["input_cost_per_token"] + 1_000 * gemini["output_cost_per_token"]
+
+    regional = compute_autorouter_savings(
+        baseline_model="vertex_ai/gemini-3.5-flash",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=_breakdown(served, vertex_location="us-east5"),
+    )
+    global_endpoint = compute_autorouter_savings(
+        baseline_model="vertex_ai/gemini-3.5-flash",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=_breakdown(served, vertex_location="global"),
+    )
+
+    assert regional == pytest.approx(1.1 * baseline - served)
+    assert global_endpoint == pytest.approx(baseline - served)
+
+
 def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
     """An operator who configures nothing still sees the driver work."""
     result = compute_savings_spend(

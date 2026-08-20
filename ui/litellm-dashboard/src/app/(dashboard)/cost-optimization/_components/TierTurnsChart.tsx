@@ -133,7 +133,7 @@ const TierTurnsChart: React.FC<TierTurnsChartProps> = ({ view, autoRouters }) =>
                     {slice.tier} {Math.round((100 * slice.turns) / total).toLocaleString()}%
                   </p>
                   {slice.models.length > 0 && (
-                    <p className="text-xs break-words text-muted-foreground/70">{slice.models.join(", ")}</p>
+                    <p className="text-xs break-words text-muted-foreground">{slice.models.join(", ")}</p>
                   )}
                 </div>
               </li>

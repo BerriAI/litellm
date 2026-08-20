@@ -269,7 +269,7 @@ class TestAimlImageGeneration(BaseImageGenTest):
 
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "gemini/imagen-4.0-generate-001"}
+        return {"model": "gemini/gemini-3.1-flash-image"}
 
 
 @pytest.mark.skip(reason="Runwayml image generation API only tested locally")

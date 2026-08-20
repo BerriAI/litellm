@@ -151,7 +151,7 @@ describe("sort contract – only backend-sortable columns are sortable", () => {
 
   it("does not make Spend / Budget sortable (the backend rejects sort_by=spend)", () => {
     renderTable();
-    expect(screen.getByText("Spend / Budget").closest("button")).toBeNull();
+    expect(screen.queryByText("Spend / Budget").closest("button")).toBeNull();
     // Team and Created are the only sortable headers.
     expect(screen.getByText("Team").closest("button")).not.toBeNull();
     expect(screen.getByText("Created").closest("button")).not.toBeNull();

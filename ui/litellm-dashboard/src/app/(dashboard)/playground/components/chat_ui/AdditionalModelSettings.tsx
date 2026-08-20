@@ -101,7 +101,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
     }
   };
 
-  const disabledTextColor = useAdvancedParams ? "text-gray-700" : "text-gray-400";
+  const disabledTextColor = useAdvancedParams ? "text-foreground" : "text-muted-foreground";
 
   return (
     <div className="w-80 space-y-4 p-4">
@@ -118,7 +118,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
           </label>
           <Tooltip>
             <TooltipTrigger aria-label="Help: Stream responses">
-              <Info className="size-3 shrink-0 cursor-pointer text-gray-400 hover:text-gray-600" />
+              <Info className="size-3 shrink-0 cursor-pointer text-muted-foreground hover:text-foreground" />
             </TooltipTrigger>
             <TooltipContent className="max-w-xs">
               Streams the answer token by token. Uncheck to send a non-streaming request and render the full response at
@@ -155,7 +155,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
           </label>
           <Popover>
             <PopoverTrigger aria-label="Help: Simulate failure to test fallbacks">
-              <Info className="size-3 shrink-0 cursor-pointer text-gray-400 hover:text-gray-600" />
+              <Info className="size-3 shrink-0 cursor-pointer text-muted-foreground hover:text-foreground" />
             </PopoverTrigger>
             <PopoverContent side="right" className="max-w-[340px] gap-2 p-3 text-sm">
               <p>
@@ -168,7 +168,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
                   href="https://docs.litellm.ai/docs/proxy/keys_teams_router_settings"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-800"
+                  className="text-info hover:text-info/80"
                 >
                   Learn more
                 </a>
@@ -221,7 +221,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
               className="w-full accent-primary disabled:cursor-not-allowed"
               onChange={(event) => handleTemperatureChange(Number(event.target.value))}
             />
-            <div className="mt-1 flex justify-between text-xs text-gray-400">
+            <div className="mt-1 flex justify-between text-xs text-muted-foreground">
               <span>0</span>
               <span>1.0</span>
               <span>2.0</span>
@@ -267,7 +267,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
               className="w-full accent-primary disabled:cursor-not-allowed"
               onChange={(event) => handleMaxTokensChange(Number(event.target.value))}
             />
-            <div className="mt-1 flex justify-between text-xs text-gray-400">
+            <div className="mt-1 flex justify-between text-xs text-muted-foreground">
               <span>1</span>
               <span>32768</span>
             </div>

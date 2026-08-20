@@ -270,7 +270,7 @@ class _TeamRowGrants(BaseModel):
     litellm_model_table: _TeamModelAliasTable | None = None
 
 
-class _CliSsoTeamDetail(BaseModel):
+class CliSsoTeamDetail(BaseModel):
     """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
 
     team_id: str | None = None
@@ -279,8 +279,8 @@ class _CliSsoTeamDetail(BaseModel):
     team_model_aliases: Mapping[str, str] | None = None
 
 
-_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[_CliSsoTeamDetail, ...])
-_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = _CliSsoTeamDetail(team_models=())
+_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[CliSsoTeamDetail, ...])
+_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = CliSsoTeamDetail(team_models=())
 
 
 class _CustomSsoCall(Protocol):
@@ -479,7 +479,7 @@ def _is_safe_cli_sso_metadata_dest_key(dest_key: str) -> bool:
     return not any(fragment in lowered for fragment in _CLI_SSO_SECRET_KEY_FRAGMENTS)
 
 
-def _is_safe_cli_sso_scalar_claim_value(value: Any) -> bool:
+def _is_safe_cli_sso_scalar_claim_value(value: object) -> bool:
     if not isinstance(value, _CLI_SSO_SCALAR_TYPES):
         return False
     if isinstance(value, str):
@@ -490,17 +490,17 @@ def _is_safe_cli_sso_scalar_claim_value(value: Any) -> bool:
     return True
 
 
-def _sso_result_to_dict(result: CustomOpenID | OpenID | dict) -> dict[str, Any]:
+def _sso_result_to_dict(result: CustomOpenID | OpenID | dict[str, object]) -> dict[str, object]:
     if isinstance(result, dict):
         return result
     if hasattr(result, "model_dump"):
         dumped: Final = result.model_dump()
         if isinstance(dumped, dict):
-            return cast(dict[str, Any], dumped)
+            return dumped
     return {}
 
 
-def _get_nested_claim_value(data: dict[str, Any], claim_path: str) -> Any:
+def _get_nested_claim_value(data: Mapping[str, object], claim_path: str) -> object:
     """Resolve a dot-notation claim path against an SSO result dict.
 
     Unlike ``get_nested_value``, this does not strip a leading ``metadata.``
@@ -514,7 +514,7 @@ def _get_nested_claim_value(data: dict[str, Any], claim_path: str) -> Any:
     placeholder: Final = "\x00"
     parts = claim_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
-    current: Any = data
+    current: object = data
     for part in parts:
         if isinstance(current, dict) and part in current:
             current = current[part]
@@ -523,7 +523,7 @@ def _get_nested_claim_value(data: dict[str, Any], claim_path: str) -> Any:
     return current
 
 
-def _extract_sso_claim_value(result: CustomOpenID | OpenID | dict, claim_path: str) -> Any:
+def _extract_sso_claim_value(result: CustomOpenID | OpenID | dict[str, object], claim_path: str) -> object:
     extra_fields: Final = getattr(result, "extra_fields", None)
     if isinstance(extra_fields, dict):
         if claim_path in extra_fields:
@@ -539,7 +539,7 @@ def _extract_sso_claim_value(result: CustomOpenID | OpenID | dict, claim_path: s
     return _get_nested_claim_value(result_dict, claim_path)
 
 
-def _set_nested_metadata_value(metadata: dict[str, Any], key_path: str, value: Any) -> None:
+def _set_nested_metadata_value(metadata: dict[str, object], key_path: str, value: object) -> None:
     placeholder: Final = "\x00"
     parts = key_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
@@ -554,24 +554,25 @@ def _set_nested_metadata_value(metadata: dict[str, Any], key_path: str, value: A
 
 
 def _flatten_cli_sso_metadata_for_poll(
-    metadata: dict[str, Any],
+    metadata: Mapping[str, object],
 ) -> dict[str, str | int | float | bool]:
     """Expose scalar attribution metadata as a flat dict for CLI poll responses."""
     flattened: Final[dict[str, str | int | float | bool]] = {}
-    stack: Final[list[tuple[str, Any]]] = [("", metadata)]
+    stack: Final[list[tuple[str, object]]] = [("", metadata)]
     while stack:
         prefix, value = stack.pop()
         if isinstance(value, dict):
-            for key, nested in value.items():
+            nested_items: Mapping[str, object] = value
+            for key, nested in nested_items.items():
                 nested_prefix = f"{prefix}.{key}" if prefix else key
                 stack.append((nested_prefix, nested))
-        elif _is_safe_cli_sso_scalar_claim_value(value):
+        elif isinstance(value, (str, int, float, bool)) and _is_safe_cli_sso_scalar_claim_value(value):
             flattened[prefix] = value
     return flattened
 
 
 def build_cli_sso_attribution_metadata(
-    result: CustomOpenID | OpenID | dict,
+    result: CustomOpenID | OpenID | dict[str, object],
 ) -> dict[str, object]:
     """
     Build allowlisted, non-secret scalar attribution metadata from an SSO result.
@@ -599,8 +600,8 @@ def build_cli_sso_attribution_metadata(
 
 
 def _merge_cli_sso_attribution_metadata(
-    existing_metadata: dict[str, Any], attribution_metadata: dict[str, Any]
-) -> dict[str, Any]:
+    existing_metadata: dict[str, object], attribution_metadata: dict[str, object]
+) -> dict[str, object]:
     """Merge attribution metadata into existing user metadata in-place.
 
     Preserves original value types (in particular, string claim values that
@@ -608,7 +609,7 @@ def _merge_cli_sso_attribution_metadata(
     are merged iteratively so attribution claims do not clobber unrelated keys
     under the same parent.
     """
-    pending: Final[list[tuple[dict[str, Any], dict[str, Any]]]] = [(existing_metadata, attribution_metadata)]
+    pending: Final[list[tuple[dict[str, object], dict[str, object]]]] = [(existing_metadata, attribution_metadata)]
     while pending:
         target, source = pending.pop()
         for key, value in source.items():
@@ -656,7 +657,7 @@ async def _persist_cli_sso_user_metadata(
 
 
 def _cli_poll_attribution_metadata_from_session(
-    session_data: dict[str, Any],
+    session_data: Mapping[str, object],
 ) -> dict[str, str | int | float | bool]:
     stored: Final = session_data.get("attribution_metadata")
     if isinstance(stored, dict):
@@ -960,11 +961,12 @@ def process_sso_jwt_access_token(
             # Try role_mappings first (group-based role determination)
             if role_mappings is not None and role_mappings.roles:
                 group_claim: Final = role_mappings.group_claim
-                user_groups_raw: Final[Any] = get_nested_value(access_token_payload, group_claim)
+                user_groups_raw: Final[object] = get_nested_value(access_token_payload, group_claim)
 
                 user_groups: list[str] = []
                 if isinstance(user_groups_raw, list):
-                    user_groups = [str(g) for g in user_groups_raw]
+                    raw_groups: Final[Sequence[object]] = user_groups_raw
+                    user_groups = [str(g) for g in raw_groups]
                 elif isinstance(user_groups_raw, str):
                     user_groups = [g.strip() for g in user_groups_raw.split(",") if g.strip()]
                 elif user_groups_raw is not None:
@@ -1214,12 +1216,13 @@ def generic_response_convertor(
     ]:
         # Use role_mappings to determine role from groups
         group_claim: Final = role_mappings.group_claim
-        user_groups_raw: Final[Any] = get_nested_value(response, group_claim)
+        user_groups_raw: Final[object] = get_nested_value(response, group_claim)
 
         # Handle different formats: could be a list, string (comma-separated), or single value
         user_groups: list[str] = []
         if isinstance(user_groups_raw, list):
-            user_groups = [str(g) for g in user_groups_raw]
+            raw_groups: Final[Sequence[object]] = user_groups_raw
+            user_groups = [str(g) for g in raw_groups]
         elif isinstance(user_groups_raw, str):
             # Handle comma-separated string
             user_groups = [g.strip() for g in user_groups_raw.split(",") if g.strip()]
@@ -2189,10 +2192,10 @@ async def _build_cli_sso_user_defined_values(
     )
 
 
-def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
+def _cli_sso_team_detail(team_row: Mapping[str, object]) -> CliSsoTeamDetail:
     team: Final = _TeamRowGrants.model_validate(team_row)
     alias_table: Final = team.litellm_model_table
-    return _CliSsoTeamDetail(
+    return CliSsoTeamDetail(
         team_id=team.team_id,
         team_alias=team.team_alias,
         team_models=team.models,
@@ -2200,10 +2203,10 @@ def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
     )
 
 
-async def _fetch_cli_sso_team_details(
+async def fetch_cli_sso_team_details(
     prisma_client: PrismaClient,
     teams: Sequence[str],
-) -> tuple[_CliSsoTeamDetail, ...] | None:
+) -> tuple[CliSsoTeamDetail, ...] | None:
     """``None`` means the lookup itself failed, which is not the same as the user having no teams."""
     if not teams:
         return ()
@@ -2218,7 +2221,7 @@ async def _fetch_cli_sso_team_details(
     return tuple(_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
 
 
-def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[str]:
+def _cli_sso_session_teams(team_details: Sequence[CliSsoTeamDetail]) -> list[str]:
     """The teams a login may bind to: only those whose row still exists.
 
     A team deleted out from under a membership, which is what deleting an organization
@@ -2228,7 +2231,7 @@ def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[st
     return [detail.team_id for detail in team_details if detail.team_id is not None]
 
 
-def _selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> _CliSsoTeamDetail | None:
+def selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> CliSsoTeamDetail | None:
     """``None`` means the team's grants are unknown. An empty grant is a real value meaning unrestricted,
     so an unknown one must not be minted as empty."""
     if team_id is None:
@@ -2279,7 +2282,7 @@ async def _complete_cli_sso_callback_session(
     if hasattr(user_info, "teams") and user_info.teams:
         teams = user_info.teams if isinstance(user_info.teams, list) else []
 
-    team_details: Final = await _fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
+    team_details: Final = await fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
     if team_details is None:
         raise HTTPException(
             status_code=500,
@@ -2480,7 +2483,7 @@ async def cli_poll_key(
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
-            selected_team: Final = _selected_cli_sso_team_detail(
+            selected_team: Final = selected_cli_sso_team_detail(
                 team_details=user_team_details,
                 team_id=team_id,
             )
@@ -3093,7 +3096,7 @@ class SSOAuthenticationHandler:
     def _get_generic_sso_redirect_params(
         state: str | None = None,
         generic_authorization_endpoint: str | None = None,
-    ) -> tuple[dict, str | None]:
+    ) -> tuple[dict[str, str], str | None]:
         """
         Get redirect parameters for Generic SSO with proper state priority handling.
         Optionally generates PKCE parameters if GENERIC_CLIENT_USE_PKCE is enabled.

@@ -174,9 +174,9 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
             <MetricCard
               label="Fail Rate"
               value={`${data.failRate}%`}
-              valueColor={data.failRate > 15 ? "text-red-600" : data.failRate > 5 ? "text-amber-600" : "text-green-600"}
+              valueColor={data.failRate > 15 ? "text-destructive" : data.failRate > 5 ? "text-warning" : "text-success"}
               subtitle={`${Math.round((data.requestsEvaluated * data.failRate) / 100).toLocaleString()} blocked`}
-              icon={data.failRate > 15 ? <TriangleAlert className="size-4 text-red-400" /> : undefined}
+              icon={data.failRate > 15 ? <TriangleAlert className="size-4 text-destructive" /> : undefined}
             />
             <MetricCard
               label="Avg. latency added"
@@ -184,10 +184,10 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
               valueColor={
                 data.avgLatency != null
                   ? data.avgLatency > 150
-                    ? "text-red-600"
+                    ? "text-destructive"
                     : data.avgLatency > 50
-                      ? "text-amber-600"
-                      : "text-green-600"
+                      ? "text-warning"
+                      : "text-success"
                   : "text-muted-foreground"
               }
               subtitle={data.avgLatency != null ? "Per request (avg)" : "No data"}

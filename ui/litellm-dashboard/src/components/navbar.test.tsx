@@ -30,7 +30,6 @@ const mockUserDropdownData = vi.hoisted(() => ({
 vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
   const React = await import("react");
   const { useState } = React;
-  const { Button } = await import("antd");
   const localStorageUtils = await import("@/utils/localStorageUtils");
   return {
     default: function MockUserDropdown({ onLogout }: { onLogout: () => void }) {
@@ -38,9 +37,9 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
       const [open, setOpen] = useState(false);
       return (
         <div>
-          <Button type="text" aria-label="Open account menu" onClick={() => setOpen(!open)}>
+          <button type="button" aria-label="Open account menu" onClick={() => setOpen(!open)}>
             Account
-          </Button>
+          </button>
           {open && (
             <div data-testid="user-dropdown-content">
               <span>{userId}</span>
@@ -96,7 +95,7 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
 let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
-let mockUseAuthorizedImpl = () => ({
+const mockUseAuthorizedImpl = () => ({
   userId: "test-user",
   userEmail: "test@example.com",
   userRole: "Admin",

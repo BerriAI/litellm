@@ -46,6 +46,7 @@ class KeyLoggingCallback(BaseModel):
 class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
     priority: str | None = None
+    batch_enqueued_token_limit: int | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -73,6 +74,7 @@ class KeyGenerateBody(BaseModel):
     allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
     object_permission: ObjectPermission | None = None
+    router_settings: "RouterSettingsOverride | None" = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -234,16 +236,18 @@ class ChatBody(BaseModel):
 
 
 class RouterSettingsOverride(BaseModel):
-    """Per-request `router_settings_override` in a /chat/completions body: the
-    reliability knobs (fallbacks by trigger, retry count) the reliability suite
-    drives per call instead of via static router config. Serialized exclude_none, so
-    an override sets only the strategies a test exercises. Each fallbacks map is
-    model_name -> the ordered fallback model_names to try."""
+    """Router settings a test scopes below the global config: sent per request as
+    `router_settings_override` in a /chat/completions body (the reliability suite's
+    fallback and retry knobs) or stored on a key as `router_settings` at
+    /key/generate (the auto-router suite's tag filtering switch). Serialized
+    exclude_none, so an override sets only the knobs a test exercises. Each
+    fallbacks map is model_name -> the ordered fallback model_names to try."""
 
     fallbacks: list[dict[str, list[str]]] | None = None
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    enable_tag_filtering: bool | None = None
 
 
 class ReliabilityChatBody(ChatBody):
@@ -384,9 +388,45 @@ class AnthropicCustomTool(BaseModel):
 type AnthropicTool = AnthropicToolSearchTool | AnthropicWebSearchTool | AnthropicCustomTool
 
 
+class AnthropicContentBlock(BaseModel):
+    """One block of a `content` array. Only the fields a test reads are
+    declared; `extra="allow"` keeps the rest (a `server_tool_use` block's
+    `input`, a `tool_search_tool_result` block's nested `content`) so an
+    assistant turn read off the wire can be replayed into history verbatim
+    instead of being silently flattened to its text."""
+
+    model_config = ConfigDict(extra="allow")
+    type: str | None = None
+    text: str | None = None
+    id: str | None = None
+
+
+class AnthropicToolResultBlock(BaseModel):
+    """The user-turn answer to a client-side `tool_use`. `tool_use_id` must be
+    the id the model actually emitted; an invented one is rejected by
+    Anthropic's own schema validator, which Bedrock inherits."""
+
+    type: Literal["tool_result"] = "tool_result"
+    tool_use_id: str
+    content: str
+
+
+class AnthropicAssistantTurn(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: list[AnthropicContentBlock]
+
+
+class AnthropicToolResultTurn(BaseModel):
+    role: Literal["user"] = "user"
+    content: list[AnthropicToolResultBlock]
+
+
+type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
+
+
 class AnthropicMessagesBody(BaseModel):
     model: str
-    messages: list[ChatMessage]
+    messages: list[AnthropicMessage]
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
@@ -399,11 +439,6 @@ class CountTokensBody(BaseModel):
 
     model: str
     messages: list[ChatMessage]
-
-
-class AnthropicContentBlock(BaseModel):
-    type: str | None = None
-    text: str | None = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -713,6 +748,10 @@ class LiteLLMParamsBody(BaseModel):
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
+    auto_router_config: str | None = None
+    auto_router_default_model: str | None = None
+    auto_router_embedding_model: str | None = None
+    tags: list[str] | None = None
     mock_response: str | None = None
     timeout: float | None = None
     tpm: int | None = None
@@ -728,6 +767,8 @@ class ModelInfoBody(BaseModel):
     # constraint when a prior run's teardown had not removed the row.
     id: str | None = None
     mode: ModelMode | None = None
+    access_groups: list[str] | None = None
+    team_id: str | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -823,6 +864,7 @@ class TeamNewResponse(BaseModel):
 class TeamUpdateBody(BaseModel):
     team_id: str
     team_alias: str
+    models: list[str] | None = None
 
 
 class TeamInfoParams(BaseModel):

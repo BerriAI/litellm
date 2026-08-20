@@ -4,6 +4,7 @@ Unit tests for auto router management endpoints
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -286,6 +287,13 @@ def test_semantic_matching_without_an_embedding_model_is_rejected():
         _request("what is 2+2", semantic_keyword_matching=True)
 
 
+def test_classifier_plugin_is_not_settable_over_http():
+    """classifier_plugin holds a live runtime object, closed off like `plugins`; a plugin-mode
+    config is therefore unrepresentable in a request body."""
+    with pytest.raises(ValidationError):
+        _request("what is 2+2", classifier_type="custom", classifier_plugin="my_module.instance")
+
+
 class TestAutoRouterBenchmarks:
     from litellm.proxy.management_endpoints.auto_router_endpoints import _SessionAggRow
 
@@ -318,9 +326,7 @@ class TestAutoRouterBenchmarks:
         from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
 
         totals = _benchmark_totals(self.ROW)
-        bucket_hits = (
-            totals.cache.same_model.hits + totals.cache.first_visit.hits + totals.cache.return_to_tier.hits
-        )
+        bucket_hits = totals.cache.same_model.hits + totals.cache.first_visit.hits + totals.cache.return_to_tier.hits
         assert bucket_hits == 27
         assert totals.cache.hit_rate_pct == pytest.approx(100.0 * 28 / 38, abs=0.1)
 
@@ -483,7 +489,7 @@ from litellm.proxy.management_endpoints.auto_router_endpoints import (
     start_shadow_eval,
     stop_shadow_eval_job,
 )
-from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalJobResponse, StartShadowEvalRequest
+from litellm.types.management_endpoints.auto_router_endpoints import StartShadowEvalRequest
 
 VIEWER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, api_key="sk-view", user_id="viewer")
 NON_ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="user")
@@ -500,19 +506,23 @@ def _shadow_router() -> MagicMock:
     return router
 
 
-def _job_record(**overrides: object) -> MagicMock:
-    """Spec'd like a real prisma row: only the table's columns exist as attributes, so
-    from_attributes validation falls back to model defaults for everything else."""
+def _leg_record(**overrides: object) -> MagicMock:
+    """Spec'd like a real prisma row: only the table's columns exist as attributes. One
+    row is one key's leg of a job; legs sharing group_id are one job."""
     defaults = {
-        "id": "job-1",
+        "id": "leg-1",
+        "group_id": "job-1",
         "api_key_id": "key-hash",
         "router_name": "my-router",
+        "direction": "forward",
+        "baseline_model": None,
         "judge_model": "anthropic/claude-sonnet-5",
         "shadow_percentage": 10.0,
         "max_turns": 200,
         "created_at": datetime(2026, 8, 11, tzinfo=timezone.utc),
         "ends_at": datetime.now(timezone.utc) + timedelta(days=7),
         "stopped_at": None,
+        "stopped_by": None,
     }
     fields = {**defaults, **overrides}
     record = MagicMock(spec=list(fields))
@@ -521,22 +531,100 @@ def _job_record(**overrides: object) -> MagicMock:
     return record
 
 
-def _shadow_prisma(active_job=None, agg_rows=None) -> MagicMock:
+def _key_record(
+    token: str = "key-hash", key_alias: str | None = "prod-alpha", key_name: str | None = "sk-...lpha"
+) -> MagicMock:
+    record = MagicMock(spec=["token", "key_alias", "key_name"])
+    record.token = token
+    record.key_alias = key_alias
+    record.key_name = key_name
+    return record
+
+
+def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-hash", "key-hash-2")) -> MagicMock:
+    """The job-table fake honours the filters it is handed, so a read that forgets
+    stopped_at sees rows the partial index would have released, one that forgets
+    direction sees the opposite-direction legs a key may hold at the same time, and a
+    group read that matched on a leg id would come back empty."""
     prisma = MagicMock()
-    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=MagicMock())
-    prisma.db.execute_raw = AsyncMock(return_value=0)
-    prisma.db.litellm_shadowevaljob.find_first = AsyncMock(return_value=active_job)
-    prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=None)
-    prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[])
-    prisma.db.litellm_shadowevaljob.create = AsyncMock(return_value=_job_record())
-    prisma.db.litellm_shadowevaljob.update = AsyncMock(
-        return_value=_job_record(stopped_at=datetime.now(timezone.utc))
-    )
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[_key_record(token) for token in known_keys])
+    async def execute_raw(sql: str, *params: object):
+        if "SET stopped_by" in sql:
+            group = [row for row in stored if row.group_id == params[0]]
+            counts = {row["job_id"]: row["attempt_count"] for row in prisma.attempt_rows}
+            sampling = any(row.stopped_at is None and counts.get(row.id, 0) < row.max_turns for row in group)
+            window_open = bool(group) and group[0].ends_at > datetime.now(timezone.utc)
+            claimable = [row for row in group if row.stopped_by is None]
+            if not (claimable and sampling and window_open):
+                return 0
+            for row in claimable:
+                row.stopped_by = params[1]
+                if row.stopped_at is None:
+                    row.stopped_at = datetime.fromisoformat(str(params[2])).replace(tzinfo=timezone.utc)
+            return len(claimable)
+        return 0
+
+    prisma.db.execute_raw = AsyncMock(side_effect=execute_raw)
+    stored = legs if isinstance(legs, list) else list(legs)
+
+    async def find_many_legs(where=None, **_: object):
+        current = list(stored)
+        w = dict(where or {})
+        if "api_key_id" in w:
+            wanted = w["api_key_id"]["in"] if isinstance(w["api_key_id"], dict) else [w["api_key_id"]]
+            current = [row for row in current if row.api_key_id in wanted]
+        if "direction" in w:
+            current = [row for row in current if row.direction == w["direction"]]
+        if "stopped_at" in w:
+            current = [row for row in current if row.stopped_at is w["stopped_at"]]
+        if "group_id" in w:
+            wanted = w["group_id"]["in"] if isinstance(w["group_id"], dict) else [w["group_id"]]
+            current = [row for row in current if row.group_id in wanted]
+        return current
+
+    def newest_groups(rows, limit):
+        latest: dict = {}
+        for row in rows:
+            if row.group_id not in latest or row.created_at > latest[row.group_id]:
+                latest[row.group_id] = row.created_at
+        ordered = sorted(latest, key=lambda group_id: latest[group_id], reverse=True)
+        return ordered[: int(limit)]
+
+    def leg_dict(row):
+        fields = (
+            "id",
+            "group_id",
+            "api_key_id",
+            "router_name",
+            "direction",
+            "baseline_model",
+            "judge_model",
+            "shadow_percentage",
+            "max_turns",
+            "created_at",
+            "ends_at",
+            "stopped_at",
+            "stopped_by",
+        )
+        return {field: getattr(row, field) for field in fields}
+
+    prisma.db.litellm_shadowevaljob.find_many = AsyncMock(side_effect=find_many_legs)
+    prisma.db.litellm_shadowevaljob.create_many = AsyncMock(return_value=1)
+    prisma.db.litellm_shadowevaljob.update_many = AsyncMock(return_value=1)
     prisma.db.litellm_shadowevalattempt.find_first = AsyncMock(return_value=None)
+    prisma.attempt_rows = []
 
     async def query_raw(sql: str, *params: object):
+        if "AS attempt_count" in sql:
+            return prisma.attempt_rows
+        if "GROUP BY group_id" in sql:
+            scoped = [row for row in stored if "api_key_id = $2" not in sql or row.api_key_id == params[1]]
+            keep = set(newest_groups(scoped, params[0]))
+            return [leg_dict(row) for row in stored if row.group_id in keep]
         if "FILTER (WHERE outcome != 'error')::int AS judged_count" in sql:
             return [{"judged_count": 10, "error_count": 2, "judge_spend": 0.031}]
+        if "SELECT job_id AS grp" in sql:
+            return by_leg_rows if by_leg_rows is not None else []
         return agg_rows if agg_rows is not None else []
 
     prisma.db.query_raw = AsyncMock(side_effect=query_raw)
@@ -545,7 +633,7 @@ def _shadow_prisma(active_job=None, agg_rows=None) -> MagicMock:
 
 def _start_request(**overrides: object) -> StartShadowEvalRequest:
     payload = {
-        "api_key_id": "key-hash",
+        "api_key_ids": ("key-hash",),
         "router_name": "my-router",
         "shadow_percentage": 10.0,
         "judge_model": "anthropic/claude-sonnet-5",
@@ -557,44 +645,55 @@ def _start_request(**overrides: object) -> StartShadowEvalRequest:
 
 
 @pytest.mark.asyncio
-async def test_start_shadow_eval_creates_job_and_frees_expired_or_exhausted_ones(monkeypatch: pytest.MonkeyPatch):
-    """Expiry and turn-budget exhaustion both end sampling on their own; either must
-    release the key's slot in the active-job index so a new eval can start."""
+async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeypatch: pytest.MonkeyPatch):
+    """N keys become N sibling rows sharing group_id and identical config, written by a
+    single create_many so a unique-index loser rolls back the whole claim, and expiry or
+    budget exhaustion frees every requested key's slot first."""
     import litellm.proxy.proxy_server as proxy_server
 
     prisma = _shadow_prisma()
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
 
-    response = await start_shadow_eval(_start_request(), ADMIN)
+    response = await start_shadow_eval(_start_request(api_key_ids=("key-hash", "key-hash-2")), ADMIN)
 
-    assert response.status == "running"
-    assert response.max_turns == 200
-    assert response.judged_count is None
-    sweep_sql, sweep_key = prisma.db.execute_raw.call_args.args
+    sweep_sql, sweep_keys = prisma.db.execute_raw.call_args.args
     assert "stopped_at IS NULL" in sweep_sql
-    assert "ends_at <= NOW()" in sweep_sql
+    assert "j.ends_at <= (NOW() AT TIME ZONE 'utc')" in sweep_sql
+    assert "SET stopped_at = (NOW() AT TIME ZONE 'utc')" in sweep_sql
     assert ">= j.max_turns" in sweep_sql
-    assert sweep_key == "key-hash"
-    create_data = prisma.db.litellm_shadowevaljob.create.call_args.kwargs["data"]
-    assert create_data["api_key_id"] == "key-hash"
-    assert create_data["created_by"] == "admin"
-    assert "status" not in create_data
+    assert "j.api_key_id = ANY($1::text[])" in sweep_sql
+    assert sweep_keys == ["key-hash", "key-hash-2"]
+    prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
+    rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+    assert [row["api_key_id"] for row in rows] == ["key-hash", "key-hash-2"]
+    assert len({frozenset((k, v) for k, v in row.items() if k != "api_key_id") for row in rows}) == 1
+    assert len({row["group_id"] for row in rows}) == 1
+    assert all(row["max_turns"] == 200 and row["created_by"] == "admin" for row in rows)
+    assert all("status" not in row and "id" not in row for row in rows)
+    assert response.job_id == rows[0]["group_id"]
+    assert response.status == "running"
+    assert response.judged_count is None
+    assert [(key.api_key_id, key.max_turns, key.key_alias) for key in response.keys] == [
+        ("key-hash", 200, "prod-alpha"),
+        ("key-hash-2", 200, "prod-alpha"),
+    ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "caller,request_overrides,active,expected_status",
+    "caller,request_overrides,claimed,expected_status",
     [
-        (NON_ADMIN, {}, None, 403),
-        (VIEWER, {}, None, 403),
-        (ADMIN, {"router_name": "not-a-router"}, None, 400),
-        (ADMIN, {"judge_model": "not/a real model!"}, None, 400),
-        (ADMIN, {"judge_model": "my-router"}, None, 400),
-        (ADMIN, {}, "active", 409),
-        (ADMIN, {"direction": "reverse", "baseline_model": "my-router"}, None, 400),
-        (ADMIN, {"direction": "reverse", "baseline_model": "not/a real model!"}, None, 400),
-        (ADMIN, {"direction": "reverse", "baseline_model": "openai/gpt-4o", "router_name": "not-a-router"}, None, 400),
+        (NON_ADMIN, {}, (), 403),
+        (VIEWER, {}, (), 403),
+        (ADMIN, {"router_name": "not-a-router"}, (), 400),
+        (ADMIN, {"judge_model": "not/a real model!"}, (), 400),
+        (ADMIN, {"judge_model": "my-router"}, (), 400),
+        (ADMIN, {}, ("key-hash",), 409),
+        (ADMIN, {"api_key_ids": ("key-hash", "key-hash-2")}, ("key-hash-2",), 409),
+        (ADMIN, {"direction": "reverse", "baseline_model": "my-router"}, (), 400),
+        (ADMIN, {"direction": "reverse", "baseline_model": "not/a real model!"}, (), 400),
+        (ADMIN, {"direction": "reverse", "baseline_model": "openai/gpt-4o", "router_name": "not-a-router"}, (), 400),
     ],
     ids=[
         "non-admin",
@@ -603,23 +702,143 @@ async def test_start_shadow_eval_creates_job_and_frees_expired_or_exhausted_ones
         "unresolvable-judge",
         "router-as-judge",
         "already-active",
+        "one-of-several-keys-already-active",
         "router-as-baseline",
         "unresolvable-baseline",
         "reverse-still-needs-an-auto-router",
     ],
 )
 async def test_start_shadow_eval_rejections(
-    monkeypatch: pytest.MonkeyPatch, caller, request_overrides, active, expected_status
+    monkeypatch: pytest.MonkeyPatch, caller, request_overrides, claimed, expected_status
 ):
     import litellm.proxy.proxy_server as proxy_server
 
-    prisma = _shadow_prisma(active_job=_job_record() if active else None)
+    prisma = _shadow_prisma(legs=[_leg_record(id=f"leg-{key}", group_id="job-7", api_key_id=key) for key in claimed])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
 
     with pytest.raises(HTTPException) as exc:
         await start_shadow_eval(_start_request(**request_overrides), caller)
     assert exc.value.status_code == expected_status
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_names_the_busy_key_and_its_job(monkeypatch: pytest.MonkeyPatch):
+    """A key busy elsewhere blocks the whole start rather than being silently dropped from
+    it, and the 409 names which key and which job so the caller can stop or drop it."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record(id="leg-b", group_id="job-7", api_key_id="key-hash-2")])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(api_key_ids=("key-hash", "key-hash-2")), ADMIN)
+    assert exc.value.status_code == 409
+    assert "key-hash-2 (job job-7)" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_reuses_a_key_whose_previous_job_already_stopped(monkeypatch: pytest.MonkeyPatch):
+    """The claim is held by unstopped legs only, matching the partial unique index. A read
+    that forgets that would strand every key that has ever finished a job."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record(group_id="job-7", stopped_at=datetime.now(timezone.utc))])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    job = await start_shadow_eval(_start_request(), ADMIN)
+
+    assert job.status == "running"
+    prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_reverse_records_its_arms_and_holds_its_own_slot(monkeypatch: pytest.MonkeyPatch):
+    """The two directions ask opposite questions of the same key, so a forward job holding
+    the slot must not block a reverse one. The second reverse start still 409s."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    legs = [_leg_record(group_id="job-fwd")]
+    prisma = _shadow_prisma(legs=legs)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    reverse = _start_request(direction="reverse", baseline_model="openai/gpt-4o")
+    response = await start_shadow_eval(reverse, ADMIN)
+
+    assert (response.direction, response.baseline_model) == ("reverse", "openai/gpt-4o")
+    rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+    assert rows[0]["direction"] == "reverse"
+    assert rows[0]["baseline_model"] == "openai/gpt-4o"
+
+    legs.append(_leg_record(id="leg-2", group_id="job-rev", direction="reverse"))
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(reverse, ADMIN)
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    await start_shadow_eval(_start_request(), ADMIN)
+
+    rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+    assert rows[0]["direction"] == "forward"
+    assert rows[0]["baseline_model"] is None
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_rejects_keys_this_proxy_does_not_know(monkeypatch: pytest.MonkeyPatch):
+    """A typo'd api_key_id would otherwise create a leg no traffic can ever match. Every
+    unknown key is named at once, so a caller passing several fixes them in one round."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(known_keys=("key-hash",))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(api_key_ids=("key-hash", "typo-a", "typo-b")), ADMIN)
+    assert exc.value.status_code == 400
+    assert "typo-a, typo-b" in exc.value.detail
+    assert "key-hash," not in exc.value.detail
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+def test_start_shadow_eval_request_dedupes_and_bounds_the_key_set():
+    """A key named twice would collide with itself on the one-active-per-key index, a job
+    scoping no key samples nothing, and the key-count cap bounds every downstream read."""
+    assert _start_request(api_key_ids=("a", "b", "a")).api_key_ids == ("a", "b")
+    assert len(_start_request(api_key_ids=tuple(f"k{i}" for i in range(100))).api_key_ids) == 100
+    with pytest.raises(ValidationError):
+        _start_request(api_key_ids=())
+    with pytest.raises(ValidationError):
+        _start_request(api_key_ids=tuple(f"k{i}" for i in range(101)))
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_concurrent_unique_violation_is_a_409(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from prisma.errors import UniqueViolationError
+
+    prisma = _shadow_prisma()
+    prisma.db.litellm_shadowevaljob.create_many = AsyncMock(
+        side_effect=UniqueViolationError(MagicMock(message="unique constraint"))
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(), ADMIN)
+    assert exc.value.status_code == 409
 
 
 @pytest.mark.parametrize(
@@ -639,97 +858,25 @@ def test_start_request_pins_baseline_model_to_reverse(overrides):
 
 
 @pytest.mark.asyncio
-async def test_start_shadow_eval_reverse_records_its_arms_and_holds_its_own_slot(monkeypatch: pytest.MonkeyPatch):
-    """The two directions ask opposite questions of the same key, so a forward job holding
-    the slot must not block a reverse one. The second reverse start still 409s."""
-    import litellm.proxy.proxy_server as proxy_server
-
-    prisma = _shadow_prisma()
-    active = {"forward": _job_record()}
-    prisma.db.litellm_shadowevaljob.find_first = AsyncMock(
-        side_effect=lambda where, **_: active.get(str(where.get("direction")))
-    )
-    prisma.db.litellm_shadowevaljob.create = AsyncMock(
-        return_value=_job_record(direction="reverse", baseline_model="openai/gpt-4o")
-    )
-    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
-    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
-
-    reverse = _start_request(direction="reverse", baseline_model="openai/gpt-4o")
-    response = await start_shadow_eval(reverse, ADMIN)
-
-    assert (response.direction, response.baseline_model) == ("reverse", "openai/gpt-4o")
-    create_data = prisma.db.litellm_shadowevaljob.create.call_args.kwargs["data"]
-    assert create_data["direction"] == "reverse"
-    assert create_data["baseline_model"] == "openai/gpt-4o"
-
-    active["reverse"] = _job_record(id="job-2", direction="reverse")
-    with pytest.raises(HTTPException) as exc:
-        await start_shadow_eval(reverse, ADMIN)
-    assert exc.value.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
-
-    prisma = _shadow_prisma()
-    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
-    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
-
-    await start_shadow_eval(_start_request(), ADMIN)
-
-    create_data = prisma.db.litellm_shadowevaljob.create.call_args.kwargs["data"]
-    assert create_data["direction"] == "forward"
-    assert create_data["baseline_model"] is None
-
-
-@pytest.mark.asyncio
-async def test_start_shadow_eval_rejects_a_key_this_proxy_does_not_know(monkeypatch: pytest.MonkeyPatch):
-    """A typo'd api_key_id would otherwise create a job no traffic can ever match."""
-    import litellm.proxy.proxy_server as proxy_server
-
-    prisma = _shadow_prisma()
-    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
-    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
-    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
-
-    with pytest.raises(HTTPException) as exc:
-        await start_shadow_eval(_start_request(), ADMIN)
-    assert exc.value.status_code == 400
-    assert "not a key on this proxy" in exc.value.detail
-
-
-@pytest.mark.asyncio
-async def test_start_shadow_eval_concurrent_unique_violation_is_a_409(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
-    from prisma.errors import UniqueViolationError
-
-    prisma = _shadow_prisma()
-    prisma.db.litellm_shadowevaljob.create = AsyncMock(
-        side_effect=UniqueViolationError(MagicMock(message="unique constraint"))
-    )
-    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
-    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
-
-    with pytest.raises(HTTPException) as exc:
-        await start_shadow_eval(_start_request(), ADMIN)
-    assert exc.value.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_get_shadow_eval_job_derives_counts_spend_and_stratified_results(monkeypatch: pytest.MonkeyPatch):
+async def test_get_shadow_eval_job_pools_counts_and_slices_results_per_key(monkeypatch: pytest.MonkeyPatch):
+    """One read answers for every leg: totals and stratifications aggregate over the
+    group's leg ids, and the by-key slice maps each leg id back to its key hash."""
     import litellm.proxy.proxy_server as proxy_server
 
     tier_rows = [
         {"grp": "SIMPLE", "turn_count": 8, "real_wins": 2, "shadow_wins": 4, "ties": 2, "avg_confidence": 0.8},
         {"grp": "REASONING", "turn_count": 2, "real_wins": 2, "shadow_wins": 0, "ties": 0, "avg_confidence": 0.9},
     ]
-    prisma = _shadow_prisma(agg_rows=tier_rows)
-    prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=_job_record())
-    prisma.db.litellm_shadowevalattempt.find_first = AsyncMock(
-        return_value=MagicMock(error="judge call failed: boom")
+    leg_rows = [
+        {"grp": "leg-1", "turn_count": 6, "real_wins": 1, "shadow_wins": 4, "ties": 1, "avg_confidence": 0.7},
+        {"grp": "leg-2", "turn_count": 4, "real_wins": 3, "shadow_wins": 0, "ties": 1, "avg_confidence": 0.6},
+    ]
+    prisma = _shadow_prisma(
+        legs=[_leg_record(), _leg_record(id="leg-2", api_key_id="key-hash-2", max_turns=50)],
+        agg_rows=tier_rows,
+        by_leg_rows=leg_rows,
     )
+    prisma.db.litellm_shadowevalattempt.find_first = AsyncMock(return_value=MagicMock(error="judge call failed: boom"))
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
     response = await get_shadow_eval_job("job-1", VIEWER)
@@ -744,6 +891,13 @@ async def test_get_shadow_eval_job_derives_counts_spend_and_stratified_results(m
     assert response.results.by_tier[0].shadow_win_rate_pct == 50.0
     assert response.results.overall_shadow_win_rate_pct == 40.0
     assert response.results.overall_tie_rate_pct == 20.0
+    assert [(s.group, s.turn_count) for s in response.results.by_key] == [("key-hash", 6), ("key-hash-2", 4)]
+    assert response.results.by_key[0].shadow_win_rate_pct == 66.7
+    assert [(key.api_key_id, key.max_turns) for key in response.keys] == [("key-hash", 200), ("key-hash-2", 50)]
+    totals_args = [call.args for call in prisma.db.query_raw.await_args_list if "judged_count" in call.args[0]]
+    assert totals_args == [(totals_args[0][0], ["leg-1", "leg-2"])]
+    error_where = prisma.db.litellm_shadowevalattempt.find_first.call_args.kwargs["where"]
+    assert error_where == {"job_id": {"in": ["leg-1", "leg-2"]}, "outcome": "error"}
 
 
 @pytest.mark.asyncio
@@ -762,55 +916,326 @@ async def test_get_shadow_eval_job_404s_and_gates_on_role(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_list_shadow_eval_jobs_returns_derived_status_without_aggregates(monkeypatch: pytest.MonkeyPatch):
+async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monkeypatch: pytest.MonkeyPatch):
+    """A job over two keys is one list entry with both keys, not two entries, and a job
+    whose keys all stopped reads stopped while a half-stopped one still runs."""
     import litellm.proxy.proxy_server as proxy_server
 
-    prisma = _shadow_prisma()
-    prisma.db.litellm_shadowevaljob.find_many = AsyncMock(
-        return_value=[
-            _job_record(),
-            _job_record(id="job-2", ends_at=datetime.now(timezone.utc) - timedelta(days=1)),
-            _job_record(id="job-3", stopped_at=datetime.now(timezone.utc)),
+    stamp = datetime.now(timezone.utc)
+    prisma = _shadow_prisma(
+        legs=[
+            _leg_record(created_at=datetime(2026, 8, 13, tzinfo=timezone.utc)),
+            _leg_record(
+                id="leg-2",
+                api_key_id="key-hash-2",
+                stopped_at=stamp,
+                created_at=datetime(2026, 8, 13, tzinfo=timezone.utc),
+            ),
+            _leg_record(
+                id="leg-3",
+                group_id="job-2",
+                stopped_at=stamp,
+                created_at=datetime(2026, 8, 12, tzinfo=timezone.utc),
+            ),
+            _leg_record(
+                id="leg-4",
+                group_id="job-3",
+                ends_at=datetime.now(timezone.utc) - timedelta(days=1),
+                created_at=datetime(2026, 8, 11, tzinfo=timezone.utc),
+            ),
         ]
     )
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
     jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
 
-    assert [job.status for job in jobs] == ["running", "completed", "stopped"]
-    swept = ShadowEvalJobResponse.model_validate(
-        _job_record(
-            id="job-4",
-            ends_at=datetime.now(timezone.utc) - timedelta(days=1),
-            stopped_at=datetime.now(timezone.utc),
-        ),
-        from_attributes=True,
-    )
-    assert swept.status == "completed"
+    assert [(job.job_id, job.status) for job in jobs] == [
+        ("job-1", "running"),
+        ("job-2", "stopped"),
+        ("job-3", "completed"),
+    ]
+    assert [key.api_key_id for key in jobs[0].keys] == ["key-hash", "key-hash-2"]
     assert all(job.judged_count is None and job.results is None for job in jobs)
-    assert prisma.db.query_raw.await_count == 0
+    legs_sql, legs_limit = prisma.db.query_raw.await_args_list[0].args
+    assert "GROUP BY group_id ORDER BY MAX(created_at) DESC LIMIT $1::int" in legs_sql
+    assert legs_limit == 50
+    counts_sql, _ = prisma.db.query_raw.await_args_list[1].args
+    assert "AS attempt_count" in counts_sql
+    assert "j.stopped_at IS NULL OR a.created_at <= j.stopped_at" in counts_sql
+    assert prisma.db.query_raw.await_count == 2
+    prisma.db.litellm_shadowevaljob.find_many.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_stop_shadow_eval_sets_stopped_at_and_rejects_non_running(monkeypatch: pytest.MonkeyPatch):
+async def test_list_shadow_eval_jobs_filters_to_jobs_containing_the_key(monkeypatch: pytest.MonkeyPatch):
+    """The filter matches a key anywhere in a job's key set and still returns the whole
+    job, sibling keys included."""
     import litellm.proxy.proxy_server as proxy_server
 
-    prisma = _shadow_prisma()
-    prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(return_value=_job_record())
+    prisma = _shadow_prisma(
+        legs=[
+            _leg_record(),
+            _leg_record(id="leg-2", api_key_id="key-hash-2"),
+            _leg_record(id="leg-3", group_id="job-2", api_key_id="key-hash-2"),
+            _leg_record(id="leg-4", group_id="job-3"),
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id="key-hash-2", limit=50)
+
+    assert [job.job_id for job in jobs] == ["job-1", "job-2"]
+    assert [key.api_key_id for key in jobs[0].keys] == ["key-hash", "key-hash-2"]
+
+
+@pytest.mark.parametrize(
+    ("stopped_flags", "days_left", "expected"),
+    [
+        ((False, False), 7, "running"),
+        ((True, False), 7, "running"),
+        ((True, True), 7, "stopped"),
+        ((True, True), -1, "completed"),
+        ((False, False), -1, "completed"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_job_status_runs_until_every_key_stops_and_completed_outranks_stopped(
+    monkeypatch: pytest.MonkeyPatch, stopped_flags: tuple[bool, ...], days_left: int, expected: str
+):
+    import litellm.proxy.proxy_server as proxy_server
+
+    stamp = datetime.now(timezone.utc)
+    prisma = _shadow_prisma(
+        legs=[
+            _leg_record(
+                id=f"leg-{index}",
+                api_key_id=f"key-{index}",
+                stopped_at=stamp if stopped else None,
+                ends_at=datetime.now(timezone.utc) + timedelta(days=days_left),
+            )
+            for index, stopped in enumerate(stopped_flags)
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+
+    assert [job.status for job in jobs] == [expected]
+
+
+@pytest.mark.asyncio
+async def test_list_reads_completed_once_every_key_spends_its_budget(monkeypatch: pytest.MonkeyPatch):
+    """A job whose keys all exhausted their turn budgets stopped sampling on its own, so
+    it must read completed on the very next list, before any sweep stamps its legs; one
+    key under budget keeps the whole job running. An operator starting an unrelated eval
+    must never look like it terminated a finished one."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(
+        legs=[
+            _leg_record(max_turns=5),
+            _leg_record(id="leg-2", api_key_id="key-hash-2", max_turns=5),
+            _leg_record(id="leg-3", group_id="job-2", api_key_id="key-hash", max_turns=5),
+            _leg_record(id="leg-4", group_id="job-2", api_key_id="key-hash-2", max_turns=5),
+        ]
+    )
+    prisma.attempt_rows = [
+        {"job_id": "leg-1", "attempt_count": 5},
+        {"job_id": "leg-2", "attempt_count": 6},
+        {"job_id": "leg-3", "attempt_count": 5},
+        {"job_id": "leg-4", "attempt_count": 3},
+    ]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+
+    by_id = {job.job_id: job for job in jobs}
+    assert by_id["job-1"].status == "completed"
+    assert all(key.stopped_at is None for key in by_id["job-1"].keys)
+    assert by_id["job-2"].status == "running"
+    assert {key.api_key_id: key.attempt_count for key in by_id["job-2"].keys} == {"key-hash": 5, "key-hash-2": 3}
+
+
+@pytest.mark.asyncio
+async def test_recorded_operator_stop_outranks_budget_arithmetic(monkeypatch: pytest.MonkeyPatch):
+    """A detached attempt can land around the stop and push the raw count past the
+    budget; the recorded stopped_by must keep the job reading stopped regardless."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    stamp = datetime.now(timezone.utc)
+    prisma = _shadow_prisma(legs=[_leg_record(max_turns=5, stopped_at=stamp, stopped_by="admin")])
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 6}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+    assert jobs[0].status == "stopped"
+    assert jobs[0].stopped_by == "admin"
+
+    detail = await get_shadow_eval_job("job-1", VIEWER)
+    assert detail.status == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_backfilled_legacy_stop_never_reads_as_completion(monkeypatch: pytest.MonkeyPatch):
+    """Jobs stopped before stopped_by existed are backfilled with 'unknown' by the
+    migration, so even one whose stray attempts crossed the budget stays stopped."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(
+        legs=[_leg_record(max_turns=5, stopped_at=datetime.now(timezone.utc), stopped_by="unknown")]
+    )
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 6}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+    assert jobs[0].status == "stopped"
+
+
+def test_stopped_by_migration_backfills_every_job_that_displayed_stopped():
+    """The migration must close the pre-column population: without the backfill, a
+    legacy stop whose stray attempts crossed the budget would read completed."""
+    import litellm_proxy_extras
+
+    sql = (
+        Path(litellm_proxy_extras.__file__).parent
+        / "migrations"
+        / "20260818224500_add_shadow_eval_stopped_by"
+        / "migration.sql"
+    ).read_text()
+    assert 'ADD COLUMN     "stopped_by" TEXT' in sql
+    assert "SET stopped_by = 'unknown'" in sql
+    assert "WHERE stopped_at IS NOT NULL AND ends_at > (NOW() AT TIME ZONE 'utc')" in sql
+
+
+@pytest.mark.asyncio
+async def test_stop_rejects_a_job_that_already_spent_its_budget(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record(max_turns=3)])
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 3}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(HTTPException) as exhausted:
+        await stop_shadow_eval_job("job-1", ADMIN)
+    assert exhausted.value.status_code == 400
+    assert "completed" in exhausted.value.detail
+    prisma.db.litellm_shadowevaljob.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_shadow_eval_responses_name_every_shadowed_key(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(
+        legs=[_leg_record(), _leg_record(id="leg-2", api_key_id="deleted-key-hash")],
+        known_keys=("key-hash", "key-hash-2"),
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+    assert [(key.key_alias, key.key_name) for key in jobs[0].keys] == [
+        (None, None),
+        ("prod-alpha", "sk-...lpha"),
+    ]
+    batched_where = prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert batched_where == {"token": {"in": ["deleted-key-hash", "key-hash"]}}
+
+    detail = await get_shadow_eval_job("job-1", VIEWER)
+    assert [key.key_alias for key in detail.keys] == [None, "prod-alpha"]
+
+
+@pytest.mark.asyncio
+async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_running(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """One stop ends sampling for the whole job, while a leg that already stopped on its
+    own budget keeps the stopped_at it earned."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    earned = datetime.now(timezone.utc) - timedelta(hours=1)
+    prisma = _shadow_prisma(legs=[_leg_record(), _leg_record(id="leg-2", api_key_id="key-hash-2", stopped_at=earned)])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
     stopped = await stop_shadow_eval_job("job-1", ADMIN)
-    assert stopped.status == "stopped"
-    update = prisma.db.litellm_shadowevaljob.update.call_args.kwargs
-    assert set(update["data"]) == {"stopped_at"}
 
-    prisma.db.litellm_shadowevaljob.find_unique = AsyncMock(
-        return_value=_job_record(ends_at=datetime.now(timezone.utc) - timedelta(days=1))
-    )
+    assert stopped.status == "stopped"
+    assert stopped.stopped_by == "admin"
+    stop_sql, stop_group, stop_operator, stop_stamp = prisma.db.execute_raw.call_args.args
+    assert "SET stopped_by = $2, stopped_at = COALESCE(stopped_at, $3::timestamp)" in stop_sql
+    assert "WHERE group_id = $1 AND stopped_by IS NULL" in stop_sql
+    assert "ends_at > (NOW() AT TIME ZONE 'utc')" in stop_sql
+    assert ") < k.max_turns" in stop_sql
+    assert (stop_group, stop_operator) == ("job-1", "admin")
+    assert datetime.fromisoformat(stop_stamp).tzinfo is None
+    assert prisma.db.execute_raw.await_count == 1
+    prisma.db.litellm_shadowevaljob.update_many.assert_not_called()
+    by_key = {key.api_key_id: key.stopped_at for key in stopped.keys}
+    assert by_key["key-hash-2"] == earned
+    assert by_key["key-hash"] is not None and by_key["key-hash"] != earned
+
+    done_leg = _leg_record(ends_at=datetime.now(timezone.utc) - timedelta(days=1))
+    prisma_done = _shadow_prisma(legs=[done_leg])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_done)
     with pytest.raises(HTTPException) as exc:
         await stop_shadow_eval_job("job-1", ADMIN)
     assert exc.value.status_code == 400
+    assert "already completed" in exc.value.detail
+    assert done_leg.stopped_by is None
 
     with pytest.raises(HTTPException) as forbidden:
         await stop_shadow_eval_job("job-1", VIEWER)
     assert forbidden.value.status_code == 403
+
+
+def test_every_shadow_eval_sql_constant_speaks_naive_utc():
+    """The tables store naive UTC wall time (prisma's convention), so SQL-side time must be
+    NOW() AT TIME ZONE 'utc' and python-side params must cast ::timestamp; a bare NOW() or a
+    timestamptz cast writes session-local wall time into the naive column and skews every
+    comparison against prisma-written stamps."""
+    import litellm.proxy.management_endpoints.auto_router_endpoints as module
+
+    sql_constants = {name: value for name, value in vars(module).items() if name.endswith("_SQL")}
+    assert sql_constants
+    for name, sql in sql_constants.items():
+        assert "::timestamptz" not in sql, name
+        for occurrence in sql.split("NOW()")[1:]:
+            assert occurrence.startswith(" AT TIME ZONE 'utc'"), name
+
+
+@pytest.mark.asyncio
+async def test_a_stop_racing_the_last_budgeted_attempt_reports_completed_not_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The statement claims the job only while a leg still samples, so a stop landing in
+    the same instant the budget spends records nothing and the job keeps reading
+    completed; stamping it would misreport a self-ended job as operator-stopped forever."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record(max_turns=2)])
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 2}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(HTTPException) as exc:
+        await stop_shadow_eval_job("job-1", ADMIN)
+    assert exc.value.status_code == 400
+    assert "already completed" in exc.value.detail
+    assert prisma.db.litellm_shadowevaljob.find_many.await_args.kwargs["where"] == {"group_id": "job-1"}
+
+
+@pytest.mark.asyncio
+async def test_two_racing_stops_produce_exactly_one_winner(monkeypatch: pytest.MonkeyPatch):
+    """The statement's stopped_by IS NULL predicate lets only one racer claim rows; the
+    loser reads the stamped state and gets the same answer a late caller gets."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record()])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    first = await stop_shadow_eval_job("job-1", ADMIN)
+    assert first.status == "stopped"
+
+    with pytest.raises(HTTPException) as exc:
+        await stop_shadow_eval_job("job-1", ADMIN)
+    assert exc.value.status_code == 400
+    assert "already stopped" in exc.value.detail

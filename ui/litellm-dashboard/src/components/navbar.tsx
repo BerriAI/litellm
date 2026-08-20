@@ -61,14 +61,14 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white">
+    <nav className="sticky top-0 z-10 border-b border-border bg-card">
       <div className="w-full">
         <div className="flex h-14 items-center px-4">
           <div className="flex shrink-0 items-center">
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
-                className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
                 <span className="text-lg">
@@ -120,7 +120,7 @@ const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {!isPublicPage && (
-            <div className="ml-4 flex shrink-0 items-center border-l border-gray-200 pl-4">
+            <div className="ml-4 flex shrink-0 items-center border-l border-border pl-4">
               <ViewSwitcher />
             </div>
           )}
@@ -134,7 +134,7 @@ const Navbar: React.FC<NavbarProps> = ({
 
             <nav
               aria-label="Product documentation"
-              className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-gray-200 pl-4" : ""}`}
+              className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-border pl-4" : ""}`}
             >
               <a
                 href="https://docs.litellm.ai/docs/"
@@ -150,16 +150,16 @@ const Navbar: React.FC<NavbarProps> = ({
             </nav>
 
             {!hideCommunityLinks && (
-              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
+              <div className="flex shrink-0 items-center border-l border-border pl-4">
                 <CommunityEngagementButtons />
               </div>
             )}
 
             {!isPublicPage && (
-              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
-                <div className="flex items-center gap-0.5 rounded-lg bg-gray-50 px-1 py-0 transition-colors hover:bg-gray-100">
+              <div className="flex shrink-0 items-center border-l border-border pl-4">
+                <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
                   <NotificationsBell />
-                  <span className="mx-0.5 h-6 w-px shrink-0 bg-gray-200" aria-hidden />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   <UserDropdown onLogout={handleLogout} />
                 </div>
               </div>

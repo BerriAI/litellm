@@ -15,7 +15,7 @@ import CreateVectorStore from "./CreateVectorStore";
 import TestVectorStoreTab from "./TestVectorStoreTab";
 import IndexesTab from "./IndexesTab";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
@@ -49,7 +49,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
       setVectorStores(response.data || []);
     } catch (error) {
       console.error("Error fetching vector stores:", error);
-      NotificationsManager.fromBackend("Error fetching vector stores: " + error);
+      toast.fromError("Error fetching vector stores: " + error);
     } finally {
       setIsLoadingVectorStores(false);
     }
@@ -62,7 +62,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
       setCredentials(response.credentials || []);
     } catch (error) {
       console.error("Error fetching credentials:", error);
-      NotificationsManager.fromBackend("Error fetching credentials: " + error);
+      toast.fromError("Error fetching credentials: " + error);
     }
   };
 
@@ -99,11 +99,11 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
     setIsDeleting(true);
     try {
       await vectorStoreDeleteCall(accessToken, vectorStoreToDelete);
-      NotificationsManager.success("Vector store deleted successfully");
+      toast.success("Vector store deleted successfully");
       fetchVectorStores();
     } catch (error) {
       console.error("Error deleting vector store:", error);
-      NotificationsManager.fromBackend("Error deleting vector store: " + error);
+      toast.fromError("Error deleting vector store: " + error);
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);

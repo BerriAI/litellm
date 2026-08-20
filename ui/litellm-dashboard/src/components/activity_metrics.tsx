@@ -70,14 +70,14 @@ const ModelSection = ({
             <div className="mt-3">
               <div className="grid grid-cols-1 gap-2">
                 {metrics.top_api_keys.map((keyData) => (
-                  <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                  <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-muted rounded-lg">
                     <div>
                       <p className="font-medium">{keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`}</p>
-                      {keyData.team_id && <p className="text-xs text-gray-500">Team: {keyData.team_id}</p>}
+                      {keyData.team_id && <p className="text-xs text-muted-foreground">Team: {keyData.team_id}</p>}
                     </div>
                     <div className="text-right">
                       <p className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</p>
-                      <p className="text-xs text-gray-500">
+                      <p className="text-xs text-muted-foreground">
                         {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
                       </p>
                     </div>
@@ -233,7 +233,9 @@ const ModelCollapsible = ({
       className="border-b last:border-b-0"
     >
       <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-3 text-left">
-        <ChevronDown className={`size-4 shrink-0 text-gray-400 transition-transform ${open ? "" : "-rotate-90"}`} />
+        <ChevronDown
+          className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`}
+        />
         {header}
       </CollapsibleTrigger>
       <CollapsibleContent keepMounted={everOpened} className="px-4 pb-4">
@@ -410,7 +412,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
                 <h3 className="text-lg font-medium text-foreground">
                   {modelMetrics[modelName].label || "Unknown Item"}
                 </h3>
-                <div className="flex space-x-4 text-sm text-gray-500">
+                <div className="flex space-x-4 text-sm text-muted-foreground">
                   <span>${formatNumberWithCommas(modelMetrics[modelName].total_spend, 2)}</span>
                   <span>{modelMetrics[modelName].total_requests.toLocaleString()} requests</span>
                 </div>

@@ -1,8 +1,12 @@
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import { ClassificationRubric } from "./ComplexityRouterConfig";
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
+  async () => await import("../../../tests/mocks/complexityScorerDefaults"),
+);
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ accessToken: "sk-test" }),
@@ -45,7 +49,7 @@ const openEditor = async ({
     />,
   );
   await userEvent.click(screen.getByRole("button", { name: /prompt/i }));
-  await waitFor(() => expect(screen.getByLabelText("Classifier system prompt")).toBeInTheDocument());
+  expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
   return onChange;
 };
 
@@ -83,7 +87,7 @@ describe("ClassifierPromptEditor", () => {
     const onChange = await openEditor();
     const textarea = screen.getByLabelText("Classifier system prompt");
     await userEvent.clear(textarea);
-    await userEvent.type(textarea, "Grade data sensitivity");
+    fireEvent.change(textarea, { target: { value: "Grade data sensitivity" } });
     await userEvent.click(screen.getByRole("button", { name: "Save prompt" }));
     expect(onChange).toHaveBeenCalledWith("Grade data sensitivity");
   });

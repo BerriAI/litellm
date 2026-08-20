@@ -960,3 +960,40 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert result == "translated"
     assert translation_calls["count"] == 1
     assert "config" not in captured
+
+
+def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():
+    """Regional and provider-prefixed Claude 4.8+/5 entries carry
+    ``supports_mid_conversation_system``, but the bare first-party keys
+    (``claude-opus-4-8``) that a plain ``custom_llm_provider="anthropic"``
+    lookup resolves were missed, so that lookup reports the capability as
+    unset. Every mapped first-party entry the fallback rule matches must
+    carry the flag."""
+    import json
+    import os
+    import re
+
+    import litellm
+
+    cost_map_path = os.path.join(
+        os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json"
+    )
+    with open(cost_map_path) as f:
+        cost_map = json.load(f)
+    rules = cost_map["fallback_generalizations"]["rules"]
+    rule_pattern = next(
+        (r["pattern"] for r in rules if r["name"] == "claude-mid-conversation-system"),
+        None,
+    )
+    assert rule_pattern is not None, "claude-mid-conversation-system rule not found in fallback_generalizations"
+    pattern = re.compile(rule_pattern, re.IGNORECASE)
+    missing = [
+        key
+        for key, info in cost_map.items()
+        if isinstance(info, dict)
+        and info.get("litellm_provider") == "anthropic"
+        and "claude" in key
+        and pattern.search(key)
+        and info.get("supports_mid_conversation_system") is not True
+    ]
+    assert missing == []

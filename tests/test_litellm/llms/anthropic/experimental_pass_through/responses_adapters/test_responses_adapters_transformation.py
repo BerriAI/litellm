@@ -22,7 +22,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
-from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.anthropic import (
+    AllAnthropicToolsValues,
+    AnthropicMessagesRequest,
+)
 from litellm.types.llms.openai import ResponseAPIUsage
 
 
@@ -606,11 +609,66 @@ class TestTranslateToolsToResponsesAPI:
             {
                 "type": "function",
                 "name": "get_weather",
+                "strict": False,
                 "description": "Get current weather for a city.",
                 "parameters": {
                     "type": "object",
                     "properties": {"city": {"type": "string"}},
                     "required": ["city"],
+                },
+            }
+        ]
+
+    def test_tool_with_optional_properties_stays_non_strict(self):
+        """Regression: an unset Anthropic `strict` must not become the Responses strict default,
+        which would rewrite `required` to include every optional property."""
+        tools: List[AllAnthropicToolsValues] = [
+            {
+                "name": "search",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "cursor": {"type": "string"},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+
+        result = _ADAPTER.translate_tools_to_responses_api(tools)
+
+        assert result[0]["strict"] is False
+        assert result[0]["parameters"]["required"] == ["query"]
+
+    def test_tool_forwards_explicit_strict_true(self):
+        """An explicit Anthropic `strict: True` still reaches Responses as True."""
+        tools: List[AllAnthropicToolsValues] = [
+            {
+                "name": "search",
+                "strict": True,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+
+        result = _ADAPTER.translate_tools_to_responses_api(tools)
+
+        assert result == [
+            {
+                "type": "function",
+                "name": "search",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
                 },
             }
         ]
@@ -934,6 +992,29 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert len(kwargs["user"]) == 64
 
+    def test_metadata_user_id_mapped_to_prompt_cache_key(self):
+        req = _make_request(metadata={"user_id": "user-42"})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["prompt_cache_key"] == "user-42"
+
+    def test_metadata_user_id_prompt_cache_key_truncated_to_first_64_chars(self):
+        long_id = "".join(str(i % 10) for i in range(100))
+        req = _make_request(metadata={"user_id": long_id})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["prompt_cache_key"] == long_id[:64]
+        assert len(kwargs["prompt_cache_key"]) == 64
+
+    def test_metadata_empty_user_id_sets_no_prompt_cache_key(self):
+        req = _make_request(metadata={"user_id": ""})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["user"] == ""
+        assert "prompt_cache_key" not in kwargs
+
+    def test_metadata_null_user_id_sets_no_prompt_cache_key(self):
+        req = _make_request(metadata={"user_id": None})
+        kwargs = _ADAPTER.translate_request(req)
+        assert "prompt_cache_key" not in kwargs
+
     def test_no_optional_fields_does_not_add_spurious_keys(self):
         req = _make_request()
         kwargs = _ADAPTER.translate_request(req)
@@ -947,6 +1028,7 @@ class TestTranslateRequestBroaderCoverage:
             "text",
             "context_management",
             "user",
+            "prompt_cache_key",
         ):
             assert key not in kwargs, f"unexpected key: {key}"
 
@@ -1355,3 +1437,155 @@ class TestToolResultImages:
         outputs = [item for item in items if item.get("type") == "function_call_output"]
         assert outputs[0]["output"] == "screenshot saved"
         assert self._input_images(items) == []
+
+
+def _contains_key(value, key) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(_contains_key(v, key) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_key(v, key) for v in value)
+    return False
+
+
+class TestPromptCacheBreakpointToResponses:
+    """OpenAI `prompt_cache_breakpoint` markers ride through the /v1/messages -> Responses bridge (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def test_system_with_breakpoint_becomes_leading_developer_message(self):
+        request = _make_request(
+            model="openai/gpt-5.6",
+            system=[
+                {"type": "text", "text": "Be concise."},
+                {"type": "text", "text": "Be helpful.", "prompt_cache_breakpoint": self.EXPLICIT},
+            ],
+        )
+        kwargs = _ADAPTER.translate_request(request)
+        assert "instructions" not in kwargs
+        assert kwargs["input"] == [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "Be concise."},
+                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": self.EXPLICIT},
+                ],
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+        ]
+
+    def test_system_without_breakpoint_still_becomes_instructions(self):
+        request = _make_request(system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}])
+        kwargs = _ADAPTER.translate_request(request)
+        assert kwargs["instructions"] == "Be concise.\nBe helpful."
+        assert kwargs["input"] == [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+        ]
+
+    def test_system_string_still_becomes_instructions(self):
+        kwargs = _ADAPTER.translate_request(_make_request(system="Be concise."))
+        assert kwargs["instructions"] == "Be concise."
+        assert kwargs["input"][0]["role"] == "user"
+
+    def test_system_with_breakpoint_skips_non_text_blocks(self):
+        request = _make_request(
+            system=[
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                {"type": "text", "text": "only", "prompt_cache_breakpoint": self.EXPLICIT},
+            ]
+        )
+        kwargs = _ADAPTER.translate_request(request)
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "only", "prompt_cache_breakpoint": self.EXPLICIT}],
+        }
+
+    def test_user_text_and_image_blocks_carry_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look", "prompt_cache_breakpoint": self.EXPLICIT},
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://example.com/a.png"},
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        },
+                    ],
+                }
+            ]
+        )
+        assert items == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "look", "prompt_cache_breakpoint": self.EXPLICIT},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/a.png",
+                        "prompt_cache_breakpoint": self.EXPLICIT,
+                    },
+                ],
+            }
+        ]
+
+    def test_user_blocks_without_breakpoint_are_unchanged(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [{"role": "user", "content": [{"type": "text", "text": "look"}]}]
+        )
+        assert items == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "look"}]}]
+
+    def test_midturn_system_block_carries_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [{"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": self.EXPLICIT}]}]
+        )
+        assert items == [
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "fix", "prompt_cache_breakpoint": self.EXPLICIT}],
+            }
+        ]
+
+    def test_assistant_and_tool_result_blocks_drop_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "a", "prompt_cache_breakpoint": self.EXPLICIT},
+                        {"type": "tool_use", "id": "toolu_01", "name": "t", "input": {}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01",
+                            "content": "r",
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        }
+                    ],
+                },
+            ]
+        )
+        assert len(items) == 4
+        assert not _contains_key(items, "prompt_cache_breakpoint")
+
+    def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _build_responses_kwargs,
+        )
+
+        kwargs = _build_responses_kwargs(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="openai/gpt-5.6",
+            extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
+        )
+        assert kwargs["prompt_cache_options"] == {"mode": "explicit"}

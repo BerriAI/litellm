@@ -68,18 +68,18 @@ export const getRequestLogsTableColumns = ({
       if (sessionCount <= 1) return <LlmBadge />;
 
       const sessionTypeBadge = (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-full text-[11px] font-medium whitespace-nowrap">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-info/10 text-info border border-info/20 rounded-full text-[11px] font-medium whitespace-nowrap">
           <SparkleIcon />
           <span>{sessionCount}</span>
           {sessionAgentCount > 0 && (
             <>
-              <span className="text-blue-300">·</span>
+              <span className="text-info">·</span>
               <AgentIcon size={10} />
             </>
           )}
           {sessionMcpCount > 0 && (
             <>
-              <span className="text-blue-300">·</span>
+              <span className="text-info">·</span>
               <WrenchIcon />
             </>
           )}
@@ -143,9 +143,9 @@ export const getRequestLogsTableColumns = ({
       return (
         <div className="flex flex-col items-end">
           {spend ? <CellTooltip content={`$${String(spend)}`} trigger={money} /> : money}
-          {isMultiCallSession && <span className="text-[10px] text-gray-400">session total</span>}
+          {isMultiCallSession && <span className="text-[10px] text-muted-foreground">session total</span>}
           {mcpCount > 0 && mcpSpend > 0 && (
-            <span className="text-[10px] text-amber-600">
+            <span className="text-[10px] text-warning">
               incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
             </span>
           )}
@@ -253,7 +253,7 @@ export const getRequestLogsTableColumns = ({
       return (
         <span className="text-sm">
           {String(log.total_tokens || "0")}
-          <span className="text-gray-400 text-xs ml-1">
+          <span className="text-muted-foreground text-xs ml-1">
             ({String(log.prompt_tokens || "0")}+{String(log.completion_tokens || "0")})
           </span>
         </span>
@@ -304,7 +304,7 @@ export const getRequestLogsTableColumns = ({
               </div>
             }
             trigger={
-              <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">
+              <span className="px-2 py-1 bg-muted rounded-full text-xs">
                 {firstTagKey}: {String(firstTagValue)}
                 {remainingCount > 0 && ` +${remainingCount}`}
               </span>
