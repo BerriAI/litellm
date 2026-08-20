@@ -140,10 +140,20 @@ class TestKeyDistinctness:
         second = request(headers={"traceparent": "00-cc-dd-01", "x-api-key": "two"})
         assert canonicalize(first).key == canonicalize(second).key
 
+    def test_query_params_are_identity(self) -> None:
+        first = request("get", "/v1/vector_stores", params={"limit": "100"})
+        second = request("get", "/v1/vector_stores", params={"limit": "10"})
+        assert canonicalize(first).key != canonicalize(second).key
+
     def test_secret_set_versus_unset_stays_distinct(self) -> None:
         with_key = request(body={"api_key": "sk-live-aaaaaaaaaaaaaaaa"})
         without_key = request(body={"api_key": None})
         assert canonicalize(with_key).key != canonicalize(without_key).key
+
+    def test_form_fields_are_identity(self) -> None:
+        first = request("upload", "/v1/files", form={"purpose": "assistants"}, file_sha256="a" * 64)
+        second = request("upload", "/v1/files", form={"purpose": "batch"}, file_sha256="a" * 64)
+        assert canonicalize(first).key != canonicalize(second).key
 
     def test_file_content_is_identity(self) -> None:
         first = request(
