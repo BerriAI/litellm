@@ -20,10 +20,9 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { ClockCircleOutlined } from "@ant-design/icons";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, Clock } from "lucide-react";
 import React, { useCallback, useMemo } from "react";
 import { useForm } from "react-hook-form";
 
@@ -199,7 +198,7 @@ const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
                       placeholder={field.placeholder}
                     />
                     <InputGroupAddon>
-                      <ClockCircleOutlined />
+                      <Clock />
                     </InputGroupAddon>
                   </InputGroup>
                 ) : (

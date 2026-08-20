@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { Table } from "antd";
+import type { ColumnDef } from "@tanstack/react-table";
 import { useFormContext, useWatch } from "react-hook-form";
+import { DataTable } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { antdRules } from "../common_components/antdFormRules";
@@ -136,20 +137,20 @@ const ConditionalPublicModelName: React.FC = () => {
 
   const liteLLMModelTooltipContent = <div>The model name LiteLLM will send to the LLM API</div>;
 
-  const columns = [
+  const columns: ColumnDef<ModelMapping>[] = [
     {
-      title: (
+      id: "public_name",
+      accessorKey: "public_name",
+      header: () => (
         <span className="flex items-center">
           Public Model Name
           <SimpleTooltip content={publicNameTooltipContent} width="500px" />
         </span>
       ),
-      dataIndex: "public_name",
-      key: "public_name",
-      render: (text: string, record: any, index: number) => {
+      cell: ({ row }) => {
         return (
           <Input
-            value={text}
+            value={row.original.public_name}
             onChange={(e) => {
               const newValue = e.target.value;
               const newMappings = [...((form.getValues("model_mappings") as ModelMapping[]) ?? [])];
@@ -175,7 +176,7 @@ const ConditionalPublicModelName: React.FC = () => {
                 finalPublicName = newValue.slice(0, -3); // Remove "-1m" (3 characters)
               }
 
-              newMappings[index].public_name = finalPublicName;
+              newMappings[row.index].public_name = finalPublicName;
               form.setValue("model_mappings", newMappings);
             }}
           />
@@ -183,14 +184,14 @@ const ConditionalPublicModelName: React.FC = () => {
       },
     },
     {
-      title: (
+      id: "litellm_model",
+      accessorKey: "litellm_model",
+      header: () => (
         <span className="flex items-center">
           LiteLLM Model Name
           <SimpleTooltip content={liteLLMModelTooltipContent} width="360px" />
         </span>
       ),
-      dataIndex: "litellm_model",
-      key: "litellm_model",
     },
   ];
 
@@ -208,12 +209,12 @@ const ConditionalPublicModelName: React.FC = () => {
       className="mb-4"
     >
       {(control) => (
-        <Table
+        <DataTable
           key={tableKey} // Add key to force re-render
-          dataSource={control.value as ModelMapping[] | undefined}
+          data={(control.value as ModelMapping[] | undefined) ?? []}
           columns={columns}
-          pagination={false}
-          size="small"
+          getRowId={(row) => row.litellm_model}
+          size="compact"
         />
       )}
     </MountedFormField>

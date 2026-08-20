@@ -197,10 +197,6 @@ const antdSearchInput = (placeholder: HTMLElement): HTMLInputElement => {
   return input;
 };
 
-const openAntdSelect = async (placeholder: HTMLElement) => {
-  await userEvent.click(antdSearchInput(placeholder));
-};
-
 const openSection = async (name: RegExp) => {
   await userEvent.click(await screen.findByRole("button", { name }));
 };
@@ -468,8 +464,9 @@ describe("CreateKey", () => {
       await nameTheKey();
       await openSection(/Optional Settings/i);
 
-      await openAntdSelect(await screen.findByText("Select access groups (optional)"));
-      await userEvent.click(await screen.findByText("Group One"));
+      await userEvent.click(await screen.findByLabelText("Select access groups (optional)"));
+      await userEvent.click(await screen.findByRole("option", { name: /Group One/ }));
+      await userEvent.keyboard("{Escape}");
       await submit();
 
       expect((await createdPayload()).access_group_ids).toStrictEqual(["ag-1"]);

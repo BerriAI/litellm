@@ -9,7 +9,6 @@ import { Select as AntdSelect, Card, Col, Row, Tooltip, Typography } from "antd"
 import { Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
-import type { UploadProps } from "antd/es/upload";
 import React, { useEffect, useMemo, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 import TeamDropdown from "../common_components/team_dropdown";
@@ -44,7 +43,6 @@ interface AddModelFormProps {
   providerModels: string[];
   setProviderModelsFn: (provider: Providers) => void;
   getPlaceholder: (provider: Providers) => string;
-  uploadProps: UploadProps;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
@@ -71,7 +69,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   providerModels,
   setProviderModelsFn,
   getPlaceholder,
-  uploadProps,
   showAdvancedSettings,
   setShowAdvancedSettings,
   teams,
@@ -311,7 +308,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                           <span className="px-4 text-muted-foreground text-sm">OR</span>
                           <div className="grow border-t border-border"></div>
                         </div>
-                        <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+                        <ProviderSpecificFields selectedProvider={selectedProvider} />
                       </>
                     )}
                     <div className="flex items-center my-4">

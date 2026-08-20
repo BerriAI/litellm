@@ -861,10 +861,9 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterPtuEdit(user);
 
-      const to = screen.getAllByPlaceholderText("Select date")[1];
-      await user.clear(to);
-      await user.type(to, "2026-06-01 00:00:00");
-      await user.tab();
+      fireEvent.change(screen.getByLabelText("PTU Effective To (UTC)"), {
+        target: { value: "2026-06-01T00:00:00" },
+      });
 
       await expectBlocked(user, /PTU Effective To must be after PTU Effective From/i);
     });
@@ -907,17 +906,13 @@ describe("ModelInfoView", () => {
       await user.clear(screen.getByPlaceholderText("e.g. 2.00"));
       await user.type(screen.getByPlaceholderText("e.g. 2.00"), "3.5");
 
-      const dates = () => screen.getAllByPlaceholderText("Select date");
-      expect(dates()[0]).toHaveValue("2026-07-01 00:00:00");
-      expect(dates()[1]).toHaveValue("2026-08-01 00:00:00");
+      const from = screen.getByLabelText("PTU Effective From (UTC)");
+      const to = screen.getByLabelText("PTU Effective To (UTC)");
+      expect(from).toHaveValue("2026-07-01T00:00");
+      expect(to).toHaveValue("2026-08-01T00:00");
 
-      const setDate = async (index: number, value: string) => {
-        await user.clear(dates()[index]);
-        await user.type(dates()[index], value);
-        await user.tab();
-      };
-      await setDate(1, "2026-10-03 02:00:00");
-      await setDate(0, "2026-09-02 01:00:00");
+      fireEvent.change(to, { target: { value: "2026-10-03T02:00:00" } });
+      fireEvent.change(from, { target: { value: "2026-09-02T01:00:00" } });
 
       await user.click(screen.getByRole("button", { name: /save changes/i }));
       await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalled());

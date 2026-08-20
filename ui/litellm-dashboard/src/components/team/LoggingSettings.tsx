@@ -3,14 +3,13 @@ import React from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { CogIcon, BanIcon } from "@heroicons/react/outline";
-import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Info, Plus, Trash2 } from "lucide-react";
 import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import NumericalInput from "../shared/numerical_input";
@@ -198,7 +197,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           <BanIcon className="w-5 h-5 text-destructive" />
           <span className="text-base font-semibold text-foreground">Disabled Callbacks</span>
           <SimpleTooltip content="Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.">
-            <InfoCircleOutlined className="text-muted-foreground cursor-help" />
+            <Info className="size-4 text-muted-foreground cursor-help" />
           </SimpleTooltip>
         </div>
 
@@ -244,7 +243,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           <CogIcon className="w-5 h-5 text-foreground" />
           <span className="text-base font-semibold text-foreground">Logging Integrations</span>
           <SimpleTooltip content="Configure callback logging integrations for this team.">
-            <InfoCircleOutlined className="text-muted-foreground cursor-help" />
+            <Info className="size-4 text-muted-foreground cursor-help" />
           </SimpleTooltip>
         </div>
         <Button variant="secondary" onClick={addLoggingConfig} size="sm" type="button">

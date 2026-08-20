@@ -469,6 +469,23 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
         assert "litellm_logging_obj" not in request_data
 
     @pytest.mark.asyncio
+    async def test_recovered_usage_without_cost_clobbers_client_cost_with_zero(self):
+        from litellm.types.utils import Usage
+
+        recovered_usage = Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31)
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"combined_usage_object": recovered_usage}
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "response_cost": 999.0,
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert request_data["combined_usage_object"] is recovered_usage
+        assert request_data["response_cost"] == 0.0
+
+    @pytest.mark.asyncio
     async def test_no_recovered_usage_is_noop(self):
         logging_obj = MagicMock()
         logging_obj.model_call_details = {}
@@ -476,6 +493,111 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
         await self._run(request_data)
         assert "combined_usage_object" not in request_data
         assert "response_cost" not in request_data
+
+
+class TestPostCallFailureHookLiftsStandardLoggingObject:
+    """Failure callbacks read standard_logging_object from request_data, but
+    post_call_failure_hook pops litellm_logging_obj before they run. The hook
+    must lift the logging obj's standard_logging_object onto request_data so
+    failed-request spend logs keep deployment attribution (LIT-5795).
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_lifts_standard_logging_object(self):
+        sl_object = {"model_id": "mid-123", "model_group": "group-x"}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"standard_logging_object": sl_object}
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+        assert request_data["standard_logging_object"] is sl_object
+        assert "litellm_logging_obj" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_logging_obj_value_overwrites_preexisting_key(self):
+        authoritative = {"model_id": "from-logging-obj"}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"standard_logging_object": authoritative}
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "standard_logging_object": {"model_id": "client-injected"},
+            "metadata": {},
+        }
+        await self._run(request_data)
+        assert request_data["standard_logging_object"] is authoritative
+
+    @pytest.mark.asyncio
+    async def test_client_supplied_key_is_stripped_when_logging_obj_supplies_none(self):
+        spoofed = {"model_id": "client-injected"}
+        request_data = {"standard_logging_object": spoofed, "metadata": {}}
+        await self._run(request_data)
+        assert "standard_logging_object" not in request_data
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data_with_obj = {
+            "litellm_logging_obj": logging_obj,
+            "standard_logging_object": spoofed,
+            "metadata": {},
+        }
+        await self._run(request_data_with_obj)
+        assert "standard_logging_object" not in request_data_with_obj
+
+    @pytest.mark.asyncio
+    async def test_pass_through_failure_never_relifts_client_supplied_key(self):
+        from datetime import datetime
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi import HTTPException
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        logging_obj = Logging(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "standard_logging_object": {"model_id": "client-injected"},
+            "metadata": {},
+        }
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=HTTPException(status_code=401, detail="unauthorized"),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            )
+        assert "standard_logging_object" not in request_data
+        assert "standard_logging_object" not in logging_obj.model_call_details
+
+    @pytest.mark.asyncio
+    async def test_no_standard_logging_object_is_noop(self):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+        assert "standard_logging_object" not in request_data
 
 
 class TestPostCallFailureHookEstimatesDispatchedInputTokens:

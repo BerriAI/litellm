@@ -20,7 +20,6 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
-import { EditOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { Badge } from "@/components/ui/badge";
@@ -42,7 +41,7 @@ import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filt
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { toast } from "@/lib/toast";
-import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Plus, Save } from "lucide-react";
+import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Info, Pencil, Plus, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
 import { z } from "zod/v4";
@@ -1119,7 +1118,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   startEditing();
                 }}
               >
-                <EditOutlined className="h-4 w-4" />
+                <Pencil />
                 Edit Settings
               </Button>
             )}
@@ -1809,7 +1808,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <p className="font-medium">
                   Team Member Settings{" "}
                   <SimpleTooltip content="These are limits on individual team members">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </p>
                 <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
@@ -1970,7 +1969,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <span>
                   Team Member Budget (USD){" "}
                   <SimpleTooltip content="Maximum amount in USD this member can spend within this team. This is separate from any global user budget limits">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </span>
               ),
@@ -1985,7 +1984,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <span>
                   Budget Reset Period{" "}
                   <SimpleTooltip content="How often this member's budget resets within the team. Leave unset and the budget never resets.">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </span>
               ),
@@ -1997,7 +1996,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <span>
                   Team Member TPM Limit{" "}
                   <SimpleTooltip content="Maximum tokens per minute this member can use within this team. This is separate from any global user TPM limit">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </span>
               ),
@@ -2012,7 +2011,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <span>
                   Team Member RPM Limit{" "}
                   <SimpleTooltip content="Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </span>
               ),
@@ -2027,7 +2026,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <span>
                   Allowed Models{" "}
                   <SimpleTooltip content="Models this member can access within this team. Leave empty to inherit all team models.">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </span>
               ),
