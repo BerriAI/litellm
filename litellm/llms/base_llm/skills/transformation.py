@@ -3,7 +3,7 @@ Base configuration class for Skills API
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import httpx
 
@@ -15,14 +15,15 @@ from litellm.types.llms.anthropic_skills import (
     ListSkillsResponse,
     Skill,
 )
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.types.router import GenericLiteLLMParams
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
+    GenericLiteLLMParams: TypeAlias = Any
     LiteLLMLoggingObj = Any
 
 

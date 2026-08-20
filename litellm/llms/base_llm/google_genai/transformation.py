@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import httpx
 
@@ -12,14 +12,14 @@ if TYPE_CHECKING:
         GenerateContentResponse,
         ToolConfigDict,
     )
+    from litellm.types.router import GenericLiteLLMParams
 else:
     GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
+    GenericLiteLLMParams: TypeAlias = Any
     LiteLLMLoggingObj = Any
     ToolConfigDict = Any
-
-from litellm.types.router import GenericLiteLLMParams
 
 
 class BaseGoogleGenAIGenerateContentConfig(ABC):

@@ -361,9 +361,8 @@ guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
 reasoning_auto_summary: bool = False
 ### PROMPTS ####
-from litellm.types.prompts.init_prompts import PromptSpec
-
-prompt_name_config_map: Dict[str, PromptSpec] = {}
+# PromptSpec is lazy-loaded via __getattr__
+prompt_name_config_map: Dict[str, "PromptSpec"] = {}  # mutable-ok: registry populated as prompts are registered
 
 ##################
 ### PREVIEW FEATURES ###
@@ -525,9 +524,44 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    _finalize_model_cost_map,  # pyright: ignore[reportPrivateUsage]  # litellm-internal cost-map finalizer
+    get_model_cost_map,
+)
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
+if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+    model_cost = get_model_cost_map(url=model_cost_map_url)
+else:
+    # Populate model_cost from the bundled backup instantly so import never blocks
+    # on network I/O, then refresh from the remote map in a background thread.
+    model_cost = _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
+
+    def _fetch_remote_model_cost_map() -> None:
+        try:
+            # Fetch first: this network call gives `import litellm` on the main
+            # thread time to finish importing litellm.utils below, so importing
+            # utils here never races the main thread's own `from .utils import ...`.
+            new_model_cost: Final = get_model_cost_map(url=model_cost_map_url)
+            from litellm.utils import (
+                _invalidate_model_cost_lowercase_map,  # pyright: ignore[reportPrivateUsage]  # litellm-internal cache invalidation
+                _runtime_registered_model_cost,  # pyright: ignore[reportPrivateUsage]  # litellm-internal runtime pricing store
+            )
+
+            # Overlay runtime register_model pricing onto the fresh catalog so the
+            # refresh only updates prices rather than discarding operator overrides,
+            # which cost tracking would otherwise read as zero. Built locally and
+            # published with a single atomic rebind so concurrent readers (including
+            # a re-import) never observe a dict mutating mid-iteration. tuple() takes
+            # a snapshot so a concurrent register_model cannot resize mid-iteration.
+            for key, overrides in tuple(_runtime_registered_model_cost.items()):
+                new_model_cost[key] = {**new_model_cost.get(key, {}), **overrides}  # mutable-ok: plain model_cost entry
+            globals()["model_cost"] = new_model_cost
+            _invalidate_model_cost_lowercase_map()
+        except Exception as e:
+            verbose_logger.debug("background model cost fetch failed: %s", e)
+
+    threading.Thread(target=_fetch_remote_model_cost_map, daemon=True).start()
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
 cost_margin_config: Dict[
     str, Union[float, Dict[str, float]]
@@ -1257,31 +1291,12 @@ from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
 # (which imports tiktoken) at import time
 
-from .llms.custom_llm import CustomLLM
-from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
-from .llms.deprecated_providers.palm import (
-    PalmConfig,
-)  # here to prevent breaking changes
-from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
-from .llms.gemini.common_utils import GeminiModelInfo
-
-
-from .llms.vertex_ai.vertex_embeddings.transformation import (
-    VertexAITextEmbeddingConfig,
-)
-
-vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
-
-
-from .llms.bedrock.embed.amazon_titan_v2_transformation import (
-    AmazonTitanV2Config,
-)
-from .llms.topaz.common_utils import TopazModelInfo
-
 # OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
 # OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
-from .llms.xai.common_utils import XAIModelInfo
+# The following are lazy-loaded via __getattr__:
+#   CustomLLM, AnthropicModelInfo, AI21ChatConfig, AI21Config, PalmConfig,
+#   AlephAlphaConfig, GeminiModelInfo, VertexAITextEmbeddingConfig,
+#   vertexAITextEmbeddingConfig, AmazonTitanV2Config, TopazModelInfo, XAIModelInfo
 
 # PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
 # All remaining configs are now lazy loaded - see _lazy_imports_registry.py
@@ -1356,9 +1371,8 @@ from .exceptions import (
     LITELLM_EXCEPTION_TYPES,
     MockException,
 )
-from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
-from .router import Router
+
+# BudgetManager, run_server, Router are lazy-loaded via __getattr__
 from .assistants.main import *
 from .batches.main import *
 from .images.main import *
@@ -1370,19 +1384,7 @@ from .responses.main import *
 
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
-from . import interactions
-from .interactions.agents.main import (
-    acreate as acreate_agent,
-    create as create_agent,
-    alist as alist_agents,
-    list as list_agents,
-    aget as aget_agent,
-    get as get_agent,
-    adelete as adelete_agent,
-    delete as delete_agent,
-    alist_versions as alist_agent_versions,
-    list_versions as list_agent_versions,
-)
+# interactions module and agent functions are lazy-loaded via __getattr__
 from .skills.main import (
     create_skill,
     acreate_skill,
@@ -2116,8 +2118,44 @@ if TYPE_CHECKING:
     # Custom logger class (lazy-loaded)
     from litellm.integrations.custom_logger import CustomLogger
 
-    # Datadog LLM observability params (lazy-loaded)
+    # Datadog params (lazy-loaded)
+    from litellm.types.integrations.datadog import DatadogInitParams
     from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
+
+    # Lazy-loaded model info / config classes (deferred from top-level imports)
+    from litellm.budget_manager import BudgetManager
+    from litellm.llms.ai21.chat.transformation import AI21ChatConfig
+    from litellm.llms.ai21.chat.transformation import AI21ChatConfig as AI21Config
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.llms.bedrock.embed.amazon_titan_v2_transformation import (
+        AmazonTitanV2Config,
+    )
+    from litellm.llms.custom_llm import CustomLLM
+    from litellm.llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
+    from litellm.llms.deprecated_providers.palm import PalmConfig
+    from litellm.llms.gemini.common_utils import GeminiModelInfo
+    from litellm.llms.topaz.common_utils import TopazModelInfo
+    from litellm.llms.vertex_ai.vertex_embeddings.transformation import (
+        VertexAITextEmbeddingConfig,
+    )
+    from litellm.llms.xai.common_utils import XAIModelInfo
+    from litellm.proxy.proxy_cli import run_server
+    from litellm.router import Router
+    from litellm.types.prompts.init_prompts import PromptSpec
+
+    # Agent functions (lazy-loaded from interactions.agents.main)
+    from litellm.interactions.agents.main import acreate as acreate_agent
+    from litellm.interactions.agents.main import adelete as adelete_agent
+    from litellm.interactions.agents.main import aget as aget_agent
+    from litellm.interactions.agents.main import alist as alist_agents
+    from litellm.interactions.agents.main import alist_versions as alist_agent_versions
+    from litellm.interactions.agents.main import create as create_agent
+    from litellm.interactions.agents.main import delete as delete_agent
+    from litellm.interactions.agents.main import get as get_agent
+    from litellm.interactions.agents.main import list as list_agents
+    from litellm.interactions.agents.main import list_versions as list_agent_versions
+
+    vertexAITextEmbeddingConfig: VertexAITextEmbeddingConfig
 
     # Logging callback manager class and instance (lazy-loaded)
     from litellm.litellm_core_utils.logging_callback_manager import (
@@ -2136,6 +2174,49 @@ if TYPE_CHECKING:
 
 # Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
+
+# Lazy-loaded model info / config classes (deferred from top-level imports)
+_lazy_class_imports = {  # mutable-ok: static lazy-import lookup table, never mutated after definition
+    "CustomLLM": ("litellm.llms.custom_llm", "CustomLLM"),
+    "AnthropicModelInfo": (
+        "litellm.llms.anthropic.common_utils",
+        "AnthropicModelInfo",
+    ),
+    "AI21ChatConfig": ("litellm.llms.ai21.chat.transformation", "AI21ChatConfig"),
+    "AI21Config": ("litellm.llms.ai21.chat.transformation", "AI21ChatConfig"),
+    "PalmConfig": ("litellm.llms.deprecated_providers.palm", "PalmConfig"),
+    "AlephAlphaConfig": (
+        "litellm.llms.deprecated_providers.aleph_alpha",
+        "AlephAlphaConfig",
+    ),
+    "GeminiModelInfo": ("litellm.llms.gemini.common_utils", "GeminiModelInfo"),
+    "VertexAITextEmbeddingConfig": (
+        "litellm.llms.vertex_ai.vertex_embeddings.transformation",
+        "VertexAITextEmbeddingConfig",
+    ),
+    "AmazonTitanV2Config": (
+        "litellm.llms.bedrock.embed.amazon_titan_v2_transformation",
+        "AmazonTitanV2Config",
+    ),
+    "TopazModelInfo": ("litellm.llms.topaz.common_utils", "TopazModelInfo"),
+    "XAIModelInfo": ("litellm.llms.xai.common_utils", "XAIModelInfo"),
+    "DatadogInitParams": ("litellm.types.integrations.datadog", "DatadogInitParams"),
+    "PromptSpec": ("litellm.types.prompts.init_prompts", "PromptSpec"),
+    "BudgetManager": ("litellm.budget_manager", "BudgetManager"),
+    "Router": ("litellm.router", "Router"),
+    "run_server": ("litellm.proxy.proxy_cli", "run_server"),
+    # Agent functions (lazy-loaded from interactions.agents.main)
+    "acreate_agent": ("litellm.interactions.agents.main", "acreate"),
+    "create_agent": ("litellm.interactions.agents.main", "create"),
+    "alist_agents": ("litellm.interactions.agents.main", "alist"),
+    "list_agents": ("litellm.interactions.agents.main", "list"),
+    "aget_agent": ("litellm.interactions.agents.main", "aget"),
+    "get_agent": ("litellm.interactions.agents.main", "get"),
+    "adelete_agent": ("litellm.interactions.agents.main", "adelete"),
+    "delete_agent": ("litellm.interactions.agents.main", "delete"),
+    "alist_agent_versions": ("litellm.interactions.agents.main", "alist_versions"),
+    "list_agent_versions": ("litellm.interactions.agents.main", "list_versions"),
+}
 
 # Eager loading for backwards compatibility with VCR and other HTTP recording tools
 # When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
@@ -2159,6 +2240,38 @@ def __getattr__(name: str) -> Any:
 
         register_async_client_cleanup()
         _async_client_cleanup_registered = True
+
+    # Lazy load interactions module
+    if name == "interactions":
+        import importlib
+
+        _interactions: Final = importlib.import_module(".interactions", __name__)
+        globals()["interactions"] = _interactions
+        return _interactions
+
+    # Lazy load router submodule
+    if name == "router":
+        import importlib
+
+        _router: Final = importlib.import_module(".router", __name__)
+        globals()["router"] = _router
+        return _router
+
+    if name in _lazy_class_imports:
+        mod_path, attr = _lazy_class_imports[name]
+        import importlib
+
+        mod: Final = importlib.import_module(mod_path)
+        val: Final = getattr(mod, attr)
+        globals()[name] = val
+        return val
+
+    # Lazy-loaded config instance
+    if name == "vertexAITextEmbeddingConfig":
+        cls: Final = __getattr__("VertexAITextEmbeddingConfig")
+        instance: Final = cls()
+        globals()["vertexAITextEmbeddingConfig"] = instance
+        return instance
 
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry

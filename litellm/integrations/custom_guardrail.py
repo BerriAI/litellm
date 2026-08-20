@@ -31,11 +31,6 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
-try:
-    from fastapi.exceptions import HTTPException
-except ImportError:
-    HTTPException = None
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 dc: Final = DualCache()
@@ -1097,11 +1092,14 @@ class CustomGuardrail(CustomLogger):
             ),
         ):
             return True
-        if (
-            HTTPException is not None
-            and isinstance(e, HTTPException)
-            and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES
-        ):
+        # Imported lazily so `import litellm` never pulls in FastAPI. isinstance,
+        # not a name/module check, so subclasses defined by guardrail providers
+        # (e.g. NomaBlockedMessage) are still recognised as deliberate blocks.
+        try:
+            from fastapi.exceptions import HTTPException
+        except ImportError:
+            return False
+        if isinstance(e, HTTPException) and getattr(e, "status_code", None) in _GUARDRAIL_BLOCK_STATUS_CODES:
             return True
         return False
 

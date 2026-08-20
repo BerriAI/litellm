@@ -1,10 +1,9 @@
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, TypeAlias
 
 import httpx
 
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     VECTOR_STORE_OPENAI_PARAMS,
     BaseVectorStoreAuthCredentials,
@@ -17,12 +16,14 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.types.router import GenericLiteLLMParams
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseLLMException = _BaseLLMException
 else:
+    GenericLiteLLMParams: TypeAlias = Any
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
 
