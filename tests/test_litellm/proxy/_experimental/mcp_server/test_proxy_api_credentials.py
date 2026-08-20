@@ -74,16 +74,26 @@ async def test_mint_refuses_a_user_without_a_role(load_user, fetch_teams):
 
 
 @pytest.mark.asyncio
-async def test_mint_without_a_chosen_team_never_picks_one_for_a_team_member(load_user, fetch_teams):
+async def test_mint_refuses_a_teamless_grant_for_a_team_member(load_user, fetch_teams):
     """The consent page is the only place a team gets chosen, so a grant sealed without one
-    stays unscoped on every redemption and refresh instead of drifting onto the first team."""
+    is refused for a user with teams instead of minting an unscoped credential or drifting
+    onto the first team, on redemption and on every refresh alike."""
+    assert await mint_proxy_credential("u1", None) == "team_required"
+    load_user.assert_awaited_once_with("u1")
+    fetch_teams.assert_awaited_once_with(ANY, ["team-a", "team-b"])
+
+
+@pytest.mark.asyncio
+async def test_mint_for_a_member_of_only_deleted_teams_is_unscoped(load_user, fetch_teams):
+    """Memberships whose team rows are gone offer nothing to pick, so they never lock the
+    user out of signing in."""
+    load_user.return_value = _user(teams=["team-gone"])
+    fetch_teams.return_value = ()
     minted = await mint_proxy_credential("u1", None)
     assert isinstance(minted, MintedProxyCredential)
     assert minted.user_id == "u1"
     assert minted.team_id is None
     assert minted.expires_in == CLI_JWT_EXPIRATION_HOURS * 3600
-    load_user.assert_awaited_once_with("u1")
-    fetch_teams.assert_not_awaited()
     decoded = _decoded(minted)
     assert decoded.user_id == "u1"
     assert decoded.team_id is None
