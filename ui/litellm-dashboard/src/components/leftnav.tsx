@@ -435,7 +435,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
-  const { logoUrl } = useTheme();
+  const { logoUrl, logoUrlDark } = useTheme();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const logout = useLogout(accessToken);
 
@@ -605,7 +605,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   const logoSrc = logoUrl || `${baseUrl}/get_image`;
-  const darkLogoSrc = logoUrl || `${baseUrl}/get_image?theme=dark`;
+  const darkLogoSrc = logoUrlDark || logoUrl || `${baseUrl}/get_image?theme=dark`;
 
   return (
     <Sidebar collapsed={collapsed}>
