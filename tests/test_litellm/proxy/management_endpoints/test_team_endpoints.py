@@ -1219,6 +1219,89 @@ async def test_validate_team_member_add_permissions_non_admin():
         assert "not proxy admin OR team admin" in str(exc_info.value.detail)
 
 
+@pytest.mark.asyncio
+async def test_team_member_add_blocked_for_team_admin_when_lockdown_enabled():
+    """/team/member_add must reject a team admin directly, not just hide the UI button."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _validate_team_member_add_permissions,
+    )
+
+    team_admin = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "scim-team"
+    team.members_with_roles = [Member(user_id="team-admin-user", role="admin")]
+    team.organization_id = None
+
+    with patch.dict(
+        "litellm.proxy.proxy_server.general_settings",
+        {"disable_team_admin_add_team_user": True},
+        clear=True,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_team_member_add_permissions(
+                user_api_key_dict=team_admin,
+                complete_team_data=team,
+                data=_make_team_member_add_request(
+                    member_user_id="new-user", role="user"
+                ),
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "adding members to" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_blocked_for_team_admin_when_lockdown_enabled(
+    mock_db_client,
+):
+    """/team/member_delete must reject a team admin directly, not just hide the UI button."""
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "scim-team"
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": "team-admin-user", "user_email": None, "role": "admin"},
+            {"user_id": "user@example.com", "user_email": None, "role": "user"},
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    team_admin = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with patch.dict(
+        "litellm.proxy.proxy_server.general_settings",
+        {"disable_team_admin_delete_team_user": True},
+        clear=True,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await team_member_delete(
+                data=TeamMemberDeleteRequest(
+                    team_id=test_team_id, user_id="user@example.com"
+                ),
+                user_api_key_dict=team_admin,
+            )
+
+    assert exc_info.value.status_code == 403
+    mock_db_client.db.litellm_teamtable.update.assert_not_awaited()
+
+
 # ── VERIA-56 regression tests for _is_available_team self-join enforcement ───
 
 

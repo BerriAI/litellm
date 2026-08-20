@@ -370,6 +370,60 @@ describe("TeamMembersComponent", () => {
     expect(screen.getAllByTestId("edit-member")).toHaveLength(2);
   });
 
+  it("should hide Add Member button when disable_team_admin_add_team_user is true and user is team admin", () => {
+    vi.mocked(isProxyAdminRole).mockReturnValue(false);
+    vi.mocked(isUserTeamAdminForSingleTeam).mockReturnValue(true);
+    vi.mocked(useUISettings).mockReturnValue({
+      data: { values: { disable_team_admin_add_team_user: true } },
+      isLoading: false,
+      isError: false,
+      error: null,
+      isSuccess: true,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={true}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /add member/i })).not.toBeInTheDocument();
+  });
+
+  it("should show Add Member button for proxy admin when disable_team_admin_add_team_user is true", () => {
+    vi.mocked(isProxyAdminRole).mockReturnValue(true);
+    vi.mocked(isUserTeamAdminForSingleTeam).mockReturnValue(true);
+    vi.mocked(useUISettings).mockReturnValue({
+      data: { values: { disable_team_admin_add_team_user: true } },
+      isLoading: false,
+      isError: false,
+      error: null,
+      isSuccess: true,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={true}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /add member/i })).toBeInTheDocument();
+  });
+
   it("should show delete button for proxy admin when canEditTeam is true", () => {
     vi.mocked(isProxyAdminRole).mockReturnValue(true);
     vi.mocked(isUserTeamAdminForSingleTeam).mockReturnValue(false);

@@ -207,6 +207,11 @@ class UISettings(BaseModel):
         description="Prevents Team Admins from deleting users from the teams they manage. Useful for SCIM provisioning where team membership is defined externally.",
     )
 
+    disable_team_admin_add_team_user: bool = Field(
+        default=False,
+        description="Prevents Team Admins from adding users to the teams they manage. Useful for SCIM provisioning where team membership is defined externally.",
+    )
+
     enabled_ui_pages_internal_users: list[str] | None = Field(
         default=None,
         description="List of page keys that internal users (non-admins) can see in the UI sidebar. If not set, all pages are visible based on role permissions.",
@@ -293,6 +298,7 @@ class UISettingsResponse(SettingsResponse):
 ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",
+    "disable_team_admin_add_team_user",
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
     "allow_public_health_readiness_details",
@@ -332,6 +338,8 @@ def _derived_ui_setting_value(key: str) -> object:
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
+    "disable_team_admin_delete_team_user",
+    "disable_team_admin_add_team_user",
     "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",

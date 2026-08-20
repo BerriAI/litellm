@@ -1,5 +1,7 @@
 import math
-from typing import TYPE_CHECKING, Any, Final, Optional, Union
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
@@ -173,6 +175,59 @@ async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_ob
             return True
 
     return False
+
+
+TeamMembershipAction = Literal["add", "delete"]
+
+_TEAM_MEMBERSHIP_LOCKDOWN_SETTINGS: Final[Mapping[TeamMembershipAction, str]] = MappingProxyType(
+    {
+        "add": "disable_team_admin_add_team_user",
+        "delete": "disable_team_admin_delete_team_user",
+    }
+)
+
+_TEAM_MEMBERSHIP_ACTION_DESCRIPTIONS: Final[Mapping[TeamMembershipAction, str]] = MappingProxyType(
+    {
+        "add": "adding members to",
+        "delete": "removing members from",
+    }
+)
+
+
+async def check_team_admin_can_manage_team_membership(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_obj: LiteLLM_TeamTable,
+    action: TeamMembershipAction,
+) -> None:
+    """
+    Raise HTTP 403 when the caller's only authority over the team is team admin and the
+    matching lockdown setting is on, so deployments that provision membership externally
+    (e.g. SCIM) keep the roster authoritative. Proxy and org admins stay unrestricted.
+    """
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+    ):
+        return
+
+    from litellm.proxy.proxy_server import general_settings
+
+    if not general_settings.get(_TEAM_MEMBERSHIP_LOCKDOWN_SETTINGS[action], False):
+        return
+
+    if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return
+
+    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"Team admins are blocked from {_TEAM_MEMBERSHIP_ACTION_DESCRIPTIONS[action]} "
+            f"team_id={team_obj.team_id}. Contact your proxy admin."
+        ),
+    )
 
 
 def _team_member_has_permission(

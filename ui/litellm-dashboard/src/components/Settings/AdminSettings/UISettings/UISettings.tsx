@@ -53,6 +53,7 @@ export default function UISettings() {
   const schema = data?.field_schema;
   const property = schema?.properties?.disable_model_add_for_internal_users;
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
+  const disableTeamAdminAddProperty = schema?.properties?.disable_team_admin_add_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
   const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
@@ -88,6 +89,20 @@ export default function UISettings() {
   const handleToggleTeamAdminDelete = (checked: boolean) => {
     updateSettings(
       { disable_team_admin_delete_team_user: checked },
+      {
+        onSuccess: () => {
+          toast.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          toast.fromError(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleTeamAdminAdd = (checked: boolean) => {
+    updateSettings(
+      { disable_team_admin_add_team_user: checked },
       {
         onSuccess: () => {
           toast.success("UI settings updated successfully");
@@ -310,6 +325,14 @@ export default function UISettings() {
               ariaLabel={disableTeamAdminDeleteProperty?.description ?? "Disable team admin delete team user"}
               label="Disable team admin delete team user"
               description={disableTeamAdminDeleteProperty?.description}
+            />
+            <SettingRow
+              checked={Boolean(values.disable_team_admin_add_team_user)}
+              disabled={isUpdating}
+              onCheckedChange={handleToggleTeamAdminAdd}
+              ariaLabel={disableTeamAdminAddProperty?.description ?? "Disable team admin add team user"}
+              label="Disable team admin add team user"
+              description={disableTeamAdminAddProperty?.description}
             />
             <SettingRow
               checked={Boolean(values.require_auth_for_public_ai_hub)}

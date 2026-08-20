@@ -81,8 +81,10 @@ export default function TeamMemberTab({
   const { data: uiSettingsData } = useUISettings();
   const { userId, userRole } = useAuthorized();
   const disableTeamAdminDeleteTeamUser = Boolean(uiSettingsData?.values?.disable_team_admin_delete_team_user);
+  const disableTeamAdminAddTeamUser = Boolean(uiSettingsData?.values?.disable_team_admin_add_team_user);
   const isUserTeamAdmin = isUserTeamAdminForSingleTeam(teamData.team_info.members_with_roles, userId || "");
   const isProxyAdmin = isProxyAdminRole(userRole || "");
+  const canAddMembers = isProxyAdmin || !isUserTeamAdmin || !disableTeamAdminAddTeamUser;
 
   const getUserAllowedModels = (userId: string | null): string[] | null => {
     if (!userId) return null;
@@ -201,7 +203,7 @@ export default function TeamMemberTab({
         setIsEditMemberModalVisible(true);
       }}
       onDelete={handleMemberDelete}
-      onAddMember={() => setIsAddMemberModalVisible(true)}
+      onAddMember={canAddMembers ? () => setIsAddMemberModalVisible(true) : undefined}
       roleColumnTitle="Team Role"
       roleTooltip="This role applies only to this team and is independent from the user's proxy-level role."
       extraColumns={extraColumns}

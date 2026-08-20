@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.proxy._types import (
     Member,
@@ -29,6 +30,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     _user_has_admin_view,
     admin_can_invite_user,
+    check_team_admin_can_manage_team_membership,
 )
 
 
@@ -977,3 +979,103 @@ class TestUpdateMetadataFieldMove:
             _update_metadata_fields(updated_kv)
         assert "guardrails" not in updated_kv
         assert updated_kv["metadata"]["guardrails"] == ["g1"]
+
+
+class TestCheckTeamAdminCanManageTeamMembership:
+    """
+    Backend enforcement of the SCIM membership lockdown flags. These must hold for a
+    direct API call, not just for the dashboard buttons.
+    """
+
+    _GS_PATH = "litellm.proxy.proxy_server.general_settings"
+    _CASES = [
+        ("add", "disable_team_admin_add_team_user"),
+        ("delete", "disable_team_admin_delete_team_user"),
+    ]
+
+    @staticmethod
+    def _team(organization_id: str | None = None) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(
+            team_id="team-1",
+            organization_id=organization_id,
+            members_with_roles=[
+                Member(user_id="team-admin-user", role="admin"),
+                Member(user_id="member-user", role="user"),
+            ],
+        )
+
+    @pytest.mark.parametrize("action, flag", _CASES)
+    @pytest.mark.asyncio
+    async def test_team_admin_blocked_when_flag_on(self, action, flag):
+        user = UserAPIKeyAuth(
+            user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value
+        )
+        with patch.dict(self._GS_PATH, {flag: True}, clear=True):
+            with pytest.raises(HTTPException) as exc_info:
+                await check_team_admin_can_manage_team_membership(
+                    user_api_key_dict=user, team_obj=self._team(), action=action
+                )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.parametrize("action, flag", _CASES)
+    @pytest.mark.asyncio
+    async def test_team_admin_allowed_when_flag_off(self, action, flag):
+        user = UserAPIKeyAuth(
+            user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value
+        )
+        with patch.dict(self._GS_PATH, {flag: False}, clear=True):
+            await check_team_admin_can_manage_team_membership(
+                user_api_key_dict=user, team_obj=self._team(), action=action
+            )
+
+    @pytest.mark.parametrize("action, flag", _CASES)
+    @pytest.mark.asyncio
+    async def test_flag_only_gates_its_own_action(self, action, flag):
+        other_action = "delete" if action == "add" else "add"
+        user = UserAPIKeyAuth(
+            user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value
+        )
+        with patch.dict(self._GS_PATH, {flag: True}, clear=True):
+            await check_team_admin_can_manage_team_membership(
+                user_api_key_dict=user, team_obj=self._team(), action=other_action
+            )
+
+    @pytest.mark.parametrize("action, flag", _CASES)
+    @pytest.mark.asyncio
+    async def test_proxy_admin_not_blocked(self, action, flag):
+        user = UserAPIKeyAuth(
+            user_id="team-admin-user", user_role=LitellmUserRoles.PROXY_ADMIN.value
+        )
+        with patch.dict(self._GS_PATH, {flag: True}, clear=True):
+            await check_team_admin_can_manage_team_membership(
+                user_api_key_dict=user, team_obj=self._team(), action=action
+            )
+
+    @pytest.mark.parametrize("action, flag", _CASES)
+    @pytest.mark.asyncio
+    async def test_caller_without_team_admin_role_passes_through(self, action, flag):
+        """Other callers are gated by the endpoint's own authorization checks."""
+        user = UserAPIKeyAuth(
+            user_id="someone-else", user_role=LitellmUserRoles.INTERNAL_USER.value
+        )
+        with patch.dict(self._GS_PATH, {flag: True}, clear=True):
+            await check_team_admin_can_manage_team_membership(
+                user_api_key_dict=user, team_obj=self._team(), action=action
+            )
+
+    @pytest.mark.parametrize("action, flag", _CASES)
+    @pytest.mark.asyncio
+    async def test_org_admin_for_team_not_blocked(self, action, flag):
+        user = UserAPIKeyAuth(
+            user_id="team-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value
+        )
+        with patch.dict(self._GS_PATH, {flag: True}, clear=True):
+            with patch(
+                "litellm.proxy.management_endpoints.common_utils._is_user_org_admin_for_team",
+                new=AsyncMock(return_value=True),
+            ):
+                await check_team_admin_can_manage_team_membership(
+                    user_api_key_dict=user,
+                    team_obj=self._team(organization_id="org-1"),
+                    action=action,
+                )

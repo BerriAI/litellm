@@ -102,6 +102,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
+    check_team_admin_can_manage_team_membership,
     validate_budget_duration,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
@@ -2494,6 +2495,11 @@ async def _validate_team_member_add_permissions(
     if getattr(user_api_key_dict, "user_role", None) == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data):
+        await check_team_admin_can_manage_team_membership(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=complete_team_data,
+            action="add",
+        )
         return
     if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data):
         return
@@ -3245,6 +3251,12 @@ async def team_member_delete(
                 )
             },
         )
+
+    await check_team_admin_can_manage_team_membership(
+        user_api_key_dict=user_api_key_dict,
+        team_obj=existing_team_row,
+        action="delete",
+    )
 
     ## DELETE MEMBER FROM TEAM
     removed_team_members, new_team_members = _cleanup_members_with_roles(
