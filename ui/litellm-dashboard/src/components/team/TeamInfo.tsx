@@ -64,7 +64,6 @@ import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMeta
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
-import DurationSelect from "../common_components/DurationSelect";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
@@ -169,7 +168,7 @@ export interface TeamData {
     object_permission?: ObjectPermission | null;
     team_member_budget_table: {
       max_budget: number;
-      budget_duration: string;
+      budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
     } | null;
@@ -1256,7 +1255,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           name="team_member_budget_duration"
                           label="Default Budget Duration"
                         >
-                          {({ value, onChange }) => <DurationSelect value={value ?? undefined} onChange={onChange} />}
+                          {({ id, value, onChange }) => (
+                            <BudgetDurationDropdown
+                              id={id}
+                              placeholder="Never resets"
+                              value={value}
+                              onChange={(next) => onChange(next ?? null)}
+                            />
+                          )}
                         </FormField>
                         <FormField
                           control={form.control}

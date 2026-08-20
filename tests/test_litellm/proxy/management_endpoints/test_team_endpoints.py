@@ -2366,6 +2366,7 @@ async def test_update_team_team_member_budget_not_passed_to_db(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            explicitly_set_fields=frozenset(),
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -2739,6 +2740,142 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
 
 @pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_clears_duration_kept_budget():
+    """
+    A request that keeps team_member_budget but explicitly nulls
+    team_member_budget_duration must clear the reset period and its reset time.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {"team_member_budget_id": "existing_budget_123"}
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "existing_budget_123"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        mock_update_budget.return_value = mock_budget_response
+
+        await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv={
+                "team_id": "test_team_id",
+                "team_member_budget": 100.0,
+                "team_member_budget_duration": None,
+            },
+            team_member_budget=100.0,
+            team_member_budget_duration=None,
+            explicitly_set_fields={
+                "team_member_budget",
+                "team_member_budget_duration",
+            },
+        )
+
+    budget_request = mock_update_budget.call_args.kwargs["budget_obj"]
+    assert budget_request.max_budget == 100.0
+    assert "budget_duration" in budget_request.model_fields_set
+    assert budget_request.budget_duration is None
+    assert "budget_reset_at" in budget_request.model_fields_set
+    assert budget_request.budget_reset_at is None
+    assert "rpm_limit" not in budget_request.model_fields_set
+    assert "tpm_limit" not in budget_request.model_fields_set
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_explicit_null_duration_does_not_inherit_team_duration():
+    """
+    A first-time member budget with an explicitly null duration must never
+    reset, even when the team itself has a reset period.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {}
+    team_table.team_alias = "Test Team"
+    team_table.budget_duration = "30d"
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "new_budget_456"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        new_callable=AsyncMock,
+    ) as mock_new_budget:
+        mock_new_budget.return_value = mock_budget_response
+
+        await TeamMemberBudgetHandler.create_team_member_budget_table(
+            data=team_table,
+            new_team_data_json={"team_id": "test_team_id"},
+            user_api_key_dict=mock_user_api_key_dict,
+            team_member_budget=100.0,
+            team_member_budget_duration=None,
+            explicitly_set_fields={
+                "team_member_budget",
+                "team_member_budget_duration",
+            },
+        )
+
+    budget_request = mock_new_budget.call_args.kwargs["budget_obj"]
+    assert budget_request.max_budget == 100.0
+    assert budget_request.budget_duration is None
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_inherits_team_duration_when_duration_omitted():
+    """
+    Omitting team_member_budget_duration keeps the existing inheritance of the
+    team's own reset period.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {}
+    team_table.team_alias = "Test Team"
+    team_table.budget_duration = "30d"
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "new_budget_789"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        new_callable=AsyncMock,
+    ) as mock_new_budget:
+        mock_new_budget.return_value = mock_budget_response
+
+        await TeamMemberBudgetHandler.create_team_member_budget_table(
+            data=team_table,
+            new_team_data_json={"team_id": "test_team_id"},
+            user_api_key_dict=mock_user_api_key_dict,
+            team_member_budget=100.0,
+            explicitly_set_fields={"team_member_budget"},
+        )
+
+    assert mock_new_budget.call_args.kwargs["budget_obj"].budget_duration == "30d"
+
+
+@pytest.mark.asyncio
 async def test_update_team_with_team_member_budget_duration(
     disable_audit_logging_for_mocked_team,
 ):
@@ -2799,6 +2936,7 @@ async def test_update_team_with_team_member_budget_duration(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            explicitly_set_fields=frozenset(),
         ):
             result_kv = updated_kv.copy()
             result_kv.pop("team_member_budget", None)
