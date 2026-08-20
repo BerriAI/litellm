@@ -65,6 +65,20 @@ _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.Cont
 )
 
 
+def suppress_guardrail_information_record() -> None:
+    """Skip the automatic ``StandardLoggingGuardrailInformation`` entry for this call.
+
+    ``log_guardrail_information`` clears the flag before invoking the guardrail and
+    skips its own append when the flag is set afterwards, so this is the supported
+    way for a guardrail to opt one invocation out of recording (for instance a
+    guardrail configured to record once per session rather than per call).
+
+    Call it only on a success path: the decorator's exception branch reads the same
+    flag, so setting it before a raise also drops the error entry.
+    """
+    _guardrail_self_recorded.set(True)
+
+
 def _strict_guardrail_modes_enabled() -> bool:
     """Whether guardrail-mode validation raises (default) or logs a warning.
 

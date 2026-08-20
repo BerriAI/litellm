@@ -5,6 +5,10 @@ from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
     iter_message_text,
+    iter_role_text,
+    map_content_text,
+    map_messages_image_urls,
+    map_messages_text,
     walk_user_text,
 )
 
@@ -563,3 +567,83 @@ def test_build_inspection_messages_custom_tool_call_output():
     }
     msgs = build_inspection_messages(data)
     assert any("custom-tool-leak" in m["content"] for m in msgs)
+
+
+# ── map_content_text / map_messages_text / map_messages_image_urls ───────────────
+
+
+def test_map_content_text_transforms_string_and_text_parts_only():
+    content = [
+        {"type": "text", "text": "keep me"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+        "bare fragment",
+    ]
+    assert map_content_text(content, lambda t: t.upper()) == [
+        {"type": "text", "text": "KEEP ME"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+        "BARE FRAGMENT",
+    ]
+
+
+def test_map_content_text_does_not_mutate_the_input():
+    content = [{"type": "text", "text": "original"}]
+    map_content_text(content, lambda t: "changed")
+    assert content == [{"type": "text", "text": "original"}]
+
+
+def test_map_messages_text_preserves_every_other_key():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "answer",
+            "tool_calls": [{"id": "call_1", "function": {"name": "run", "arguments": "{}"}}],
+        }
+    ]
+    mapped = map_messages_text(messages, lambda t: t.upper())
+    assert mapped[0]["role"] == "assistant"
+    assert mapped[0]["content"] == "ANSWER"
+    assert mapped[0]["tool_calls"] == messages[0]["tool_calls"]
+
+
+def test_map_messages_image_urls_covers_both_part_shapes():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA", "detail": "low"}},
+                {"type": "image_url", "image_url": "data:image/png;base64,BBB"},
+                {"type": "input_image", "image_url": "data:image/png;base64,CCC"},
+            ],
+        }
+    ]
+    mapped = map_messages_image_urls(messages, lambda _: "[omitted]")
+    content = mapped[0]["content"]
+    assert content[0] == {"type": "text", "text": "describe"}
+    assert content[1] == {"type": "image_url", "image_url": {"url": "[omitted]", "detail": "low"}}
+    assert content[2] == {"type": "image_url", "image_url": "[omitted]"}
+    assert content[3] == {"type": "input_image", "image_url": "[omitted]"}
+
+
+def test_map_messages_image_urls_leaves_string_content_alone():
+    messages = [{"role": "user", "content": "just text"}]
+    assert map_messages_image_urls(messages, lambda _: "[omitted]") == messages
+
+
+# ── iter_role_text ──────────────────────────────────────────────────────────────
+
+
+def test_iter_role_text_selects_only_the_requested_roles():
+    messages = [
+        {"role": "system", "content": "system rules"},
+        {"role": "developer", "content": [{"type": "text", "text": "developer rules"}]},
+        {"role": "user", "content": "user text"},
+    ]
+    assert list(iter_role_text(messages, {"system", "developer"})) == [
+        "system rules",
+        "developer rules",
+    ]
+
+
+def test_iter_role_text_ignores_non_mapping_entries():
+    assert list(iter_role_text(["not a message", {"role": "system", "content": "ok"}], {"system"})) == ["ok"]

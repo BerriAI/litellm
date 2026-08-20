@@ -2288,6 +2288,7 @@ async def apply_guardrail(
         executor as thread_pool_executor,
     )
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     from litellm.proxy.proxy_server import (
         general_settings,
         proxy_config,
@@ -2336,9 +2337,16 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
+        # The caller supplies this metadata, so the authenticated identity is
+        # layered on top of it: a guardrail keyed on user_api_key_alias or
+        # user_api_key_team_id (exemptions, per-tenant behavior) must not be
+        # steerable by what the request body claims to be.
+        authenticated_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict
+        )
         request_data: Final[dict] = {
             **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
+            "metadata": {**(request.metadata or {}), **(authenticated_metadata or {})},
         }
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
