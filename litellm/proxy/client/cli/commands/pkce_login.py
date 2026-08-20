@@ -106,6 +106,7 @@ class Http(Protocol):
         data: Mapping[str, str] | None = None,
         json: Mapping[str, object] | None = None,
         timeout: float,
+        allow_redirects: bool,
     ) -> requests.Response: ...
 
 
@@ -256,6 +257,17 @@ def _form(**fields: str) -> Mapping[str, str]:
     return MappingProxyType(fields)
 
 
+def _refused_redirect(request_name: str, response: requests.Response) -> PkceFailure | None:
+    """Every POST to the proxy is sent with ``allow_redirects=False``: a 307 or 308 would make
+    ``requests`` replay the form, code and verifier or refresh token included, wherever ``Location``
+    points, past the origin check discovery passed."""
+    if not 300 <= response.status_code < 400:
+        return None
+    return PkceFailure(
+        f"{request_name} redirected to {response.headers.get('Location', 'another address')}; refusing to follow it"
+    )
+
+
 def register_client(contract: CliAuthContract, redirect_uri: str, http: Http) -> str | PkceFailure:
     registration: Final[_ClientRegistration] = {
         "client_name": _CLIENT_NAME,
@@ -265,9 +277,14 @@ def register_client(contract: CliAuthContract, redirect_uri: str, http: Http) ->
         "token_endpoint_auth_method": "none",
     }
     try:
-        response: Final = http.post(contract.registration_endpoint, json=registration, timeout=_HTTP_TIMEOUT_SECONDS)
+        response: Final = http.post(
+            contract.registration_endpoint, json=registration, timeout=_HTTP_TIMEOUT_SECONDS, allow_redirects=False
+        )
     except requests.RequestException as exc:
         return PkceFailure(f"client registration failed: {exc}")
+    redirected: Final = _refused_redirect("client registration", response)
+    if redirected is not None:
+        return redirected
     if response.status_code not in (200, 201):
         return PkceFailure(f"client registration failed with {response.status_code}: {_error_detail(response)}")
     try:
@@ -354,9 +371,12 @@ def _token_request(
     now: Callable[[], float],
 ) -> PkceCredential | PkceFailure:
     try:
-        response: Final = http.post(token_endpoint, data=form, timeout=_HTTP_TIMEOUT_SECONDS)
+        response: Final = http.post(token_endpoint, data=form, timeout=_HTTP_TIMEOUT_SECONDS, allow_redirects=False)
     except requests.RequestException as exc:
         return PkceFailure(f"token request failed: {exc}")
+    redirected: Final = _refused_redirect("token request", response)
+    if redirected is not None:
+        return redirected
     if response.status_code != 200:
         return PkceFailure(f"token request failed with {response.status_code}: {_error_detail(response)}")
     try:
@@ -382,9 +402,13 @@ def revoke_credential(revocation_endpoint: str, client_id: str, refresh_token: s
             revocation_endpoint,
             data=_form(token=refresh_token, token_type_hint="refresh_token", client_id=client_id),
             timeout=_HTTP_TIMEOUT_SECONDS,
+            allow_redirects=False,
         )
     except requests.RequestException as exc:
         return PkceFailure(f"revocation request failed: {exc}")
+    redirected: Final = _refused_redirect("revocation request", response)
+    if redirected is not None:
+        return redirected
     if response.status_code != 200:
         return PkceFailure(f"revocation failed with {response.status_code}: {_error_detail(response)}")
     return None

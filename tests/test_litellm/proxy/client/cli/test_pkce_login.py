@@ -76,8 +76,9 @@ STORED = {
 
 
 class _FakeResponse:
-    def __init__(self, status_code, payload=None, text=""):
+    def __init__(self, status_code, payload=None, text="", headers=None):
         self.status_code = status_code
+        self.headers = headers or {}
         self._payload = payload
         self.text = json.dumps(payload) if payload is not None else text
         self.content = self.text.encode()
@@ -101,9 +102,12 @@ class _FakeHttp:
         self.calls.append(("GET", url, None, None))
         return self._route("GET", url, None, None)
 
-    def post(self, url, *, data=None, json=None, timeout):
+    def post(self, url, *, data=None, json=None, timeout, allow_redirects):
         self.calls.append(("POST", url, data, _wire(json)))
-        return self._route("POST", url, data, json)
+        response = self._route("POST", url, data, json)
+        if allow_redirects and 300 <= response.status_code < 400:
+            return self.post(response.headers["Location"], data=data, json=json, timeout=timeout, allow_redirects=True)
+        return response
 
     def _route(self, method, url, data, json):
         handler = self.routes[(method, url)]
@@ -402,6 +406,29 @@ def test_revoke_failures_name_the_cause(response, expected):
     result = revoke_credential(f"{BASE}/revoke", "llm_dcrc_abc", "t", _FakeHttp({("POST", f"{BASE}/revoke"): response}))
     assert isinstance(result, PkceFailure)
     assert expected in result.reason
+
+
+@pytest.mark.parametrize("status", [302, 307, 308])
+def test_posts_to_the_proxy_never_follow_a_redirect(status):
+    elsewhere = "https://evil.example.net/oauth"
+    http = _FakeHttp(
+        {
+            ("POST", f"{BASE}/register"): _FakeResponse(status, headers={"Location": elsewhere}),
+            ("POST", f"{BASE}/token"): _FakeResponse(status, headers={"Location": elsewhere}),
+            ("POST", f"{BASE}/revoke"): _FakeResponse(status, headers={"Location": elsewhere}),
+            ("POST", elsewhere): _FakeResponse(200, {"client_id": "llm_dcrc_evil", **TOKEN_JSON}),
+        }
+    )
+    outcomes = (
+        register_client(CONTRACT, "http://127.0.0.1:5/callback", http),
+        redeem_code(CONTRACT, "llm_dcrc_abc", "http://127.0.0.1:5/callback", "code", "verifier", http),
+        refresh_credential(f"{BASE}/token", f"{BASE}/revoke", BASE, "llm_dcrc_abc", "llm_srefresh_old", http),
+        revoke_credential(f"{BASE}/revoke", "llm_dcrc_abc", "llm_srefresh_old", http),
+    )
+    assert [type(outcome) for outcome in outcomes] == [PkceFailure] * 4
+    assert all(f"redirected to {elsewhere}; refusing to follow it" in outcome.reason for outcome in outcomes)
+    posted_to = [url for _, url, _, _ in http.calls]
+    assert posted_to == [f"{BASE}/register", f"{BASE}/token", f"{BASE}/token", f"{BASE}/revoke"]
 
 
 @pytest.mark.parametrize(
