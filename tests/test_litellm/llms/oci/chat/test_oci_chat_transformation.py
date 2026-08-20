@@ -47,6 +47,30 @@ def supplied_params(request):
     return request.param
 
 
+
+_AMBIENT_OCI_ENV: tuple[str, ...] = (
+    "OCI_REGION",
+    "OCI_USER",
+    "OCI_FINGERPRINT",
+    "OCI_TENANCY",
+    "OCI_KEY_FILE",
+    "OCI_KEY",
+    "OCI_COMPARTMENT_ID",
+)
+
+
+@pytest.fixture
+def without_ambient_oci_env(monkeypatch):
+    """Drop OCI credentials the environment may supply.
+
+    validate_environment falls back to os.environ for every credential and to a
+    default region only when OCI_REGION is unset, so a developer or runner with
+    OCI configured would see these tests find credentials they never passed.
+    """
+    for variable in _AMBIENT_OCI_ENV:
+        monkeypatch.delenv(variable, raising=False)
+
+@pytest.mark.usefixtures("without_ambient_oci_env")
 class TestOCIChatConfig:
     def test_validate_environment_with_oci_region(self, supplied_params):
         config = OCIChatConfig()
@@ -1561,6 +1585,7 @@ def config():
     return OCIChatConfig()
 
 
+@pytest.mark.usefixtures("without_ambient_oci_env")
 class TestOCIKeyNormalization:
     """Tests for OCI private key content normalization."""
 
@@ -1661,6 +1686,7 @@ class TestOCIKeyNormalization:
         assert "list" in str(exc_info.value.message)
 
 
+@pytest.mark.usefixtures("without_ambient_oci_env")
 class TestOCIValidateEnvironment:
     """Tests for OCI environment validation."""
 
@@ -1705,6 +1731,7 @@ class TestOCIValidateEnvironment:
         assert "user-agent" in headers
 
 
+@pytest.mark.usefixtures("without_ambient_oci_env")
 class TestOCIGetCompleteUrl:
     """Tests for OCI URL generation."""
 
@@ -1738,6 +1765,7 @@ class TestOCIGetCompleteUrl:
         assert "inference.generativeai" in url
 
 
+@pytest.mark.usefixtures("without_ambient_oci_env")
 class TestOCIImageUrlTransformation:
     """Tests for OCI image_url format handling in multimodal messages.
 
