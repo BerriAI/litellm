@@ -551,7 +551,7 @@ def _get_batch_job_usage_from_response_body(
     return usage
 
 
-def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[str, Any]) -> dict:
+def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[str, Any]) -> Mapping[str, Any]:
     """
     Get the ``result`` object from a line of an Anthropic message batch results JSONL file.
 
@@ -563,7 +563,7 @@ def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[st
 
 def _get_response_from_batch_job_output_file(
     batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
-) -> Any:
+) -> Mapping[str, Any]:
     """
     Get the response from the batch job output file
     """
