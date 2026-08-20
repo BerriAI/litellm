@@ -222,6 +222,15 @@ class SpendLogCleanup:
         remaining_ms: Final = int((deadline - time.monotonic()) * 1000)
         return max(1, min(int(self.batch_timeout_seconds * 1000), remaining_ms))
 
+    @staticmethod
+    def _group_deadline(overall_deadline: float, groups_remaining: int) -> float:
+        if groups_remaining == 1:
+            return overall_deadline
+        current_time: Final = time.monotonic()
+        if current_time >= overall_deadline:
+            return overall_deadline
+        return current_time + (overall_deadline - current_time) / groups_remaining
+
     def _remaining_timeout_ms(self, deadline: float) -> RemainingTimeoutMs:
         """
         The per-statement bound for work this job delegates, as a callable.
@@ -583,9 +592,7 @@ class SpendLogCleanup:
             autorouter_retention_seconds: Final = self._retention_seconds_for(
                 "maximum_autorouter_session_retention_period"
             )
-            health_check_retention_seconds: Final = self._retention_seconds_for(
-                "maximum_health_check_retention_period"
-            )
+            health_check_retention_seconds: Final = self._retention_seconds_for("maximum_health_check_retention_period")
             if (
                 not delete_spend_logs
                 and autorouter_retention_seconds is None
@@ -617,19 +624,43 @@ class SpendLogCleanup:
                     return
 
             deadline: Final = time.monotonic() + self.run_budget_seconds
+            configured_group_count: Final = sum(
+                (
+                    int(delete_spend_logs and self.retention_seconds is not None),
+                    int(autorouter_retention_seconds is not None),
+                    int(health_check_retention_seconds is not None),
+                )
+            )
 
             spend_log_results: Final = (
-                await self._clean_spend_log_tables(prisma_client, deadline)
+                await self._clean_spend_log_tables(
+                    prisma_client,
+                    self._group_deadline(deadline, configured_group_count),
+                )
                 if delete_spend_logs and self.retention_seconds is not None
                 else ()
             )
+            remaining_groups_after_spend_logs: Final = sum(
+                (
+                    int(autorouter_retention_seconds is not None),
+                    int(health_check_retention_seconds is not None),
+                )
+            )
             session_results: Final = (
-                await self._clean_session_rollup(prisma_client, autorouter_retention_seconds, deadline)
+                await self._clean_session_rollup(
+                    prisma_client,
+                    autorouter_retention_seconds,
+                    self._group_deadline(deadline, remaining_groups_after_spend_logs),
+                )
                 if autorouter_retention_seconds is not None
                 else ()
             )
             health_check_results: Final = (
-                await self._clean_health_checks(prisma_client, health_check_retention_seconds, deadline)
+                await self._clean_health_checks(
+                    prisma_client,
+                    health_check_retention_seconds,
+                    self._group_deadline(deadline, 1),
+                )
                 if health_check_retention_seconds is not None
                 else ()
             )

@@ -934,6 +934,32 @@ async def test_run_budget_is_shared_across_tables_not_granted_per_table():
 
 
 @pytest.mark.asyncio
+async def test_cleanup_groups_share_budget_so_health_checks_still_get_a_delete():
+    mock_prisma_client = MagicMock()
+    _wire_tx(mock_prisma_client.db)
+    mock_db = MagicMock()
+    _wire_tx(mock_db)
+    mock_db.execute_raw = AsyncMock(return_value=1000)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(
+        general_settings={
+            "maximum_spend_logs_retention_period": "7d",
+            "maximum_health_check_retention_period": "30d",
+            "maximum_spend_logs_cleanup_max_batches": 50,
+            "maximum_spend_logs_cleanup_run_budget": "1s",
+        }
+    )
+    cleaner.pod_lock_manager = None
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    tables_touched = {call[0][0].split('"')[1] for call in mock_db.execute_raw.call_args_list}
+    assert "LiteLLM_SpendLogs" in tables_touched
+    assert "LiteLLM_HealthCheckTable" in tables_touched
+
+
+@pytest.mark.asyncio
 async def test_each_batch_carries_a_statement_and_lock_timeout():
     """
     A Prisma transaction timeout cannot interrupt a statement already running,
