@@ -34739,6 +34739,11 @@ export interface components {
              * @description URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL
              */
             logo_url?: string | null;
+            /**
+             * Logo Url Dark
+             * @description URL or path to a custom logo image for dark mode. Can be a local file path or HTTP/HTTPS URL. Leave unset to reuse logo_url in dark mode
+             */
+            logo_url_dark?: string | null;
         };
         /**
          * UIThemeSettingsResponse
