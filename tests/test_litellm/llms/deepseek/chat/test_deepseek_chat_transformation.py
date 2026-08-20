@@ -1,3 +1,6 @@
+from copy import deepcopy
+from unittest.mock import patch
+
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
 
@@ -103,32 +106,42 @@ async def test_async_transform_request_strips_unsupported_tools_from_body():
     assert body["tools"][0]["function"]["name"] == "shell"
 
 
-def test_fill_reasoning_content_warns_once_per_request_and_preserves_history(caplog):
+def test_fill_reasoning_content_warns_once_per_request_and_preserves_history():
     messages = [
         {"role": "user", "content": "Use both tools."},
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "first"}], "reasoning_content": ""},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "first"}],
+            "reasoning_content": "",
+        },
         {"role": "tool", "tool_call_id": "first", "content": "first result"},
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "second"}], "reasoning_content": ""},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "second"}],
+            "reasoning_content": "",
+        },
         {"role": "tool", "tool_call_id": "second", "content": "second result"},
         {"role": "user", "content": "Continue."},
     ]
+    original_messages = deepcopy(messages)
+    config = DeepSeekChatConfig()
 
-    with caplog.at_level("WARNING"):
-        first_result = DeepSeekChatConfig()._fill_reasoning_content(messages)
-        second_result = DeepSeekChatConfig()._fill_reasoning_content(messages)
+    warning_path = "litellm.llms.deepseek.chat.transformation.litellm.verbose_logger.warning"
+    with patch(warning_path) as warning:
+        first_result = config._fill_reasoning_content(messages)
+        warning.assert_called_once()
 
-    warnings = [
-        record
-        for record in caplog.records
-        if "DeepSeek thinking mode: assistant message is missing `reasoning_content`" in record.message
-    ]
-    assert len(warnings) == 2
-    assert first_result[1]["reasoning_content"] == " "
-    assert first_result[3]["reasoning_content"] == " "
-    assert second_result[1]["reasoning_content"] == " "
-    assert second_result[3]["reasoning_content"] == " "
-    assert messages[1]["reasoning_content"] == ""
-    assert messages[3]["reasoning_content"] == ""
+    with patch(warning_path) as warning:
+        second_result = config._fill_reasoning_content(messages)
+        warning.assert_called_once()
+
+    assert [first_result[index]["reasoning_content"] for index in (1, 3)] == [" ", " "]
+    assert [second_result[index]["reasoning_content"] for index in (1, 3)] == [" ", " "]
+    assert first_result[0] is messages[0]
+    assert second_result[4] is messages[4]
+    assert messages == original_messages
 
 
 def test_thinking_mode_active_bool_thinking_returns_false_without_crashing():
