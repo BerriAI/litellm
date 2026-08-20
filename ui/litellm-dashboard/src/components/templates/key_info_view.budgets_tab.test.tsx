@@ -131,16 +131,20 @@ const UNCONFIGURED_BUDGET = {
   notes: [],
 } as KeyBudgetEntry;
 
+// `code` and `severity` are the contract; `text` is explicitly free to be reworded, so every note
+// text below is synthetic. Copying the resolver's prose only buys tests that go stale silently.
+const noteText = (code: string): string => `synthetic ${code} caveat`;
+
 const ALERT_ONLY_NOTE = {
   code: "alert_only",
   severity: "info",
-  text: "alert only, never blocks; compared against recorded spend rather than the live counter",
+  text: noteText("alert_only"),
 } as const;
 
 const PROJECT_DEAD_NOTE = {
   code: "project_spend_not_tracked",
   severity: "warning",
-  text: "project spend is never incremented today, so this budget cannot trip",
+  text: noteText("project_spend_not_tracked"),
 } as const;
 
 const KEY_UNLIMITED: KeyBudgetEntry = {
@@ -203,38 +207,21 @@ const ORG_UNCONFIGURED: KeyBudgetEntry = {
   source: "organization.budget_id",
 };
 
-// The widest row the endpoint can emit: an end_user budget the reservation layer tightened, on a
-// proxy with a custom auth callable. Three notes rather than one sentence, in the server's order.
-// Texts are snapshots of the resolver's constants; 382 characters across the row is the constraint.
+// The widest row the endpoint can emit is an end_user budget the reservation layer tightened, on a
+// proxy with a custom auth callable: three notes rather than one sentence, in the server's order.
 const WORST_CASE_NOTES = [
-  {
-    code: "reservation_blocks_at_limit",
-    severity: "info",
-    text:
-      "the reservation layer usually blocks this scope as soon as spend reaches the limit, ahead of the " +
-      "read-time check; requests it cannot price up front are still gated by the read-time check alone",
-  },
-  {
-    code: "end_user_route_only",
-    severity: "warning",
-    text: "applies only to requests that name this end user; nothing else on this row says so",
-  },
+  { code: "reservation_blocks_at_limit", severity: "info", text: noteText("reservation_blocks_at_limit") },
+  { code: "end_user_route_only", severity: "warning", text: noteText("end_user_route_only") },
   {
     code: "custom_auth_may_override_end_user_cap",
     severity: "warning",
-    text: "a custom auth callable can set a request-scoped end user cap that overrides this one and is not visible here",
+    text: noteText("custom_auth_may_override_end_user_cap"),
   },
 ] as const;
 
-// Longest single note the endpoint can emit at 192 characters, and so the real width constraint on
-// one line of the scope column. Snapshot of the resolver's constant.
-const LONGEST_SINGLE_NOTE = {
-  code: "reservation_blocks_at_limit",
-  severity: "info",
-  text:
-    "the reservation layer usually blocks this scope as soon as spend reaches the limit, ahead of the " +
-    "read-time check; requests it cannot price up front are still gated by the read-time check alone",
-} as const;
+// Deliberately far past anything the endpoint emits, so no rewording on the server can move this
+// guard. Only its length and the absence of clipping matter, never its wording.
+const OVERLONG_NOTE_TEXT = `${"a caveat clause that keeps going ".repeat(16)}end`;
 
 const ALL_BUDGETS = [KEY_UNLIMITED, USER_WITHIN_BUDGET, TEAM_SOFT_OVER, TEAM_MEMBER_BLOCKING, ORG_UNCONFIGURED];
 
@@ -314,9 +301,7 @@ describe("KeyInfoView Budgets tab", () => {
     expect(within(softRow).getByText("Exceeded (alert only)")).toBeInTheDocument();
     expect(within(softRow).queryByTestId("key-budget-blocking")).not.toBeInTheDocument();
     expect(within(softRow).queryByText("Blocks requests")).not.toBeInTheDocument();
-    expect(softRow).toHaveTextContent(
-      "alert only, never blocks; compared against recorded spend rather than the live counter",
-    );
+    expect(softRow).toHaveTextContent(ALERT_ONLY_NOTE.text);
   });
 
   it("does not render a spend the server could not read as a healthy $0.00", async () => {
@@ -408,17 +393,9 @@ describe("KeyInfoView Budgets tab", () => {
     expect(rendered).toHaveLength(3);
     // Separate elements, not one joined blob, so each caveat can carry its own severity.
     expect(new Set(rendered).size).toBe(3);
-
-    // jsdom has no layout, so nothing here can prove the text is visually unclipped. Asserting the
-    // absence of the clipping utilities is the only mechanical guard against re-truncating a note.
-    for (const note of rendered) {
-      expect(note).not.toHaveClass("truncate");
-      expect(note.className).not.toMatch(/line-clamp|overflow-hidden|whitespace-nowrap/);
-      expect(note).not.toHaveAttribute("title");
-    }
   });
 
-  it("renders the longest single note the endpoint can emit without dropping any of it", async () => {
+  it("renders a note far longer than any the endpoint emits without dropping any of it", async () => {
     const reserved: KeyBudgetEntry = {
       ...UNCONFIGURED_BUDGET,
       scope: "team",
@@ -429,13 +406,19 @@ describe("KeyInfoView Budgets tab", () => {
       remaining: 180,
       source: "team.max_budget",
       status: "ok",
-      notes: [LONGEST_SINGLE_NOTE],
+      notes: [{ code: "rolling_window", severity: "info", text: OVERLONG_NOTE_TEXT }],
     };
     mockBudgets([reserved]);
     const panel = await renderAndOpenBudgetsTab();
 
-    expect(LONGEST_SINGLE_NOTE.text).toHaveLength(192);
-    expect(panel.getByText(LONGEST_SINGLE_NOTE.text)).toBeInTheDocument();
+    expect(OVERLONG_NOTE_TEXT.length).toBeGreaterThan(500);
+    const note = panel.getByText(OVERLONG_NOTE_TEXT);
+
+    // jsdom has no layout, so nothing here can prove the text is visually unclipped. Asserting the
+    // absence of the clipping utilities is the only mechanical guard against re-truncating a note.
+    expect(note).not.toHaveClass("truncate");
+    expect(note.className).not.toMatch(/line-clamp|overflow-hidden|whitespace-nowrap/);
+    expect(note).not.toHaveAttribute("title");
   });
 
   it("keeps two per-model rows on one cap apart by the request model each measures", async () => {
@@ -548,7 +531,7 @@ describe("KeyInfoView Budgets tab", () => {
         {
           code: "throttled_instead_of_blocked",
           severity: "warning",
-          text: "this key opted into throttle_on_budget_exceeded, so exceeding it slows requests instead of blocking",
+          text: noteText("throttled_instead_of_blocked"),
         },
       ],
     };

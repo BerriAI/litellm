@@ -21,40 +21,44 @@ const UNCONFIGURED_BUDGET = {
   notes: [],
 } as KeyBudgetEntry;
 
+// `code` and `severity` are the contract; `text` is explicitly free to be reworded, so these are
+// synthetic. A test that pins the server's prose asserts the one field promised to change.
+const noteText = (code: string): string => `synthetic ${code} caveat`;
+
 const PROJECT_DEAD_NOTE = {
   code: "project_spend_not_tracked",
   severity: "warning",
-  text: "project spend is never incremented today, so this budget cannot trip",
+  text: noteText("project_spend_not_tracked"),
 } as const;
 
 const ALERT_ONLY_NOTE = {
   code: "alert_only",
   severity: "info",
-  text: "alert only, never blocks",
+  text: noteText("alert_only"),
 } as const;
 
 const ROLLING_NOTE = {
   code: "rolling_window",
   severity: "info",
-  text: "rolling window",
+  text: noteText("rolling_window"),
 } as const;
 
 const THROTTLE_NOTE = {
   code: "throttled_instead_of_blocked",
   severity: "warning",
-  text: "this key opted into throttle_on_budget_exceeded, so exceeding it slows requests instead of blocking",
+  text: noteText("throttled_instead_of_blocked"),
 } as const;
 
 const END_USER_ROUTE_NOTE = {
   code: "end_user_route_only",
   severity: "warning",
-  text: "applies only to requests that name this end user; nothing else on this row says so",
+  text: noteText("end_user_route_only"),
 } as const;
 
 const COLD_MODEL_NOTE = {
   code: "model_budget_fails_open",
   severity: "info",
-  text: "no per-model counter exists yet; these budgets are cache-only and fail open until one does",
+  text: noteText("model_budget_fails_open"),
 } as const;
 
 const TEAM_MEMBER_AT_LIMIT: KeyBudgetEntry = {
