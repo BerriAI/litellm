@@ -26,43 +26,18 @@ test_paths:
     paths:
       - tests/code_coverage_tests/test_aio_http_image_conversion.py
   - reason: >-
-      A second mirror of the package tree living beside tests/test_litellm, which is the mirror the
-      repo convention names; only test_no_hardcoded_secrets.py is invoked, from the linting
-      workflow, and whether this directory should exist at all is unresolved
+      What is left of a second mirror that sat beside tests/test_litellm and ran nowhere. Its
+      other 30 files moved into the real mirror on 2026-08-20 and now run; these four cannot,
+      because each shares a filename with a live test whose contents are disjoint from it, so
+      landing them means merging test bodies rather than moving a file. Measured on the same
+      date: test_common_utils.py holds 15 tests the live file does not, test_oci_chat_transformation
+      13, test_deepseek_chat_transformation 12, and test_discoverable_endpoints 5. Revisit by
+      merging each into its twin, which is a content review, not a move
     paths:
-      - tests/litellm/a2a_protocol/providers/pydantic_ai_agents/test_pydantic_ai_agent_headers.py
-      - tests/litellm/a2a_protocol/providers/pydantic_ai_agents/test_pydantic_ai_agent_transformation.py
-      - tests/litellm/integrations/helicone/test_helicone_gemini.py
-      - tests/litellm/litellm_core_utils/test_json_schema_validation.py
-      - tests/litellm/llms/anthropic/test_anthropic_reasoning_effort.py
-      - tests/litellm/llms/anthropic/test_anthropic_schema_filter.py
-      - tests/litellm/llms/azure/test_azure_embedding.py
-      - tests/litellm/llms/bedrock/embed/test_embedding.py
-      - tests/litellm/llms/bedrock/test_nova_imported_models.py
       - tests/litellm/llms/deepseek/chat/test_deepseek_chat_transformation.py
-      - tests/litellm/llms/gradient_ai/chat/test_gradient_ai_chat_transformation.py
       - tests/litellm/llms/oci/chat/test_oci_chat_transformation.py
-      - tests/litellm/llms/openai_like/test_abliteration_provider.py
-      - tests/litellm/llms/openai_like/test_assemblyai_provider.py
-      - tests/litellm/llms/openai_like/test_empiriolabs_provider.py
-      - tests/litellm/llms/vertex_ai/agent_engine/test_transformation.py
-      - tests/litellm/llms/vertex_ai/gemini/test_transformation.py
-      - tests/litellm/llms/vertex_ai/text_to_speech/test_transformation.py
       - tests/litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
-      - tests/litellm/proxy/agent_endpoints/test_agent_rbac.py
-      - tests/litellm/proxy/common_utils/test_rbac_utils.py
       - tests/litellm/proxy/management_endpoints/test_common_utils.py
-      - tests/litellm/proxy/management_endpoints/test_cost_estimate_endpoint.py
-      - tests/litellm/proxy/test_claude_code_marketplace.py
-      - tests/litellm/proxy/test_init_litellm_callbacks.py
-      - tests/litellm/proxy/test_prisma_engine_watchdog.py
-      - tests/litellm/proxy/vector_store_endpoints/test_vector_store_rbac.py
-      - tests/litellm/test_bedrock_extended_beta_models.py
-      - tests/litellm/test_bedrock_nemotron_super.py
-      - tests/litellm/test_proxy_auth.py
-      - tests/litellm/test_router_retry_backoff_headers.py
-      - tests/litellm/test_sambanova_model_metadata.py
-      - tests/litellm/test_stream_chunk_builder_images.py
   - reason: >-
       Legacy proxy suite superseded by the proxy shards; no job invokes it and whether it still
       describes supported behaviour is unresolved
