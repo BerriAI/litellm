@@ -2,7 +2,7 @@ import openai from "openai";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
@@ -317,9 +317,7 @@ export async function makeOpenAIResponsesRequest(
   } catch (error) {
     if (signal?.aborted) {
     } else {
-      NotificationManager.fromBackend(
-        `Error occurred while generating model response. Please try again. Error: ${error}`,
-      );
+      toast.fromError(`Error occurred while generating model response. Please try again. Error: ${error}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

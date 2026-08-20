@@ -253,6 +253,7 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
 
 
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file")
+PROVIDER_SCOPED_CREATION_FUNCTION_NAMES: Final = frozenset({"_acreate_file"})
 
 
 def _get_fallback_target_model_group(fallback_entry: str | Mapping[str, object]) -> str | None:
@@ -272,6 +273,18 @@ def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     error the caller actually needs to see.
     """
     return any(kwargs.get(key) for key in PROVIDER_SCOPED_RESOURCE_KEYS)
+
+
+def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
+    """
+    True when the request creates a resource that will live under one provider's credentials.
+
+    A file uploaded for batches or fine-tuning is stored in the account of the deployment
+    that handled it, and its id is only usable against the model group the caller named.
+    Letting the upload fall back to a different model group silently stores the file with
+    the wrong provider, and every later use of the returned id fails.
+    """
+    return getattr(kwargs.get("original_function"), "__name__", None) in PROVIDER_SCOPED_CREATION_FUNCTION_NAMES
 
 
 async def run_async_fallback(
@@ -322,7 +335,9 @@ async def run_async_fallback(
     metadata_variable_name: Final = _get_router_metadata_variable_name(
         function_name=getattr(kwargs.get("original_function"), "__name__", None)
     )
-    same_model_group_only: Final = references_provider_scoped_resource(kwargs)
+    same_model_group_only: Final = references_provider_scoped_resource(kwargs) or creates_provider_scoped_resource(
+        kwargs
+    )
     # Read out of kwargs and narrowed here rather than declared as a parameter: every caller
     # reaches this function by spreading a loosely-typed kwargs dict, so a declared parameter
     # would carry an annotation that no call site can actually be checked against.

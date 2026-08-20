@@ -23,7 +23,7 @@ export function buildProjectApiParams(values: ProjectFormValues) {
     project_alias: values.project_alias,
     description: values.description,
     models: values.models ?? [],
-    max_budget: values.max_budget,
+    max_budget: values.max_budget === undefined ? undefined : Math.round(values.max_budget * 100) / 100,
     blocked: values.isBlocked ?? false,
     ...(values.guardrails &&
       values.guardrails.length > 0 && {
