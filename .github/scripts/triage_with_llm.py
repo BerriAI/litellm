@@ -52,6 +52,7 @@ from agent_shin_shared import (  # noqa: E402  -- sys.path adjusted above
     AGENT_SHIN_DEFAULT_BOT_LOGIN,
     ALLOWLIST_LOGINS,
     GRACE_COMMENT_MARKER,
+    GRACE_PERIOD_LABEL,
     GRACE_PERIOD_SECONDS,
     GREPTILE_BOT_LOGINS,
     SCORE_PATTERN,
@@ -88,7 +89,7 @@ RECONSIDER_RATE_LIMIT_SECONDS = 600
 # posted on the first low-quality detection — used on subsequent triage
 # runs to detect that a warning was already posted and measure how long
 # ago it was posted) and `GRACE_PERIOD_SECONDS` (length of the grace
-# period between the warning and the actual auto-close, 2 hours) are
+# period between the warning and the actual auto-close) are
 # imported from `agent_shin_shared` so the daily Greptile sweep and the
 # LLM judge agree on the same marker and duration.
 
@@ -869,8 +870,8 @@ def format_issue_close_comment(verdict: dict) -> str:
 
 def format_grace_warning_pr_comment(verdict: dict) -> str:
     """Comment posted on the FIRST low-quality detection — gives the
-    contributor a 2-hour grace window to fix the PR before the next
-    triage run actually closes it.
+    contributor a `GRACE_PERIOD_SECONDS` window to fix the PR before the
+    next triage run actually closes it.
 
     This is the "before-close" warning. On the second triage run, if the
     grace marker is older than `GRACE_PERIOD_SECONDS` AND the PR still
@@ -896,7 +897,8 @@ def format_grace_warning_pr_comment(verdict: dict) -> str:
         "\n"
         f"> {explanation}\n"
         "\n"
-        "If the description isn't updated in the next **2 hours**, I'll auto-close this PR. "
+        f"If the description isn't updated in the next **{GRACE_PERIOD_LABEL}**, I'll auto-close "
+        "this PR. "
         "That's **not** us saying we don't care about the change; we want the open-PR list to "
         "mirror what a maintainer can act on *right now*, so contributors don't get lost in a "
         'backlog. A closed PR is a soft "park this for later," not a rejection. Take your '
@@ -908,7 +910,8 @@ def format_grace_warning_pr_comment(verdict: dict) -> str:
         "[what counts as QA proof](https://docs.litellm.ai/blog/agent-shin-triage#the-rubric-for-pull-requests) "
         "for the full rubric (a linked issue alone isn't enough; it covers context, not proof).\n"
         "\n"
-        "**If the PR does get auto-closed in 2 hours, you still have easy recovery paths:**\n"
+        f"**If the PR does get auto-closed in {GRACE_PERIOD_LABEL}, you still have easy recovery "
+        "paths:**\n"
         "\n"
         "- Comment `@agent-shin reconsider` after updating the description. I'll re-evaluate "
         "and reopen the PR if it now passes.\n"
@@ -944,7 +947,8 @@ def format_grace_warning_issue_comment(verdict: dict) -> str:
         "\n"
         f"> {explanation}\n"
         "\n"
-        "If the issue isn't updated in the next **2 hours**, I'll auto-close it. That's **not** us "
+        f"If the issue isn't updated in the next **{GRACE_PERIOD_LABEL}**, I'll auto-close it. "
+        "That's **not** us "
         "saying the bug isn't real or the request isn't useful; we want the open-issue list "
         "to mirror what a maintainer can act on *right now*, so reports like yours don't get "
         'buried in a backlog. A closed issue is a soft "park this for later," not a '
@@ -965,7 +969,8 @@ def format_grace_warning_issue_comment(verdict: dict) -> str:
         "dead-end (a video, a screenshot, or the exact commands you ran with their real "
         "output showing where the flow stops today). Mocked or stubbed runs don't count.\n"
         "\n"
-        "**If the issue does get auto-closed in 2 hours**, comment `@agent-shin reconsider` "
+        f"**If the issue does get auto-closed in {GRACE_PERIOD_LABEL}**, comment "
+        "`@agent-shin reconsider` "
         "and I'll re-evaluate. If it now meets the bar, I'll reopen the issue.\n"
         "\n"
         "Internal BerriAI contributors: this rubric doesn't apply to you; ping a maintainer.\n"

@@ -49,6 +49,7 @@ from _agent_shin_actions import maybe_post_comment  # noqa: E402
 from agent_shin_shared import (  # noqa: E402
     AGENT_SHIN_DEFAULT_BOT_LOGIN,
     ALLOWLIST_LOGINS,
+    GRACE_PERIOD_LABEL,
     list_open_items,
 )
 from triage_with_llm import (  # noqa: E402
@@ -223,8 +224,8 @@ def format_heads_up_comment(
         f"- If this {noun} still fails the rubric at **{cutoff_str}**, "
         "we'll close it.\n"
         f"- From then on the bot runs daily, and every {noun} that fails "
-        "the rubric gets a **2-hour lifetime**: one warning comment, then "
-        "auto-close 2 hours later.\n"
+        f"the rubric gets **{GRACE_PERIOD_LABEL} to fix it**: one warning "
+        f"comment, then auto-close {GRACE_PERIOD_LABEL} later.\n"
         "\n"
         f"{_recovery_section(kind)}\n"
         "\n"

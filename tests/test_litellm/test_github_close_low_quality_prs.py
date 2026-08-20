@@ -176,7 +176,7 @@ class TestEvaluatePr:
         # `min_age_days=0` means no age filter — a freshly-opened PR is
         # eligible the moment Greptile scores it below threshold. The
         # first detection still goes through the warn-grace step rather
-        # than closing immediately, giving the contributor 2 hours to
+        # than closing immediately, giving the contributor a grace window to
         # respond before the next run actually closes the PR.
         monkeypatch.setattr(
             closer_module,
@@ -321,7 +321,7 @@ class TestEvaluatePr:
         old_warning = {
             "user": {"login": "github-actions[bot]"},
             "body": (
-                "you have 2 hours to fix this\n\n" + closer_module.GRACE_COMMENT_MARKER
+                "you have a grace window to fix this\n\n" + closer_module.GRACE_COMMENT_MARKER
             ),
             "created_at": (
                 _now - dt.timedelta(seconds=closer_module.GRACE_PERIOD_SECONDS + 60)
@@ -355,7 +355,7 @@ class TestEvaluatePr:
     def test_should_skip_when_grace_warning_within_window(
         self, closer_module, _now, monkeypatch
     ):
-        # Within the 2-hour grace window the closer must NOT close the
+        # Within the grace window the closer must NOT close the
         # PR even if the score is still low. The warning is only an hour
         # old; give the contributor time to push fixes before destruction.
         recent_warning = {
@@ -573,7 +573,7 @@ class TestGraceWarningCommentText:
         body = closer_module.format_grace_warning_comment(score=2, threshold=4)
         # The user's PR explicitly said "specify in the comment" — pin
         # that the grace window appears in the comment.
-        assert "2 hours" in body
+        assert closer_module.GRACE_PERIOD_LABEL in body
 
     def test_should_mention_agent_shin_reconsider(self, closer_module):
         body = closer_module.format_grace_warning_comment(score=2, threshold=4)
