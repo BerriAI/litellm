@@ -144,15 +144,14 @@ const createEmptyToolPermissionConfig = (): ToolPermissionConfig => ({
 });
 
 const getStepIndicatorClass = (isDone: boolean, isCurrent: boolean): string => {
-  if (isDone) return "bg-indigo-600 text-white dark:bg-indigo-500";
-  if (isCurrent)
-    return "bg-background text-indigo-600 border-2 border-indigo-600 dark:text-indigo-400 dark:border-indigo-400";
+  if (isDone) return "bg-indigo-600 text-white";
+  if (isCurrent) return "bg-background text-indigo-600 border-2 border-indigo-600";
   return "bg-muted text-muted-foreground border border-border";
 };
 
 const getStepTitleClass = (isDone: boolean, isCurrent: boolean): string => {
   if (isCurrent) return "font-semibold text-foreground";
-  if (isDone) return "font-medium text-indigo-600 dark:text-indigo-400";
+  if (isDone) return "font-medium text-indigo-600";
   return "font-medium text-muted-foreground";
 };
 
@@ -1127,11 +1126,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                         >
                           {isDone ? "\u2713" : index + 1}
                         </div>
-                        {!isLast && (
-                          <div
-                            className={`min-h-4 w-px flex-1 ${isDone ? "bg-indigo-600 dark:bg-indigo-500" : "bg-border"}`}
-                          />
-                        )}
+                        {!isLast && <div className={`min-h-4 w-px flex-1 ${isDone ? "bg-indigo-600" : "bg-border"}`} />}
                       </div>
 
                       {/* Step content */}
@@ -1147,11 +1142,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                           {step.optional && !isCurrent && (
                             <span className="text-[11px] text-muted-foreground">optional</span>
                           )}
-                          {isDone && (
-                            <span className="text-[11px] text-indigo-600 hover:underline dark:text-indigo-400">
-                              Edit
-                            </span>
-                          )}
+                          {isDone && <span className="text-[11px] text-indigo-600 hover:underline">Edit</span>}
                         </div>
 
                         {/* Expanded form content for current step */}

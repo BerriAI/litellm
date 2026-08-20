@@ -12,7 +12,7 @@ import {
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
@@ -172,7 +172,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-hidden py-2">
-      <PageHeader
+      <LegacyPageHeader
         icon={<KeyRound className="size-5" />}
         title="Virtual Keys"
         subtitle="Every key that authenticates requests to the gateway."

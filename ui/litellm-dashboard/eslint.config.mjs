@@ -57,15 +57,6 @@ const eslintConfig = [
               message:
                 "@tremor/react is being phased out; build new UI with shadcn/ui primitives instead of adding tremor imports.",
             },
-            {
-              group: ["antd", "antd/*"],
-              message:
-                "antd is being phased out; build new UI with shadcn/ui primitives instead of adding antd imports.",
-            },
-            {
-              group: ["@ant-design/icons", "@ant-design/icons/*"],
-              message: "@ant-design/icons is gone from the dashboard; use lucide-react instead.",
-            },
           ],
         },
       ],
@@ -94,7 +85,6 @@ const eslintConfig = [
     files: ["src/**/*.test.{ts,tsx}", "tests/**/*.{ts,tsx}"],
     plugins: { "testing-library": testingLibrary, "jest-dom": jestDom },
     rules: {
-      "local/no-antd-class-selectors": "error",
       "testing-library/await-async-queries": "error",
       "testing-library/no-wait-for-multiple-assertions": "error",
       "testing-library/no-wait-for-side-effects": "error",

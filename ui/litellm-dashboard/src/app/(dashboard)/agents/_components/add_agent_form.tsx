@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Select, Steps, Tag } from "antd";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { Bot, CircleCheck, Key, LayoutGrid } from "lucide-react";
+import { Bot, Check, CircleCheck, Key, LayoutGrid } from "lucide-react";
 import CreatedKeyDisplay from "@/components/shared/CreatedKeyDisplay";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -51,9 +52,60 @@ import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermis
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-const { Step } = Steps;
-
 const CUSTOM_AGENT_TYPE = "custom";
+
+const STEP_TITLES = ["Configure", "Entitlements", "Governance", "Agent Management", "Ready"] as const;
+
+const stepMarkerClass = (index: number, current: number): string => {
+  if (index < current) return "border-primary text-primary";
+  if (index === current) return "border-primary bg-primary text-primary-foreground";
+  return "border-border text-muted-foreground";
+};
+
+const stepTitleClass = (index: number, current: number): string => {
+  if (index === current) return "font-medium text-foreground";
+  if (index < current) return "text-foreground";
+  return "text-muted-foreground";
+};
+
+const AgentTypeLabel: React.FC<{ agentType: string; info: AgentCreateInfo | undefined }> = ({ agentType, info }) => {
+  if (agentType === CUSTOM_AGENT_TYPE) {
+    return (
+      <span className="flex items-center gap-2">
+        <LayoutGrid className="size-4 text-warning" />
+        <span>Custom / Other</span>
+      </span>
+    );
+  }
+  if (!info) return <>{agentType}</>;
+  return (
+    <span className="flex items-center gap-2">
+      <Logo src={info.logo_url} label={info.agent_type_display_name} className="h-4 w-4 object-contain" />
+      <span>{info.agent_type_display_name}</span>
+    </span>
+  );
+};
+
+const StepProgress: React.FC<{ current: number }> = ({ current }) => (
+  <ol aria-label="Agent creation steps" className="mb-8 flex items-center">
+    {STEP_TITLES.map((title, index) => (
+      <li
+        key={title}
+        aria-current={index === current ? "step" : undefined}
+        className="flex flex-1 items-center gap-2 last:flex-none"
+      >
+        <span
+          aria-hidden="true"
+          className={`flex size-6 shrink-0 items-center justify-center rounded-full border text-xs ${stepMarkerClass(index, current)}`}
+        >
+          {index < current ? <Check className="size-3.5" /> : index + 1}
+        </span>
+        <span className={`text-xs whitespace-nowrap ${stepTitleClass(index, current)}`}>{title}</span>
+        {index < STEP_TITLES.length - 1 && <span aria-hidden="true" className="mx-2 h-px flex-1 bg-border" />}
+      </li>
+    ))}
+  </ol>
+);
 
 const SHARED_INITIAL_VALUES: AgentFormValues = {
   allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] },
@@ -536,7 +588,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         <h4 className="mb-3 text-sm font-medium text-foreground">Budgets &amp; Rate Limits</h4>
         <div className="space-y-4">
           {!requireTraceIdOutbound && (
-            <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300">
+            <div className="rounded-lg border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
               Enable &quot;Require x-litellm-trace-id on calls BY this agent&quot; in Tracing to configure budgets and
               rate limits.
             </div>
@@ -684,66 +736,45 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         <FieldLabel htmlFor="agent-type">
           {labelWithHint("Agent Type", "Select the type of agent you want to create")}
         </FieldLabel>
-        <Select
-          id="agent-type"
-          value={agentType}
-          onChange={handleAgentTypeChange}
-          size="large"
-          style={{ width: "100%" }}
-          optionLabelProp="label"
-          dropdownRender={(menu) => (
-            <>
-              {menu}
-              <Separator className="my-1" />
-              <div className="px-2 py-1">
-                <div className="mb-1 px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                  Not listed?
-                </div>
-                <div
-                  className={`flex cursor-pointer items-center gap-3 rounded px-2 py-2 transition-colors ${
-                    agentType === CUSTOM_AGENT_TYPE
-                      ? "bg-amber-50 dark:bg-amber-950"
-                      : "hover:bg-amber-50 dark:hover:bg-amber-950"
-                  }`}
-                  onClick={() => handleAgentTypeChange(CUSTOM_AGENT_TYPE)}
-                >
-                  <LayoutGrid className="size-4.5 text-amber-600 dark:text-amber-400" />
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-amber-700 dark:text-amber-400">Custom / Other</span>
-                      <Tag color="orange" style={{ fontSize: 10, padding: "0 4px" }}>
-                        GENERIC
-                      </Tag>
-                    </div>
-                    <div className="text-xs text-amber-600 dark:text-amber-400">
-                      For agents that don&apos;t follow a standard protocol, just needs a virtual key
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        >
-          {agentTypeMetadata.map((info) => (
-            <Select.Option
-              key={info.agent_type}
-              value={info.agent_type}
-              label={
-                <div className="flex items-center gap-2">
-                  <Logo src={info.logo_url} label={info.agent_type_display_name} className="h-4 w-4 object-contain" />
-                  <span>{info.agent_type_display_name}</span>
-                </div>
-              }
-            >
-              <div className="flex items-center gap-3 py-1">
-                <Logo src={info.logo_url} label={info.agent_type_display_name} className="h-5 w-5 object-contain" />
-                <div>
-                  <div className="font-medium">{info.agent_type_display_name}</div>
-                  {info.description && <div className="text-xs text-muted-foreground">{info.description}</div>}
-                </div>
-              </div>
-            </Select.Option>
-          ))}
+        <Select value={agentType} onValueChange={(value) => value !== null && handleAgentTypeChange(value)}>
+          <SelectTrigger id="agent-type" className="h-10 w-full">
+            <SelectValue>{() => <AgentTypeLabel agentType={agentType} info={selectedAgentTypeInfo} />}</SelectValue>
+          </SelectTrigger>
+          <SelectContent className="p-1">
+            {agentTypeMetadata.map((info) => (
+              <SelectItem key={info.agent_type} value={info.agent_type}>
+                <span className="flex items-center gap-3 py-1">
+                  <Logo src={info.logo_url} label={info.agent_type_display_name} className="h-5 w-5 object-contain" />
+                  <span className="block">
+                    <span className="block font-medium">{info.agent_type_display_name}</span>
+                    {info.description && (
+                      <span className="block text-xs text-muted-foreground">{info.description}</span>
+                    )}
+                  </span>
+                </span>
+              </SelectItem>
+            ))}
+            <SelectSeparator />
+            <div className="mb-1 px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Not listed?
+            </div>
+            <SelectItem value={CUSTOM_AGENT_TYPE} className="focus:bg-warning/10 dark:focus:**:text-amber-400">
+              <span className="flex items-center gap-3">
+                <LayoutGrid className="size-4.5 shrink-0 text-warning" />
+                <span className="block">
+                  <span className="flex items-center gap-2">
+                    <span className="font-medium text-warning">Custom / Other</span>
+                    <Badge variant="warning" className="h-4 px-1 text-[10px]">
+                      GENERIC
+                    </Badge>
+                  </span>
+                  <span className="block text-xs whitespace-normal text-warning">
+                    For agents that don&apos;t follow a standard protocol, just needs a virtual key
+                  </span>
+                </span>
+              </span>
+            </SelectItem>
+          </SelectContent>
         </Select>
       </Field>
 
@@ -846,10 +877,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       <div>
         {/* Agent name chip */}
         <div className="mb-6 flex justify-center">
-          <Tag color="purple" className="inline-flex items-center gap-1.5 px-3 py-1 text-sm">
+          <Badge className="h-auto gap-1.5 bg-purple-100 px-3 py-1 text-sm text-purple-700">
             <Bot className="size-3.5" />
             {agentName}
-          </Tag>
+          </Badge>
         </div>
 
         <AgentFormField
@@ -875,7 +906,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div
             className={`cursor-pointer rounded-lg border-2 p-4 transition-colors ${
               keyAssignOption === "create_new"
-                ? "border-indigo-600 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-950"
+                ? "border-indigo-600 bg-indigo-50"
                 : "border-border bg-background hover:border-muted-foreground/40"
             }`}
             onClick={() => setKeyAssignOption("create_new")}
@@ -885,7 +916,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                 <RadioGroupItem value="create_new" aria-label="Create a new key for this agent" />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <Key className="size-4 text-indigo-600 dark:text-indigo-400" />
+                    <Key className="size-4 text-indigo-600" />
                     <span className="font-medium text-foreground">Create a new key for this agent</span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">A dedicated key scoped to this agent.</p>
@@ -904,7 +935,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                   )}
                 </div>
               </div>
-              <Tag color="green">Recommended</Tag>
+              <Badge variant="success">Recommended</Badge>
             </div>
           </div>
 
@@ -912,7 +943,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div
             className={`cursor-pointer rounded-lg border-2 p-4 transition-colors ${
               keyAssignOption === "existing_key"
-                ? "border-indigo-600 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-950"
+                ? "border-indigo-600 bg-indigo-50"
                 : "border-border bg-background hover:border-muted-foreground/40"
             }`}
             onClick={() => setKeyAssignOption("existing_key")}
@@ -959,13 +990,13 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const renderReadyStep = () => (
     <div className="py-6 text-center">
-      <CircleCheck className="mb-4 size-12 text-green-500" />
+      <CircleCheck className="mb-4 size-12 text-success" />
       <h3 className="mb-2 text-xl font-semibold text-foreground">Agent Created!</h3>
       <div className="mb-4 flex justify-center">
-        <Tag color="purple" className="inline-flex items-center gap-1.5 px-3 py-1 text-sm">
+        <Badge className="h-auto gap-1.5 bg-purple-100 px-3 py-1 text-sm text-purple-700">
           <Bot className="size-3.5" />
           {createdAgentName}
-        </Tag>
+        </Badge>
       </div>
       {createdKeyValue && (
         <div className="mx-auto mt-4 max-w-md text-left">
@@ -998,13 +1029,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         </DialogHeader>
         <TooltipProvider>
           <div className="mt-4">
-            <Steps current={currentStep} size="small" className="mb-8">
-              <Step title="Configure" />
-              <Step title="Entitlements" />
-              <Step title="Governance" />
-              <Step title="Agent Management" />
-              <Step title="Ready" />
-            </Steps>
+            <StepProgress current={currentStep} />
 
             <FormProvider {...form}>
               <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
