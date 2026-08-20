@@ -6327,73 +6327,43 @@ class ProxyConfig:
         Pull from DB, read general settings value
         """
         global general_settings, store_model_in_db
-        global use_background_health_checks, use_shared_health_check  # noqa: PLW0603  # DB reload runtime state  # pragma: no cover
-        global health_check_interval, health_check_concurrency, health_check_details  # noqa: PLW0603  # DB reload runtime state  # pragma: no cover
+        global use_background_health_checks, use_shared_health_check  # noqa: PLW0603  # DB reload runtime state
+        global health_check_interval, health_check_concurrency, health_check_details  # noqa: PLW0603  # DB reload runtime state
         if db_general_settings is None:
             return
         _general_settings: Final = dict(db_general_settings)
-        health_check_settings: Final = (  # pragma: no cover
-            "background_health_checks",  # pragma: no cover
-            "use_shared_health_check",  # pragma: no cover
-            "health_check_interval",  # pragma: no cover
-            "health_check_concurrency",  # pragma: no cover
-            "health_check_details",  # pragma: no cover
-            "enable_health_check_routing",
-            "health_check_staleness_threshold",
-            "health_check_ignore_transient_errors",
-        )
+        health_check_settings: Final = frozenset("background_health_checks use_shared_health_check health_check_interval health_check_concurrency health_check_details enable_health_check_routing health_check_staleness_threshold health_check_ignore_transient_errors".split())  # noqa: E501  # keep immutable DB setting key list compact
+
+        def _db_setting_is_active(key: str) -> bool:
+            return key in _general_settings and key not in self._yaml_general_settings_keys
+
         for key in health_check_settings:
             if key not in _general_settings or key in self._yaml_general_settings_keys:
                 continue
             general_settings[key] = _general_settings[key]
 
-        if (
-            "background_health_checks" in _general_settings
-            and "background_health_checks" not in self._yaml_general_settings_keys  # pragma: no cover
-        ):
+        if _db_setting_is_active("background_health_checks"):
             use_background_health_checks = _general_settings["background_health_checks"]
-        if (
-            "use_shared_health_check" in _general_settings
-            and "use_shared_health_check" not in self._yaml_general_settings_keys  # pragma: no cover
-        ):
+        if _db_setting_is_active("use_shared_health_check"):
             use_shared_health_check = _general_settings["use_shared_health_check"]
-        if (
-            "health_check_interval" in _general_settings
-            and "health_check_interval" not in self._yaml_general_settings_keys  # pragma: no cover
-        ):
+        if _db_setting_is_active("health_check_interval"):
             health_check_interval = _general_settings["health_check_interval"]
-        if (
-            "health_check_concurrency" in _general_settings
-            and "health_check_concurrency" not in self._yaml_general_settings_keys  # pragma: no cover
-        ):
+        if _db_setting_is_active("health_check_concurrency"):
             health_check_concurrency = _general_settings["health_check_concurrency"]
-        if (
-            "health_check_details" in _general_settings
-            and "health_check_details" not in self._yaml_general_settings_keys  # pragma: no cover
-        ):
+        if _db_setting_is_active("health_check_details"):
             health_check_details = _general_settings["health_check_details"]
 
         if llm_router is not None:
-            if (
-                "enable_health_check_routing" in _general_settings
-                and "enable_health_check_routing" not in self._yaml_general_settings_keys  # pragma: no cover
-            ):
+            if _db_setting_is_active("enable_health_check_routing"):
                 llm_router.enable_health_check_routing = _general_settings["enable_health_check_routing"]
-            if (
-                "health_check_staleness_threshold" in _general_settings
-                and "health_check_staleness_threshold" not in self._yaml_general_settings_keys  # pragma: no cover
-            ):
+            if _db_setting_is_active("health_check_staleness_threshold"):
                 llm_router.health_state_cache.staleness_threshold = float(
                     _general_settings["health_check_staleness_threshold"]
-                )  # pragma: no cover
-            if (
-                "health_check_ignore_transient_errors" in _general_settings
-                and "health_check_ignore_transient_errors" not in self._yaml_general_settings_keys  # pragma: no cover
-            ):
+                )
+            if _db_setting_is_active("health_check_ignore_transient_errors"):
                 llm_router.health_check_ignore_transient_errors = _general_settings[
-                    "health_check_ignore_transient_errors"  # pragma: no cover
+                    "health_check_ignore_transient_errors"
                 ]
-
         await _reconcile_background_health_check_task()
 
         ## MAX PARALLEL REQUESTS ##
