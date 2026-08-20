@@ -269,7 +269,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       <div className="inline-flex items-center gap-2 mb-4">
         <h4 className="m-0 text-xl font-semibold text-foreground">Complexity Tier Configuration</h4>
         <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-          <Info className="size-4 text-gray-400" />
+          <Info className="size-4 text-muted-foreground/70" />
         </SimpleTooltip>
       </div>
 
@@ -298,7 +298,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <div className="flex items-center gap-2 mb-2">
                     <strong className="text-base font-semibold">{label} Tier</strong>
                     <SimpleTooltip content={tierInfo.description}>
-                      <Info className="size-4 text-gray-400" />
+                      <Info className="size-4 text-muted-foreground/70" />
                     </SimpleTooltip>
                     <span className="text-xs text-muted-foreground">
                       Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
@@ -349,7 +349,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             <div className="flex items-center gap-2 mb-2">
               <strong className="text-base font-semibold">Default Model</strong>
               <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
-                <Info className="size-4 text-gray-400" />
+                <Info className="size-4 text-muted-foreground/70" />
               </SimpleTooltip>
             </div>
             <SearchSelect
@@ -374,11 +374,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
       <Separator className="my-6" />
 
-      <div className="rounded-lg border border-gray-200 bg-gray-50">
+      <div className="rounded-lg border border-border bg-muted">
         {[
           {
             key: "classifier",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Classification Method</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Classification Method</strong>,
             children: (
               <ClassificationMethodConfig
                 value={value}
@@ -393,12 +393,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           },
           {
             key: "adaptive",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Adaptive Routing</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Adaptive Routing</strong>,
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
           },
           {
             key: "affinity",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Affinity</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Affinity</strong>,
             children: (
               <>
                 <div className="flex items-center gap-2 mb-2">
@@ -432,7 +432,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           },
           {
             key: "plan-mode",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Plan-Mode Override</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Plan-Mode Override</strong>,
             children: (
               <>
                 <div className="flex items-center gap-2 mb-2">
@@ -476,7 +476,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           },
           {
             key: "response",
-            label: <strong className="text-gray-700 font-semibold">Advanced: Response Format</strong>,
+            label: <strong className="text-foreground font-semibold">Advanced: Response Format</strong>,
             children: (
               <>
                 <div className="flex items-center gap-2 mb-2">
@@ -499,7 +499,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             ? [
                 {
                   key: "escalation",
-                  label: <strong className="text-gray-700 font-semibold">Advanced: Escalation Keywords</strong>,
+                  label: <strong className="text-foreground font-semibold">Advanced: Escalation Keywords</strong>,
                   children: <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />,
                 },
               ]
@@ -508,7 +508,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             ? [
                 {
                   key: "keyword-semantic",
-                  label: <strong className="text-gray-700 font-semibold">Advanced: Keyword/Semantic Matching</strong>,
+                  label: <strong className="text-foreground font-semibold">Advanced: Keyword/Semantic Matching</strong>,
                   children: (
                     <>
                       {onKeywordTierRulesChange && (
@@ -537,7 +537,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               ]
             : []),
         ].map(({ key, label, children }) => (
-          <Collapsible key={key} className="border-b border-gray-200 last:border-b-0">
+          <Collapsible key={key} className="border-b border-border last:border-b-0">
             <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left">
               <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
               {label}

@@ -91,6 +91,8 @@ mock_prisma_client = MagicMock()
 mock_prisma_client.db = MagicMock()
 mock_prisma_client.db.litellm_teamtable = MagicMock()
 mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
+mock_prisma_client.db.litellm_auditlog = MagicMock()
+mock_prisma_client.db.litellm_auditlog.create = AsyncMock()
 
 
 # Fixture to provide the mock prisma client
@@ -101,6 +103,11 @@ def mock_db_client():
     ):  # Mock in both places if necessary
         yield mock_prisma_client
     mock_prisma_client.reset_mock()
+
+
+@pytest.fixture
+def disable_audit_logging_for_mocked_team(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("litellm.store_audit_logs", False)
 
 
 # Fixture to provide a mock admin user auth object
@@ -2060,7 +2067,9 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
 
 
 @pytest.mark.asyncio
-async def test_update_team_team_member_budget_not_passed_to_db():
+async def test_update_team_team_member_budget_not_passed_to_db(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that 'team_member_budget' is never passed to prisma_client.db.litellm_teamtable.update
     regardless of whether the value is set or None.
@@ -2498,7 +2507,9 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
 
 @pytest.mark.asyncio
-async def test_update_team_with_team_member_budget_duration():
+async def test_update_team_with_team_member_budget_duration(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that team/update endpoint properly handles team_member_budget_duration.
     """
@@ -5171,7 +5182,9 @@ async def test_update_team_standalone_budget_raise_blocked_for_team_admin():
 
 
 @pytest.mark.asyncio
-async def test_update_team_standalone_budget_raise_allowed_for_proxy_admin():
+async def test_update_team_standalone_budget_raise_allowed_for_proxy_admin(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that a proxy admin CAN raise a standalone team's budget on /team/update.
 
@@ -5325,7 +5338,9 @@ async def test_update_team_standalone_budget_removal_blocked_for_team_admin():
 
 
 @pytest.mark.asyncio
-async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed():
+async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed(
+    disable_audit_logging_for_mocked_team,
+):
     """
     When a team currently has NO cap (max_budget=None / unlimited), a team admin
     setting a finite max_budget is a RESTRICTION, not a raise, and is
@@ -5407,7 +5422,9 @@ async def test_update_team_standalone_uncapped_team_admin_sets_finite_allowed():
 
 
 @pytest.mark.asyncio
-async def test_update_team_standalone_unchanged_budget_allowed():
+async def test_update_team_standalone_unchanged_budget_allowed(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update for a standalone team does NOT compare against the
     caller's personal max_budget when the budget is unchanged.
@@ -5508,7 +5525,9 @@ async def test_update_team_standalone_unchanged_budget_allowed():
 
 
 @pytest.mark.asyncio
-async def test_update_team_standalone_lower_budget_allowed():
+async def test_update_team_standalone_lower_budget_allowed(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update for a standalone team allows lowering the budget
     below the team's current value even when the new value still exceeds the
@@ -5691,7 +5710,9 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
 
 
 @pytest.mark.asyncio
-async def test_update_team_standalone_models_not_gated_by_user_limit():
+async def test_update_team_standalone_models_not_gated_by_user_limit(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update for a standalone team does NOT gate the team's models
     by the caller's personal allowed models.
@@ -5775,7 +5796,9 @@ async def test_update_team_standalone_models_not_gated_by_user_limit():
 
 
 @pytest.mark.asyncio
-async def test_update_team_org_scoped_budget_bypasses_user_limit():
+async def test_update_team_org_scoped_budget_bypasses_user_limit(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update for an org-scoped team does NOT validate budget against user's personal max_budget.
 
@@ -5890,7 +5913,9 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
 
 
 @pytest.mark.asyncio
-async def test_update_team_org_scoped_models_bypasses_user_limit():
+async def test_update_team_org_scoped_models_bypasses_user_limit(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update for an org-scoped team does NOT validate models against user's personal models.
 
@@ -6080,7 +6105,9 @@ async def test_update_team_org_scoped_models_not_in_org_models():
 
 
 @pytest.mark.asyncio
-async def test_update_team_org_scoped_models_with_all_proxy_models():
+async def test_update_team_org_scoped_models_with_all_proxy_models(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update for an org-scoped team succeeds when organization has 'all-proxy-models'.
 
@@ -6196,7 +6223,9 @@ async def test_update_team_org_scoped_models_with_all_proxy_models():
 
 
 @pytest.mark.asyncio
-async def test_update_team_tpm_limit_not_gated_by_user_limit():
+async def test_update_team_tpm_limit_not_gated_by_user_limit(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update does NOT gate the team's tpm_limit by the caller's
     personal tpm_limit.
@@ -6279,7 +6308,9 @@ async def test_update_team_tpm_limit_not_gated_by_user_limit():
 
 
 @pytest.mark.asyncio
-async def test_update_team_rpm_limit_not_gated_by_user_limit():
+async def test_update_team_rpm_limit_not_gated_by_user_limit(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update does NOT gate the team's rpm_limit by the caller's
     personal rpm_limit.
@@ -6795,7 +6826,9 @@ async def test_update_team_org_scoped_rpm_exceeds_org_limit():
 
 
 @pytest.mark.asyncio
-async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
+async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update for an org-scoped team bypasses user's TPM/RPM limits.
 
@@ -6905,7 +6938,9 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
 
 
 @pytest.mark.asyncio
-async def test_update_team_guardrails_with_org_id():
+async def test_update_team_guardrails_with_org_id(
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that updating team guardrails works when team has an organization_id.
     The fix ensures 'teams' field is included when fetching organization data.
@@ -7242,7 +7277,10 @@ async def test_persist_deleted_team_records():
 
 
 @pytest.mark.asyncio
-async def test_delete_team_persists_deleted_teams(monkeypatch):
+async def test_delete_team_persists_deleted_teams(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
     from litellm.proxy._types import DeleteTeamRequest
 
     mock_prisma_client = AsyncMock()
@@ -7325,7 +7363,10 @@ async def test_delete_team_persists_deleted_teams(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delete_team_sweeps_references_outside_members_with_roles(monkeypatch):
+async def test_delete_team_sweeps_references_outside_members_with_roles(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
     """
     Regression pin for LIT-5511: a deleted team stayed visible on user records.
 
@@ -7431,7 +7472,10 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(monkeypatch):
+async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
     """
     A virtual key scoped to the team is deleted from the db with the team, but auth resolves a
     cached key object without re-reading the team, so leaving the cache entry behind lets that key
@@ -7493,7 +7537,10 @@ async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_delete_team_failing_reconcile_sweep_cannot_strand_the_team_in_cache(monkeypatch):
+async def test_delete_team_failing_reconcile_sweep_cannot_strand_the_team_in_cache(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
     """
     The reconcile sweep runs after the team row is committed deleted. If it ran before cache
     eviction, a sweep failure would return an error with the team gone from the db but still
@@ -7555,7 +7602,10 @@ async def test_delete_team_failing_reconcile_sweep_cannot_strand_the_team_in_cac
 
 
 @pytest.mark.asyncio
-async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(monkeypatch):
+async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
     """
     Evicting locally only reaches the worker that handled the delete. Without the broadcast, every
     other worker keeps serving the deleted team, and the deleted team's keys, out of its own
@@ -7619,7 +7669,10 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(monkey
 
 
 @pytest.mark.asyncio
-async def test_delete_team_survives_a_failing_cache_backend(monkeypatch):
+async def test_delete_team_survives_a_failing_cache_backend(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
     """
     Cache eviction runs after the reference sweep has already committed, so a cache backend that
     is unreachable must not abort the delete. If it did, `/team/delete` would fail with the team
@@ -8088,6 +8141,7 @@ async def test_update_team_soft_budget_validation(
     expected_soft_budget,
     expected_max_budget,
     error_message,
+    disable_audit_logging_for_mocked_team,
 ):
     """
     Test soft_budget validation in /team/update endpoint.
@@ -8498,7 +8552,11 @@ async def test_get_team_daily_activity_member_without_permission_filters_by_keys
 
 
 @pytest.mark.asyncio
-async def test_update_team_with_router_settings(mock_db_client, mock_admin_auth):
+async def test_update_team_with_router_settings(
+    mock_db_client,
+    mock_admin_auth,
+    disable_audit_logging_for_mocked_team,
+):
     """
     Test that /team/update correctly handles router_settings by:
     1. Accepting router_settings as a dict parameter
@@ -11594,7 +11652,9 @@ async def test_update_team_output_token_estimate_lowered_rejected_for_team_admin
 
 
 @pytest.mark.asyncio
-async def test_update_team_output_token_estimate_unchanged_allows_team_admin_edit():
+async def test_update_team_output_token_estimate_unchanged_allows_team_admin_edit(
+    disable_audit_logging_for_mocked_team,
+):
     """The team settings form resends every field it renders, so gating on
     presence would break a team admin editing an unrelated setting."""
     import contextlib
@@ -11957,7 +12017,9 @@ class _FakeMirrorDb:
 
 
 @pytest.mark.asyncio
-async def test_update_team_syncs_access_group_assigned_team_ids_in_both_directions():
+async def test_update_team_syncs_access_group_assigned_team_ids_in_both_directions(
+    disable_audit_logging_for_mocked_team,
+):
     """
     A team-side edit of `access_group_ids` must be mirrored onto every affected access
     group's `assigned_team_ids`, in one transaction, in both directions.
@@ -12113,7 +12175,9 @@ async def test_sync_reads_the_committed_team_row_rather_than_the_callers_snapsho
 
 
 @pytest.mark.asyncio
-async def test_new_team_and_delete_team_both_drive_the_mirror():
+async def test_new_team_and_delete_team_both_drive_the_mirror(
+    disable_audit_logging_for_mocked_team,
+):
     """Every writer of `team.access_group_ids` has to reach the mirror, not just update.
     These pin the wiring on the other two paths; the mirror's own behavior is covered above.
 

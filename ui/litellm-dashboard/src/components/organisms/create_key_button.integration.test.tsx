@@ -189,13 +189,7 @@ const openModal = async (props: Partial<React.ComponentProps<typeof CreateKey>> 
   return view;
 };
 
-const antdSearchInput = (placeholder: HTMLElement): HTMLInputElement => {
-  const input = placeholder.parentElement?.querySelector("input");
-  if (input == null) {
-    throw new Error("no antd search input next to the placeholder");
-  }
-  return input;
-};
+const userSearchInput = (): Promise<HTMLElement> => screen.findByPlaceholderText("Type email to search for users");
 
 const openSection = async (name: RegExp) => {
   await userEvent.click(await screen.findByRole("button", { name }));
@@ -563,11 +557,11 @@ describe("CreateKey", () => {
 
     it("mounts the user search control only once Another User is chosen", async () => {
       await openModal();
-      expect(screen.queryByText("Type email to search for users")).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("Type email to search for users")).not.toBeInTheDocument();
 
       await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
 
-      expect(await screen.findByText("Type email to search for users")).toBeInTheDocument();
+      expect(await userSearchInput()).toBeInTheDocument();
     });
 
     it("hides the Another User option from a non-admin", async () => {
@@ -664,7 +658,7 @@ describe("CreateKey", () => {
     it("prefills models once the available model list arrives", async () => {
       renderCreateKey({ autoOpenCreate: true, prefillData: { models: ["gpt-4"] } });
 
-      expect(await screen.findByTitle("gpt-4", {}, { timeout: 5000 })).toBeInTheDocument();
+      expect(await screen.findByLabelText("gpt-4", {}, { timeout: 5000 })).toBeInTheDocument();
     });
 
     it("ignores a team the user has no access to", async () => {
@@ -711,8 +705,8 @@ describe("CreateKey", () => {
       await openModal();
       await userEvent.click(await screen.findByLabelText("Models"));
 
-      expect(await screen.findByTitle("All Proxy Models")).toBeInTheDocument();
-      expect(screen.queryByTitle("All Team Models")).not.toBeInTheDocument();
+      expect(await screen.findByRole("option", { name: "All Proxy Models" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "All Team Models" })).not.toBeInTheDocument();
     });
 
     it("offers all-team-models but hides all-proxy-models once a team is selected", async () => {
@@ -724,8 +718,8 @@ describe("CreateKey", () => {
 
       await userEvent.click(await screen.findByLabelText("Models"));
 
-      expect(await screen.findByTitle("All Team Models")).toBeInTheDocument();
-      expect(screen.queryByTitle("All Proxy Models")).not.toBeInTheDocument();
+      expect(await screen.findByRole("option", { name: "All Team Models" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "All Proxy Models" })).not.toBeInTheDocument();
     });
   });
 
@@ -797,7 +791,7 @@ describe("CreateKey", () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
         renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
-        const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+        const search = await userSearchInput();
 
         await user.type(search, "ali");
         expect(vi.mocked(userFilterUICall)).not.toHaveBeenCalled();
@@ -824,7 +818,7 @@ describe("CreateKey", () => {
 
       const user = userEvent.setup();
       renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
-      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+      const search = await userSearchInput();
 
       await user.type(search, "ali");
       await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
@@ -856,7 +850,7 @@ describe("CreateKey", () => {
 
       const user = userEvent.setup();
       renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
-      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+      const search = await userSearchInput();
 
       await user.type(search, "ali");
       await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
@@ -884,7 +878,7 @@ describe("CreateKey", () => {
 
       const user = userEvent.setup();
       renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
-      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+      const search = await userSearchInput();
 
       await user.type(search, "ali");
       await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
@@ -919,7 +913,7 @@ describe("CreateKey", () => {
 
       const user = userEvent.setup();
       renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
-      const search = antdSearchInput(await screen.findByText("Type email to search for users"));
+      const search = await userSearchInput();
 
       await user.type(search, "ali");
       await waitFor(() => expect(answers.has("ali")).toBe(true), { timeout: 3000 });
@@ -1007,7 +1001,7 @@ describe("CreateKey", () => {
       await nameTheKey();
 
       await userEvent.click(await screen.findByLabelText("Key Type"));
-      await userEvent.click(await screen.findByText("Management"));
+      await userEvent.click(await screen.findByRole("option", { name: /^Management/ }));
       await submit();
 
       const payload = await createdPayload();
@@ -1050,8 +1044,8 @@ describe("CreateKey", () => {
       await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
       await nameTheKey();
 
-      await userEvent.type(antdSearchInput(await screen.findByText("Type email to search for users")), "alice");
-      await userEvent.click(await screen.findByText("alice@example.com (u-77)"));
+      await userEvent.type(await userSearchInput(), "alice");
+      await userEvent.click(await screen.findByRole("option", { name: "alice@example.com (u-77)" }));
       await submit();
 
       expect((await createdPayload()).user_id).toBe("u-77");

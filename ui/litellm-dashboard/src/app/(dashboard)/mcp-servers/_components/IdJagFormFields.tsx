@@ -3,7 +3,7 @@ import React from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
@@ -14,13 +14,13 @@ interface IdJagFormFieldsProps {
   isEditing?: boolean;
 }
 
-const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
+const fieldClassName = "rounded-lg border-border focus:border-info focus:ring-ring";
 
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
-  <span className="text-sm font-medium text-gray-700 flex items-center">
+  <span className="text-sm font-medium text-foreground flex items-center">
     {label}
     <SimpleTooltip content={tooltip}>
-      <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+      <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
     </SimpleTooltip>
   </span>
 );
@@ -30,7 +30,7 @@ const PRIVATE_KEY_PATH = ["credentials", "client_private_key"] as const;
 const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
   const requiredWhenCreating = (message: string) =>
-    isEditing ? undefined : { validate: { required: antdRequired(message) } };
+    isEditing ? undefined : { validate: { required: requiredRule(message) } };
 
   return (
     <>

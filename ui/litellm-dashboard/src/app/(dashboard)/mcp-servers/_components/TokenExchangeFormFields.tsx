@@ -6,7 +6,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { useWatch } from "react-hook-form";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
 import { selectControl, selectTriggerControl, tagsControl, textControl } from "./mcpFieldRules";
@@ -15,7 +15,7 @@ interface TokenExchangeFormFieldsProps {
   isEditing?: boolean;
 }
 
-const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
+const fieldClassName = "rounded-lg border-border focus:border-info focus:ring-ring";
 
 const TOKEN_EXCHANGE_PROFILE_ITEMS = [
   { value: "rfc8693", label: "RFC 8693 (standard)" },
@@ -23,10 +23,10 @@ const TOKEN_EXCHANGE_PROFILE_ITEMS = [
 ];
 
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
-  <span className="text-sm font-medium text-gray-700 flex items-center">
+  <span className="text-sm font-medium text-foreground flex items-center">
     {label}
     <SimpleTooltip content={tooltip}>
-      <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+      <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
     </SimpleTooltip>
   </span>
 );
@@ -35,7 +35,7 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
   const isEntraObo = useWatch({ name: "token_exchange_profile" }) === "entra_obo";
   const requiredWhenCreating = (message: string) =>
-    isEditing ? undefined : { validate: { required: antdRequired(message) } };
+    isEditing ? undefined : { validate: { required: requiredRule(message) } };
 
   return (
     <>
@@ -170,7 +170,7 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
           isEntraObo
             ? {
                 validate: {
-                  required: antdRequired("Microsoft Entra OBO requires a scope, e.g. api://<app-id>/.default"),
+                  required: requiredRule("Microsoft Entra OBO requires a scope, e.g. api://<app-id>/.default"),
                 },
               }
             : undefined

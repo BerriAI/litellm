@@ -21,15 +21,22 @@ async function findDeploymentByName(page: PlaywrightPage, modelName: string): Pr
   return body.data.find((row) => row.model_name === modelName);
 }
 
+/** Anchors a substring match to the whole string, escaping regex metacharacters. */
+const exactly = (text: string): RegExp => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
 /**
- * Helper to select a provider from the Add Model form dropdown.
+ * Helper to select a provider from the Add Model form dropdown. The field is a
+ * searchable combobox: it only opens on click, typing filters the list, and the
+ * option has to be picked explicitly because nothing is highlighted by default.
+ * Options are matched on their visible text, not their accessible name, which
+ * also carries the provider logo's alt text ("Anthropic logo Anthropic").
  */
-async function selectProvider(page: any, providerName: string) {
-  const providerDropdown = page.getByRole("combobox", { name: /Provider/i });
+async function selectProvider(page: PlaywrightPage, providerName: string) {
+  const providerDropdown = page.getByRole("combobox", { name: "Provider", exact: true });
+  await providerDropdown.click();
   await providerDropdown.fill(providerName);
-  await page.waitForTimeout(1000);
-  await providerDropdown.press("Enter");
-  await page.waitForTimeout(2000);
+  await page.getByRole("option").filter({ hasText: exactly(providerName) }).click();
+  await expect(providerDropdown).toHaveValue(providerName);
 }
 
 test.describe("Add Model", () => {
@@ -64,11 +71,10 @@ test.describe("Add Model", () => {
     await selectProvider(page, "Anthropic");
 
     // The model field should be a multi-select dropdown; click to open it
-    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-    await modelDropdown.click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
 
     // Verify provider-specific models are listed
-    await expect(page.getByTitle("claude-haiku-4-5", { exact: true })).toBeVisible();
+    await expect(page.getByRole("option", { name: "claude-haiku-4-5", exact: true })).toBeVisible();
   });
 
   test("Edit team model TPM and RPM limits", async ({ page }) => {
@@ -156,14 +162,14 @@ test.describe("Add Model", () => {
     await page.getByRole("tab", { name: "Add Model" }).click();
 
     // Labels come from /public/providers/fields, not the frontend Providers enum, and the two differ.
-    await selectProvider(page, "OpenAI-Compatible Endpoints");
+    await selectProvider(page, "OpenAI-Compatible Endpoints (Together AI, etc.)");
 
     const publicName = `e2e-ui-added-${Date.now()}`;
     uiAddedModelName = publicName;
 
     // The model picker's "custom" entry reveals the free-text name field.
-    await page.locator(".ant-select-selection-overflow").first().click();
-    await page.locator(".ant-select-dropdown:visible").getByText("Custom Model Name (Enter below)").click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "Custom Model Name (Enter below)" }).click();
     await page.keyboard.press("Escape");
     await page.getByPlaceholder("Enter custom model name").fill(publicName);
 
@@ -177,8 +183,8 @@ test.describe("Add Model", () => {
     await expect(page.getByTestId("connection-success-msg")).toBeVisible({ timeout: 30_000 });
 
     // The modal swallows the Add click. Scope to the footer: the dismiss X is also named "Close".
-    const resultsModal = page.locator(".ant-modal:visible").filter({ hasText: "Connection Test Results" });
-    await resultsModal.locator(".ant-modal-footer").getByRole("button", { name: "Close" }).click();
+    const resultsModal = page.getByRole("dialog", { name: "Connection Test Results" });
+    await resultsModal.locator('[data-slot="dialog-footer"]').getByRole("button", { name: "Close" }).click();
     await expect(resultsModal).toBeHidden({ timeout: 5_000 });
 
     const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
@@ -213,9 +219,8 @@ test.describe("Add Model", () => {
     await selectProvider(page, "Anthropic");
 
     // Select model: claude-haiku-4-5
-    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-    await modelDropdown.click();
-    await page.getByTitle("claude-haiku-4-5", { exact: true }).click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "claude-haiku-4-5", exact: true }).click();
     await page.keyboard.press("Escape");
 
     // Enter bad API key
@@ -239,9 +244,8 @@ test.describe("Add Model", () => {
     await selectProvider(page, "Anthropic");
 
     // Select model: claude-haiku-4-5
-    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-    await modelDropdown.click();
-    await page.getByTitle("claude-haiku-4-5", { exact: true }).click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "claude-haiku-4-5", exact: true }).click();
     await page.keyboard.press("Escape");
 
     // Enter any API key
@@ -315,18 +319,15 @@ test.describe("Add Model", () => {
 
       await selectProvider(page, "Cohere");
 
-      const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-      await modelDropdown.click();
-      const wildcardOption = page.getByTitle(/All .* Models \(Wildcard\)/);
-      await wildcardOption.click();
+      await page.getByRole("combobox", { name: "Select models" }).click();
+      await page.getByRole("option", { name: /All .* Models \(Wildcard\)/ }).click();
       await page.keyboard.press("Escape");
 
       const apiKeyInput = page.locator('input[type="password"]').first();
       await apiKeyInput.fill("sk-any-key-for-team-byok-test");
 
-      // Flip the Team-BYOK switch on (Form.Item label "Team-BYOK Model")
-      const teamByokRow = page.locator(".ant-form-item", { hasText: "Team-BYOK Model" });
-      await teamByokRow.getByRole("switch").click();
+      // Flip the Team-BYOK switch on; the Switch carries its own aria-label.
+      await page.getByRole("switch", { name: "Team-BYOK Model" }).click();
 
       // TeamDropdown options show the alias above the team id, so match on the id line by text.
       const teamDropdown = page.getByTestId("team-dropdown").getByRole("combobox");
@@ -376,10 +377,8 @@ test.describe("Add Model", () => {
     await selectProvider(page, "Cohere");
 
     // Select All Cohere Models (Wildcard)
-    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
-    await modelDropdown.click();
-    const wildcardOption = page.getByTitle(/All .* Models \(Wildcard\)/);
-    await wildcardOption.click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: /All .* Models \(Wildcard\)/ }).click();
     await page.keyboard.press("Escape");
 
     // Enter any API key

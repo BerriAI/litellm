@@ -8,7 +8,7 @@ import { z } from "zod/v4";
 
 import { createPassThroughEndpoint } from "./networking";
 import NumericalInput from "./shared/numerical_input";
-import KeyValueInput from "./key_value_input";
+import KeyValueInput, { type KeyValuePair } from "./key_value_input";
 import QueryParamInput from "./query_param_input";
 import { passThroughItem } from "./PassThroughSettings/PassThroughSettings";
 import RoutePreview from "./route_preview";
@@ -31,6 +31,8 @@ const HTTP_METHOD_OPTIONS = HTTP_METHODS.map((method) => ({ label: method, value
 
 type GuardrailSettings = Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
 
+const keyValuePairsSchema = z.array(z.tuple([z.string(), z.string()]));
+
 const passThroughFormSchema = z.object({
   path: z.string().min(1, "Path is required").regex(/^\//, "Path is required"),
   target: z
@@ -39,8 +41,10 @@ const passThroughFormSchema = z.object({
     .pipe(z.url({ error: "Please enter a valid URL" })),
   methods: z.array(z.string()).optional(),
   include_subpath: z.boolean(),
-  headers: z.record(z.string(), z.string(), { error: "Please configure the headers" }),
-  default_query_params: z.record(z.string(), z.string()).optional(),
+  headers: keyValuePairsSchema.refine((pairs) => pairs.some(([name]) => name !== ""), {
+    error: "Please configure the headers",
+  }),
+  default_query_params: keyValuePairsSchema.optional(),
   auth: z.boolean().optional(),
   timeout: z.string().optional(),
   cost_per_request: z.string().optional(),
@@ -53,7 +57,7 @@ const emptyFormValues = {
   target: "",
   methods: undefined,
   include_subpath: true,
-  headers: undefined,
+  headers: [],
   default_query_params: undefined,
   auth: undefined,
   timeout: undefined,
@@ -71,6 +75,14 @@ const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode =>
 );
 
 const optionalText = (raw: string): string | undefined => (raw === "" ? undefined : raw);
+
+const toRecord = (pairs: readonly KeyValuePair[]): Record<string, string> =>
+  Object.fromEntries(pairs.filter(([name]) => name !== ""));
+
+const optionalRecord = (pairs: readonly KeyValuePair[] | undefined): Record<string, string> | undefined => {
+  const record = toRecord(pairs ?? []);
+  return Object.keys(record).length > 0 ? record : undefined;
+};
 
 interface AddFallbacksProps {
   accessToken: string;
@@ -109,8 +121,8 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
         target: values.target,
         methods: values.methods,
         include_subpath: values.include_subpath,
-        headers: values.headers,
-        default_query_params: values.default_query_params,
+        headers: toRecord(values.headers),
+        default_query_params: optionalRecord(values.default_query_params),
         ...(premiumUser ? { auth: values.auth } : {}),
         timeout: values.timeout,
         cost_per_request: values.cost_per_request,
@@ -143,7 +155,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
           <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[1000px]">
             <DialogHeader>
               <div className="flex items-center space-x-3 border-b border-border pb-4">
-                <Plug className="size-5 text-blue-500" />
+                <Plug className="size-5 text-info" />
                 <DialogTitle className="text-xl font-semibold text-foreground">Add Pass-Through Endpoint</DialogTitle>
               </div>
             </DialogHeader>
