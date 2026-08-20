@@ -472,6 +472,8 @@ def _is_positive_cost(value: object) -> bool:
 
 
 def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
+    if entry.get("tiered_pricing") is not None:
+        return True
     for key, value in entry.items():
         if "cost_per" not in key:
             continue
@@ -483,15 +485,15 @@ def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
 
 
 def _entry_declares_price(entry: Mapping[str, object]) -> bool:
-    return any("cost_per" in key for key in entry)
+    return any("cost_per" in key or key == "tiered_pricing" for key in entry)
 
 
 def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
     """
-    A model group counts as priced when a deployment overrides any *cost_per* field in its
-    litellm_params, even at zero, or when its resolved model info carries a positive price on
-    any billed metric (tokens, characters, seconds, pages, images, queries, ...), so models
-    billed by a non-token metric are not treated as unpriced.
+    A model group counts as priced when a deployment overrides any *cost_per* field or
+    tiered_pricing in its litellm_params, even at zero, or when its resolved model info carries
+    tiered_pricing or a positive price on any billed metric (tokens, characters, seconds, pages,
+    images, queries, ...), so models billed by a non-token metric are not treated as unpriced.
     """
     for deployment in llm_router.get_model_list(model_name=model) or ():
         litellm_params = deployment.get("litellm_params") or _EMPTY_COST_ENTRY
