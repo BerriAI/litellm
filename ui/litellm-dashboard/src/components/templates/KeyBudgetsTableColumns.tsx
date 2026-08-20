@@ -38,9 +38,10 @@ const isAlertOnly = (entry: KeyBudgetEntry): boolean => entry.enforcement === "s
 
 /**
  * Whether a note means the row is dead: it cannot reject a request no matter what the numbers say.
- * Only a permanent property counts. `model_budget_fails_open` is deliberately not dead, because a
- * cold counter is transient: the budget is live and blocks as soon as one request warms it, so
- * calling it dead tells someone to ignore a cap that stops them a minute later.
+ * Only a permanent property of this row counts. `custom_auth_skips_read_time_checks` is deliberately
+ * not dead even though it says budgets go unchecked, because the reservation layer still enforces
+ * the scopes it covers, so which rows survive depends on scope rather than on the code. Encoding
+ * that split here would duplicate the resolver's coverage set and drift from it.
  *
  * Deadness is a property of the code alone. Severity does not imply it in either direction, since
  * dead codes appear under both values, so an unclassified code is assumed live: calling a row dead
@@ -51,8 +52,8 @@ const isAlertOnly = (entry: KeyBudgetEntry): boolean => entry.enforcement === "s
 const CODE_KILLS_ROW: Readonly<Record<KeyBudgetNoteCode, boolean>> = {
   alert_only: false,
   custom_auth_may_override_end_user_cap: false,
+  custom_auth_skips_read_time_checks: false,
   end_user_route_only: false,
-  model_budget_fails_open: false,
   per_model_counters: false,
   project_spend_not_tracked: true,
   request_tags_add_budgets: false,

@@ -6833,16 +6833,21 @@ export interface paths {
          *           `team_member`, `user`, `organization`, `project`, `tag`, `end_user` or `end_user_model`
          *         - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
          *           names, so a denial message maps back to a row here
-         *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
+         *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias.
+         *           On the per-model scopes this is one row per counter rather than per request model, so
+         *           `entity_id` is the model whose counter was read and `entity_label` is the configured cap
+         *           it is compared against; several request models can share one counter, and they are not
+         *           listed separately because their spend is not separate
          *         - enforcement: str - `hard` blocks the request, `soft` only raises an alert, `throttled`
          *           scales the key's rate limits down instead of denying anything. Only the key's own
          *           `max_budget` can be `throttled`; every other scope on the same key still blocks
          *         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
          *           but places no limit on it
          *         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
-         *           counter, not the periodically-synced database column
-         *         - spend_state: str - Whether `spend` is `live`, missing because no counter exists yet
-         *           (`no_counter`), or missing because the read failed (`unavailable`)
+         *           counter, not the periodically-synced database column. `null` only when the read failed
+         *         - spend_state: str - Whether `spend` came from a counter (`live`), is the zero that will be
+         *           enforced because no counter has been created yet (`no_counter`), or is missing because the
+         *           read failed (`unavailable`)
          *         - remaining: float | None - `max_budget - spend`, when both are known
          *         - comparison: str - The operator the enforcing check uses, which differs per scope
          *         - budget_duration / budget_reset_at / window_start: When spend next resets to zero
@@ -7533,16 +7538,21 @@ export interface paths {
          *           `team_member`, `user`, `organization`, `project`, `tag`, `end_user` or `end_user_model`
          *         - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
          *           names, so a denial message maps back to a row here
-         *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
+         *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias.
+         *           On the per-model scopes this is one row per counter rather than per request model, so
+         *           `entity_id` is the model whose counter was read and `entity_label` is the configured cap
+         *           it is compared against; several request models can share one counter, and they are not
+         *           listed separately because their spend is not separate
          *         - enforcement: str - `hard` blocks the request, `soft` only raises an alert, `throttled`
          *           scales the key's rate limits down instead of denying anything. Only the key's own
          *           `max_budget` can be `throttled`; every other scope on the same key still blocks
          *         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
          *           but places no limit on it
          *         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
-         *           counter, not the periodically-synced database column
-         *         - spend_state: str - Whether `spend` is `live`, missing because no counter exists yet
-         *           (`no_counter`), or missing because the read failed (`unavailable`)
+         *           counter, not the periodically-synced database column. `null` only when the read failed
+         *         - spend_state: str - Whether `spend` came from a counter (`live`), is the zero that will be
+         *           enforced because no counter has been created yet (`no_counter`), or is missing because the
+         *           read failed (`unavailable`)
          *         - remaining: float | None - `max_budget - spend`, when both are known
          *         - comparison: str - The operator the enforcing check uses, which differs per scope
          *         - budget_duration / budget_reset_at / window_start: When spend next resets to zero
@@ -26418,7 +26428,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "alert_only" | "custom_auth_may_override_end_user_cap" | "end_user_route_only" | "model_budget_fails_open" | "per_model_counters" | "project_spend_not_tracked" | "request_tags_add_budgets" | "reservation_blocks_at_limit" | "rolling_window" | "throttled_instead_of_blocked" | "user_budget_not_applied_to_team_key";
+            code: "alert_only" | "custom_auth_may_override_end_user_cap" | "custom_auth_skips_read_time_checks" | "end_user_route_only" | "per_model_counters" | "project_spend_not_tracked" | "request_tags_add_budgets" | "reservation_blocks_at_limit" | "rolling_window" | "throttled_instead_of_blocked" | "user_budget_not_applied_to_team_key";
             /**
              * Severity
              * @enum {string}

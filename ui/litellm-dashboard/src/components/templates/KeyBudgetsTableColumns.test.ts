@@ -63,11 +63,12 @@ const USER_ON_TEAM_KEY_NOTE = {
   text: noteText("user_budget_not_applied_to_team_key"),
 } as const;
 
-// Transient, not dead: the counter is merely cold and the cap blocks once one request warms it.
-const COLD_MODEL_NOTE = {
-  code: "model_budget_fails_open",
-  severity: "info",
-  text: noteText("model_budget_fails_open"),
+// Fires on every row when a custom auth callable skips the read-time checks. Not dead: the
+// reservation layer still enforces the scopes it covers, so it cannot condemn a row on its own.
+const CUSTOM_AUTH_SKIPS_NOTE = {
+  code: "custom_auth_skips_read_time_checks",
+  severity: "warning",
+  text: noteText("custom_auth_skips_read_time_checks"),
 } as const;
 
 const TEAM_MEMBER_AT_LIMIT: KeyBudgetEntry = {
@@ -203,16 +204,25 @@ describe("cannotTrip", () => {
   });
 });
 
-describe("cold per-model counters", () => {
-  it("stays live, because the cap blocks as soon as one request warms the counter", () => {
-    expect(COLD_MODEL_NOTE.severity).toBe("info");
-    expect(cannotTrip({ ...HEALTHY, scope: "key_model", notes: [COLD_MODEL_NOTE] })).toBe(false);
+describe("custom auth skipping read-time checks", () => {
+  it("does not condemn a row, because the reservation layer still covers most scopes", () => {
+    expect(cannotTrip({ ...HEALTHY, scope: "team", notes: [CUSTOM_AUTH_SKIPS_NOTE] })).toBe(false);
   });
 
-  it("is not lumped in with a budget that is permanently inert", () => {
-    expect(cannotTrip({ ...HEALTHY, notes: [USER_ON_TEAM_KEY_NOTE] })).toBe(true);
-    expect(rowRank({ ...HEALTHY, scope: "key_model", notes: [COLD_MODEL_NOTE] })).toBeLessThan(
-      rowRank({ ...HEALTHY, notes: [USER_ON_TEAM_KEY_NOTE] }),
+  it("cannot flatten the table, since it rides every row and would otherwise kill all of them", () => {
+    const rows: KeyBudgetEntry[] = [
+      { ...BLOCKING, notes: [CUSTOM_AUTH_SKIPS_NOTE] },
+      { ...HEALTHY, notes: [CUSTOM_AUTH_SKIPS_NOTE] },
+      { ...UNCONFIGURED_BUDGET, notes: [CUSTOM_AUTH_SKIPS_NOTE] },
+    ];
+    expect(rows.map(cannotTrip)).toStrictEqual([false, false, false]);
+    expect(rows.map(rowRank)).toStrictEqual([0, 2, 3]);
+    expect(isBlockingRow(rows[0])).toBe(true);
+  });
+
+  it("still ranks a permanently inert row below a live one carrying the same note", () => {
+    expect(rowRank({ ...HEALTHY, notes: [CUSTOM_AUTH_SKIPS_NOTE] })).toBeLessThan(
+      rowRank({ ...HEALTHY, notes: [CUSTOM_AUTH_SKIPS_NOTE, USER_ON_TEAM_KEY_NOTE] }),
     );
   });
 });

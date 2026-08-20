@@ -233,7 +233,9 @@ const assertServerCouldEmit = (budgets: readonly KeyBudgetEntry[]): void => {
     // Scoped to the states the resolver defines today; a fixture simulating a newer server is
     // deliberately outside them and only has to satisfy the invariants that are not state-specific.
     if (["live", "no_counter", "unavailable"].includes(budget.spend_state)) {
-      expect(budget.spend_state === "live").toBe(budget.spend !== null);
+      // A missing per-model counter is reported as a real 0.0, because zero is what the cap will be
+      // compared against. Only a failed read has no number at all.
+      expect(budget.spend_state === "unavailable").toBe(budget.spend === null);
     }
     expect(budget.status === "unlimited").toBe(budget.max_budget === null);
     if (budget.spend == null || budget.max_budget == null) {
@@ -242,7 +244,7 @@ const assertServerCouldEmit = (budgets: readonly KeyBudgetEntry[]): void => {
       expect(budget.remaining).toBeCloseTo(budget.max_budget - budget.spend, 6);
     }
     if (budget.spend_state === "no_counter") {
-      expect(budget.notes.map((note) => note.code)).toContain("model_budget_fails_open");
+      expect(budget.notes.map((note) => note.code)).toContain("per_model_counters");
     }
   }
 };
@@ -278,6 +280,14 @@ const rowFor = (panel: ReturnType<typeof within>, entityLabel: string): HTMLElem
   const row = panel.getByText(entityLabel).closest("tr");
   if (row === null) throw new Error(`no table row rendered for ${entityLabel}`);
   return row;
+};
+
+const cellUnder = (panel: ReturnType<typeof within>, row: HTMLElement, column: string): HTMLElement => {
+  const index = panel
+    .getAllByRole("columnheader")
+    .findIndex((header: HTMLElement) => header.textContent?.trim() === column);
+  if (index < 0) throw new Error(`no ${column} column rendered`);
+  return within(row).getAllByRole("cell")[index];
 };
 
 describe("KeyInfoView Budgets tab", () => {
@@ -349,11 +359,12 @@ describe("KeyInfoView Budgets tab", () => {
     expect(row).not.toHaveTextContent("$0.00");
     // The meter is the part that lies loudest: drawn at 0% it reads as untouched headroom.
     expect(within(row).queryByRole("meter")).not.toBeInTheDocument();
+    expect(cellUnder(panel, row, "Remaining")).toHaveTextContent("-");
     expect(row).toHaveTextContent("Blocks at ≥ $1,000.00");
   });
 
-  // The resolver nulls `remaining` whenever spend is null and always attaches the cold note to a
-  // `no_counter` reading, so a fixture without both is one the server cannot produce.
+  // The resolver reports a cold counter as the 0.0 it will be enforced as, and always attaches the
+  // per-model note to a `no_counter` reading, so a fixture without both is one the server cannot produce.
   const COLD_PER_MODEL: KeyBudgetEntry = {
     ...UNCONFIGURED_BUDGET,
     scope: "key_model",
@@ -361,16 +372,13 @@ describe("KeyInfoView Budgets tab", () => {
     entity_id: "claude-opus-5",
     entity_label: "claude-opus-5",
     max_budget: 40,
-    spend: null,
+    spend: 0,
     spend_state: "no_counter",
-    remaining: null,
+    remaining: 40,
     comparison: ">",
     source: "key.model_max_budget[claude-opus-5]",
     status: "ok",
-    notes: [
-      { code: "per_model_counters", severity: "warning", text: noteText("per_model_counters") },
-      { code: "model_budget_fails_open", severity: "info", text: noteText("model_budget_fails_open") },
-    ],
+    notes: [{ code: "per_model_counters", severity: "warning", text: noteText("per_model_counters") }],
   };
 
   it("shows a genuine no-counter-yet zero as $0.00 with its meter, not as unknown", async () => {
@@ -381,6 +389,9 @@ describe("KeyInfoView Budgets tab", () => {
     expect(row).toHaveTextContent("$0.00 of $40.00");
     expect(row).not.toHaveTextContent("Unknown");
     expect(within(row).getByRole("meter")).toBeInTheDocument();
+    // A cold counter reports a real zero, so the whole cap is still available and the remaining
+    // cell says so rather than falling back to the dash it shows when spend cannot be read.
+    expect(cellUnder(panel, row, "Remaining")).toHaveTextContent("$40.00");
   });
 
   it("keeps a cold per-model budget live, since one request warms the counter and it starts blocking", async () => {
