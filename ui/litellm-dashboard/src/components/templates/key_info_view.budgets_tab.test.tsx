@@ -135,12 +135,6 @@ const UNCONFIGURED_BUDGET = {
 // text below is synthetic. Copying the resolver's prose only buys tests that go stale silently.
 const noteText = (code: string): string => `synthetic ${code} caveat`;
 
-const ALERT_ONLY_NOTE = {
-  code: "alert_only",
-  severity: "info",
-  text: noteText("alert_only"),
-} as const;
-
 const PROJECT_DEAD_NOTE = {
   code: "project_spend_not_tracked",
   severity: "warning",
@@ -167,19 +161,18 @@ const USER_WITHIN_BUDGET: KeyBudgetEntry = {
   status: "ok",
 };
 
-const TEAM_SOFT_OVER: KeyBudgetEntry = {
+const TEAM_WITHIN_BUDGET: KeyBudgetEntry = {
   ...UNCONFIGURED_BUDGET,
   scope: "team",
   entity_type: "team",
   entity_id: "team-123",
   entity_label: "Platform",
-  enforcement: "soft",
   max_budget: 500,
-  spend: 900,
-  remaining: -400,
-  source: "budget_table:b-soft",
-  status: "exceeded",
-  notes: [ALERT_ONLY_NOTE],
+  spend: 400,
+  remaining: 100,
+  comparison: ">",
+  source: "budget_table:b-team",
+  status: "ok",
 };
 
 const TEAM_MEMBER_BLOCKING: KeyBudgetEntry = {
@@ -223,7 +216,7 @@ const WORST_CASE_NOTES = [
 // guard. Only its length and the absence of clipping matter, never its wording.
 const OVERLONG_NOTE_TEXT = `${"a caveat clause that keeps going ".repeat(16)}end`;
 
-const ALL_BUDGETS = [KEY_UNLIMITED, USER_WITHIN_BUDGET, TEAM_SOFT_OVER, TEAM_MEMBER_BLOCKING, ORG_UNCONFIGURED];
+const ALL_BUDGETS = [KEY_UNLIMITED, USER_WITHIN_BUDGET, TEAM_WITHIN_BUDGET, TEAM_MEMBER_BLOCKING, ORG_UNCONFIGURED];
 
 // A fixture the resolver cannot produce is how a rendering bug hides: a cold per-model row built
 // with no notes and a computed `remaining` looked healthy while the real one rendered as dead.
@@ -232,9 +225,7 @@ const assertServerCouldEmit = (budgets: readonly KeyBudgetEntry[]): void => {
   for (const budget of budgets) {
     // Scoped to the states the resolver defines today; a fixture simulating a newer server is
     // deliberately outside them and only has to satisfy the invariants that are not state-specific.
-    if (["live", "no_counter", "unavailable"].includes(budget.spend_state)) {
-      // A missing per-model counter is reported as a real 0.0, because zero is what the cap will be
-      // compared against. Only a failed read has no number at all.
+    if (["live", "unavailable"].includes(budget.spend_state)) {
       expect(budget.spend_state === "unavailable").toBe(budget.spend === null);
     }
     // A row nobody could resolve has no cap to call unlimited and no spend to compare, so it is the
@@ -248,9 +239,6 @@ const assertServerCouldEmit = (budgets: readonly KeyBudgetEntry[]): void => {
       expect(budget.remaining).toBeNull();
     } else {
       expect(budget.remaining).toBeCloseTo(budget.max_budget - budget.spend, 6);
-    }
-    if (budget.spend_state === "no_counter") {
-      expect(budget.notes.map((note) => note.code)).toContain("per_model_counters");
     }
   }
 };
@@ -332,17 +320,6 @@ describe("KeyInfoView Budgets tab", () => {
     expect(blockedRow).toHaveTextContent("$1,000.2000 of $1,000.00");
   });
 
-  it("shows an over-budget soft limit as alert-only, never as a blocker", async () => {
-    const panel = await renderAndOpenBudgetsTab();
-
-    const softRow = rowFor(panel, "Platform");
-    expect(within(softRow).getByText("Alert only")).toBeInTheDocument();
-    expect(within(softRow).getByText("Exceeded (alert only)")).toBeInTheDocument();
-    expect(within(softRow).queryByTestId("key-budget-blocking")).not.toBeInTheDocument();
-    expect(within(softRow).queryByText("Blocks requests")).not.toBeInTheDocument();
-    expect(softRow).toHaveTextContent(ALERT_ONLY_NOTE.text);
-  });
-
   it("does not render a spend the server could not read as a healthy $0.00", async () => {
     const unreadable: KeyBudgetEntry = {
       ...UNCONFIGURED_BUDGET,
@@ -398,7 +375,7 @@ describe("KeyInfoView Budgets tab", () => {
     expect(within(row).queryByText("Within budget")).not.toBeInTheDocument();
     expect(within(row).queryByText("Cannot trip")).not.toBeInTheDocument();
     expect(cellUnder(panel, row, "Remaining")).toHaveTextContent("-");
-    expect(row).toHaveTextContent(noteText("entity_unavailable"));
+    expect(cellUnder(panel, row, "Caveats")).toHaveTextContent(noteText("entity_unavailable"));
   });
 
   it("sorts a budget it could not read above the ones it could, since only that row needs chasing", async () => {
@@ -407,52 +384,6 @@ describe("KeyInfoView Budgets tab", () => {
 
     const [, ...dataRows] = panel.getAllByRole("row");
     expect(dataRows[0]).toHaveTextContent("team-123");
-  });
-
-  // The resolver reports a cold counter as the 0.0 it will be enforced as, and always attaches the
-  // per-model note to a `no_counter` reading, so a fixture without both is one the server cannot produce.
-  const COLD_PER_MODEL: KeyBudgetEntry = {
-    ...UNCONFIGURED_BUDGET,
-    scope: "key_model",
-    entity_type: "key",
-    entity_id: "claude-opus-5",
-    entity_label: "claude-opus-5",
-    max_budget: 40,
-    spend: 0,
-    spend_state: "no_counter",
-    remaining: 40,
-    comparison: ">",
-    source: "key.model_max_budget[claude-opus-5]",
-    status: "ok",
-    notes: [{ code: "per_model_counters", severity: "warning", text: noteText("per_model_counters") }],
-  };
-
-  it("shows a genuine no-counter-yet zero as $0.00 with its meter, not as unknown", async () => {
-    mockBudgets([COLD_PER_MODEL]);
-    const panel = await renderAndOpenBudgetsTab();
-
-    const row = rowFor(panel, "claude-opus-5");
-    expect(row).toHaveTextContent("$0.00 of $40.00");
-    expect(row).not.toHaveTextContent("Unknown");
-    expect(within(row).getByRole("meter")).toBeInTheDocument();
-    // A cold counter reports a real zero, so the whole cap is still available and the remaining
-    // cell says so rather than falling back to the dash it shows when spend cannot be read.
-    expect(cellUnder(panel, row, "Remaining")).toHaveTextContent("$40.00");
-  });
-
-  it("keeps a cold per-model budget live, since one request warms the counter and it starts blocking", async () => {
-    mockBudgets([COLD_PER_MODEL, KEY_UNLIMITED]);
-    const panel = await renderAndOpenBudgetsTab();
-
-    const row = rowFor(panel, "claude-opus-5");
-    expect(within(row).getByText("Within budget")).toBeInTheDocument();
-    expect(within(row).queryByText("Cannot trip")).not.toBeInTheDocument();
-    expect(within(row).getByText("Blocks requests")).toBeInTheDocument();
-    expect(row).toHaveTextContent("Blocks at > $40.00");
-
-    // A live budget must outrank a scope with nothing configured, never sink below it.
-    const [, ...dataRows] = panel.getAllByRole("row");
-    expect(dataRows[0]).toHaveTextContent("claude-opus-5");
   });
 
   it("treats a spend state this build predates as unreadable rather than as a confident number", async () => {
@@ -493,8 +424,9 @@ describe("KeyInfoView Budgets tab", () => {
     mockBudgets([endUser]);
     const panel = await renderAndOpenBudgetsTab();
 
-    const rendered = WORST_CASE_NOTES.map((note) => panel.getByText(note.text));
-    expect(rendered).toHaveLength(3);
+    const caveats = cellUnder(panel, rowFor(panel, "customer-42"), "Caveats");
+    expect(caveats).toHaveTextContent("3 caveats");
+    const rendered = WORST_CASE_NOTES.map((note) => within(caveats).getByText(note.text));
     // Separate elements, not one joined blob, so each caveat can carry its own severity.
     expect(new Set(rendered).size).toBe(3);
   });
@@ -516,84 +448,14 @@ describe("KeyInfoView Budgets tab", () => {
     const panel = await renderAndOpenBudgetsTab();
 
     expect(OVERLONG_NOTE_TEXT.length).toBeGreaterThan(500);
-    const note = panel.getByText(OVERLONG_NOTE_TEXT);
+    const caveats = cellUnder(panel, rowFor(panel, "Platform"), "Caveats");
+    const note = within(caveats).getByText(OVERLONG_NOTE_TEXT);
 
-    // jsdom has no layout, so nothing here can prove the text is visually unclipped. Asserting the
-    // absence of the clipping utilities is the only mechanical guard against re-truncating a note.
+    // The cell shows a count so every row is the same height, but the text itself must still ship
+    // whole: jsdom has no layout, so the mechanical guard is that nothing clips or truncates it.
     expect(note).not.toHaveClass("truncate");
     expect(note.className).not.toMatch(/line-clamp|overflow-hidden|whitespace-nowrap/);
     expect(note).not.toHaveAttribute("title");
-  });
-
-  it("keeps two per-model rows on one cap apart by the request model each measures", async () => {
-    const direct: KeyBudgetEntry = {
-      ...UNCONFIGURED_BUDGET,
-      scope: "key_model",
-      entity_type: "key",
-      entity_id: "claude-opus-5",
-      entity_label: "claude-opus-5",
-      max_budget: 40,
-      spend: 5,
-      remaining: 35,
-      comparison: ">",
-      source: "key.model_max_budget[claude-opus-5]",
-      status: "ok",
-    };
-    const routed: KeyBudgetEntry = {
-      ...direct,
-      entity_id: "bedrock/claude-opus-5",
-      spend: 38,
-      remaining: 2,
-    };
-    mockBudgets([direct, routed]);
-    const panel = await renderAndOpenBudgetsTab();
-
-    const routedRow = rowFor(panel, "bedrock/claude-opus-5");
-    expect(routedRow).toHaveTextContent("$38.0000 of $40.00");
-    // The cap is repeated on both rows, so it cannot be what tells them apart.
-    expect(panel.getAllByText("claude-opus-5")).toHaveLength(2);
-    expect(routedRow).toHaveTextContent("claude-opus-5");
-
-    const [, ...dataRows] = panel.getAllByRole("row");
-    expect(dataRows).toHaveLength(2);
-    expect(dataRows.filter((row) => row.textContent?.includes("bedrock/claude-opus-5"))).toHaveLength(1);
-  });
-
-  it("floats the one exceeded per-model row above its healthy siblings on the same cap", async () => {
-    const cap = {
-      ...UNCONFIGURED_BUDGET,
-      scope: "key_model",
-      entity_type: "key",
-      entity_label: "claude-opus-5",
-      max_budget: 40,
-      comparison: ">",
-      source: "key.model_max_budget[claude-opus-5]",
-    } as const;
-    const healthy: KeyBudgetEntry = { ...cap, entity_id: "claude-opus-5", spend: 1, remaining: 39, status: "ok" };
-    const alsoHealthy: KeyBudgetEntry = {
-      ...cap,
-      entity_id: "vertex_ai/claude-opus-5",
-      spend: 2,
-      remaining: 38,
-      status: "ok",
-    };
-    const over: KeyBudgetEntry = {
-      ...cap,
-      entity_id: "bedrock/claude-opus-5",
-      spend: 41,
-      remaining: -1,
-      status: "exceeded",
-    };
-    mockBudgets([healthy, alsoHealthy, over]);
-    const panel = await renderAndOpenBudgetsTab();
-
-    const [, ...dataRows] = panel.getAllByRole("row");
-    expect(dataRows[0]).toHaveTextContent("bedrock/claude-opus-5");
-    expect(within(dataRows[0]).getByTestId("key-budget-blocking")).toBeInTheDocument();
-    // Siblings keep the server's order behind it rather than being reshuffled among themselves.
-    expect(dataRows[1]).toHaveTextContent("claude-opus-5");
-    expect(dataRows[2]).toHaveTextContent("vertex_ai/claude-opus-5");
-    expect(panel.getAllByTestId("key-budget-blocking")).toHaveLength(1);
   });
 
   it("renders notes in the order the server sent them, most specific to these numbers first", async () => {
@@ -613,8 +475,8 @@ describe("KeyInfoView Budgets tab", () => {
     mockBudgets([endUser]);
     const panel = await renderAndOpenBudgetsTab();
 
-    const texts = WORST_CASE_NOTES.map((note) => note.text);
-    const rendered = texts.map((text) => panel.getByText(text));
+    const caveats = cellUnder(panel, rowFor(panel, "customer-42"), "Caveats");
+    const rendered = WORST_CASE_NOTES.map((note) => within(caveats).getByText(note.text));
     const positions = rendered.map((node) => Array.from(node.parentElement?.children ?? []).indexOf(node));
     expect(positions).toStrictEqual([...positions].sort((a, b) => a - b));
     // Server order is meaningful: the reservation note explains the comparison the row renders.
@@ -709,7 +571,7 @@ describe("KeyInfoView Budgets tab", () => {
     const deadRow = rowFor(panel, "checkout");
     expect(within(deadRow).getByText("Cannot trip")).toBeInTheDocument();
     expect(within(deadRow).queryByText("Within budget")).not.toBeInTheDocument();
-    expect(deadRow).toHaveTextContent(PROJECT_DEAD_NOTE.text);
+    expect(cellUnder(panel, deadRow, "Caveats")).toHaveTextContent(PROJECT_DEAD_NOTE.text);
 
     const [, ...dataRows] = panel.getAllByRole("row");
     expect(dataRows[dataRows.length - 1]).toHaveTextContent("checkout");
@@ -771,12 +633,12 @@ describe("KeyInfoView Budgets tab", () => {
     expect(within(orgRow).queryByRole("meter")).not.toBeInTheDocument();
   });
 
-  it("puts the blocking budget above the alert-only, healthy and unlimited ones", async () => {
+  it("puts the blocking budget above the healthy and unlimited ones", async () => {
     const panel = await renderAndOpenBudgetsTab();
 
     const [, ...dataRows] = panel.getAllByRole("row");
     expect(dataRows[0]).toHaveTextContent("alice @ Platform");
-    expect(dataRows[1]).toHaveTextContent("Exceeded (alert only)");
+    expect(dataRows[1]).toHaveTextContent("Within budget");
     expect(dataRows[2]).toHaveTextContent("Within budget");
     expect(dataRows.slice(3).every((row) => row.textContent?.includes("Unlimited"))).toBe(true);
   });

@@ -16,13 +16,13 @@ import {
   StatusBadge,
   type StatusTone,
 } from "@/components/shared/table_cells";
+import { cn } from "@/lib/cva.config";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 const SCOPE_LABELS: Record<string, string> = {
   proxy: "Proxy",
   key: "Key",
   key_window: "Key window",
-  key_model: "Key per-model",
   team: "Team",
   team_window: "Team window",
   team_member: "Team member",
@@ -31,10 +31,9 @@ const SCOPE_LABELS: Record<string, string> = {
   project: "Project",
   tag: "Tag",
   end_user: "End user",
-  end_user_model: "End user per-model",
 };
 
-const isAlertOnly = (entry: KeyBudgetEntry): boolean => entry.enforcement === "soft";
+export const scopeLabel = (entry: KeyBudgetEntry): string => SCOPE_LABELS[entry.scope] ?? entry.scope;
 
 /**
  * Whether a note means the row is dead: it cannot reject a request no matter what the numbers say.
@@ -50,12 +49,10 @@ const isAlertOnly = (entry: KeyBudgetEntry): boolean => entry.enforcement === "s
  * fails this build until someone classifies it.
  */
 const CODE_KILLS_ROW: Readonly<Record<KeyBudgetNoteCode, boolean>> = {
-  alert_only: false,
   custom_auth_may_override_end_user_cap: false,
   custom_auth_skips_read_time_checks: false,
   end_user_route_only: false,
   entity_unavailable: false,
-  per_model_counters: false,
   project_spend_not_tracked: true,
   request_tags_add_budgets: false,
   reservation_blocks_at_limit: false,
@@ -75,7 +72,7 @@ export const cannotTrip = (entry: KeyBudgetEntry): boolean => entry.notes.some(n
 export const isThrottled = (entry: KeyBudgetEntry): boolean => entry.enforcement === "throttled";
 
 /** Whether going over this budget rejects a request, as opposed to alerting, throttling or nothing. */
-const canDeny = (entry: KeyBudgetEntry): boolean => !isAlertOnly(entry) && !cannotTrip(entry) && !isThrottled(entry);
+const canDeny = (entry: KeyBudgetEntry): boolean => !cannotTrip(entry) && !isThrottled(entry);
 
 export const isBlockingRow = (entry: KeyBudgetEntry): boolean => entry.status === "exceeded" && canDeny(entry);
 
@@ -95,12 +92,11 @@ export const rowRank = (entry: KeyBudgetEntry): number => {
 };
 
 /**
- * Only `live` and `no_counter` carry a number worth drawing. Any other state, including one the
- * server adds after this ships, is rendered as unknown rather than as a confident zero: overstating
- * a spend is the failure that matters here, and a new state is by definition not the normal one.
+ * Only `live` carries a number worth drawing. Any other state, including one the server adds after
+ * this ships, is rendered as unknown rather than as a confident zero: overstating a spend is the
+ * failure that matters here, and a new state is by definition not the normal one.
  */
-const spendIsReadable = (entry: KeyBudgetEntry): boolean =>
-  entry.spend_state === "live" || entry.spend_state === "no_counter";
+const spendIsReadable = (entry: KeyBudgetEntry): boolean => entry.spend_state === "live";
 
 const COMPARISON_GLYPH: Record<string, string> = { ">=": "≥", ">": ">" };
 
@@ -110,10 +106,7 @@ const COMPARISON_GLYPH: Record<string, string> = { ">=": "≥", ">": ">" };
  * to `>`. So this reads `comparison` off each row rather than assuming a constant per scope. Two
  * rows can show identical numbers and opposite statuses, so state the threshold each one enforces.
  */
-const thresholdVerb = (entry: KeyBudgetEntry): string => {
-  if (isAlertOnly(entry)) return "Alerts";
-  return isThrottled(entry) ? "Throttles" : "Blocks";
-};
+const thresholdVerb = (entry: KeyBudgetEntry): string => (isThrottled(entry) ? "Throttles" : "Blocks");
 
 export const budgetThresholdRule = (entry: KeyBudgetEntry): string | null => {
   if (entry.max_budget == null) return null;
@@ -127,7 +120,6 @@ const statusPresentation = (entry: KeyBudgetEntry): { tone: StatusTone; label: s
   if (entry.status === "unknown") return { tone: "warning", label: "Unknown" };
   if (cannotTrip(entry)) return { tone: "neutral", label: "Cannot trip" };
   if (entry.status !== "exceeded") return { tone: "success", label: "Within budget" };
-  if (isAlertOnly(entry)) return { tone: "warning", label: "Exceeded (alert only)" };
   return isThrottled(entry)
     ? { tone: "warning", label: "Exceeded (throttling)" }
     : { tone: "error", label: "Exceeded" };
@@ -135,52 +127,64 @@ const statusPresentation = (entry: KeyBudgetEntry): { tone: StatusTone; label: s
 
 function ScopeCell({ entry }: { entry: KeyBudgetEntry }) {
   const entity = entry.entity_label || entry.entity_id;
-  // Per-model rows split one cap across every request model that routes onto it, so `entity_id` is
-  // what tells two rows apart while `entity_label` repeats the cap. Showing only the label would
-  // render them as duplicates.
-  const measured = entry.entity_label && entry.entity_id !== entry.entity_label ? entry.entity_id : null;
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <CellTooltip
         content={`Limit source: ${entry.source}`}
-        trigger={
-          <span className="w-fit truncate text-sm font-medium text-foreground">
-            {SCOPE_LABELS[entry.scope] ?? entry.scope}
-          </span>
-        }
+        trigger={<span className="w-fit truncate text-sm font-medium text-foreground">{scopeLabel(entry)}</span>}
       />
       {entity && (
         <span className="truncate font-mono text-xs text-muted-foreground" title={entity}>
           {entity}
         </span>
       )}
-      {measured && (
-        <span className="truncate font-mono text-xs text-muted-foreground/70" title={measured}>
-          {measured}
-        </span>
-      )}
+    </div>
+  );
+}
+
+/**
+ * Caveats collapse to one marker per row rather than printing as prose in the scope cell.
+ *
+ * Inline they set each row's height from the length of its longest note, which is what made the
+ * table read as ragged. Every note still ships in the DOM, one element each and in the server's
+ * order, so none is dropped, truncated, or reachable only by hovering.
+ */
+function NotesCell({ entry }: { entry: KeyBudgetEntry }) {
+  if (entry.notes.length === 0) return <span className="text-xs text-muted-foreground">-</span>;
+  const warnings = entry.notes.filter((note) => note.severity === "warning").length;
+  return (
+    <span className="flex flex-col">
+      <CellTooltip
+        content={
+          <span className="flex max-w-md flex-col gap-2">
+            {entry.notes.map((note) => (
+              <span key={note.code}>{note.text}</span>
+            ))}
+          </span>
+        }
+        trigger={
+          <span
+            className={cn(
+              "w-fit cursor-help text-xs italic",
+              warnings > 0 ? "text-amber-600" : "text-muted-foreground",
+            )}
+          >
+            {entry.notes.length === 1 ? "1 caveat" : `${entry.notes.length} caveats`}
+          </span>
+        }
+      />
       {entry.notes.map((note) => (
-        <span
-          key={note.code}
-          className={
-            note.severity === "warning" ? "text-xs italic text-amber-600" : "text-xs italic text-muted-foreground"
-          }
-        >
+        <span key={note.code} className="sr-only">
           {note.text}
         </span>
       ))}
-    </div>
+    </span>
   );
 }
 
 /** Exhaustive, so a fourth enforcement mode fails this build rather than defaulting to a claim. */
 const ENFORCEMENT_BADGE: Readonly<Record<KeyBudgetEnforcement, { tone: StatusTone; label: string; tooltip: string }>> =
   {
-    soft: {
-      tone: "neutral",
-      label: "Alert only",
-      tooltip: "Soft budget. Going over raises an alert and never rejects a request.",
-    },
     throttled: {
       tone: "warning",
       label: "Throttles requests",
@@ -281,6 +285,14 @@ export const getKeyBudgetsTableColumns = (): ColumnDef<KeyBudgetEntry>[] => [
         />
       );
     },
+  },
+  {
+    id: "notes",
+    meta: { title: "Caveats" },
+    header: "Caveats",
+    size: 110,
+    enableSorting: false,
+    cell: ({ row }) => <NotesCell entry={row.original} />,
   },
   {
     id: "resets",

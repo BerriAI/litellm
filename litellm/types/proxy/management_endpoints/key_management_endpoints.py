@@ -114,7 +114,6 @@ BudgetScope = Literal[
     "proxy",
     "key",
     "key_window",
-    "key_model",
     "team",
     "team_window",
     "team_member",
@@ -123,22 +122,19 @@ BudgetScope = Literal[
     "project",
     "tag",
     "end_user",
-    "end_user_model",
 ]
 
-BudgetEnforcement = Literal["hard", "soft", "throttled"]
+BudgetEnforcement = Literal["hard", "throttled"]
 
 BudgetComparison = Literal[">=", ">"]
 
 BudgetStatus = Literal["unlimited", "ok", "exceeded", "unknown"]
 
 BudgetNoteCode = Literal[
-    "alert_only",
     "custom_auth_may_override_end_user_cap",
     "custom_auth_skips_read_time_checks",
     "end_user_route_only",
     "entity_unavailable",
-    "per_model_counters",
     "project_spend_not_tracked",
     "request_tags_add_budgets",
     "reservation_blocks_at_limit",
@@ -149,7 +145,7 @@ BudgetNoteCode = Literal[
 
 BudgetNoteSeverity = Literal["info", "warning"]
 
-BudgetSpendState = Literal["live", "no_counter", "unavailable"]
+BudgetSpendState = Literal["live", "unavailable"]
 
 
 class KeyBudgetNote(BaseModel):

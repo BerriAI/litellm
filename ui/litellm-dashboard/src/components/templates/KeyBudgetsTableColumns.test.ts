@@ -31,12 +31,6 @@ const PROJECT_DEAD_NOTE = {
   text: noteText("project_spend_not_tracked"),
 } as const;
 
-const ALERT_ONLY_NOTE = {
-  code: "alert_only",
-  severity: "info",
-  text: noteText("alert_only"),
-} as const;
-
 const ROLLING_NOTE = {
   code: "rolling_window",
   severity: "info",
@@ -105,24 +99,14 @@ const RESERVED_TEAM_AT_300: KeyBudgetEntry = {
 
 const UNRESERVED_TEAM_AT_300: KeyBudgetEntry = { ...RESERVED_TEAM_AT_300, comparison: ">", status: "ok" };
 
-const SOFT_OVER: KeyBudgetEntry = {
-  ...UNCONFIGURED_BUDGET,
-  enforcement: "soft",
-  comparison: ">=",
-  max_budget: 500,
-  spend: 900,
-  remaining: -400,
-  status: "exceeded",
-};
-
 const SUB_DOLLAR_LIMIT: KeyBudgetEntry = { ...UNCONFIGURED_BUDGET, comparison: ">", max_budget: 0.1 };
 
 const BLOCKING: KeyBudgetEntry = { ...UNCONFIGURED_BUDGET, status: "exceeded", enforcement: "hard" };
-const ALERT_ONLY: KeyBudgetEntry = {
+const THROTTLING: KeyBudgetEntry = {
   ...UNCONFIGURED_BUDGET,
   status: "exceeded",
-  enforcement: "soft",
-  notes: [ALERT_ONLY_NOTE],
+  enforcement: "throttled",
+  notes: [THROTTLE_NOTE],
 };
 const HEALTHY: KeyBudgetEntry = { ...UNCONFIGURED_BUDGET, status: "ok", enforcement: "hard" };
 const INERT: KeyBudgetEntry = {
@@ -150,8 +134,9 @@ describe("budgetThresholdRule", () => {
     expect(budgetThresholdRule(UNRESERVED_TEAM_AT_300)).toBe("Blocks at > $300.00");
   });
 
-  it("never promises a soft budget will block", () => {
-    expect(budgetThresholdRule(SOFT_OVER)).toBe("Alerts at ≥ $500.00");
+  it("never promises a throttling budget will block", () => {
+    const throttlingOver: KeyBudgetEntry = { ...THROTTLING, comparison: ">=", max_budget: 500 };
+    expect(budgetThresholdRule(throttlingOver)).toBe("Throttles at ≥ $500.00");
   });
 
   it("states no threshold for a scope with nothing configured", () => {
@@ -168,8 +153,8 @@ describe("cannotTrip", () => {
     expect(cannotTrip(INERT)).toBe(true);
   });
 
-  it("does not call a soft budget dead, since alert_only only restates the enforcement column", () => {
-    expect(cannotTrip(ALERT_ONLY)).toBe(false);
+  it("does not call a throttling budget dead, since the note only restates the enforcement column", () => {
+    expect(cannotTrip(THROTTLING)).toBe(false);
   });
 
   it("leaves a warning note trippable, because it qualifies the number rather than killing it", () => {
@@ -259,7 +244,7 @@ describe("isThrottled", () => {
 describe("isBlockingRow", () => {
   it("counts only a hard budget that is over as blocking", () => {
     expect(isBlockingRow(BLOCKING)).toBe(true);
-    expect(isBlockingRow(ALERT_ONLY)).toBe(false);
+    expect(isBlockingRow(THROTTLING)).toBe(false);
     expect(isBlockingRow(HEALTHY)).toBe(false);
     expect(isBlockingRow(UNCONFIGURED_BUDGET)).toBe(false);
   });
@@ -309,15 +294,15 @@ describe("a scope the server could not resolve", () => {
 });
 
 describe("rowRank", () => {
-  it("ranks a blocking budget above an alert-only one, and both above healthy and unlimited", () => {
-    expect(rowRank(BLOCKING)).toBeLessThan(rowRank(ALERT_ONLY));
-    expect(rowRank(ALERT_ONLY)).toBeLessThan(rowRank(HEALTHY));
+  it("ranks a blocking budget above a throttling one, and both above healthy and unlimited", () => {
+    expect(rowRank(BLOCKING)).toBeLessThan(rowRank(THROTTLING));
+    expect(rowRank(THROTTLING)).toBeLessThan(rowRank(HEALTHY));
     expect(rowRank(HEALTHY)).toBeLessThan(rowRank(UNCONFIGURED_BUDGET));
   });
 
   it("sinks a row that cannot trip below every row that can, since it never stopped anything", () => {
     expect(rowRank(INERT)).toBeGreaterThan(rowRank(BLOCKING));
-    expect(rowRank(INERT)).toBeGreaterThan(rowRank(ALERT_ONLY));
+    expect(rowRank(INERT)).toBeGreaterThan(rowRank(THROTTLING));
     expect(rowRank(INERT)).toBeGreaterThan(rowRank(HEALTHY));
     expect(rowRank(INERT)).toBeGreaterThan(rowRank(UNCONFIGURED_BUDGET));
   });

@@ -48,7 +48,6 @@ from litellm.proxy.auth.auth_checks import (
     user_budget_applies_to_key,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.hooks.model_max_budget_limiter import ModelSpendHit
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_keys import (
     end_user_spend_counter,
@@ -73,14 +72,12 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     KeyBudgetEntry,
     KeyBudgetNote,
 )
-from litellm.types.utils import BudgetConfig
 
 _ENTITY_TYPE_BY_SCOPE: Final[Mapping[BudgetScope, Litellm_EntityType]] = MappingProxyType(
     {
         "proxy": Litellm_EntityType.PROXY,
         "key": Litellm_EntityType.KEY,
         "key_window": Litellm_EntityType.KEY,
-        "key_model": Litellm_EntityType.KEY,
         "team": Litellm_EntityType.TEAM,
         "team_window": Litellm_EntityType.TEAM,
         "team_member": Litellm_EntityType.TEAM_MEMBER,
@@ -89,34 +86,17 @@ _ENTITY_TYPE_BY_SCOPE: Final[Mapping[BudgetScope, Litellm_EntityType]] = Mapping
         "project": Litellm_EntityType.PROJECT,
         "tag": Litellm_EntityType.TAG,
         "end_user": Litellm_EntityType.END_USER,
-        "end_user_model": Litellm_EntityType.END_USER,
     }
 )
-
-_MODEL_SCOPES: Final[frozenset[BudgetScope]] = frozenset({"key_model", "end_user_model"})
 
 _RESERVATION_COVERED_SCOPES: Final[frozenset[BudgetScope]] = frozenset(
     {"key", "key_window", "team", "team_window", "team_member", "user", "organization", "tag", "end_user"}
 )
 
-_ALERT_ONLY_NOTE: Final = KeyBudgetNote(
-    code="alert_only",
-    severity="info",
-    text="alert only, never blocks; compared against recorded spend rather than the live counter",
-)
 _ROLLING_WINDOW_NOTE: Final = KeyBudgetNote(
     code="rolling_window",
     severity="info",
     text="rolling window; the start moves with reset_at so consecutive windows can overlap",
-)
-_MODEL_BUDGET_NOTE: Final = KeyBudgetNote(
-    code="per_model_counters",
-    severity="warning",
-    text=(
-        "one row per counter behind this cap, because each counter is compared against it alone; these "
-        "counters are cache-only and fail open while one is missing, and a model this proxy cannot "
-        "enumerate has a counter that is not reported here"
-    ),
 )
 _RESERVATION_NOTE: Final = KeyBudgetNote(
     code="reservation_blocks_at_limit",
@@ -195,14 +175,6 @@ class SpendReader(Protocol):
     ) -> float: ...
 
 
-class ModelSpendReader(Protocol):
-    async def __call__(self, *, entity_id: str, model: str, budget_config: BudgetConfig) -> ModelSpendHit | None: ...
-
-
-class ModelBudgetKeyMatcher(Protocol):
-    def __call__(self, *, model: str, configured: Mapping[str, BudgetConfig]) -> str | None: ...
-
-
 async def _read_counter_spend(
     *,
     counter_key: str,
@@ -226,54 +198,6 @@ async def _read_counter_spend(
     )
 
 
-async def _read_key_model_spend(*, entity_id: str, model: str, budget_config: BudgetConfig) -> ModelSpendHit | None:
-    from litellm.proxy.proxy_server import model_max_budget_limiter
-
-    return await model_max_budget_limiter.resolve_model_spend(
-        scope="virtual_key", entity_id=entity_id, model=model, budget_config=budget_config
-    )
-
-
-async def _read_end_user_model_spend(
-    *, entity_id: str, model: str, budget_config: BudgetConfig
-) -> ModelSpendHit | None:
-    from litellm.proxy.proxy_server import model_max_budget_limiter
-
-    return await model_max_budget_limiter.resolve_model_spend(
-        scope="end_user", entity_id=entity_id, model=model, budget_config=budget_config
-    )
-
-
-def _match_model_budget_key(*, model: str, configured: Mapping[str, BudgetConfig]) -> str | None:
-    from litellm.proxy.proxy_server import model_max_budget_limiter
-
-    return model_max_budget_limiter.get_request_model_budget_key(model=model, internal_model_max_budget=configured)
-
-
-def _deployment_models(model_list: Sequence[object]) -> tuple[str, ...]:
-    """
-    ``Router.deployment_names`` is appended to and never pruned, so it names deployments that were
-    deleted. ``model_list`` is the live registry, so read the same names back out of it instead.
-    """
-    parsed: Final = (_validated(_DEPLOYMENT_ENTRY, entry, "model_list entry") for entry in model_list)
-    return tuple(entry.litellm_params.model for entry in parsed if entry is not None)
-
-
-def _request_models(allowed_models: tuple[str, ...]) -> tuple[str, ...]:
-    """
-    Model names a request could carry, since per-model counters are keyed by the request model.
-
-    Deployment names are in here because routing straight at one bypasses the model group, and a
-    wildcard or non-router deployment can still produce a counter no enumeration can predict.
-    """
-    from litellm.proxy.proxy_server import llm_router
-
-    if llm_router is None:
-        return allowed_models
-    routable: Final = (*llm_router.get_model_names(), *_deployment_models(llm_router.model_list or ()))
-    return tuple(dict.fromkeys((*allowed_models, *routable)))
-
-
 @dataclass(frozen=True, slots=True)
 class KeyBudgetResolverDeps:
     prisma_client: PrismaClient
@@ -282,9 +206,6 @@ class KeyBudgetResolverDeps:
     general_settings: Mapping[str, object]
     custom_auth_enabled: bool = False
     read_spend: SpendReader = field(default=_read_counter_spend)
-    read_key_model_spend: ModelSpendReader = field(default=_read_key_model_spend)
-    read_end_user_model_spend: ModelSpendReader = field(default=_read_end_user_model_spend)
-    match_model_budget_key: ModelBudgetKeyMatcher = field(default=_match_model_budget_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,21 +236,7 @@ class _RecordedSpend:
     value: float
 
 
-@dataclass(frozen=True, slots=True)
-class _KeyModelSpend:
-    key_hash: str
-    model: str
-    budget_config: BudgetConfig
-
-
-@dataclass(frozen=True, slots=True)
-class _EndUserModelSpend:
-    end_user_id: str
-    model: str
-    budget_config: BudgetConfig
-
-
-_SpendSource = _CounterSpend | _RecordedSpend | _KeyModelSpend | _EndUserModelSpend | _UnknownSpend
+_SpendSource = _CounterSpend | _RecordedSpend | _UnknownSpend
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,7 +245,6 @@ class _SpendReading:
 
     value: float | None
     state: BudgetSpendState
-    counter_model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,12 +278,6 @@ class _MetadataFields(BaseModel):
     metadata: _MetadataTags = _MetadataTags()
 
 
-class _KeyModelsFields(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    models: tuple[str, ...] = ()
-
-
 class _WindowFields(BaseModel):
     """Entries stay unparsed here so that one malformed window cannot discard the rest."""
 
@@ -386,33 +286,11 @@ class _WindowFields(BaseModel):
     budget_limits: tuple[object, ...] = ()
 
 
-class _ModelBudgetFields(BaseModel):
-    model_config = ConfigDict(extra="ignore", protected_namespaces=())
-
-    model_max_budget: Mapping[str, object] = MappingProxyType({})
-
-
-class _DeploymentParamsFields(BaseModel):
-    model_config = ConfigDict(extra="ignore", protected_namespaces=())
-
-    model: str
-
-
-class _DeploymentEntryFields(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    litellm_params: _DeploymentParamsFields
-
-
 _T = TypeVar("_T")
 
 _METADATA_FIELDS: Final = TypeAdapter(_MetadataFields)
 _WINDOW_FIELDS: Final = TypeAdapter(_WindowFields)
-_MODEL_BUDGET_FIELDS: Final = TypeAdapter(_ModelBudgetFields)
-_DEPLOYMENT_ENTRY: Final = TypeAdapter(_DeploymentEntryFields)
 _BUDGET_LIMIT_ENTRY: Final = TypeAdapter(BudgetLimitEntry)
-_BUDGET_CONFIG: Final = TypeAdapter(BudgetConfig)
-_KEY_MODELS: Final = TypeAdapter(_KeyModelsFields)
 
 
 def _validated(adapter: TypeAdapter[_T], value: object, field_name: str) -> _T | None:
@@ -429,19 +307,11 @@ class _TokenBudgetInputs:
 
     tags: tuple[str, ...]
     budget_limits: tuple[BudgetLimitEntry, ...]
-    model_max_budget: Mapping[str, BudgetConfig]
-    models: tuple[str, ...]
 
 
 def _token_budget_inputs(valid_token: UserAPIKeyAuth) -> _TokenBudgetInputs:
     dumped: Final = valid_token.model_dump()
-    container: Final = _validated(_KEY_MODELS, dumped, "models")
-    return _TokenBudgetInputs(
-        tags=_key_tags(dumped),
-        budget_limits=_budget_windows(dumped),
-        model_max_budget=_model_budgets(dumped),
-        models=container.models if container is not None else (),
-    )
+    return _TokenBudgetInputs(tags=_key_tags(dumped), budget_limits=_budget_windows(dumped))
 
 
 def _key_tags(dumped: Mapping[str, object]) -> tuple[str, ...]:
@@ -461,20 +331,6 @@ def _budget_windows(dumped: Mapping[str, object]) -> tuple[BudgetLimitEntry, ...
         return ()
     parsed: Final = (_validated(_BUDGET_LIMIT_ENTRY, entry, "budget_limits") for entry in container.budget_limits)
     return tuple(entry for entry in parsed if entry is not None)
-
-
-def _model_budgets(dumped: Mapping[str, object] | None) -> Mapping[str, BudgetConfig]:
-    """Same as ``_budget_windows``: drop only the per-model caps that fail to parse."""
-    if dumped is None:
-        return MappingProxyType({})
-    container: Final = _validated(_MODEL_BUDGET_FIELDS, dumped, "model_max_budget")
-    if container is None:
-        return MappingProxyType({})
-    parsed: Final = (
-        (model, _validated(_BUDGET_CONFIG, config, "model_max_budget"))
-        for model, config in container.model_max_budget.items()
-    )
-    return MappingProxyType({model: config for model, config in parsed if config is not None})
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,8 +354,6 @@ class _KeyBudgetContext:
     end_user_id: str | None
     custom_auth_enabled: bool
     custom_auth_skips_checks: bool
-    request_models: tuple[str, ...]
-    match_model_budget_key: ModelBudgetKeyMatcher
     general_settings: Mapping[str, object]
     proxy: _ProxyBudget | _Unavailable | None
     team: LiteLLM_TeamTable | None
@@ -532,43 +386,8 @@ async def resolve_key_budgets(
             reservation_enabled=reservation_enabled,
             proxy_notes=proxy_notes,
         )
-        for plan, reading in _collapse_shared_counters(tuple(zip(plans, readings, strict=True)))
+        for plan, reading in zip(plans, readings, strict=True)
     )
-
-
-def _counter_identity(index: int, plan: _PlannedBudget, reading: _SpendReading) -> object:
-    """Two rows share an identity only when enforcement compares both against the same counter."""
-    if plan.scope not in _MODEL_SCOPES:
-        return index
-    return (plan.source, reading.counter_model)
-
-
-def _collapse_shared_counters(pairs: tuple[_ReadPlan, ...]) -> tuple[_ReadPlan, ...]:
-    """
-    One counter, one row.
-
-    A per-model cap is planned once per request model routed to it, but the reader falls back to the
-    provider-stripped name, so several of those models read one counter. Reporting each of them would
-    show a single balance several times over as though it were several balances.
-    """
-    identities: Final = tuple(
-        _counter_identity(index=index, plan=plan, reading=reading) for index, (plan, reading) in enumerate(pairs)
-    )
-    first_index: Final = {identity: index for index, identity in reversed(tuple(enumerate(identities)))}
-    return tuple(pair for index, pair in enumerate(pairs) if first_index[identities[index]] == index)
-
-
-def _model_reading(hit: ModelSpendHit | None) -> _SpendReading:
-    """
-    A missing per-model counter is reported as no spend, because that is what will be enforced.
-
-    The check reading it treats the absence as untouched headroom rather than as an error, so zero is
-    the number the cap will actually be compared against. ``spend_state`` still says the counter does
-    not exist, which is the part a reader needs to tell this apart from a counter that says zero.
-    """
-    if hit is None:
-        return _SpendReading(value=0.0, state="no_counter")
-    return _SpendReading(value=hit.spend, state="live", counter_model=hit.model)
 
 
 async def _read_spend(plan: _PlannedBudget, deps: KeyBudgetResolverDeps) -> _SpendReading:
@@ -591,18 +410,6 @@ async def _read_spend(plan: _PlannedBudget, deps: KeyBudgetResolverDeps) -> _Spe
                         fallback_authoritative=source.fallback_authoritative,
                     ),
                     state="live",
-                )
-            case _KeyModelSpend():
-                return _model_reading(
-                    await deps.read_key_model_spend(
-                        entity_id=source.key_hash, model=source.model, budget_config=source.budget_config
-                    )
-                )
-            case _EndUserModelSpend():
-                return _model_reading(
-                    await deps.read_end_user_model_spend(
-                        entity_id=source.end_user_id, model=source.model, budget_config=source.budget_config
-                    )
                 )
             case _:
                 assert_never(source)
@@ -668,7 +475,7 @@ def _to_entry(
     return KeyBudgetEntry(
         scope=plan.scope,
         entity_type=_ENTITY_TYPE_BY_SCOPE[plan.scope],
-        entity_id=reading.counter_model or plan.entity_id,
+        entity_id=plan.entity_id,
         entity_label=plan.entity_label,
         enforcement=plan.enforcement,
         max_budget=plan.max_budget,
@@ -726,8 +533,6 @@ async def _load_context(
         custom_auth_skips_checks=(
             deps.custom_auth_enabled and deps.general_settings.get("custom_auth_run_common_checks") is not True
         ),
-        request_models=_request_models(token_inputs.models),
-        match_model_budget_key=deps.match_model_budget_key,
         general_settings=deps.general_settings,
         proxy=loaded_proxy,
         team=team,
@@ -1006,7 +811,6 @@ def _plan_budgets(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         *_plan_proxy(context),
         *_plan_key(context),
         *_plan_key_windows(context),
-        *_plan_key_models(context),
         *_plan_team(context),
         *_plan_team_windows(context),
         *_plan_team_member(context),
@@ -1121,20 +925,7 @@ def _plan_key(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         budget_reset_at=token.budget_reset_at,
         notes=(_THROTTLE_NOTE,) if throttled else (),
     )
-    soft: Final = _PlannedBudget(
-        scope="key",
-        entity_id=token.key_alias,
-        entity_label=token.key_alias,
-        enforcement="soft",
-        max_budget=token.soft_budget,
-        comparison=">=",
-        source=f"budget_table:{token.budget_id}.soft_budget" if token.budget_id else "key.budget_id.soft_budget",
-        spend_source=_RecordedSpend(token.spend or 0.0),
-        budget_duration=token.budget_duration,
-        budget_reset_at=token.budget_reset_at,
-        notes=(_ALERT_ONLY_NOTE,),
-    )
-    return (hard, soft)
+    return (hard,)
 
 
 def _plan_key_windows(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
@@ -1164,44 +955,6 @@ def _plan_key_windows(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
     )
 
 
-def _model_counter_candidates(
-    config_key: str, configured: Mapping[str, BudgetConfig], context: _KeyBudgetContext
-) -> tuple[str, ...]:
-    """Counters are keyed by the request model, so a config key has to be probed under each model routed to it."""
-    routed: Final = (
-        model
-        for model in context.request_models
-        if context.match_model_budget_key(model=model, configured=configured) == config_key
-    )
-    return tuple(dict.fromkeys((config_key, *routed)))
-
-
-def _plan_key_models(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
-    token: Final = context.valid_token
-    configured: Final = context.token_inputs.model_max_budget
-    return tuple(
-        _PlannedBudget(
-            scope="key_model",
-            entity_id=request_model,
-            entity_label=cap_key,
-            enforcement="hard",
-            max_budget=_positive_or_none(config.max_budget),
-            comparison=">",
-            source=f"key.model_max_budget[{cap_key}]",
-            spend_source=_KeyModelSpend(key_hash=token.token or "", model=request_model, budget_config=config),
-            budget_duration=config.budget_duration,
-            notes=(_MODEL_BUDGET_NOTE,),
-        )
-        for cap_key, config in configured.items()
-        for request_model in _model_counter_candidates(config_key=cap_key, configured=configured, context=context)
-    )
-
-
-def _positive_or_none(max_budget: float | None) -> float | None:
-    """Several checks treat a non-positive cap as 'unset' rather than as an immediate block."""
-    return max_budget if max_budget is not None and max_budget > 0 else None
-
-
 def _plan_team(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
     team: Final = context.team
     if team is None:
@@ -1218,20 +971,7 @@ def _plan_team(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         budget_duration=team.budget_duration,
         budget_reset_at=team.budget_reset_at,
     )
-    soft: Final = _PlannedBudget(
-        scope="team",
-        entity_id=team.team_id,
-        entity_label=team.team_alias,
-        enforcement="soft",
-        max_budget=team.soft_budget,
-        comparison=">=",
-        source="team.soft_budget",
-        spend_source=_RecordedSpend(team.spend or 0.0),
-        budget_duration=team.budget_duration,
-        budget_reset_at=team.budget_reset_at,
-        notes=(_ALERT_ONLY_NOTE,),
-    )
-    return (hard, soft)
+    return (hard,)
 
 
 def _plan_team_windows(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
@@ -1316,6 +1056,11 @@ def _plan_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
     )
 
 
+def _positive_or_none(max_budget: float | None) -> float | None:
+    """Several checks treat a non-positive cap as 'unset' rather than as an immediate block."""
+    return max_budget if max_budget is not None and max_budget > 0 else None
+
+
 def _plan_organization(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
     org: Final = context.organization
     if org is None or org.organization_id is None:
@@ -1359,20 +1104,7 @@ def _plan_project(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         budget_reset_at=meta.budget_reset_at,
         notes=(_PROJECT_SPEND_NOTE,),
     )
-    soft: Final = _PlannedBudget(
-        scope="project",
-        entity_id=project.project_id,
-        entity_label=project.project_alias,
-        enforcement="soft",
-        max_budget=linked.soft_budget if linked is not None else None,
-        comparison=">=",
-        source=f"budget_table:{project.budget_id}.soft_budget" if project.budget_id else "project.budget_id",
-        spend_source=_RecordedSpend(project.spend or 0.0),
-        budget_duration=meta.budget_duration,
-        budget_reset_at=meta.budget_reset_at,
-        notes=(_ALERT_ONLY_NOTE,),
-    )
-    return (hard, soft)
+    return (hard,)
 
 
 def _plan_tags(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
@@ -1437,21 +1169,4 @@ def _plan_end_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
             else (_END_USER_ROUTE_NOTE,)
         ),
     )
-    configured: Final = _model_budgets(budget.model_dump() if budget is not None else None)
-    per_model: Final = tuple(
-        _PlannedBudget(
-            scope="end_user_model",
-            entity_id=request_model,
-            entity_label=cap_key,
-            enforcement="hard",
-            max_budget=_positive_or_none(config.max_budget),
-            comparison=">",
-            source=f"{row_source}.model_max_budget[{cap_key}]",
-            spend_source=_EndUserModelSpend(end_user_id=end_user_id, model=request_model, budget_config=config),
-            budget_duration=config.budget_duration,
-            notes=(_MODEL_BUDGET_NOTE,),
-        )
-        for cap_key, config in configured.items()
-        for request_model in _model_counter_candidates(config_key=cap_key, configured=configured, context=context)
-    )
-    return (primary, *per_model)
+    return (primary,)
