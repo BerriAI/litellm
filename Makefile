@@ -206,8 +206,8 @@ lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/type_discipline_gate.py --base origin/litellm_internal_staging
 
 # Test-quality budget (zero-assert / mock-echo tests, sys.path.insert, raw env writes,
-# litellm module-global mutation, credential-gated skips), counted across tests/ the
-# same delta-vs-base way.
+# litellm module-global mutation, credential-gated skips, conftest snapshot
+# inventory), counted across tests/ the same delta-vs-base way.
 lint-test-quality: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/test_quality_gate.py --base origin/litellm_internal_staging
 
