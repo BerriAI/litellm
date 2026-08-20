@@ -2253,7 +2253,8 @@ async def test_get_user_daily_activity_aggregated_rejects_service_account_caller
 
 
 @pytest.mark.asyncio
-async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch):
+@pytest.mark.parametrize("include_current_utc_day", [False, True])
+async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch, include_current_utc_day):
     """
     Test that admin users can call the aggregated endpoint without a user_id
     to get a global view. Also verifies that the correct arguments are forwarded
@@ -2291,6 +2292,7 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         api_key=None,
         user_id=None,
         timezone=480,
+        include_current_utc_day=include_current_utc_day,
         user_api_key_dict=admin_key_dict,
     )
 
@@ -2308,6 +2310,7 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         model="gpt-4",
         api_key=None,
         timezone_offset_minutes=480,
+        include_current_utc_day=include_current_utc_day,
     )
 
 
