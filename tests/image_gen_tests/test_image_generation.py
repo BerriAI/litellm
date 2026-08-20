@@ -458,7 +458,7 @@ async def test_azure_image_generation_request_body():
     ) as mock_post:
         mock_post.side_effect = Exception("test")
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             await aimage_generation(
                 model="azure/gpt-image-1",
                 prompt="test prompt",

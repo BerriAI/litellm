@@ -4176,7 +4176,7 @@ async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_corre
 
         wrapper._stream_created_time = time.time() - 10
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.Timeout):
             await wrapper.__anext__()
 
         assert trace_id_var.get() == "outer-trace-max-duration"
@@ -4323,7 +4323,9 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
 
         monkeypatch.setattr("litellm.litellm_core_utils.streaming_handler.exception_type", fake_exception_type)
 
-        with pytest.raises(Exception):
+        from litellm.exceptions import MidStreamFallbackError
+
+        with pytest.raises(MidStreamFallbackError):
             wrapper._handle_stream_fallback_error(RuntimeError("boom"))
 
         # The mapper ran while the stream's own ids were still active.

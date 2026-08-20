@@ -19,6 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_fil
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from fastapi import HTTPException
 
 
 @pytest.fixture
@@ -228,7 +229,7 @@ class TestFrenchEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should block (contains "build" and "système de crédit social")
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -257,7 +258,7 @@ class TestFrenchEdgeCases:
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should block (case-insensitive)
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,

@@ -22,6 +22,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     run_team_metadata_validation,
     validate_team_metadata_if_configured,
 )
+from pydantic import ValidationError
 
 
 def _registry_with(validator):
@@ -634,7 +635,7 @@ def test_parse_schema_round_trips_fields_in_order():
     ],
 )
 def test_parse_schema_malformed_raises(raw):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         parse_team_metadata_schema(raw)
 
 
