@@ -1,79 +1,68 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MountedFieldControlProps } from "@/components/common_components/MountedFormField";
-import { scopesControl, tagsControl } from "./mcpFieldRules";
+import { tagsControl } from "./mcpFieldRules";
 
 const controlWith = (value: unknown, onChange = vi.fn()): MountedFieldControlProps =>
   ({ id: "field", name: "field", value, onChange, onBlur: vi.fn() }) as unknown as MountedFieldControlProps;
 
-describe("scopesControl", () => {
-  it("splits a stored delimited string into one tag per scope", () => {
-    expect(scopesControl(controlWith("read write admin")).value).toStrictEqual(["read", "write", "admin"]);
+// These fields were antd Selects with tokenSeparators={[","]}: a comma commits a tag, and nothing
+// else does. The shadcn tag input commits the whole typed string as one custom value instead, so
+// every case below pins the antd rule the migration has to preserve.
+describe("tagsControl", () => {
+  it("splits the comma-separated headers an admin commits as one entry", () => {
+    const onChange = vi.fn();
+    tagsControl(controlWith([], onChange)).onValueChange(["Authorization,X-Custom-Header"]);
+
+    expect(onChange).toHaveBeenCalledWith(["Authorization", "X-Custom-Header"]);
   });
 
-  it("splits a comma-delimited entry the tag input committed as a single custom value", () => {
+  it("trims the space an admin types after each comma", () => {
     const onChange = vi.fn();
-    scopesControl(controlWith([], onChange)).onValueChange(["read,write"]);
-
-    expect(onChange).toHaveBeenCalledWith(["read", "write"]);
-  });
-
-  it("keeps already-split scopes intact while splitting only the entry that needs it", () => {
-    const onChange = vi.fn();
-    scopesControl(controlWith(["read"], onChange)).onValueChange(["read", "write, admin"]);
+    tagsControl(controlWith([], onChange)).onValueChange(["read, write, admin"]);
 
     expect(onChange).toHaveBeenCalledWith(["read", "write", "admin"]);
   });
 
-  it("drops the duplicate when a typed entry repeats a scope that is already selected", () => {
+  it("keeps already-committed tags intact while splitting only the entry that needs it", () => {
     const onChange = vi.fn();
-    scopesControl(controlWith(["read"], onChange)).onValueChange(["read", "read,write"]);
+    tagsControl(controlWith(["group-a"], onChange)).onValueChange(["group-a", "group-b,group-c"]);
+
+    expect(onChange).toHaveBeenCalledWith(["group-a", "group-b", "group-c"]);
+  });
+
+  it("drops the duplicate when a typed entry repeats a tag that is already selected", () => {
+    const onChange = vi.fn();
+    tagsControl(controlWith(["read"], onChange)).onValueChange(["read", "read,write"]);
 
     expect(onChange).toHaveBeenCalledWith(["read", "write"]);
   });
 
-  it("keeps a URI-shaped scope whole, since it carries no delimiter", () => {
-    const onChange = vi.fn();
-    scopesControl(controlWith([], onChange)).onValueChange(["api://app-id/.default"]);
-
-    expect(onChange).toHaveBeenCalledWith(["api://app-id/.default"]);
-  });
-
-  it("clears to an empty list rather than a blank scope when the field is emptied", () => {
-    const onChange = vi.fn();
-    scopesControl(controlWith("", onChange)).onValueChange([""]);
-
-    expect(scopesControl(controlWith("")).value).toStrictEqual([]);
-    expect(onChange).toHaveBeenCalledWith([]);
-  });
-});
-
-describe("tagsControl", () => {
-  it("preserves a stdio argument that contains spaces, which is one argv entry", () => {
+  it("preserves the interior spaces of a stdio argument, which a comma alone may split", () => {
     const onChange = vi.fn();
     tagsControl(controlWith(["npx"], onChange)).onValueChange(["npx", "--header=X-Trace: on"]);
 
     expect(onChange).toHaveBeenCalledWith(["npx", "--header=X-Trace: on"]);
   });
 
-  it("preserves a comma inside an entry, which is part of the value and not a separator", () => {
+  it("keeps a scope URI whole, since it carries no comma", () => {
     const onChange = vi.fn();
-    tagsControl(controlWith([], onChange)).onValueChange(["Create, update and delete issues"]);
+    tagsControl(controlWith([], onChange)).onValueChange(["api://app-id/.default"]);
 
-    expect(onChange).toHaveBeenCalledWith(["Create, update and delete issues"]);
+    expect(onChange).toHaveBeenCalledWith(["api://app-id/.default"]);
   });
 
-  it("keeps a repeated entry, since two argv entries may legitimately be identical", () => {
-    const onChange = vi.fn();
-    tagsControl(controlWith([], onChange)).onValueChange(["-v", "-v"]);
-
-    expect(onChange).toHaveBeenCalledWith(["-v", "-v"]);
+  it("splits a stored delimited string rather than rendering it as one tag", () => {
+    expect(tagsControl(controlWith("Authorization,X-Custom-Header")).value).toStrictEqual([
+      "Authorization",
+      "X-Custom-Header",
+    ]);
   });
 
   it("renders a stored list unchanged", () => {
     expect(tagsControl(controlWith(["run", "--flag a"])).value).toStrictEqual(["run", "--flag a"]);
   });
 
-  it("drops the blank entry a cleared field leaves behind", () => {
+  it("clears to an empty list rather than a blank tag when the field is emptied", () => {
     const onChange = vi.fn();
     tagsControl(controlWith("", onChange)).onValueChange([""]);
 
