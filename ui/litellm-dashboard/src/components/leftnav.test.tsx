@@ -154,6 +154,22 @@ describe("Sidebar (leftnav)", () => {
     expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo.png");
   });
 
+  it("falls back to the light logo when a configured dark logo fails to load", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/gone.png",
+    });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/gone.png");
+
+    fireEvent.error(dark);
+
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+  });
+
   it("renders all top-level (non-nested) tabs for admin", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
