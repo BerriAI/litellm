@@ -2335,3 +2335,203 @@ class TestPostgresStatementTimeoutOptions:
                 standalone_mode=False,
             )
             return {k: os.environ[k] for k in ("DATABASE_URL", "DIRECT_URL") if k in os.environ}
+
+
+_READER_ENV_KEYS = (
+    "DATABASE_URL",
+    "DIRECT_URL",
+    "DATABASE_URL_READ_REPLICA",
+    "DATABASE_HOST",
+    "DATABASE_PORT",
+    "DATABASE_USER",
+    "DATABASE_USERNAME",
+    "DATABASE_NAME",
+    "DATABASE_SCHEMA",
+    "DATABASE_PASSWORD",
+    "DATABASE_HOST_READ_REPLICA",
+    "DATABASE_PORT_READ_REPLICA",
+    "DATABASE_USER_READ_REPLICA",
+    "DATABASE_USERNAME_READ_REPLICA",
+    "DATABASE_NAME_READ_REPLICA",
+    "DATABASE_SCHEMA_READ_REPLICA",
+    "DATABASE_PASSWORD_READ_REPLICA",
+    "IAM_TOKEN_DB_AUTH",
+)
+
+
+@pytest.mark.xdist_group("proxy_cli")
+class TestReadReplicaUrlWiring:
+    """Read routing is driven by DATABASE_URL_READ_REPLICA, which PrismaClient reads
+    straight from the environment. The CLI is the entrypoint the docker image uses, so
+    it has to leave that var assembled from the discrete DATABASE_*_READ_REPLICA vars
+    and carrying the same pool params as the writer, or the reader silently never
+    comes up (or comes up on Prisma's default pool size).
+    """
+
+    _WRITER_ENV = {
+        "DATABASE_HOST": "writer.internal",
+        "DATABASE_USERNAME": "litellm_admin",
+        "DATABASE_PASSWORD": "p@ss+w0rd/x",
+        "DATABASE_NAME": "ai_gateway",
+    }
+
+    def test_discrete_reader_vars_assemble_the_reader_url(self):
+        """The reported bug: with only the discrete vars set, the CLI never assembled
+        a reader URL, so read routing stayed off on the docker/CLI path."""
+        captured = self._run_server_and_capture_urls(
+            extra_env={
+                **self._WRITER_ENV,
+                "DATABASE_HOST_READ_REPLICA": "reader.internal",
+            }
+        )
+
+        reader = urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"])
+        assert reader.hostname == "reader.internal"
+        assert reader.port == 5432
+        assert reader.username == "litellm_admin"
+        assert urlparse.unquote_plus(reader.password or "") == "p@ss+w0rd/x"
+        assert reader.path == "/ai_gateway"
+
+    def test_reader_only_overrides_win_over_writer_fallbacks(self):
+        """A reader identity distinct from the writer's is the point of the split, so
+        the *_READ_REPLICA overrides must not be dropped in favor of the writer's."""
+        captured = self._run_server_and_capture_urls(
+            extra_env={
+                **self._WRITER_ENV,
+                "DATABASE_HOST_READ_REPLICA": "reader.internal",
+                "DATABASE_PORT_READ_REPLICA": "6543",
+                "DATABASE_USER_READ_REPLICA": "litellm_reader",
+                "DATABASE_PASSWORD_READ_REPLICA": "r3@d+er/x",
+            }
+        )
+
+        reader = urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"])
+        assert reader.port == 6543
+        assert reader.username == "litellm_reader"
+        assert urlparse.unquote_plus(reader.password or "") == "r3@d+er/x"
+        assert reader.path == "/ai_gateway"
+
+    def test_pool_params_reach_the_reader(self):
+        """Without these the reader engine sizes its pool off Prisma's default
+        (num_cpus * 2 + 1) and ignores the operator's configured limit entirely."""
+        captured = self._run_server_and_capture_urls(
+            general_settings={
+                "database_connection_pool_limit": 1,
+                "database_connection_timeout": 5,
+                "database_socket_timeout": 10,
+            },
+            extra_env={
+                **self._WRITER_ENV,
+                "DATABASE_HOST_READ_REPLICA": "reader.internal",
+            },
+        )
+
+        params = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert params["connection_limit"] == ["1"]
+        assert params["pool_timeout"] == ["5"]
+        assert params["socket_timeout"] == ["10"]
+
+    def test_pinned_reader_url_keeps_its_identity_and_gains_pool_params(self):
+        """Appending query params is the only mutation allowed on an operator-supplied
+        reader URL; its host, credentials and database must survive untouched."""
+        captured = self._run_server_and_capture_urls(
+            general_settings={"database_connection_pool_limit": 3},
+            extra_env={
+                **self._WRITER_ENV,
+                "DATABASE_HOST_READ_REPLICA": "ignored.internal",
+                "DATABASE_URL_READ_REPLICA": "postgresql://pinned_reader:pinned_pw@pinned.internal:6543/pinned_db?schema=public",
+            },
+        )
+
+        reader = urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"])
+        assert reader.hostname == "pinned.internal"
+        assert reader.port == 6543
+        assert reader.username == "pinned_reader"
+        assert reader.password == "pinned_pw"
+        assert reader.path == "/pinned_db"
+        params = urlparse.parse_qs(reader.query)
+        assert params["schema"] == ["public"]
+        assert params["connection_limit"] == ["3"]
+
+    def test_no_reader_vars_leaves_read_routing_off(self):
+        """Reader stays strictly opt-in: a single-database deployment must not end up
+        with DATABASE_URL_READ_REPLICA set, which would turn on routing."""
+        captured = self._run_server_and_capture_urls(extra_env=self._WRITER_ENV)
+
+        assert "DATABASE_URL_READ_REPLICA" not in captured
+        assert urlparse.urlparse(captured["DATABASE_URL"]).hostname == "writer.internal"
+
+    def test_non_postgres_reader_url_exits_before_prisma_setup(self):
+        """The postgresql-only datasource cannot connect to it, and the resulting
+        Prisma failure is opaque, so it has to be rejected up front like the writer."""
+        with pytest.raises(SystemExit) as exc_info:
+            self._run_server_and_capture_urls(
+                extra_env={
+                    **self._WRITER_ENV,
+                    "DATABASE_URL_READ_REPLICA": "sqlite:///data/reader.db",
+                }
+            )
+
+        assert exc_info.value.code == 1
+
+    def test_empty_reader_url_is_ignored_rather_than_rejected(self):
+        """An optional env var rendered empty by a chart or compose file is not a
+        misconfigured URL; treating it as one would fail startup for deployments that
+        never asked for a reader."""
+        captured = self._run_server_and_capture_urls(
+            extra_env={**self._WRITER_ENV, "DATABASE_URL_READ_REPLICA": ""}
+        )
+
+        assert captured.get("DATABASE_URL_READ_REPLICA", "") == ""
+        assert urlparse.urlparse(captured["DATABASE_URL"]).hostname == "writer.internal"
+
+    def test_discrete_vars_are_not_read_without_the_opt_in_host(self):
+        """DatabaseURLSettings validates the whole DATABASE_* environment, so loading
+        it unconditionally would fail startup for single-database deployments that
+        carry an unparseable value (an empty IAM_TOKEN_DB_AUTH, say)."""
+        from litellm.proxy.proxy_cli import _read_replica_url_from_env
+
+        with patch.dict(os.environ, {"IAM_TOKEN_DB_AUTH": ""}, clear=False):
+            os.environ.pop("DATABASE_URL_READ_REPLICA", None)
+            os.environ.pop("DATABASE_HOST_READ_REPLICA", None)
+            assert _read_replica_url_from_env() is None
+
+    @staticmethod
+    def _run_server_and_capture_urls(
+        general_settings: dict | None = None,
+        extra_env: dict | None = None,
+    ) -> dict:
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.return_value.get_config = AsyncMock(
+            return_value={"model_list": [], "general_settings": general_settings or {}}
+        )
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=mock_proxy_config,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {k: v for k, v in os.environ.items() if k not in _READER_ENV_KEYS}
+        clean_env.update(extra_env or {})
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("atexit.register"),
+            patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False),
+            patch("litellm.proxy.db.check_migration.check_prisma_schema_diff"),
+        ):
+            run_server.main(
+                ["--config", "test-config.yaml", "--local", "--skip_server_startup"],
+                standalone_mode=False,
+            )
+            return {k: os.environ[k] for k in ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA") if k in os.environ}

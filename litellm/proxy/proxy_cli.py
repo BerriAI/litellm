@@ -18,6 +18,11 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.proxy.db.db_url_settings import (
+    DatabaseURLSettings,
+    unsupported_db_scheme,
+    unsupported_db_scheme_message,
+)
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
 from litellm.secret_managers.main import get_secret_bool
 
@@ -92,6 +97,42 @@ def _build_db_connection_url_params(
     if extra_params:
         params.update(extra_params)
     return params
+
+
+def _exit_on_unsupported_db_scheme(env_var: str, url: str) -> None:
+    """Exit with an actionable message when a connection URL is not PostgreSQL.
+
+    Prisma's failure against the postgresql-only datasource is opaque and version
+    dependent (a confusing migration error, or a startup that never binds), so the
+    CLI rejects the URL before touching prisma.
+    """
+    bad_scheme = unsupported_db_scheme(url)
+    if bad_scheme is None:
+        return
+    print(
+        f"\033[1;31mLiteLLM Proxy: {unsupported_db_scheme_message(env_var, bad_scheme)}\033[0m",
+        file=sys.stderr,
+        flush=True,
+    )
+    sys.exit(1)
+
+
+def _read_replica_url_from_env() -> str | None:
+    """Return the read-replica URL Prisma should use, or None when read routing is off.
+
+    An operator-pinned ``DATABASE_URL_READ_REPLICA`` wins; otherwise the reader is
+    assembled from the discrete ``DATABASE_*_READ_REPLICA`` vars (each falling back
+    to its writer equivalent), the same way the componentized entrypoints do via
+    ``DatabaseURLSettings.apply_to_env``. The discrete vars are only loaded once
+    ``DATABASE_HOST_READ_REPLICA`` opts in, so single-database deployments never
+    depend on the rest of the ``DATABASE_*`` environment parsing cleanly.
+    """
+    pinned_url = os.getenv("DATABASE_URL_READ_REPLICA")
+    if pinned_url:
+        return pinned_url
+    if not os.getenv("DATABASE_HOST_READ_REPLICA"):
+        return None
+    return DatabaseURLSettings.from_env().build_reader_url()
 
 
 class DatabaseTimeoutSettings(BaseModel):
@@ -1221,23 +1262,11 @@ def run_server(
             db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
-            from litellm.proxy.db.db_url_settings import (
-                unsupported_db_scheme,
-                unsupported_db_scheme_message,
-            )
-
             for _db_env in ("DATABASE_URL", "DIRECT_URL"):
                 _candidate_url = os.getenv(_db_env)
                 if _candidate_url is None:
                     continue
-                _bad_scheme = unsupported_db_scheme(_candidate_url)
-                if _bad_scheme is not None:
-                    print(
-                        f"\033[1;31mLiteLLM Proxy: {unsupported_db_scheme_message(_db_env, _bad_scheme)}\033[0m",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    sys.exit(1)
+                _exit_on_unsupported_db_scheme(_db_env, _candidate_url)
             try:
                 from litellm.secret_managers.main import get_secret
 
@@ -1271,6 +1300,10 @@ def run_server(
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, connection_url_params)
                     os.environ["DIRECT_URL"] = modified_url
+                reader_url = _read_replica_url_from_env()
+                if reader_url:
+                    _exit_on_unsupported_db_scheme("DATABASE_URL_READ_REPLICA", reader_url)
+                    os.environ["DATABASE_URL_READ_REPLICA"] = append_query_params(reader_url, connection_url_params)
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
             except FileNotFoundError:
