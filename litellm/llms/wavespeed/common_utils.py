@@ -106,6 +106,24 @@ def _to_data_uri(payload: bytes, filename: str | None) -> str:
     return f"data:{mime_type};base64,{base64.b64encode(payload).decode()}"
 
 
+def _reference_to_uri(reference: object, filename: str | None) -> str:
+    if isinstance(reference, str):
+        return reference
+    if isinstance(reference, (bytes, bytearray)):
+        return _to_data_uri(bytes(reference), filename)
+    if isinstance(reference, os.PathLike):
+        path: Final = os.fspath(reference)
+        with open(path, "rb") as handle:
+            return _to_data_uri(handle.read(), filename or str(path))
+    read: Final = getattr(reference, "read", None)
+    if callable(read):
+        payload: Final = read()
+        if not isinstance(payload, bytes):
+            raise WaveSpeedError(status_code=400, message="Reference file handle must be opened in binary mode")
+        return _to_data_uri(payload, filename or getattr(reference, "name", None))
+    raise WaveSpeedError(status_code=400, message=f"Unsupported reference type: {type(reference).__name__}")
+
+
 def to_reference_uri(reference: object) -> str:
     """Normalize an OpenAI ``input_reference`` into something a JSON body can carry.
 
@@ -113,29 +131,12 @@ def to_reference_uri(reference: object) -> str:
     ``(filename, content)`` tuples, but WaveSpeed submits predictions as JSON, so
     anything that is not already a URL or data URI has to be inlined as one.
     """
-    if isinstance(reference, str):
-        return reference
-    if isinstance(reference, (bytes, bytearray)):
-        return _to_data_uri(bytes(reference), None)
-    if isinstance(reference, os.PathLike):
-        path: Final = os.fspath(reference)
-        with open(path, "rb") as handle:
-            return _to_data_uri(handle.read(), str(path))
-    if isinstance(reference, tuple):
-        filename, content = (reference[0], reference[1]) if len(reference) >= 2 else (None, None)
-        if content is None:
-            raise WaveSpeedError(status_code=400, message="Reference tuple is missing its content")
-        inner: Final = to_reference_uri(content)
-        if inner.startswith("data:") and filename:
-            return _to_data_uri(base64.b64decode(inner.split(",", 1)[1]), str(filename))
-        return inner
-    read: Final = getattr(reference, "read", None)
-    if callable(read):
-        payload: Final = read()
-        if not isinstance(payload, bytes):
-            raise WaveSpeedError(status_code=400, message="Reference file handle must be opened in binary mode")
-        return _to_data_uri(payload, getattr(reference, "name", None))
-    raise WaveSpeedError(status_code=400, message=f"Unsupported reference type: {type(reference).__name__}")
+    if not isinstance(reference, tuple):
+        return _reference_to_uri(reference, None)
+    if len(reference) < 2 or reference[1] is None:
+        raise WaveSpeedError(status_code=400, message="Reference tuple is missing its content")
+    supplied_name: Final = reference[0]
+    return _reference_to_uri(reference[1], str(supplied_name) if supplied_name else None)
 
 
 def get_api_key(api_key: str | None) -> str:
