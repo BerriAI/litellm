@@ -513,6 +513,24 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
     return False
 
 
+def _group_declares_explicit_cost(model: str, llm_router: "Router") -> bool:
+    """
+    Alias-aware counterpart to ``_is_cost_explicitly_configured``, which resolves the model group
+    the same way ``_model_group_has_pricing`` does. A deployment that prices itself through its
+    ``model_info`` block lands in the cost map under its deployment id rather than in its
+    litellm_params, and reaching that entry through the router's own resolution keeps an alias
+    pointing at such a group from being read as unpriced.
+    """
+    for deployment in llm_router.get_model_list(model_name=model) or ():
+        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+        if model_id is None:
+            continue
+        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
+        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+            return True
+    return False
+
+
 def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> bool:
     if not model or llm_router is None:
         return False
@@ -523,7 +541,24 @@ def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> b
     if _model_group_has_pricing(model=model, llm_router=llm_router):
         return False
 
-    return not _is_cost_explicitly_configured(model, llm_router)
+    return not _group_declares_explicit_cost(model=model, llm_router=llm_router)
+
+
+def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:
+    candidates: Final = (model,) if isinstance(model, str) else tuple(model or ())
+    return tuple(
+        candidate for candidate in candidates if model_has_no_cost_mapping(model=candidate, llm_router=llm_router)
+    )
+
+
+def _unpriced_models_block_message(models: tuple[str, ...]) -> str:
+    names: Final = ", ".join(f"'{model}'" for model in models)
+    subject: Final = f"Model {names} has" if len(models) == 1 else f"Models {names} have"
+    return (
+        f"{subject} no pricing in the cost map, so litellm cannot price the request. "
+        "Requests for unpriced models are blocked because 'block_requests_for_models_without_pricing' "
+        "is enabled. Add pricing (input_cost_per_token/output_cost_per_token) to allow the request."
+    )
 
 
 async def _run_project_checks(
@@ -796,18 +831,14 @@ async def common_checks(
         and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
     )
 
-    if (
-        litellm.block_requests_for_models_without_pricing
-        and isinstance(_model, str)
-        and RouteChecks.is_llm_api_route(route=route)
-        and model_has_no_cost_mapping(model=_model, llm_router=llm_router)
-    ):
+    unpriced_models: Final = (
+        _unpriced_models_in_request(model=_model, llm_router=llm_router)
+        if litellm.block_requests_for_models_without_pricing and RouteChecks.is_llm_api_route(route=route)
+        else ()
+    )
+    if unpriced_models:
         raise ProxyException(
-            message=(
-                f"Model '{_model}' has no pricing in the cost map, so its spend would be tracked as $0. "
-                "Requests for unpriced models are blocked because 'block_requests_for_models_without_pricing' "
-                "is enabled. Add pricing for this model (input_cost_per_token/output_cost_per_token) to allow it."
-            ),
+            message=_unpriced_models_block_message(unpriced_models),
             type=ProxyErrorTypes.model_cost_map_missing,
             param="model",
             code=status.HTTP_403_FORBIDDEN,
