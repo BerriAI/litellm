@@ -65,6 +65,41 @@ _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.Cont
 )
 
 
+def is_guardrail_intervention(e: Exception) -> bool:
+    """
+    Returns True if the exception represents an intentional guardrail block
+    (this was logged previously as an API failure - guardrail_failed_to_respond).
+
+    Guardrails signal intentional blocks by raising:
+    - GuardrailRaisedException (generic guardrail API, tool permission)
+    - BlockedPiiEntityError (Presidio PII detection)
+    - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
+    - HTTPException with a block-signalling status (400, 403, 422)
+    - ModifyResponseException (passthrough mode violation)
+
+    Only the statuses guardrails use in-tree to signal a deliberate rejection
+    count as an intervention: 400 (content policy), 403 (e.g. akto) and 422
+    (e.g. llm_as_a_judge). Other 4xx codes are commonly propagated from an
+    upstream guardrail provider response (401 bad key, 408 timeout, 429 rate
+    limit, or a raw upstream status), which are technical failures, not
+    blocks, so they stay guardrail_failed_to_respond.
+    """
+    if isinstance(e, ModifyResponseException):
+        return True
+    if isinstance(
+        e,
+        (
+            GuardrailRaisedException,
+            BlockedPiiEntityError,
+            SensitiveDataRouteException,
+        ),
+    ):
+        return True
+    if HTTPException is not None and isinstance(e, HTTPException) and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES:
+        return True
+    return False
+
+
 def _strict_guardrail_modes_enabled() -> bool:
     """Whether guardrail-mode validation raises (default) or logs a warning.
 
@@ -429,11 +464,13 @@ class CustomGuardrail(CustomLogger):
                         f"Sensitive data detected by {self.guardrail_name} (routing skipped: request has no session_id)"
                     ),
                     guardrail_name=self.guardrail_name,
+                    blocked_content=True,
                 )
         else:
             raise GuardrailRaisedException(
                 message=f"Sensitive data detected by {self.guardrail_name}",
                 guardrail_name=self.guardrail_name,
+                blocked_content=True,
             )
 
     @staticmethod
@@ -1068,42 +1105,8 @@ class CustomGuardrail(CustomLogger):
 
     @staticmethod
     def _is_guardrail_intervention(e: Exception) -> bool:
-        """
-        Returns True if the exception represents an intentional guardrail block
-        (this was logged previously as an API failure - guardrail_failed_to_respond).
-
-        Guardrails signal intentional blocks by raising:
-        - GuardrailRaisedException (generic guardrail API, tool permission)
-        - BlockedPiiEntityError (Presidio PII detection)
-        - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
-        - HTTPException with a block-signalling status (400, 403, 422)
-        - ModifyResponseException (passthrough mode violation)
-
-        Only the statuses guardrails use in-tree to signal a deliberate rejection
-        count as an intervention: 400 (content policy), 403 (e.g. akto) and 422
-        (e.g. llm_as_a_judge). Other 4xx codes are commonly propagated from an
-        upstream guardrail provider response (401 bad key, 408 timeout, 429 rate
-        limit, or a raw upstream status), which are technical failures, not
-        blocks, so they stay guardrail_failed_to_respond.
-        """
-        if isinstance(e, ModifyResponseException):
-            return True
-        if isinstance(
-            e,
-            (
-                GuardrailRaisedException,
-                BlockedPiiEntityError,
-                SensitiveDataRouteException,
-            ),
-        ):
-            return True
-        if (
-            HTTPException is not None
-            and isinstance(e, HTTPException)
-            and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES
-        ):
-            return True
-        return False
+        """Retained spelling for existing callers; prefer ``is_guardrail_intervention``."""
+        return is_guardrail_intervention(e)
 
     def _process_error(
         self,

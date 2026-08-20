@@ -741,8 +741,6 @@ def test_sync_responses_api_caching():
     # Step 1: Cache the responses API response
     caching_handler.sync_set_cache(result=responses_api_response, kwargs=kwargs)
 
-    time.sleep(0.5)
-
     # Step 2: Retrieve from cache
     cached_response = caching_handler._sync_get_cache(
         model=original_model,
@@ -875,7 +873,6 @@ def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
     }
 
     caching_handler.sync_set_cache(result=responses_api_response, kwargs=kwargs)
-    time.sleep(0.2)
 
     cached_response = caching_handler._sync_get_cache(
         model=original_model,
@@ -920,7 +917,6 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
     }
 
     caching_handler.sync_set_cache(result=chat_completion_response, kwargs=kwargs)
-    time.sleep(0.2)
 
     cached_response = caching_handler._sync_get_cache(
         model=original_model,

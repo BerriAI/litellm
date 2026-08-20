@@ -2653,8 +2653,6 @@ class TestObservabilityCallbackBans:
             "posthog_api_url",
             "braintrust_api_key",
             "braintrust_project",
-            "phoenix_project_name",
-            "phoenix_project_name_override",
             "wandb_api_key",
             "weave_project_id",
             "gcs_bucket_name",
@@ -2685,8 +2683,7 @@ class TestObservabilityCallbackBans:
             "langsmith_api_key",
             "posthog_api_url",
             "braintrust_project",
-            "phoenix_project_name",
-            "phoenix_project_name_override",
+            "user_api_key_auth_metadata",
         ],
     )
     def test_observability_field_in_metadata_dict_is_rejected(
@@ -2706,6 +2703,28 @@ class TestObservabilityCallbackBans:
                 model="gpt-4",
             )
         assert field in str(exc.value)
+
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    @pytest.mark.parametrize(
+        "field",
+        ["phoenix_project_name", "phoenix_project_name_override"],
+    )
+    def test_phoenix_project_fields_in_metadata_are_accepted(self, metadata_key, field):
+        # The Phoenix integrations only honor the project from
+        # ``user_api_key_auth_metadata`` on the proxy, so the bare metadata
+        # fields are inert and must not 400 SDK-style callers that send them.
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    metadata_key: {field: "client-project"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
 
     def test_observability_field_in_litellm_params_metadata_is_rejected(self):
         with pytest.raises(ValueError) as exc:
