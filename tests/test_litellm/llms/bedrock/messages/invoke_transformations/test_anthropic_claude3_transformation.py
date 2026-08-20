@@ -2948,3 +2948,38 @@ def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
         headers={},
     )
     assert result["tools"][0]["name"] == "litellm_web_search"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
+    """
+    Regression test for LIT-5839: closing the outer bedrock_sse_wrapper
+    mid-stream (what the proxy does on a client disconnect) must close the
+    inner async_sse_wrapper deterministically so the partial-stream logging
+    fires. `completion_start_time` is only stamped on the logging object by
+    that dispatch, so it observing a value proves the whole chain ran.
+    """
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _hanging_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 25, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
+        await asyncio.Event().wait()
+
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="chat",
+        start_time=datetime.now(),
+        litellm_call_id="test_bedrock_sse_wrapper_disconnect_logging",
+        function_id="test_bedrock_sse_wrapper_disconnect_logging",
+    )
+    wrapped = cfg.bedrock_sse_wrapper(_hanging_stream(), litellm_logging_obj=logging_obj, request_body={})
+    await wrapped.__anext__()
+    await wrapped.__anext__()
+    assert logging_obj.completion_start_time is None
+
+    await wrapped.aclose()
+
+    assert logging_obj.completion_start_time is not None
