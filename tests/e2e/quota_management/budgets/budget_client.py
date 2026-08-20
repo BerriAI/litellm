@@ -460,7 +460,7 @@ class BudgetClient:
                 time.sleep(_TEAM_READY_SLEEP_SECONDS)
                 continue
             break
-        assert False, last_body
+        raise AssertionError(last_body)
 
     def update_team_member(
         self,

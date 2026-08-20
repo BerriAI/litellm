@@ -8454,9 +8454,7 @@ async def test_get_team_daily_activity_member_with_permission_sees_all_spend(
                 hasattr(mock_db_client.db.litellm_verificationtoken, "find_many")
                 and mock_db_client.db.litellm_verificationtoken.find_many.called
             ):
-                assert (
-                    False
-                ), "API keys should not be fetched for members with /team/daily/activity permission"
+                pytest.fail("API keys should not be fetched for members with /team/daily/activity permission")
 
 
 @pytest.mark.asyncio
@@ -8808,7 +8806,7 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
                 and mock_db_client.db.litellm_verificationtoken.find_many.called
             ):
                 # If it was called, that's unexpected for admin users
-                assert False, "API keys should not be fetched for team admin users"
+                pytest.fail("API keys should not be fetched for team admin users")
 
 
 @pytest.mark.asyncio

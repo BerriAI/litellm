@@ -137,7 +137,7 @@ async def test_basic_secret_detection_text_completion():
         call_type="completion",
     )
 
-    test_data == {
+    assert test_data == {
         "prompt": "Hey, how's it going, API_KEY = '[REDACTED]', my OPENAI_API_KEY = '[REDACTED]' and i want to know what is the weather",
         "model": "gpt-3.5-turbo",
     }

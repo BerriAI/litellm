@@ -43,9 +43,10 @@ def test_llm_passthrough_route():
             client=client,
         )
 
-        mock_post.call_args.kwargs[
-            "request"
-        ].url == "http://localhost:8090/v1/chat/completions"
+        assert (
+            mock_post.call_args.kwargs["request"].url
+            == "http://localhost:8090/v1/chat/completions"
+        )
 
         assert response.status_code == 200
         assert response.json == {"message": "Hello, world!"}

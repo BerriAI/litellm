@@ -1664,7 +1664,7 @@ class TestAuthCallbackRouting:
             key_id = cli_state.split(":", 1)[1]
             assert key_id == "cli-test1234567890"
         else:
-            assert False, "CLI state should have been detected"
+            pytest.fail("CLI state should have been detected")
 
     def test_non_cli_state_routing(self):
         """Test that non-CLI states don't trigger CLI routing"""
