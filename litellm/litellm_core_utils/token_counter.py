@@ -897,6 +897,26 @@ def _count_anthropic_content(
     return tokens
 
 
+def _count_media_block(block: object) -> int:
+    """
+    Count a block type the other branches do not handle.
+
+    Video and audio blocks carry an opaque data URI whose cost the provider decides
+    (frame sampling rate, audio chunking), so they contribute 0 rather than raise - on
+    the ollama route the counter runs after generation, where raising discards a
+    response the model already produced. Any other type is unknown and raises.
+    """
+    if isinstance(block, dict) and block.get("type") in ("video_url", "input_audio"):
+        return 0
+    content_type = block.get("type", type(block).__name__) if isinstance(block, dict) else type(block).__name__
+    raise ValueError(
+        f"Invalid content item type: {content_type}. "
+        f"Expected str or dict with 'type' field "
+        f"(text, image_url, image, document, file, video_url, input_audio, tool_use, tool_result, "
+        f"thinking, redacted_thinking, tool_reference)."
+    )
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -966,13 +986,7 @@ def _count_content_list(
                 if tool_name:
                     num_tokens += count_function(tool_name)
             else:
-                content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
-                raise ValueError(
-                    f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference)."
-                )
+                num_tokens += _count_media_block(c)
         return num_tokens
     except Exception as e:
         if default_token_count is not None:
