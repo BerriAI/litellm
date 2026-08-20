@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import sys
@@ -16461,6 +16462,8 @@ from litellm.models.team import LiteLLM_TeamTable  # noqa: E402
 from litellm.proxy._types import LiteLLM_ProjectTableCachedObj  # noqa: E402
 from litellm.proxy.auth.auth_checks import TeamMemberBudget  # noqa: E402
 from litellm.proxy.management_endpoints.key_budget_resolver import (  # noqa: E402
+    _MODEL_BUDGET_COLD_NOTE,
+    _RESERVATION_NOTE,
     KeyBudgetResolverDeps,
     resolve_key_budgets,
 )
@@ -16505,19 +16508,31 @@ class _RecordingSpendReader:
         return self.spend_by_counter_key.get(counter_key, 0.0)
 
 
-async def _model_spend_reader(*, entity_id, model, budget_config):
-    return {"gpt-5": 6.0, "claude-sonnet-4-5": 2.0}.get(model)
+class _RecordingModelSpendReader:
+    """Stands in for the per-model cache so a test can prove which request models were probed."""
+
+    def __init__(self, spend_by_model=None):
+        default = {"gpt-5": 6.0, "claude-sonnet-4-5": 2.0}
+        self.spend_by_model = default if spend_by_model is None else spend_by_model
+        self.probed = []
+
+    async def __call__(self, *, entity_id, models, budget_config):
+        self.probed.append(tuple(models))
+        found = [self.spend_by_model[model] for model in models if model in self.spend_by_model]
+        return max(found) if found else None
 
 
-def _budgets_deps(read_spend=None):
+def _budgets_deps(read_spend=None, model_spend=None, match_model_budget_key=None, general_settings=None):
+    model_reader = model_spend or _RecordingModelSpendReader()
     return KeyBudgetResolverDeps(
         prisma_client=MagicMock(),
         user_api_key_cache=MagicMock(),
         proxy_logging_obj=MagicMock(),
-        general_settings={},
+        general_settings=general_settings if general_settings is not None else {},
         read_spend=read_spend or _RecordingSpendReader({}),
-        read_key_model_spend=_model_spend_reader,
-        read_end_user_model_spend=_model_spend_reader,
+        read_key_model_spend=model_reader,
+        read_end_user_model_spend=model_reader,
+        match_model_budget_key=match_model_budget_key or (lambda *, model, configured: None),
     )
 
 
@@ -16757,28 +16772,106 @@ async def test_key_budgets_emit_unlimited_rows_for_configured_but_uncapped_scope
         assert hard[scope].remaining is None, scope
 
 
-@pytest.mark.asyncio
-async def test_key_budgets_status_follows_the_operator_the_enforcing_check_uses():
-    """The key check blocks at `>=` and the team check at `>`, so equal spend must not read the same."""
-    reader = _RecordingSpendReader(
-        {
-            "spend:key:" + _BUDGETS_KEY_HASH: 100.0,
-            "spend:team:team-budgets": 300.0,
-        }
-    )
-    with _budgets_world(**_fully_populated_world()):
-        budgets = await resolve_key_budgets(
+_BUDGETS_SPEND_AT_LIMIT = {
+    "spend:key:" + _BUDGETS_KEY_HASH: 100.0,
+    "spend:key:" + _BUDGETS_KEY_HASH + ":window:1d": 20.0,
+    "spend:team:team-budgets": 300.0,
+    "spend:team:team-budgets:window:7d": 30.0,
+    "spend:team_member:user-budgets:team-budgets": 50.0,
+    "spend:user:user-budgets": 400.0,
+    "spend:org:org-budgets": 600.0,
+    "spend:tag:prod": 700.0,
+    "spend:end_user:end-user-budgets": 800.0,
+}
+
+# Reservation reserves before the read-time check and refuses once spend has reached the cap, so every
+# scope it covers blocks at ">=" no matter which operator the read-time check in auth_checks uses.
+_BUDGETS_RESERVED_SCOPES = (
+    "key",
+    "key_window",
+    "team",
+    "team_window",
+    "team_member",
+    "user",
+    "organization",
+    "tag",
+    "end_user",
+)
+_BUDGETS_UNRESERVED_SCOPES = ("proxy", "project", "key_model", "end_user_model")
+
+
+async def _budgets_at_limit(general_settings=None):
+    world = _fully_populated_world()
+    world["team_member"] = TeamMemberBudget(max_budget=50.0, recorded_spend=8.0, source="budget_table:budget-member")
+    # The owner's personal budget only carries a limit on a team key when this is on, and the point of
+    # this fixture is that every reservation-covered scope has a cap sitting exactly at its spend.
+    settings = {"apply_user_budget_to_team_keys": True, **(general_settings or {})}
+    with _budgets_world(**world):
+        return await resolve_key_budgets(
             valid_token=_budgets_token(),
-            end_user_id=None,
-            deps=_budgets_deps(read_spend=reader),
+            end_user_id="end-user-budgets",
+            deps=_budgets_deps(
+                read_spend=_RecordingSpendReader(_BUDGETS_SPEND_AT_LIMIT),
+                general_settings=settings,
+            ),
         )
 
-    hard = {entry.scope: entry for entry in budgets if entry.enforcement == "hard"}
-    assert hard["key"].comparison == ">="
-    assert hard["key"].status == "exceeded"
-    assert hard["team"].comparison == ">"
-    assert hard["team"].status == "ok"
-    assert hard["team"].remaining == 0.0
+
+@pytest.mark.parametrize("scope", _BUDGETS_RESERVED_SCOPES)
+@pytest.mark.asyncio
+async def test_key_budgets_report_the_reservation_operator_for_every_scope_it_covers(scope):
+    """Spend exactly at the cap is already blocked by the reservation, so the row must not read `ok`."""
+    budgets = await _budgets_at_limit()
+
+    entry = next(e for e in budgets if e.scope == scope and e.enforcement == "hard")
+    assert entry.max_budget is not None, scope
+    assert entry.spend == entry.max_budget, scope
+    assert entry.comparison == ">=", scope
+    assert entry.status == "exceeded", scope
+
+
+@pytest.mark.parametrize("scope", _BUDGETS_RESERVED_SCOPES)
+@pytest.mark.asyncio
+async def test_key_budgets_fall_back_to_the_read_time_operator_when_reservation_is_disabled(scope):
+    """With reservation off the read-time check is the only gate, so `>` scopes stop blocking at the cap."""
+    budgets = await _budgets_at_limit(general_settings={"disable_budget_reservation": True})
+
+    entry = next(e for e in budgets if e.scope == scope and e.enforcement == "hard")
+    read_time = {"team", "tag", "end_user"}
+    assert entry.comparison == (">" if scope in read_time else ">="), scope
+    assert entry.status == ("ok" if scope in read_time else "exceeded"), scope
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_leave_unreserved_scopes_on_their_read_time_operator():
+    """Reservation never touches these, so reporting `>=` for them would overstate when they block."""
+    budgets = await _budgets_at_limit()
+
+    by_scope = {e.scope: e for e in budgets if e.enforcement == "hard"}
+    for scope in _BUDGETS_UNRESERVED_SCOPES:
+        assert by_scope[scope].comparison == ">", scope
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_keep_soft_budgets_on_their_alerting_operator():
+    """Soft budgets only ever raise an alert, so the reservation operator must not be applied to them."""
+    budgets = await _budgets_at_limit()
+
+    soft = [entry for entry in budgets if entry.enforcement == "soft"]
+    assert soft, "expected the fully populated world to configure soft budgets"
+    assert all(entry.comparison == ">=" for entry in soft)
+    assert all(_RESERVATION_NOTE not in (entry.note or "") for entry in soft)
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_explain_a_scope_whose_operator_the_reservation_tightened():
+    """A row that blocks earlier than auth_checks alone would has to say so, not silently change."""
+    budgets = await _budgets_at_limit()
+
+    team = next(e for e in budgets if e.scope == "team" and e.enforcement == "hard")
+    key = next(e for e in budgets if e.scope == "key" and e.enforcement == "hard")
+    assert _RESERVATION_NOTE in (team.note or "")
+    assert _RESERVATION_NOTE not in (key.note or ""), "the key check already blocks at >=, nothing was tightened"
 
 
 @pytest.mark.asyncio
@@ -16961,3 +17054,144 @@ async def test_key_budgets_route_returns_404_for_an_unknown_key():
 
     assert response.status_code == 404
     assert "Key not found in database" in json.dumps(response.json())
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_probe_every_request_model_that_maps_onto_a_per_model_cap():
+    """Counters are keyed by the request model, so reading only the config key misses a warm counter."""
+    model_reader = _RecordingModelSpendReader({"openai/gpt-5": 6.0})
+    token = _budgets_token(
+        models=["openai/gpt-5"], model_max_budget={"gpt-5": {"max_budget": 5.0, "budget_duration": "1d"}}
+    )
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=token,
+            end_user_id=None,
+            deps=_budgets_deps(
+                model_spend=model_reader,
+                match_model_budget_key=lambda *, model, configured: "gpt-5" if model.endswith("gpt-5") else None,
+            ),
+        )
+
+    entry = next(e for e in budgets if e.scope == "key_model")
+    assert "openai/gpt-5" in model_reader.probed[0], "the request model's counter was never probed"
+    assert entry.spend == 6.0
+    assert entry.status == "exceeded"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_say_a_per_model_counter_is_missing_rather_than_claiming_a_cold_cache():
+    """The stale note claimed the cache was cold even when it was warm under a different model key."""
+    warm = _RecordingModelSpendReader({"gpt-5": 6.0})
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps(model_spend=warm)
+        )
+
+    warm_entry = next(e for e in budgets if e.scope == "key_model" and e.entity_id == "gpt-5")
+    assert warm_entry.spend == 6.0
+    assert warm_entry.note != _MODEL_BUDGET_COLD_NOTE
+
+    cold = _RecordingModelSpendReader({})
+    with _budgets_world(**_fully_populated_world()):
+        cold_budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps(model_spend=cold)
+        )
+
+    cold_entry = next(e for e in cold_budgets if e.scope == "key_model" and e.entity_id == "gpt-5")
+    assert cold_entry.spend is None
+    assert cold_entry.note == _MODEL_BUDGET_COLD_NOTE
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_keep_the_valid_windows_when_one_window_entry_is_malformed():
+    """Enforcement still applies the good windows, so dropping the whole scope hides a live budget."""
+    token = _budgets_token(
+        budget_limits=[
+            {"max_budget": 20.0, "budget_duration": "1d", "reset_at": _BUDGETS_RESET_AT},
+            {"max_budget": "not-a-number", "budget_duration": "7d"},
+        ]
+    )
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(valid_token=token, end_user_id=None, deps=_budgets_deps())
+
+    windows = [entry for entry in budgets if entry.scope == "key_window"]
+    assert [entry.entity_id for entry in windows] == ["1d"]
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_keep_the_valid_model_caps_when_one_model_entry_is_malformed():
+    """Same rule for per-model caps: one bad entry must not blank every other model's budget."""
+    token = _budgets_token(
+        model_max_budget={
+            "gpt-5": {"max_budget": 5.0, "budget_duration": "1d"},
+            "claude-sonnet-4-5": {"max_budget": "not-a-number"},
+        }
+    )
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(valid_token=token, end_user_id=None, deps=_budgets_deps())
+
+    models = [entry.entity_id for entry in budgets if entry.scope == "key_model"]
+    assert models == ["gpt-5"]
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_prefer_the_request_token_end_user_cap_over_the_row():
+    """Reservation reads the token's cap first, so reporting the row's number would understate the block."""
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id="end-user-budgets",
+            deps=_budgets_deps(),
+            token_end_user_max_budget=25.0,
+        )
+
+    entry = next(e for e in budgets if e.scope == "end_user")
+    assert entry.max_budget == 25.0
+    assert entry.source == "token.end_user_max_budget"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_warn_that_custom_auth_can_hide_an_end_user_cap():
+    """A custom auth callable sets that cap per request, so the report has to admit it cannot see one."""
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id="end-user-budgets",
+            deps=_budgets_deps(),
+        )
+        with_custom_auth = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id="end-user-budgets",
+            deps=dataclasses.replace(_budgets_deps(), custom_auth_enabled=True),
+        )
+
+    plain = next(e for e in budgets if e.scope == "end_user")
+    warned = next(e for e in with_custom_auth if e.scope == "end_user")
+    assert "custom auth" not in (plain.note or "")
+    assert "custom auth" in (warned.note or "")
+
+
+@pytest.mark.parametrize("max_budget", [0, 0.0, -5.0])
+@pytest.mark.asyncio
+async def test_key_budgets_treat_a_non_positive_cap_as_unset(max_budget):
+    """The enforcing checks skip a cap of 0 rather than blocking everything, so it is not a limit."""
+    world = _fully_populated_world()
+    world["organization"] = _BudgetsOrgTable(
+        organization_id="org-budgets",
+        organization_alias="Reporting Org",
+        budget_id="budget-org",
+        spend=5.0,
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-org", max_budget=max_budget),
+    )
+    token = _budgets_token(model_max_budget={"gpt-5": {"max_budget": max_budget, "budget_duration": "1d"}})
+    with _budgets_world(**world):
+        budgets = await resolve_key_budgets(valid_token=token, end_user_id=None, deps=_budgets_deps())
+
+    by_scope = {entry.scope: entry for entry in budgets if entry.enforcement == "hard"}
+    assert by_scope["organization"].max_budget is None
+    assert by_scope["organization"].status == "unlimited"
+    assert by_scope["key_model"].max_budget is None
+    assert by_scope["key_model"].status == "unlimited"

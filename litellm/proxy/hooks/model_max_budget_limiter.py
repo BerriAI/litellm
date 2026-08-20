@@ -201,18 +201,28 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
         return _current_spend
 
-    def _get_request_model_budget_config(
+    def get_request_model_budget_key(
         self, model: str, internal_model_max_budget: GenericBudgetConfigType
-    ) -> BudgetConfig | None:
+    ) -> str | None:
         """
-        Get the budget config for the request model
+        Which `model_max_budget` key a request model is charged against.
 
         1. Check if `model` is in `internal_model_max_budget`
         2. If not, check if `model` without custom llm provider is in `internal_model_max_budget`
         """
-        return internal_model_max_budget.get(model, None) or internal_model_max_budget.get(
-            self._get_model_without_custom_llm_provider(model), None
+        if model in internal_model_max_budget:
+            return model
+        stripped: Final = self._get_model_without_custom_llm_provider(model)
+        return stripped if stripped in internal_model_max_budget else None
+
+    def _get_request_model_budget_config(
+        self, model: str, internal_model_max_budget: GenericBudgetConfigType
+    ) -> BudgetConfig | None:
+        """Get the budget config for the request model."""
+        matched: Final = self.get_request_model_budget_key(
+            model=model, internal_model_max_budget=internal_model_max_budget
         )
+        return internal_model_max_budget.get(matched, None) if matched is not None else None
 
     def _get_model_without_custom_llm_provider(self, model: str) -> str:
         if "/" in model:
