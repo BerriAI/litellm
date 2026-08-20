@@ -761,7 +761,15 @@ class LiteLLMAnthropicMessagesAdapter:
                 name=truncated_name,
             )
             if "input_schema" in tool:
-                function_chunk["parameters"] = tool["input_schema"]
+                # Shallow-copy so the additional-kwargs loop below cannot mutate
+                # the caller's schema in place. Callers reuse the same tool list
+                # (e.g. the pass-through guardrail translates the tools, then the
+                # request is translated again for the real call), so aliasing the
+                # source dict here leaks non-schema keys such as display_width_px
+                # back into it on the first pass and forwards a polluted schema on
+                # the second. translate_anthropic_output_format_to_openai in this
+                # same file already copies its schema for the same reason.
+                function_chunk["parameters"] = dict(tool["input_schema"] or {})
             if "description" in tool:
                 function_chunk["description"] = tool["description"]
             if "strict" in tool:
