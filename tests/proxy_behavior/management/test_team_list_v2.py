@@ -37,21 +37,21 @@ async def _v2_team_ids(proxy_client, caller_cleartext: str, extra: str = "") -> 
         page += 1
 
 
-# GET /v2/team/list is an info route reachable by every actor, but
-# _enforce_list_team_v2_access still gates a BARE query: a proxy admin sees
-# all teams, an org admin sees its orgs' teams, and a regular user — who has
-# passed no user_id filter — is rejected 401 ("only admins can query all
-# teams"). A regular user must scope the query to its own user_id.
+# GET /v2/team/list is an info route reachable by every actor.
+# _enforce_list_team_v2_access scopes a BARE query: a proxy admin sees all
+# teams, an org admin sees its orgs' teams, and a regular user — who has
+# passed no user_id filter — sees the teams it belongs to (LIT-5384: this
+# used to be a 401, which broke the Admin UI key edit flow).
 _BARE = [
     ("proxy_admin", Actor.PROXY_ADMIN, 200, frozenset({"alpha", "beta", "gamma"})),
     ("org_admin", Actor.ORG_ADMIN, 200, frozenset({"alpha", "gamma"})),
     ("org_b_admin", Actor.ORG_B_ADMIN, 200, frozenset({"beta"})),
-    ("team_admin", Actor.TEAM_ADMIN, 401, None),
-    ("internal_user", Actor.INTERNAL_USER, 401, None),
-    ("owner", Actor.OWNER, 401, None),
-    ("unrelated_same_org", Actor.UNRELATED_SAME_ORG, 401, None),
-    ("cross_org_user", Actor.CROSS_ORG_USER, 401, None),
-    ("service_account", Actor.SERVICE_ACCOUNT, 401, None),
+    ("team_admin", Actor.TEAM_ADMIN, 200, frozenset({"alpha"})),
+    ("internal_user", Actor.INTERNAL_USER, 200, frozenset({"alpha"})),
+    ("owner", Actor.OWNER, 200, frozenset({"alpha"})),
+    ("unrelated_same_org", Actor.UNRELATED_SAME_ORG, 200, frozenset({"alpha"})),
+    ("cross_org_user", Actor.CROSS_ORG_USER, 200, frozenset({"beta"})),
+    ("service_account", Actor.SERVICE_ACCOUNT, 200, frozenset({"alpha"})),
 ]
 
 

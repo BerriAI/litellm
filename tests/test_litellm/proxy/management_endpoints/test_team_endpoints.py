@@ -3077,56 +3077,6 @@ async def test_bulk_team_member_add_no_db_connection():
 
 
 @pytest.mark.asyncio
-async def test_list_team_v2_security_check_non_admin_user():
-    """
-    Test that list_team_v2 properly checks route permissions for non-admin users.
-    Non-admin users should only be able to query their own teams.
-    """
-    from unittest.mock import AsyncMock, Mock, patch
-
-    from fastapi import HTTPException, Request
-
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
-
-    # Mock request
-    mock_request = Mock(spec=Request)
-
-    # Test Case 1: Non-admin user trying to query all teams (user_id=None)
-    mock_user_api_key_dict_non_admin = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER,
-        user_id="non_admin_user_123",
-    )
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
-        patch("litellm.proxy.proxy_server.user_api_key_cache"),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
-            new_callable=AsyncMock,
-            return_value=None,
-        ),
-    ):
-        mock_prisma_client.return_value = MagicMock()  # Mock non-None prisma client
-
-        # Should raise HTTPException with 401 status
-        with pytest.raises(HTTPException) as exc_info:
-            await list_team_v2(
-                http_request=mock_request,
-                user_id=None,  # Non-admin trying to query all teams
-                user_api_key_dict=mock_user_api_key_dict_non_admin,
-                status=None,
-            )
-
-        assert exc_info.value.status_code == 401
-        assert "Only admin users can query all teams/other teams" in str(
-            exc_info.value.detail
-        )
-        assert LitellmUserRoles.INTERNAL_USER.value in str(exc_info.value.detail)
-
-
-@pytest.mark.asyncio
 async def test_list_team_v2_security_check_non_admin_user_other_user():
     """
     Test that list_team_v2 properly checks route permissions for non-admin users
@@ -8947,7 +8897,7 @@ async def test_list_team_v1_batches_key_queries():
         patch(
             "litellm.proxy.management_endpoints.team_endpoints._authorize_and_filter_teams",
             new_callable=AsyncMock,
-            return_value=[team1, team2],
+            return_value=([team1, team2], None),
         ),
         patch(
             "litellm.proxy.management_endpoints.team_endpoints.get_all_team_memberships",
@@ -12209,3 +12159,70 @@ async def test_invalidate_access_group_cache_deletes_the_cached_object():
         "user_api_key_cache": cache,
         "proxy_logging_obj": logging_obj,
     }
+
+
+@pytest.mark.asyncio
+async def test_enforce_list_team_v2_access_scopes_bare_query_to_caller():
+    """A non-admin listing teams without a user_id filter means "my teams" (LIT-5384),
+    and only an explicit request for another user's teams is rejected."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _enforce_list_team_v2_access,
+    )
+
+    caller = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+    args = {
+        "organization_id": None,
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": MagicMock(),
+        "proxy_logging_obj": MagicMock(),
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._get_org_admin_org_ids",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        assert await _enforce_list_team_v2_access(
+            user_api_key_dict=caller, user_id=None, **args
+        ) == ("alice", None)
+
+        with pytest.raises(HTTPException) as exc:
+            await _enforce_list_team_v2_access(
+                user_api_key_dict=caller, user_id="bob", **args
+            )
+
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_authorize_and_filter_teams_scopes_bare_query_to_caller():
+    """/team/list without a user_id filter returns the caller's own teams rather than
+    401'ing a non-admin (LIT-5384)."""
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _authorize_and_filter_teams,
+    )
+
+    caller = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    args = {
+        "prisma_client": prisma_client,
+        "user_api_key_cache": MagicMock(),
+        "proxy_logging_obj": MagicMock(),
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        assert await _authorize_and_filter_teams(
+            user_api_key_dict=caller, user_id=None, **args
+        ) == ([], "alice")
+
+        with pytest.raises(HTTPException) as exc:
+            await _authorize_and_filter_teams(
+                user_api_key_dict=caller, user_id="bob", **args
+            )
+
+    assert exc.value.status_code == 401

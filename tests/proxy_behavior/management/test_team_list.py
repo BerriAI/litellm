@@ -23,17 +23,18 @@ def _seeded_visible(resp_json, world) -> set:
 
 
 # Family 1 — bare GET /team/list (no query params). _authorize_and_filter_teams
-# authorizes only an admin view (proxy admin) or an org admin; everyone else
-# is 401. An org admin sees every team in its org(s).
+# gives a proxy admin every team, an org admin every team in its org(s), and
+# everyone else the teams they belong to (LIT-5384: a bare query from a
+# regular user used to be 401).
 _BARE = [
     ("proxy_admin", Actor.PROXY_ADMIN, 200, {"alpha", "beta", "gamma"}),
     ("org_admin", Actor.ORG_ADMIN, 200, {"alpha", "gamma"}),
-    ("team_admin", Actor.TEAM_ADMIN, 401, None),
-    ("internal_user", Actor.INTERNAL_USER, 401, None),
-    ("owner", Actor.OWNER, 401, None),
-    ("unrelated_same_org", Actor.UNRELATED_SAME_ORG, 401, None),
-    ("cross_org_user", Actor.CROSS_ORG_USER, 401, None),
-    ("service_account", Actor.SERVICE_ACCOUNT, 401, None),
+    ("team_admin", Actor.TEAM_ADMIN, 200, {"alpha"}),
+    ("internal_user", Actor.INTERNAL_USER, 200, {"alpha"}),
+    ("owner", Actor.OWNER, 200, {"alpha"}),
+    ("unrelated_same_org", Actor.UNRELATED_SAME_ORG, 200, {"alpha"}),
+    ("cross_org_user", Actor.CROSS_ORG_USER, 200, {"beta"}),
+    ("service_account", Actor.SERVICE_ACCOUNT, 200, {"alpha"}),
     ("org_b_admin", Actor.ORG_B_ADMIN, 200, {"beta"}),
 ]
 
@@ -103,3 +104,14 @@ async def test_team_list_own_query(
     assert visible == set(expected_visible), (
         f"{actor.value}: expected {sorted(expected_visible)}, " f"got {sorted(visible)}"
     )
+
+
+async def test_team_list_other_user_id_query_is_401(proxy_client, world):
+    """A regular user filtering by another user's user_id is still rejected 401."""
+    resp = await proxy_client.get(
+        f"/team/list?user_id={world.keys[Actor.CROSS_ORG_USER].user_id}",
+        headers={
+            "Authorization": f"Bearer {world.keys[Actor.INTERNAL_USER].cleartext}"
+        },
+    )
+    assert resp.status_code == 401, resp.text
