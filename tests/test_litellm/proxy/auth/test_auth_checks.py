@@ -5696,6 +5696,64 @@ async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(mon
 
 
 @pytest.mark.asyncio
+async def test_get_team_member_default_budget_caches_json_safe_payload():
+    """The Redis layer json.dumps() the cached value, so datetime columns on the budget row
+    must be dumped to ISO strings before the write, and the read side must give back a model.
+    """
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    budget_row = MagicMock()
+    budget_row.dict = lambda: {
+        "budget_id": "tm-budget-1",
+        "max_budget": 25.0,
+        "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        "updated_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+
+    class _JsonOnlyRedis:
+        """Stands in for RedisCache, which serializes with a bare json.dumps()."""
+
+        def __init__(self):
+            self.writes = []
+
+        async def async_set_cache(self, key, value, **kwargs):
+            self.writes.append((key, json.dumps(value)))
+
+        async def async_get_cache(self, key, **kwargs):
+            return None
+
+    redis_cache = _JsonOnlyRedis()
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+
+    budget = await get_team_member_default_budget(
+        budget_id="tm-budget-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert isinstance(budget, LiteLLM_BudgetTable)
+    assert budget.max_budget == 25.0
+    assert len(redis_cache.writes) == 1
+    written_key, written_payload = redis_cache.writes[0]
+    assert written_key == "team_member_default_budget:tm-budget-1"
+    assert json.loads(written_payload)["max_budget"] == 25.0
+
+    cached = await get_team_member_default_budget(
+        budget_id="tm-budget-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert isinstance(cached, LiteLLM_BudgetTable)
+    assert cached.max_budget == 25.0
+    mock_prisma_client.db.litellm_budgettable.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_end_user_object_db_fetch_returns_validated_end_user():
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
