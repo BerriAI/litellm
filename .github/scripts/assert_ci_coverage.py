@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import ast
+import operator
 import pathlib
 import re
 import sys
 import warnings
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -54,6 +55,14 @@ class Allowlist:
 
     def covers_dockerfile(self, relative_path: str) -> bool:
         return any(relative_path == path for entry in self.dockerfiles for path in entry.paths)
+
+
+@dataclass(frozen=True, slots=True)
+class Section:
+    name: str
+    entries: tuple[AllowEntry, ...]
+    candidates: tuple[str, ...]
+    matches: Callable[[str, str], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,6 +377,25 @@ def _uncovered_dockerfiles(allowlist: Allowlist, tokens: frozenset[str]) -> tupl
     )
 
 
+def _stale_allowlist_paths(
+    allowlist: Allowlist,
+    *,
+    test_files: tuple[str, ...],
+    dockerfiles: tuple[str, ...],
+) -> tuple[Finding, ...]:
+    sections: Final[tuple[Section, ...]] = (
+        Section("test_paths", allowlist.test_paths, test_files, _token_covers),
+        Section("dockerfiles", allowlist.dockerfiles, dockerfiles, operator.eq),
+    )
+    return tuple(
+        Finding(subject=path, detail=f"listed under '{section.name}' but matches no file the census looks at")
+        for section in sections
+        for entry in section.entries
+        for path in entry.paths
+        if not any(section.matches(path, candidate) for candidate in section.candidates)
+    )
+
+
 def _parse_entry(item: object, section: str) -> AllowEntry:
     if not isinstance(item, dict):
         raise SystemExit(f"{ALLOWLIST_FILE.name}: '{section}' entries must be mappings")
@@ -465,7 +493,14 @@ def main() -> int:
 
     test_findings = _uncovered_tests(allowlist, _invoked_test_tokens(scalars))
     dockerfile_findings = _uncovered_dockerfiles(allowlist, _built_dockerfile_tokens(scalars))
+    stale_findings = _stale_allowlist_paths(allowlist, test_files=_test_files(), dockerfiles=_dockerfiles())
 
+    if stale_findings:
+        _report(
+            "allowlist entries that exempt nothing",
+            stale_findings,
+            "Delete each from .github/ci-coverage-allowlist.yml; the file it named is gone or was renamed.",
+        )
     if test_findings:
         _report(
             "test files that no CI job invokes",
@@ -478,7 +513,7 @@ def main() -> int:
             dockerfile_findings,
             "Build each in a workflow, or list it in .github/ci-coverage-allowlist.yml with a reason.",
         )
-    if test_findings or dockerfile_findings:
+    if stale_findings or test_findings or dockerfile_findings:
         return 1
 
     _write(

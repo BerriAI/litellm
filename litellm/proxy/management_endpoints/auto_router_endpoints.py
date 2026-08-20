@@ -37,6 +37,7 @@ from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
 from litellm.types.management_endpoints.auto_router_endpoints import (
+    SHADOW_EVAL_TURN_VALVE,
     AutoRouterBenchmarkGroup,
     AutoRouterBenchmarksResponse,
     AutoRouterBenchmarkTotals,
@@ -662,12 +663,19 @@ _ATTEMPT_AGG_BY_TIER_SQL: Final = "SELECT COALESCE(tier, 'UNCLASSIFIED') AS grp,
 _ATTEMPT_AGG_BY_MODEL_SQL: Final = "SELECT COALESCE(real_model, 'unknown') AS grp," + _ATTEMPT_AGG_SELECT
 _ATTEMPT_AGG_BY_LEG_SQL: Final = "SELECT job_id AS grp," + _ATTEMPT_AGG_SELECT
 
+# These guards derive spend from attempt rows, the cross-pod authority; the sampler also
+# reads the live counter, so admission can stop before a row-based guard would fire (safe
+# direction, and mid-deploy rows from old pods price as judge-only until the deploy ends).
 _SWEEP_FINISHED_JOBS_SQL: Final = """
 UPDATE "LiteLLM_ShadowEvalJob" j SET stopped_at = (NOW() AT TIME ZONE 'utc')
 WHERE j.api_key_id = ANY($1::text[]) AND j.stopped_at IS NULL
   AND (
     j.ends_at <= (NOW() AT TIME ZONE 'utc')
     OR (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_turns
+    OR (
+      j.max_budget IS NOT NULL
+      AND (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_budget
+    )
   )
 """
 
@@ -681,7 +689,7 @@ WHERE job_id = ANY($1::text[])
 """
 
 _ATTEMPT_COUNTS_SQL: Final = """
-SELECT a.job_id, COUNT(*)::int AS attempt_count
+SELECT a.job_id, COUNT(*)::int AS attempt_count, COALESCE(SUM(a.judge_cost + a.shadow_cost), 0)::float AS spend
 FROM "LiteLLM_ShadowEvalAttempt" a
 JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
 WHERE a.job_id = ANY($1::text[]) AND (j.stopped_at IS NULL OR a.created_at <= j.stopped_at)
@@ -697,6 +705,10 @@ WHERE group_id = $1 AND stopped_by IS NULL
     SELECT 1 FROM "LiteLLM_ShadowEvalJob" k
     WHERE k.group_id = $1 AND k.stopped_at IS NULL
       AND (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_turns
+      AND (
+        k.max_budget IS NULL
+        OR (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_budget
+      )
   )
 """
 
@@ -704,6 +716,7 @@ WHERE group_id = $1 AND stopped_by IS NULL
 class _AttemptCountRow(BaseModel):
     job_id: str
     attempt_count: int
+    spend: float
 
 
 _ATTEMPT_COUNT_ROWS: Final = TypeAdapter(list[_AttemptCountRow])
@@ -770,6 +783,7 @@ class _LegRow(BaseModel):
     judge_model: str
     shadow_percentage: float
     max_turns: int
+    max_budget: float | None = None
     created_at: datetime
     ends_at: datetime
     stopped_at: datetime | None = None
@@ -789,22 +803,25 @@ class _LegRow(BaseModel):
 _LEG_ROWS: Final = TypeAdapter(list[_LegRow])
 
 
-async def _leg_attempt_counts(prisma_client: "PrismaClient", legs: Sequence[_LegRow]) -> Mapping[str, int]:
-    """Each leg's attempt count by leg id, judged and errored alike, in one grouped read.
-    It is the same count the sampler budgets against max_turns, so the derived status
-    flips to completed exactly when sampling actually ends. A stamped leg's count freezes
-    at its stopped_at: in-flight attempts that land after the stamp are excluded, so they
-    can never reclassify a leg that was stopped under budget as budget-spent."""
+async def _leg_attempt_counts(prisma_client: "PrismaClient", legs: Sequence[_LegRow]) -> Mapping[str, _AttemptCountRow]:
+    """Each leg's attempt count and recorded spend by leg id, judged and errored alike, in
+    one grouped read. They are the same figures the sampler budgets against max_turns and
+    max_budget, so the derived status flips to completed exactly when sampling actually
+    ends. A stamped leg's figures freeze at its stopped_at: in-flight attempts that land
+    after the stamp are excluded, so they can never reclassify a leg that was stopped
+    under budget as budget-spent."""
     if not legs:
         return MappingProxyType({})
     rows: Final = _ATTEMPT_COUNT_ROWS.validate_python(
         await _query_raw(prisma_client, _ATTEMPT_COUNTS_SQL, [leg.id for leg in legs])  # mutable-ok: query param
         or ()
     )
-    return MappingProxyType({row.job_id: row.attempt_count for row in rows})
+    return MappingProxyType({row.job_id: row for row in rows})
 
 
-def _group_response(group_id: str, legs: Sequence[_LegRow], attempt_counts: Mapping[str, int]) -> ShadowEvalJobResponse:
+def _group_response(
+    group_id: str, legs: Sequence[_LegRow], attempt_counts: Mapping[str, _AttemptCountRow]
+) -> ShadowEvalJobResponse:
     """The one constructor of a job response: the caller names the group and passes that
     group's legs. Config is read off the first leg because every leg carries the same copy,
     written by one create_many. No caller may serialize a raw row (that would leak a leg id
@@ -816,8 +833,10 @@ def _group_response(group_id: str, legs: Sequence[_LegRow], attempt_counts: Mapp
             ShadowEvalJobKeyResponse(
                 api_key_id=leg.api_key_id,
                 max_turns=leg.max_turns,
+                max_budget=leg.max_budget,
                 stopped_at=leg.stopped_at,
-                attempt_count=attempt_counts.get(leg.id, 0),
+                attempt_count=stats.attempt_count if (stats := attempt_counts.get(leg.id)) else 0,
+                spend=round(stats.spend, 6) if stats else 0.0,
             )
             for leg in sorted(legs, key=lambda leg: leg.api_key_id)
         ),
@@ -923,11 +942,12 @@ async def start_shadow_eval(
     serve and duplicates them against baseline_model. A key can hold one active job per
     direction, so both questions can run at once.
 
-    Shadow responses are never served to users. Each key samples until it has judged
-    max_turns turns of its own traffic, the job's window ends, or the job is stopped, so one
-    key running out of budget does not end sampling for the others; sampling changes
-    propagate to pods within about 10 seconds. Shadow and judge calls bill to the shadowed
-    key but are excluded from request counts and auto-router adoption metrics.
+    Shadow responses are never served to users. Each key samples until its recorded eval
+    spend, the shadow and judge calls' own cost, reaches max_budget dollars, the job's
+    window ends, or the job is stopped, so one key running out of budget does not end
+    sampling for the others; sampling changes propagate to pods within about 10 seconds.
+    Shadow and judge calls bill to the shadowed key but are excluded from request counts
+    and auto-router adoption metrics.
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
@@ -952,7 +972,7 @@ async def start_shadow_eval(
             ),
         )
 
-    # A job whose window passed or whose turn budget ran out stopped sampling on its own,
+    # A job whose window passed or whose budget ran out stopped sampling on its own,
     # but its legs still hold their slots in the per-key, per-direction partial unique index
     # until stamped; free them so a new eval can start. Sweeping both directions is deliberate.
     requested: Final = list(data.api_key_ids)  # mutable-ok: query param
@@ -983,7 +1003,8 @@ async def start_shadow_eval(
         "baseline_model": data.baseline_model,
         "judge_model": data.judge_model,
         "shadow_percentage": data.shadow_percentage,
-        "max_turns": data.max_turns,
+        "max_turns": SHADOW_EVAL_TURN_VALVE,
+        "max_budget": data.max_budget,
         "created_by": user_api_key_dict.user_id,
         "created_at": now,
         "ends_at": ends_at,
@@ -1007,7 +1028,8 @@ async def start_shadow_eval(
         keys=tuple(
             ShadowEvalJobKeyResponse(
                 api_key_id=api_key_id,
-                max_turns=data.max_turns,
+                max_turns=SHADOW_EVAL_TURN_VALVE,
+                max_budget=data.max_budget,
                 key_alias=labels[api_key_id].key_alias,
                 key_name=labels[api_key_id].key_name,
             )

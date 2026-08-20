@@ -3,10 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 
 const mockUsePaginatedDailyActivity = vi.fn();
 
+const mockCancel = vi.fn();
+
 vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", () => ({
   usePaginatedDailyActivity: (args: unknown) => {
     mockUsePaginatedDailyActivity(args);
-    return { data: { results: [] }, loading: false, isFetchingMore: false };
+    return {
+      data: { results: [] },
+      loading: false,
+      isFetchingMore: false,
+      progress: { currentPage: 4, totalPages: 9 },
+      cancelled: false,
+      cancel: mockCancel,
+    };
   },
 }));
 
@@ -39,6 +48,14 @@ describe("useDailyActivityRange", () => {
     expect(mockUsePaginatedDailyActivity).toHaveBeenLastCalledWith(
       expect.objectContaining({ aggregatedFetchFn: userDailyActivityAggregatedCall }),
     );
+  });
+
+  it("forwards the pagination progress and cancel affordances instead of dropping them", () => {
+    const { result } = renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));
+
+    expect(result.current.progress).toEqual({ currentPage: 4, totalPages: 9 });
+    expect(result.current.cancelled).toBe(false);
+    expect(result.current.cancel).toBe(mockCancel);
   });
 
   it("stays disabled until an access token is available", () => {

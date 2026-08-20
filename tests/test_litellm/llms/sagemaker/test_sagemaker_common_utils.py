@@ -87,7 +87,6 @@ def test_sagemaker_response_stream_shape_is_structure_shape():
     assert (
         shape is not None
     ), "get_sagemaker_response_stream_shape() is None — botocore may not be installed"
-    shape: StructureShape = shape  # remove Optional
     assert isinstance(shape, StructureShape)
     assert shape.name == "InvokeEndpointWithResponseStreamOutput"
 

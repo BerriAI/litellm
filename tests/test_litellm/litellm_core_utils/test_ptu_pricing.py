@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from litellm.litellm_core_utils.ptu_pricing import (
+    ptu_config_error,
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
     PTU_ZEROED_PRICING_FIELDS,
@@ -161,3 +162,50 @@ def test_a_setting_that_is_not_a_charge_is_left_alone():
 
     assert override is not None
     assert "output_vector_size" not in override
+
+
+# --- the rule both the endpoints and config.yaml registration enforce ---------------
+
+
+def test_a_complete_reservation_has_no_error():
+    assert ptu_config_error(_VALID) is None
+
+
+def test_a_deployment_with_no_ptu_fields_is_not_a_ptu_deployment():
+    """The gate must stay scoped to PTU configuration, or it would reject every ordinary
+    deployment for lacking a team_id."""
+    assert ptu_config_error({"team_id": "team-alpha"}) is None
+    assert ptu_config_error({}) is None
+
+
+@pytest.mark.parametrize(
+    "override, expected",
+    [
+        ({"team_id": None}, "team_id is required when PTU fields are set (one model maps to one team)"),
+        ({"team_id": ""}, "team_id is required when PTU fields are set (one model maps to one team)"),
+        ({"cost_per_ptu_per_hour": None}, "ptu_count and cost_per_ptu_per_hour must be set together"),
+        ({"ptu_count": None}, "ptu_count and cost_per_ptu_per_hour must be set together"),
+        ({"ptu_effective_to": "2025-01-01T00:00:00Z"}, "ptu_effective_to must be after ptu_effective_from"),
+    ],
+    ids=["no team", "blank team", "count without rate", "rate without count", "inverted window"],
+)
+def test_an_incoherent_reservation_names_its_reason(override, expected):
+    assert ptu_config_error({**_VALID, **override}) == expected
+
+
+def test_a_missing_start_is_explained_rather_than_inferred():
+    error = ptu_config_error({k: v for k, v in _VALID.items() if k != "ptu_effective_from"})
+
+    assert error is not None
+    assert error.startswith("ptu_effective_from is required when PTU fields are set")
+
+
+def test_an_inverted_window_is_caught_before_the_count_and_rate_gate():
+    """A patch that moves one end of the window carries no count or rate, so ordering has to
+    be checked first or an inverted window reaches the row and the next load cannot parse it."""
+    window_only = {
+        "ptu_effective_from": "2026-01-01T00:00:00Z",
+        "ptu_effective_to": "2025-01-01T00:00:00Z",
+    }
+
+    assert ptu_config_error(window_only) == "ptu_effective_to must be after ptu_effective_from"

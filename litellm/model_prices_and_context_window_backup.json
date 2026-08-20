@@ -34758,6 +34758,50 @@
         "supports_reasoning": false,
         "supports_function_calling": true
     },
+    "perplexity/perplexity/deepseek-v4-flash-0731": {
+        "cache_read_input_token_cost": 2.8e-08,
+        "input_cost_per_token": 1.3e-07,
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "output_cost_per_token": 2.6e-07,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models",
+        "supports_web_search": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+    },
+    "perplexity/perplexity/glm-5.2": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models",
+        "supports_web_search": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+    },
+    "perplexity/perplexity/kimi-k3": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models",
+        "supports_web_search": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+    },
+    "perplexity/perplexity/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "output_cost_per_token": 4e-06,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models",
+        "supports_web_search": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+    },
     "perplexity/pplx-embed-v1-0.6b": {
         "input_cost_per_token": 4e-09,
         "litellm_provider": "perplexity",

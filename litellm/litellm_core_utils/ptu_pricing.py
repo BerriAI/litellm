@@ -79,6 +79,45 @@ def _as_utc(value: object) -> datetime | None:
         return None
 
 
+def _named(reason: str, model_name: str | None) -> str:
+    """The reason on its own for a caller that already has the deployment in hand, else named."""
+    return reason if model_name is None else f"PTU configuration on model '{model_name}' is invalid: {reason}"
+
+
+def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None = None) -> str | None:
+    """Why this PTU configuration cannot be honoured, else None.
+
+    Both the model endpoints and config.yaml registration ask this, so a deployment that
+    one refuses is refused by the other for the same stated reason.
+
+    Window ordering is checked before the count/rate gate. A patch that touches only one end
+    of the window carries no count or rate, so leaving the order to that gate would let an
+    inverted window reach the row; the next load then fails to parse it and drops the
+    deployment out of the router, where no further patch can repair it.
+    """
+    effective_from: Final = _as_utc(model_info.get("ptu_effective_from"))
+    effective_to: Final = _as_utc(model_info.get("ptu_effective_to"))
+    if effective_from is not None and effective_to is not None and effective_to <= effective_from:
+        return _named("ptu_effective_to must be after ptu_effective_from", model_name)
+
+    has_count: Final = model_info.get("ptu_count") is not None
+    has_rate: Final = model_info.get("cost_per_ptu_per_hour") is not None
+    if not has_count and not has_rate:
+        return None
+    if has_count != has_rate:
+        return _named("ptu_count and cost_per_ptu_per_hour must be set together", model_name)
+    if effective_from is None:
+        return _named(
+            "ptu_effective_from is required when PTU fields are set. Flat cost accrues from that "
+            "instant, so without it the start would have to be inferred and a deployment configured "
+            "today could be billed for days it did not exist",
+            model_name,
+        )
+    if not model_info.get("team_id"):
+        return _named("team_id is required when PTU fields are set (one model maps to one team)", model_name)
+    return None
+
+
 def ptu_terms(model_info: Mapping[str, object]) -> PTUTerms | None:
     """The reservation this deployment accrues flat cost for, else None.
 

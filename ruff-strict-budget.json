@@ -57,7 +57,7 @@
     "limit": 3
   },
   "BLE001": {
-    "limit": 2923
+    "limit": 2920
   },
   "C401": {
     "limit": 8
@@ -174,7 +174,7 @@
     "limit": 176
   },
   "RUF012": {
-    "limit": 241
+    "limit": 240
   },
   "RUF015": {
     "limit": 8
