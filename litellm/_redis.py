@@ -552,11 +552,11 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
 
 
 def _sentinel_auth_kwargs(connection_kwargs: dict, sentinel_password: str | None) -> dict:
-    """The Sentinel monitors are separate servers with their own password, and redis-py refuses a
-    password passed alongside a credential provider, so the data node's provider stays behind once
-    a Sentinel password is configured."""
-    superseded: Final = frozenset({"credential_provider"}) if sentinel_password else frozenset()
-    kept: Final = ((k, v) for k, v in connection_kwargs.items() if k not in superseded)
+    """The Sentinel monitors are separate servers that authenticate with their own password, so the
+    data node's credential provider never belongs on them: leaving it there makes redis-py send the
+    data node's token to a monitor, which fails whether the monitor is unauthenticated or has its
+    own password."""
+    kept: Final = ((k, v) for k, v in connection_kwargs.items() if k != "credential_provider")
     return dict(kept, password=sentinel_password)
 
 

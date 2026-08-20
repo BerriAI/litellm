@@ -1034,13 +1034,19 @@ def test_async_cluster_drops_a_connect_func_it_cannot_pass_on():
     ],
     ids=["azure_ad", "gcp_iam"],
 )
-def test_async_sentinel_keeps_the_credential_provider_off_the_monitors(markers, provider_cls):
-    """The Sentinel monitors authenticate with their own password, and redis-py refuses a password
-    passed alongside a credential provider, so only the data node may carry the provider.
+@pytest.mark.parametrize(
+    "sentinel_password",
+    [None, "sentinel-secret"],
+    ids=["unauthenticated_monitors", "password_protected_monitors"],
+)
+def test_async_sentinel_keeps_the_credential_provider_off_the_monitors(markers, provider_cls, sentinel_password):
+    """The Sentinel monitors are separate servers with their own password, so the data node's token
+    never belongs on them: redis-py refuses it next to a Sentinel password, and sends it to an
+    unauthenticated monitor as an AUTH the monitor rejects.
     """
     redis_kwargs = {
         "sentinel_nodes": [("sentinel-1", 26379)],
-        "sentinel_password": "sentinel-secret",
+        "sentinel_password": sentinel_password,
         "service_name": "mymaster",
         "redis_connect_func": SimpleNamespace(**markers),
     }
@@ -1050,9 +1056,12 @@ def test_async_sentinel_keeps_the_credential_provider_off_the_monitors(markers, 
             get_redis_async_client()
 
     sentinel_kwargs = mock_sentinel_cls.call_args[1]["sentinel_kwargs"]
-    assert sentinel_kwargs["password"] == "sentinel-secret"
+    assert sentinel_kwargs["password"] == sentinel_password
     assert "credential_provider" not in sentinel_kwargs
-    async_redis.Connection(host="sentinel-1", port=26379, **sentinel_kwargs)
+
+    monitor_connection = async_redis.Connection(host="sentinel-1", port=26379, **sentinel_kwargs)
+    assert monitor_connection.credential_provider is None
+    assert bool(monitor_connection.username or monitor_connection.password) is bool(sentinel_password)
 
     master_kwargs = mock_sentinel_cls.return_value.master_for.call_args[1]
     assert isinstance(master_kwargs["credential_provider"], provider_cls)
