@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import ToolModal from "../tool_modal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { createPromptCall, updatePromptCall, getPromptInfo } from "@/components/networking";
 import { PromptType, PromptEditorViewProps, Tool } from "./types";
 import { convertToDotPrompt, parseExistingPrompt } from "./utils";
@@ -21,7 +21,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         return parseExistingPrompt(initialPromptData);
       } catch (error) {
         console.error("Error parsing existing prompt:", error);
-        NotificationsManager.fromBackend("Failed to parse prompt data");
+        toast.fromError("Failed to parse prompt data");
       }
     }
     return {
@@ -44,7 +44,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   };
 
   const [prompt, setPrompt] = useState<PromptType>(getInitialPrompt());
-  const [editMode, setEditMode] = useState<boolean>(!!initialPromptData);
+  const [editMode] = useState<boolean>(!!initialPromptData);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   // Construct versioned ID from prompt_id and version field
@@ -142,7 +142,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
       setShowToolModal(false);
       setEditingToolIndex(null);
     } catch (error) {
-      NotificationsManager.fromBackend("Invalid JSON format");
+      toast.fromError("Invalid JSON format");
     }
   };
 
@@ -169,10 +169,9 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
       // Store the version number or construct versioned ID for tracking
       const versionNum = versionData.version || 1;
       setActiveVersionId(`${versionData.prompt_id}.v${versionNum}`);
-      // NotificationsManager.success(`Loaded version v${versionNum}`);
     } catch (error) {
       console.error("Error loading version:", error);
-      NotificationsManager.fromBackend("Failed to load prompt version");
+      toast.fromError("Failed to load prompt version");
     }
   };
 
@@ -186,12 +185,12 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
   const handleSave = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("Access token is required");
+      toast.fromError("Access token is required");
       return;
     }
 
     if (!prompt.name || prompt.name.trim() === "") {
-      NotificationsManager.fromBackend("Please enter a valid prompt name");
+      toast.fromError("Please enter a valid prompt name");
       return;
     }
 
@@ -215,16 +214,16 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
       if (editMode && initialPromptData?.prompt_spec?.prompt_id) {
         await updatePromptCall(accessToken, initialPromptData.prompt_spec.prompt_id, promptData);
-        NotificationsManager.success("Prompt updated successfully!");
+        toast.success("Prompt updated successfully!");
       } else {
         await createPromptCall(accessToken, promptData);
-        NotificationsManager.success("Prompt created successfully!");
+        toast.success("Prompt created successfully!");
       }
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Error saving prompt:", error);
-      NotificationsManager.fromBackend(editMode ? "Failed to update prompt" : "Failed to save prompt");
+      toast.fromError(editMode ? "Failed to update prompt" : "Failed to save prompt");
     } finally {
       setIsSaving(false);
       setShowNameModal(false);
@@ -258,7 +257,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   };
 
   return (
-    <div className="flex h-full bg-white">
+    <div className="flex h-full bg-card">
       <div className="flex-1 flex flex-col">
         <PromptEditorHeader
           promptName={prompt.name}
@@ -292,8 +291,8 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         />
 
         <div className="flex-1 flex overflow-hidden">
-          <div className="w-1/2 overflow-y-auto bg-white border-r border-gray-200 shrink-0">
-            <div className="border-b border-gray-200 bg-white px-6 py-4 flex items-center gap-3">
+          <div className="w-1/2 overflow-y-auto bg-card border-r border-border shrink-0">
+            <div className="border-b border-border bg-card px-6 py-4 flex items-center gap-3">
               <ModelConfigCard
                 model={prompt.model}
                 temperature={prompt.config.temperature}
@@ -314,10 +313,10 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                 }
               />
 
-              <div className="ml-auto inline-flex items-center bg-gray-200 rounded-full p-0.5">
+              <div className="ml-auto inline-flex items-center bg-border rounded-full p-0.5">
                 <button
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                    viewMode === "pretty" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600"
+                    viewMode === "pretty" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground"
                   }`}
                   onClick={() => setViewMode("pretty")}
                 >
@@ -325,7 +324,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                 </button>
                 <button
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                    viewMode === "dotprompt" ? "bg-white text-gray-900 shadow-xs" : "text-gray-600"
+                    viewMode === "dotprompt" ? "bg-card text-foreground shadow-xs" : "text-muted-foreground"
                   }`}
                   onClick={() => setViewMode("dotprompt")}
                 >

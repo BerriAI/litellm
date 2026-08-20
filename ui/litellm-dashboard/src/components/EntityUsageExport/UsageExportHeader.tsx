@@ -1,7 +1,20 @@
-import type { DateRangePickerValue } from "@tremor/react";
-import { Button, Text } from "@tremor/react";
-import { Select } from "antd";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
+import { Download } from "lucide-react";
 import React, { useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxClear,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+  useComboboxAnchor,
+} from "@/components/ui/combobox";
 import EntityUsageExportModal from "./EntityUsageExportModal";
 import type { EntitySpendData, EntityType } from "./types";
 import type { Team } from "@/components/key_team_helpers/key_list";
@@ -17,7 +30,7 @@ interface UsageExportHeaderProps {
   selectedFilters?: string[];
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
-  filterMode?: "multiple" | "single";
+  filterSlot?: React.ReactNode;
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
@@ -33,20 +46,54 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   selectedFilters = [],
   onFiltersChange,
   filterOptions = [],
-  filterMode = "multiple",
+  filterSlot,
   customTitle,
   compactLayout = false,
   teams = [],
 }) => {
+  const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-  // Determine grid layout based on what's visible
-  const getGridCols = () => {
-    const hasFilters = showFilters && filterOptions.length > 0;
+  const hasFilters = filterSlot != null || (showFilters && filterOptions.length > 0);
+  const optionValues = filterOptions.map((option) => option.value);
+  const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
 
-    if (hasFilters) return "grid-cols-[1fr_auto]";
-    return "grid-cols-[auto]";
-  };
+  const filterList = (
+    <ComboboxContent anchor={anchor}>
+      <ComboboxEmpty>No options found</ComboboxEmpty>
+      <ComboboxList>
+        {(value: string) => (
+          <ComboboxItem key={value} value={value}>
+            {labelOf(value)}
+          </ComboboxItem>
+        )}
+      </ComboboxList>
+    </ComboboxContent>
+  );
+
+  const builtInFilter = (
+    <Combobox
+      multiple
+      items={optionValues}
+      value={selectedFilters}
+      onValueChange={(next: string[]) => onFiltersChange?.(next)}
+    >
+      <ComboboxChips render={<div ref={anchor} />} className="w-full">
+        <ComboboxValue>
+          {(selected: string[]) =>
+            selected.map((value) => (
+              <ComboboxChip key={value} aria-label={labelOf(value)}>
+                {labelOf(value)}
+              </ComboboxChip>
+            ))
+          }
+        </ComboboxValue>
+        <ComboboxChipsInput placeholder={filterPlaceholder} aria-label={filterPlaceholder} />
+        {selectedFilters.length > 0 && <ComboboxClear aria-label={`Clear ${filterLabel ?? "filters"}`} />}
+      </ComboboxChips>
+      {filterList}
+    </Combobox>
+  );
 
   return (
     <>
@@ -56,42 +103,17 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
          * align to the same baseline regardless of label heights. This removes
          * vertical drift when the right column has a label above the input.
          */}
-        <div className={`grid ${getGridCols()} items-end gap-4`}>
-          {showFilters && filterOptions.length > 0 && (
+        <div className={`grid ${hasFilters ? "grid-cols-[1fr_auto]" : "grid-cols-[auto]"} items-end gap-4`}>
+          {hasFilters && (
             <div>
-              {filterLabel && <Text className="mb-2">{filterLabel}</Text>}
-              <Select
-                mode={filterMode === "single" ? undefined : "multiple"}
-                style={{ width: "100%" }}
-                placeholder={filterPlaceholder}
-                value={filterMode === "single" ? selectedFilters[0] ?? undefined : selectedFilters}
-                onChange={(value: any) => {
-                  if (filterMode === "single") {
-                    onFiltersChange?.(value ? [value] : []);
-                  } else {
-                    onFiltersChange?.(value);
-                  }
-                }}
-                options={filterOptions}
-                allowClear
-              />
+              {filterLabel && <label className="text-sm font-medium text-foreground block mb-2">{filterLabel}</label>}
+              {filterSlot ?? builtInFilter}
             </div>
           )}
 
           <div className="justify-self-end">
-            <Button
-              onClick={() => setIsExportModalOpen(true)}
-              icon={() => (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                  />
-                </svg>
-              )}
-            >
+            <Button onClick={() => setIsExportModalOpen(true)}>
+              <Download />
               Export Data
             </Button>
           </div>

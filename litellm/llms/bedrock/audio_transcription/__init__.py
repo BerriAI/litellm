@@ -1,5 +1,5 @@
 import base64
-from typing import Union
+from typing import Final
 
 import httpx
 
@@ -11,8 +11,8 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 class BedrockAudioTranscriptionRustDispatch:
     @staticmethod
     def _audio_payload(audio_file: FileTypes) -> dict[str, object]:
-        processed_audio = process_audio_file(audio_file)
-        formats = {
+        processed_audio: Final = process_audio_file(audio_file)
+        formats: Final = {
             "audio/flac": "flac",
             "audio/mpeg": "mp3",
             "audio/mp3": "mp3",
@@ -20,7 +20,7 @@ class BedrockAudioTranscriptionRustDispatch:
             "audio/wav": "wav",
             "audio/x-wav": "wav",
         }
-        audio_format = formats.get(processed_audio.content_type) or (
+        audio_format: Final = formats.get(processed_audio.content_type) or (
             processed_audio.filename.rsplit(".", 1)[-1].lower() if "." in processed_audio.filename else ""
         )
         if audio_format not in {"wav", "mp3", "flac", "ogg"}:
@@ -41,9 +41,9 @@ class BedrockAudioTranscriptionRustDispatch:
         custom_llm_provider: str,
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
-        timeout: Union[float, httpx.Timeout] | None,
+        timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        rust_response = rust_transcription_bridge.transcription(
+        rust_response: Final = rust_transcription_bridge.transcription(
             model=model,
             audio=self._audio_payload(audio_file),
             api_key=api_key,
@@ -67,9 +67,9 @@ class BedrockAudioTranscriptionRustDispatch:
         custom_llm_provider: str,
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
-        timeout: Union[float, httpx.Timeout] | None,
+        timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        rust_response = await rust_transcription_bridge.atranscription(
+        rust_response: Final = await rust_transcription_bridge.atranscription(
             model=model,
             audio=self._audio_payload(audio_file),
             api_key=api_key,

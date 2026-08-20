@@ -47,13 +47,13 @@ export const HelpLink: React.FC<HelpLinkProps> = ({
   className = "",
 }) => {
   const baseClasses =
-    "inline-flex items-center gap-1.5 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded-sm";
+    "inline-flex items-center gap-1.5 transition-colors focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-1 rounded-sm";
 
   const variantClasses = {
-    inline: "text-blue-600 hover:text-blue-800 text-sm font-medium hover:underline",
-    subtle: "text-gray-500 hover:text-gray-700 text-xs",
+    inline: "text-info text-sm font-medium hover:underline",
+    subtle: "text-muted-foreground hover:text-foreground text-xs",
     button:
-      "text-blue-600 hover:text-blue-700 border border-gray-200 hover:border-gray-300 px-3 py-1.5 rounded-md bg-white hover:bg-gray-50 text-sm font-medium shadow-xs",
+      "text-info border border-border px-3 py-1.5 rounded-md bg-card hover:bg-accent text-sm font-medium shadow-xs",
   };
 
   return (
@@ -88,7 +88,7 @@ export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, lear
     <div className="relative inline-block ml-1.5">
       <button
         type="button"
-        className="inline-flex items-center justify-center w-4 h-4 text-gray-400 hover:text-gray-600 transition-colors cursor-help focus:outline-hidden focus:ring-2 focus:ring-blue-500 rounded-full"
+        className="inline-flex items-center justify-center w-4 h-4 text-muted-foreground hover:text-foreground transition-colors cursor-help focus:outline-hidden focus:ring-2 focus:ring-ring rounded-full"
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
         onFocus={() => setShowTooltip(true)}
@@ -111,7 +111,7 @@ export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, lear
               href={learnMoreHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-blue-300 hover:text-blue-200 font-medium"
+              className="inline-flex items-center gap-1 text-info hover:text-blue-200 font-medium"
               style={{ pointerEvents: "auto" }}
             >
               {learnMoreText}
@@ -169,7 +169,7 @@ export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", cl
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700 text-xs transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded-sm px-2 py-1"
+        className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground text-xs transition-colors focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-1 rounded-sm px-2 py-1"
         aria-expanded={isOpen}
         aria-haspopup="true"
       >
@@ -178,18 +178,18 @@ export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", cl
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+        <div className="absolute right-0 mt-1 w-56 bg-card rounded-lg shadow-lg border border-border py-1 z-50">
           {items.map((item, index) => (
             <a
               key={index}
               href={item.href}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-between px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+              className="flex items-center justify-between px-4 py-2 text-sm text-foreground hover:bg-accent transition-colors"
               onClick={() => setIsOpen(false)}
             >
               <span>{item.label}</span>
-              <ExternalLink className="h-3.5 w-3.5 text-gray-400 shrink-0 ml-2" aria-hidden="true" />
+              <ExternalLink className="h-3.5 w-3.5 text-muted-foreground shrink-0 ml-2" aria-hidden="true" />
             </a>
           ))}
         </div>

@@ -62,7 +62,7 @@ class TestAzureDocumentIntelligencePagesParam:
         return AzureDocumentIntelligenceOCRConfig()
 
     def test_get_supported_ocr_params_includes_pages_and_features(self, cfg):
-        assert cfg.get_supported_ocr_params("prebuilt-layout") == ["pages", "features"]
+        assert cfg.get_supported_ocr_params("prebuilt-layout") == ["pages", "features", "req_format"]
 
     def test_map_ocr_params_mistral_zero_based_int_list(self, cfg):
         mapped = cfg.map_ocr_params({"pages": [0, 1, 2]}, {}, "prebuilt-layout")

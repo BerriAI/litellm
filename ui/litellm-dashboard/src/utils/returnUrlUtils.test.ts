@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import {
   buildLoginUrlWithReturn,
   clearStoredReturnUrl,

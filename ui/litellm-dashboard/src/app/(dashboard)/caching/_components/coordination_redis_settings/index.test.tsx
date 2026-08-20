@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import CoordinationRedisSettings from "./index";
 import { REDACTED_VALUE } from "./types";
 import * as networking from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   getCoordinationRedisSettingsCall: vi.fn(),
@@ -17,14 +17,10 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ accessToken: "sk-test" }),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const getSettings = vi.mocked(networking.getCoordinationRedisSettingsCall);
 const updateSettings = vi.mocked(networking.updateCoordinationRedisSettingsCall);
 const testConnection = vi.mocked(networking.testCoordinationRedisConnectionCall);
-const notifications = vi.mocked(NotificationsManager);
+const notifications = vi.mocked(toast);
 
 const settingsResponse = (
   values: Record<string, unknown>,
@@ -238,7 +234,7 @@ describe("CoordinationRedisSettings", () => {
       await user.click(screen.getByRole("button", { name: /test connection/i }));
 
       await waitFor(() =>
-        expect(notifications.fromBackend).toHaveBeenCalledWith(expect.stringContaining("connection refused")),
+        expect(notifications.fromError).toHaveBeenCalledWith(expect.stringContaining("connection refused")),
       );
       expect(notifications.success).not.toHaveBeenCalled();
     });

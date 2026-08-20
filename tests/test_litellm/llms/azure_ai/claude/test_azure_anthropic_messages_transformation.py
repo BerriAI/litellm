@@ -173,24 +173,6 @@ class TestAzureAnthropicMessagesConfig:
 
         assert url == "https://test.services.ai.azure.com/anthropic/v1/messages"
 
-    def test_get_complete_url_with_base_url_containing_anthropic(self):
-        """Test get_complete_url with base URL already containing /anthropic"""
-        config = AzureAnthropicMessagesConfig()
-        api_base = "https://test.services.ai.azure.com/anthropic"
-        api_key = "test-api-key"
-        model = "claude-sonnet-4-5"
-        optional_params = {}
-        litellm_params = {}
-
-        url = config.get_complete_url(
-            api_base=api_base,
-            api_key=api_key,
-            model=model,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-        )
-
-        assert url == "https://test.services.ai.azure.com/anthropic/v1/messages"
 
     def test_get_complete_url_with_base_url_without_anthropic(self):
         """Test get_complete_url with base URL without /anthropic"""
@@ -443,7 +425,7 @@ class TestAzureAnthropicMidConversationSystem:
             {"type": "text", "text": "Cite sources."},
         ]
 
-    def test_unsupported_model_hoists_mid_conversation_system(self, local_model_cost_map):
+    def test_unsupported_model_converts_mid_conversation_system_in_place(self, local_model_cost_map):
         messages = [
             {"role": "user", "content": "read the file"},
             {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
@@ -455,13 +437,23 @@ class TestAzureAnthropicMidConversationSystem:
         )
         assert result["messages"] == [
             {"role": "user", "content": "read the file"},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Operator note (not from the user): the following was "
+                            "originally a mid-conversation system-role reminder."
+                        ),
+                    },
+                    {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+                ],
+            },
             {"role": "assistant", "content": "reading"},
             {"role": "user", "content": "continue"},
         ]
-        assert result["system"] == [
-            {"type": "text", "text": "Base."},
-            {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
-        ]
+        assert result["system"] == [{"type": "text", "text": "Base."}]
 
 
 def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():

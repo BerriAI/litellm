@@ -16,7 +16,7 @@ import json
 from collections.abc import Mapping
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
@@ -33,6 +33,7 @@ from litellm.proxy._types import (
     LitellmTableNames,
     LitellmUserRoles,
     UserAPIKeyAuth,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import invalidate_config_param
@@ -44,24 +45,24 @@ from litellm.types.management_endpoints import (
     CoordinationRedisSource,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
-_GENERAL_SETTINGS_PARAM_NAME = "general_settings"
-_COORDINATION_REDIS_KEY = "coordination_redis"
+_GENERAL_SETTINGS_PARAM_NAME: Final = "general_settings"
+_COORDINATION_REDIS_KEY: Final = "coordination_redis"
 
 # Fields that carry credentials. Redacted on read so a plaintext Redis /
 # Sentinel password never leaves the server, and scrubbed out of connection-test
 # error strings. `url` is here because a Redis url can embed a password inline
 # (e.g. redis://:secret@host:6379/1).
-_SENSITIVE_FIELDS: frozenset[str] = frozenset({"password", "sentinel_password", "url"})
+_SENSITIVE_FIELDS: Final[frozenset[str]] = frozenset({"password", "sentinel_password", "url"})
 
-_REDACTED_VALUE = "***REDACTED***"
+_REDACTED_VALUE: Final = "***REDACTED***"
 
-_ENV_REF_PREFIX = "os.environ/"
+_ENV_REF_PREFIX: Final = "os.environ/"
 
-_PING_TIMEOUT_SECONDS = 5.0
+_PING_TIMEOUT_SECONDS: Final = 5.0
 
-_SETTINGS_ADAPTER: TypeAdapter[dict[str, object]] = TypeAdapter(dict[str, object])
+_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 
 def _enforce_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -91,7 +92,7 @@ def _redact_credentials(settings: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _redact_all_values(settings: Optional[Mapping[str, object]]) -> dict[str, object]:
+def _redact_all_values(settings: Mapping[str, object] | None) -> dict[str, object]:
     """Replace every value with a fixed marker, preserving the key set.
 
     The audit row shows *which* fields changed without the audit table becoming
@@ -139,9 +140,9 @@ def _merge_over_saved(
 def _validated_params(settings: Mapping[str, object]) -> CoordinationRedisParams:
     """Validate settings the way startup does: resolve env refs, then require a connection target."""
     try:
-        params = CoordinationRedisParams(**_resolve_env_refs(settings))
+        params: Final = CoordinationRedisParams(**_resolve_env_refs(settings))
     except ValidationError as e:
-        invalid_fields = sorted({str(error["loc"][0]) for error in e.errors() if error["loc"]})
+        invalid_fields: Final = sorted({str(error["loc"][0]) for error in e.errors() if error["loc"]})
         raise HTTPException(
             status_code=400,
             detail={"error": f"Invalid coordination_redis settings for fields: {invalid_fields}"},
@@ -165,25 +166,25 @@ async def _read_general_settings() -> dict[str, object]:
 
     if prisma_client is None:
         return {}
-    config_param = await ConfigRepository(prisma_client).get_param(_GENERAL_SETTINGS_PARAM_NAME)
+    config_param: Final = await ConfigRepository(prisma_client).get_param(_GENERAL_SETTINGS_PARAM_NAME)
     if config_param is None or config_param.param_value is None:
         return {}
     return _SETTINGS_ADAPTER.validate_python(config_param.param_value)
 
 
-async def get_persisted_coordination_redis_settings() -> Optional[dict[str, object]]:
+async def get_persisted_coordination_redis_settings() -> dict[str, object] | None:
     """The coordination_redis block saved to the database, if any.
 
     Read at startup so settings saved from the admin UI take effect on the next
     boot, and used here so a read reports what the proxy would boot with.
     """
-    persisted = (await _read_general_settings()).get(_COORDINATION_REDIS_KEY)
+    persisted: Final = (await _read_general_settings()).get(_COORDINATION_REDIS_KEY)
     if isinstance(persisted, dict):
         return _SETTINGS_ADAPTER.validate_python(persisted)
     return None
 
 
-async def _current_coordination_redis_settings() -> Optional[dict[str, object]]:
+async def _current_coordination_redis_settings() -> dict[str, object] | None:
     """The coordination_redis block the proxy would boot with.
 
     The persisted row wins over the yaml-loaded config state because startup
@@ -191,21 +192,21 @@ async def _current_coordination_redis_settings() -> Optional[dict[str, object]]:
     """
     from litellm.proxy.proxy_server import proxy_config
 
-    persisted = await get_persisted_coordination_redis_settings()
+    persisted: Final = await get_persisted_coordination_redis_settings()
     if persisted is not None:
         return persisted
 
-    config_state = _SETTINGS_ADAPTER.validate_python(proxy_config.get_config_state())
-    general_settings = config_state.get(_GENERAL_SETTINGS_PARAM_NAME)
+    config_state: Final = _SETTINGS_ADAPTER.validate_python(proxy_config.get_config_state())
+    general_settings: Final = config_state.get(_GENERAL_SETTINGS_PARAM_NAME)
     if not isinstance(general_settings, dict):
         return None
-    from_file = general_settings.get(_COORDINATION_REDIS_KEY)
+    from_file: Final = general_settings.get(_COORDINATION_REDIS_KEY)
     if isinstance(from_file, dict):
         return _SETTINGS_ADAPTER.validate_python(from_file)
     return None
 
 
-def _coordination_redis_source(settings: Optional[Mapping[str, object]]) -> Optional[CoordinationRedisSource]:
+def _coordination_redis_source(settings: Mapping[str, object] | None) -> CoordinationRedisSource | None:
     """Which source the proxy's coordination Redis comes from, in startup precedence order.
 
     Mirrors `ProxyConfig._init_coordination_redis` -> `ProxyConfig._init_cache`:
@@ -216,7 +217,7 @@ def _coordination_redis_source(settings: Optional[Mapping[str, object]]) -> Opti
 
     if settings:
         return "coordination_redis"
-    cache_backend = litellm.cache.cache if litellm.cache is not None else None
+    cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
     if isinstance(cache_backend, (RedisCache, RedisClusterCache)):
         return "cache_backend"
     if _environment_has_redis_connection_target():
@@ -228,7 +229,7 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
     """Surface a fire-and-forget audit-log task failure as a warning."""
     if task.cancelled():
         return
-    exc = task.exception()
+    exc: Final = task.exception()
     if exc is not None:
         verbose_proxy_logger.warning("Failed to write coordination-redis-settings audit log: %s", exc)
 
@@ -236,19 +237,22 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 async def _emit_coordination_redis_audit_log(
     *,
     action: AUDIT_ACTIONS,
-    before_settings: Optional[Mapping[str, object]],
-    after_settings: Optional[Mapping[str, object]],
+    before_settings: Mapping[str, object] | None,
+    after_settings: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
-    litellm_changed_by: Optional[str],
+    litellm_changed_by: str | None,
 ) -> None:
     """Emit an audit-log row for a /coordination_redis/settings mutation."""
-    if litellm.store_audit_logs is not True:
-        return
-
-    from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_audit_log_for_update,
+        is_audit_logging_enabled,
+    )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-    task = asyncio.create_task(
+    if not is_audit_logging_enabled():
+        return
+
+    task: Final = asyncio.create_task(
         create_audit_log_for_update(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
@@ -271,7 +275,7 @@ class CoordinationRedisSettingsResponse(BaseModel):
     fields: list[CoordinationRedisSettingsField] = Field(
         description="List of all configurable coordination Redis settings with metadata"
     )
-    source: Optional[CoordinationRedisSource] = Field(
+    source: CoordinationRedisSource | None = Field(
         description="Where the proxy's coordination Redis comes from; null when it has none"
     )
 
@@ -282,7 +286,7 @@ class CoordinationRedisSettingsRequest(BaseModel):
 
 class CoordinationRedisTestResponse(BaseModel):
     status: str = Field(description="Connection status: 'healthy' or 'unhealthy'")
-    error: Optional[str] = Field(default=None, description="Error message if the connection failed")
+    error: str | None = Field(default=None, description="Error message if the connection failed")
 
 
 @router.get(
@@ -302,13 +306,14 @@ async def get_coordination_redis_settings(
     - fields: all configurable settings with their metadata (type, description, default, section)
     - source: "coordination_redis" | "cache_backend" | "environment" | null
     """
-    _enforce_proxy_admin(user_api_key_dict)
+    if not user_api_key_has_admin_view(user_api_key_dict):
+        _enforce_proxy_admin(user_api_key_dict)
 
-    settings = await _current_coordination_redis_settings()
-    source = _coordination_redis_source(settings)
+    settings: Final = await _current_coordination_redis_settings()
+    source: Final = _coordination_redis_source(settings)
 
-    values = _redact_credentials(settings or {})
-    fields = [field.model_copy(deep=True) for field in COORDINATION_REDIS_SETTINGS_FIELDS]
+    values: Final = _redact_credentials(settings or {})
+    fields: Final = [field.model_copy(deep=True) for field in COORDINATION_REDIS_SETTINGS_FIELDS]
     for field in fields:
         if field.field_name in values:
             field.field_value = values[field.field_name]
@@ -324,7 +329,7 @@ async def get_coordination_redis_settings(
 async def update_coordination_redis_settings(
     request: CoordinationRedisSettingsRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: Optional[str] = Header(
+    litellm_changed_by: str | None = Header(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
@@ -355,13 +360,13 @@ async def update_coordination_redis_settings(
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
-    saved_settings = await _current_coordination_redis_settings()
-    settings = _merge_over_saved(request.settings, saved_settings or {})
+    saved_settings: Final = await _current_coordination_redis_settings()
+    settings: Final = _merge_over_saved(request.settings, saved_settings or {})
     _validated_params(settings)
 
-    general_settings = await _read_general_settings()
-    before_settings = general_settings.get(_COORDINATION_REDIS_KEY)
-    action: AUDIT_ACTIONS = "updated" if isinstance(before_settings, dict) else "created"
+    general_settings: Final = await _read_general_settings()
+    before_settings: Final = general_settings.get(_COORDINATION_REDIS_KEY)
+    action: Final[AUDIT_ACTIONS] = "updated" if isinstance(before_settings, dict) else "created"
 
     await ConfigRepository(prisma_client).set_param(
         param_name=_GENERAL_SETTINGS_PARAM_NAME,
@@ -409,11 +414,11 @@ async def check_coordination_redis_connection(
 
     _enforce_proxy_admin(user_api_key_dict)
 
-    saved_settings = await _current_coordination_redis_settings()
-    settings = _merge_over_saved(request.settings, saved_settings or {})
-    params = _validated_params(settings)
+    saved_settings: Final = await _current_coordination_redis_settings()
+    settings: Final = _merge_over_saved(request.settings, saved_settings or {})
+    params: Final = _validated_params(settings)
 
-    redis_cache: Optional[RedisCache] = None
+    redis_cache: RedisCache | None = None
     try:
         redis_cache = _build_redis_usage_cache(params.model_dump(exclude_none=True))
         await asyncio.wait_for(redis_cache.ping(), timeout=_PING_TIMEOUT_SECONDS)
