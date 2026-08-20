@@ -27,7 +27,6 @@ export default function RootLayout({
     // cannot predict; suppressHydrationWarning confines that mismatch to this element.
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        {/* Dark mode is experimental, so an untouched install stays light rather than following the OS. */}
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
           <NuqsAdapter>
             <ReactQueryProvider>

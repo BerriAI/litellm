@@ -15,6 +15,7 @@ import React from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
+import { cn } from "@/lib/cva.config";
 import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 import ThemeToggle from "./ThemeToggle/ThemeToggle";
@@ -27,6 +28,8 @@ interface NavbarProps {
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
 }
+
+const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
 
 const Navbar: React.FC<NavbarProps> = ({
   accessToken,
@@ -45,6 +48,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
+  const darkImageUrl = logoUrl || `${baseUrl}/get_image?theme=dark`;
 
   const handleLogout = () => {
     clearTokenCookies();
@@ -86,10 +90,12 @@ const Navbar: React.FC<NavbarProps> = ({
               <Link href={migratedHref("")} className="flex items-center">
                 <div className="relative">
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
+                    <img src={imageUrl} alt="LiteLLM Brand" className={cn(NAV_LOGO_CLASS_NAME, "dark:hidden")} />
                     <img
-                      src={imageUrl}
-                      alt="LiteLLM Brand"
-                      className="h-auto max-h-full w-auto max-w-full object-contain"
+                      src={darkImageUrl}
+                      alt=""
+                      aria-hidden
+                      className={cn(NAV_LOGO_CLASS_NAME, "hidden dark:block")}
                     />
                   </div>
                 </div>
