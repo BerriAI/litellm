@@ -440,8 +440,11 @@ class RouteChecks:
     def is_info_route(route: str) -> bool:
         """
         Check if route is an info route
+
+        Pattern-aware, like ``is_management_route``, so an info route carrying a path parameter is as
+        reachable as one without: the incoming route holds a resolved id, never the ``{...}`` template.
         """
-        return route in LiteLLMRoutes.info_routes.value
+        return RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.info_routes.value)
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:
