@@ -310,7 +310,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             <div className="flex items-center gap-2 mb-1">
               <strong className="font-semibold">Classification Rubric</strong>
               <SimpleTooltip content="Every rubric uses the same four tiers and the same tier definitions. They differ only in the worked examples that show the classifier where the boundary between tiers sits.">
-                <Info className="size-4 text-muted-foreground/70" />
+                <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
             <SimpleTooltip
@@ -433,7 +433,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               />
               <strong className="font-semibold">Include Assistant Turns</strong>
               <SimpleTooltip content="Off by default. Enabling it changes tier decisions, and therefore spend, for an existing router, and sends assistant text to the classifier model, which may be a different provider than the routed model.">
-                <Info className="size-4 text-muted-foreground/70" />
+                <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
             <span className="text-xs text-muted-foreground">
@@ -451,7 +451,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <div className="flex items-center gap-2 mb-1">
             <strong className="font-semibold">Custom Technical Keywords</strong>
             <SimpleTooltip content="Domain-specific terms appended to the built-in technical keyword list. Prompts containing these terms score higher on the technical dimension and route to more capable models.">
-              <Info className="size-4 text-muted-foreground/70" />
+              <Info className="size-4 text-muted-foreground" />
             </SimpleTooltip>
           </div>
           <span className="block mb-2 text-xs text-muted-foreground">

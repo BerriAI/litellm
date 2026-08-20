@@ -144,7 +144,7 @@ const createEmptyToolPermissionConfig = (): ToolPermissionConfig => ({
 });
 
 const getStepIndicatorClass = (isDone: boolean, isCurrent: boolean): string => {
-  if (isDone) return "bg-info text-white";
+  if (isDone) return "bg-info text-info-foreground";
   if (isCurrent) return "bg-background text-info border-2 border-info";
   return "bg-muted text-muted-foreground border border-border";
 };

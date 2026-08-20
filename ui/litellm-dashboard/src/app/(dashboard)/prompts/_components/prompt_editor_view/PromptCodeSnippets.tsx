@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { CodeIcon, CopyIcon } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -34,6 +36,7 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   version = "1",
   proxySettings,
 }) => {
+  const syntaxTheme = useSyntaxTheme(coy);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<"curl" | "python" | "javascript">("curl");
   const [selectedTab, setSelectedTab] = useState("basic");
@@ -296,7 +299,7 @@ main();`;
 
           <SyntaxHighlighter
             language={selectedLanguage === "curl" ? "bash" : selectedLanguage === "python" ? "python" : "javascript"}
-            style={coy as any}
+            style={syntaxTheme}
             wrapLines={true}
             wrapLongLines={true}
             className="rounded-md mt-0"
