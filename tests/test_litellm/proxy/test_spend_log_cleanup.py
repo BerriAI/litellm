@@ -858,7 +858,6 @@ async def test_no_retention_keys_means_no_cleanup_at_all():
     cleaner.pod_lock_manager = None
     await cleaner.cleanup_old_spend_logs(client)
     assert client.db.execute_raw.await_count == 0
-    assert not any('"LiteLLM_HealthCheckTable"' in call[0][0] for call in client.db.execute_raw.call_args_list)
 
 
 @pytest.mark.asyncio
