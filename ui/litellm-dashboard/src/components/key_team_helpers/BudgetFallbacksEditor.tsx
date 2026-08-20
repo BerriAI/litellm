@@ -1,5 +1,5 @@
-import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Select } from "antd";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
 import { ArrowDown, Plus, X } from "lucide-react";
 import React, { useState } from "react";
@@ -94,18 +94,15 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
 
             <div className="mb-3">
               <label className="block text-xs font-medium text-gray-600 mb-1">Primary Model</label>
-              <Select
-                className="w-full"
-                placeholder="Select model"
-                value={entry.primaryModel}
-                onChange={(v) => {
-                  const newFallbacks = entry.fallbackModels.filter((m) => m !== v);
-                  updateEntry(entry.id, { primaryModel: v, fallbackModels: newFallbacks });
-                }}
-                showSearch
-                filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+              <SearchSelect
                 options={availablePrimaryOptions.map((m) => ({ label: m, value: m }))}
-                getPopupContainer={(trigger) => trigger.parentElement || document.body}
+                value={entry.primaryModel ?? ""}
+                onValueChange={(v) => {
+                  const newFallbacks = entry.fallbackModels.filter((m) => m !== v);
+                  updateEntry(entry.id, { primaryModel: v === "" ? null : v, fallbackModels: newFallbacks });
+                }}
+                placeholder="Select model"
+                emptyText="No models found"
               />
             </div>
 
@@ -118,23 +115,14 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
 
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Fallback Models</label>
-              <Select
-                mode="multiple"
-                className="w-full"
-                placeholder={entry.primaryModel ? "Select fallback models" : "Select a primary model first"}
-                value={entry.fallbackModels}
-                onChange={(values) => updateEntry(entry.id, { fallbackModels: values })}
-                disabled={!entry.primaryModel}
-                showSearch
-                filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+              <MultiSelect
                 options={availableFallbackOptions.map((m) => ({ label: m, value: m }))}
-                getPopupContainer={(trigger) => trigger.parentElement || document.body}
-                maxTagCount="responsive"
-                maxTagPlaceholder={(omittedValues) => (
-                  <SimpleTooltip content={omittedValues.map(({ value: v }) => v).join(", ")}>
-                    <span>+{omittedValues.length} more</span>
-                  </SimpleTooltip>
-                )}
+                value={entry.fallbackModels}
+                onValueChange={(values) => updateEntry(entry.id, { fallbackModels: values })}
+                placeholder={entry.primaryModel ? "Select fallback models" : "Select a primary model first"}
+                emptyText="No models found"
+                disabled={!entry.primaryModel}
+                className="w-full"
               />
               {entry.fallbackModels.length > 1 && (
                 <div className="text-[10px] text-gray-400 mt-1 ml-1">

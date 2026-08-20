@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
-import { Info } from "lucide-react";
+import { Info, UserPlus } from "lucide-react";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
-import { UserAddOutlined } from "@ant-design/icons";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { useForm } from "react-hook-form";
 import { userFilterUICall } from "@/components/networking";
@@ -266,7 +265,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 
             <div className="mt-4 text-right">
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? <UiLoadingSpinner className="size-4" /> : <UserAddOutlined />}
+                {isSubmitting ? <UiLoadingSpinner className="size-4" /> : <UserPlus />}
                 {isSubmitting ? "Adding..." : "Add Member"}
               </Button>
             </div>

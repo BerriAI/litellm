@@ -761,7 +761,7 @@ describe("ComplexityRouterConfig default model", () => {
     const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} onChange={onChange} />);
 
-    await user.click(document.querySelector('[data-slot="combobox-clear"]') as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ default_model: undefined }));
   });
