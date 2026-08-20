@@ -46,6 +46,7 @@ UNFLAGGED_INVOKE_MODEL = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-
 AWS_REGION = "us-east-1"
 CACHE_PRIMING_DEADLINE_SECONDS = 60.0
 CACHE_PRIMING_INTERVAL_SECONDS = 3.0
+CACHE_WARM_CONSECUTIVE_READS = 3
 
 
 def _cacheable_system_block(marker: str) -> TextBlock:
@@ -120,11 +121,11 @@ def _prime_prompt_cache(
     """Send first-turn calls (fresh cache-marked user turn each attempt,
     identical system prefix) until one both reads the system prefix back from
     cache and writes its own user-turn chunk, then re-send that exact turn until
-    its own chunk reads back too, proving the cache is live in both directions
-    before the reminder turn goes out (a freshly written entry can take a few
-    seconds to become readable). Only the pre-reminder turn is ever retried
-    here, so retries can never warm a mutated-prefix cache entry and mask the
-    regression the second turn asserts on."""
+    its own chunk reads back on three sends in a row, proving the cache is live
+    in both directions before the reminder turn goes out (a freshly written entry
+    can take a few seconds to become readable). Only the pre-reminder turn is
+    ever retried here, so retries can never warm a mutated-prefix cache entry and
+    mask the regression the second turn asserts on."""
     deadline = time.monotonic() + CACHE_PRIMING_DEADLINE_SECONDS
     while True:
         user_text = _first_turn_user_text(unique_marker())
@@ -150,6 +151,12 @@ def _prime_prompt_cache(
         time.sleep(CACHE_PRIMING_INTERVAL_SECONDS)
 
 
+def _reads_full_prefix(
+    client: EndpointsClient, key: str, body: RichMessagesRequest, full_prefix_tokens: int
+) -> bool:
+    return unwrap(_post_messages(client, key, body)).usage.cache_read_input_tokens >= full_prefix_tokens
+
+
 def _first_turn_reads_back(
     client: EndpointsClient,
     key: str,
@@ -157,13 +164,15 @@ def _first_turn_reads_back(
     full_prefix_tokens: int,
     deadline: float,
 ) -> bool:
-    while True:
-        usage = unwrap(_post_messages(client, key, body)).usage
-        if usage.cache_read_input_tokens >= full_prefix_tokens:
+    """True once the full prefix reads back on CACHE_WARM_CONSECUTIVE_READS sends in
+    a row. Some providers' global endpoints serve the prompt cache per region, so a
+    fresh entry can be missing from the region the next request lands on; each miss
+    re-creates the entry there, so the streak converges as the regions warm up."""
+    while time.monotonic() < deadline:
+        if all(_reads_full_prefix(client, key, body, full_prefix_tokens) for _ in range(CACHE_WARM_CONSECUTIVE_READS)):
             return True
-        if time.monotonic() >= deadline:
-            return False
         time.sleep(CACHE_PRIMING_INTERVAL_SECONDS)
+    return False
 
 
 #: Kept in sync with the copy in test_messages_mid_conversation_system_native_providers_e2e.py;
