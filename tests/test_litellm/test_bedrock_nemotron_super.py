@@ -24,7 +24,7 @@ class TestNemotronSuper3120B:
 
         assert model_info is not None, f"Model {MODEL_NAME} not found"
         assert model_info["max_input_tokens"] == 256000
-        assert model_info["max_output_tokens"] == 32000
+        assert model_info["max_output_tokens"] == 32768
         assert model_info["litellm_provider"] == "bedrock_converse"
         assert model_info["mode"] == "chat"
         assert model_info["supports_function_calling"] is True
@@ -41,7 +41,7 @@ class TestNemotronSuper3120B:
         model_info = get_model_info(f"bedrock/us-east-1/{MODEL_NAME}")
 
         assert model_info["max_input_tokens"] == 256000
-        assert model_info["max_output_tokens"] == 32000
+        assert model_info["max_output_tokens"] == 32768
 
     def test_resolves_without_region(self):
         """Test model resolves with just bedrock/ prefix"""

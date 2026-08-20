@@ -34,7 +34,7 @@ export interface ComplexityTiers {
   REASONING: string[];
 }
 
-export type ClassificationRubric = "legacy" | "agentic" | "chat";
+export type ClassificationRubric = "legacy" | "agentic" | "chat" | "business";
 
 /** What an unset preset means, matching the backend: the rubric as it shipped before calibration. */
 export const DEFAULT_CLASSIFICATION_RUBRIC: ClassificationRubric = "legacy";
@@ -67,6 +67,13 @@ export const CLASSIFICATION_RUBRIC_DESCRIPTIONS: Record<ClassificationRubric, { 
       description:
         "Drops the engineering examples, for a router serving only conversational traffic that never sees those " +
         "requests.",
+    },
+    business: {
+      label: "Business",
+      description:
+        "Business and sales examples plus business-oriented tier definitions: routine drafting and summarizing " +
+        "stay at Medium, data-determined analysis is Complex, and only decisions under conflicting tradeoffs " +
+        "reach Reasoning. Suits sales, support, and go-to-market traffic.",
     },
   };
 
@@ -262,7 +269,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       <div className="inline-flex items-center gap-2 mb-4">
         <h4 className="m-0 text-xl font-semibold text-foreground">Complexity Tier Configuration</h4>
         <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-          <Info className="size-4 text-muted-foreground/70" />
+          <Info className="size-4 text-muted-foreground" />
         </SimpleTooltip>
       </div>
 
@@ -291,7 +298,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <div className="flex items-center gap-2 mb-2">
                     <strong className="text-base font-semibold">{label} Tier</strong>
                     <SimpleTooltip content={tierInfo.description}>
-                      <Info className="size-4 text-muted-foreground/70" />
+                      <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                     <span className="text-xs text-muted-foreground">
                       Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
@@ -342,7 +349,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             <div className="flex items-center gap-2 mb-2">
               <strong className="text-base font-semibold">Default Model</strong>
               <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
-                <Info className="size-4 text-muted-foreground/70" />
+                <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
             <SearchSelect

@@ -52,7 +52,7 @@ export function SearchResultsDisplay({ searchResults }: SearchResultsDisplayProp
                   <div className="text-xs text-muted-foreground mb-2 flex items-center gap-2">
                     <span className="font-medium">Query:</span>
                     <span className="italic">&quot;{resultPage.search_query}&quot;</span>
-                    <span className="text-muted-foreground/70">•</span>
+                    <span className="text-muted-foreground">•</span>
                     <span className="text-muted-foreground">
                       {resultPage.data.length} result{resultPage.data.length !== 1 ? "s" : ""}
                     </span>
@@ -72,9 +72,9 @@ export function SearchResultsDisplay({ searchResults }: SearchResultsDisplayProp
                           <CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-left transition-colors hover:bg-accent">
                             <div className="flex items-center gap-2 flex-1 min-w-0">
                               <ChevronRight
-                                className={`size-4 shrink-0 text-muted-foreground/70 transition-transform ${isResultExpanded ? "rotate-90" : ""}`}
+                                className={`size-4 shrink-0 text-muted-foreground transition-transform ${isResultExpanded ? "rotate-90" : ""}`}
                               />
-                              <FileText className="size-3 shrink-0 text-muted-foreground/70" />
+                              <FileText className="size-3 shrink-0 text-muted-foreground" />
                               <span className="text-xs font-medium text-foreground truncate">
                                 {result.filename || result.file_id || `Result ${resultIndex + 1}`}
                               </span>
