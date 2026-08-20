@@ -2,15 +2,16 @@
 set -uo pipefail
 
 readonly API_FILE_CEILING=3000
+readonly CATEGORY="${CATEGORY:-backend}"
 
 decide() {
-  echo "detect-backend-changes: decision=$1"
+  echo "detect-changes[${CATEGORY}]: decision=$1"
   [ -z "${GITHUB_OUTPUT:-}" ] || echo "decision=$1" >>"${GITHUB_OUTPUT}"
   exit 0
 }
 
 run_full() {
-  echo "detect-backend-changes: $1; running job"
+  echo "detect-changes[${CATEGORY}]: $1; running job"
   decide run
 }
 
@@ -30,10 +31,10 @@ changed="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].
   run_full "could not list the files on PR #${PR_NUMBER}"
 [ -n "${changed}" ] || run_full "the API listed no files on PR #${PR_NUMBER}"
 
-echo "detect-backend-changes: files changed by PR #${PR_NUMBER}:"
+echo "detect-changes[${CATEGORY}]: files changed by PR #${PR_NUMBER}:"
 printf '%s\n' "${changed}" | sed 's/^/  /'
 
-decision="$(printf '%s\n' "${changed}" | bash "${classify}" backend)" ||
+decision="$(printf '%s\n' "${changed}" | bash "${classify}" "${CATEGORY}")" ||
   run_full "classify_changes.sh failed"
 case "${decision}" in
 run | skip) decide "${decision}" ;;
