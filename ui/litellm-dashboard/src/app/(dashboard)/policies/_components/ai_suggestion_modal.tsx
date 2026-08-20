@@ -853,7 +853,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                 {attackExamples.map((example, index) => (
                   <div key={index} className="relative group">
                     <textarea
-                      className="w-full rounded-lg border border-border px-3.5 py-2.5 pr-9 text-sm text-foreground placeholder-muted-foreground/70 focus:border-info focus:ring-1 focus:ring-ring overflow-hidden"
+                      className="w-full rounded-lg border border-border px-3.5 py-2.5 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus:border-info focus:ring-1 focus:ring-ring overflow-hidden"
                       rows={1}
                       style={{ minHeight: "40px", resize: "none" }}
                       placeholder={
@@ -902,7 +902,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                 Description of what you want to block
               </label>
               <textarea
-                className="w-full rounded-lg border border-border px-3.5 py-2.5 text-sm text-foreground placeholder-muted-foreground/70 focus:border-info focus:ring-1 focus:ring-ring overflow-hidden"
+                className="w-full rounded-lg border border-border px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-info focus:ring-1 focus:ring-ring overflow-hidden"
                 rows={1}
                 style={{ minHeight: "60px", resize: "none" }}
                 placeholder="e.g. Block PII leakage and prompt injection in our customer support chatbot"

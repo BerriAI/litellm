@@ -107,7 +107,7 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
             placeholder="Reason for rejection (optional)"
             value={reviewNotes}
             onChange={(e) => setReviewNotes(e.target.value)}
-            className="w-full border border-border rounded-md px-3 py-2 text-sm text-foreground placeholder-muted-foreground/70 focus:outline-hidden focus:ring-1 focus:ring-ring mb-4 resize-none"
+            className="w-full border border-border rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring mb-4 resize-none"
             rows={3}
           />
         )}
@@ -579,7 +579,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
             placeholder="Search MCP servers..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 border border-border rounded-md text-sm text-foreground placeholder-muted-foreground/70 focus:outline-hidden focus:ring-1 focus:ring-ring focus:border-info"
+            className="w-full pl-9 pr-4 py-2 border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring focus:border-info"
           />
         </div>
         <select
