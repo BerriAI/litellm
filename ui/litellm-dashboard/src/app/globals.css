@@ -134,7 +134,7 @@
   --warning: oklch(0.828 0.189 84.429);
   --info: oklch(0.707 0.165 254.624);
   --border: oklch(0.309 0 0);
-  --input: oklch(0.309 0 0);
+  --input: oklch(0.56 0 0);
   --ring: oklch(0.569 0 0);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
@@ -228,6 +228,13 @@
     padding: 0;
     font: inherit;
     letter-spacing: inherit;
+  }
+
+  /* Same plugin's white fill, on the hand-rolled controls outside components/ui that the audit
+     above did not cover. Tracks --background so light mode keeps the white it already painted.
+     Delete along with the plugin. */
+  :is(input, textarea, select):not([type="checkbox"], [type="radio"], [data-slot="combobox-chip-input"]) {
+    background-color: var(--color-background);
   }
 
   button:not(:disabled),
