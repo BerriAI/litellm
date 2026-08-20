@@ -253,6 +253,7 @@ from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -11926,8 +11927,6 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     Returns:
         TokenCountResponse
     """
-    from litellm import token_counter
-
     global llm_router
 
     prompt: Final = request.prompt
@@ -12011,7 +12010,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     _tokenizer_used: Final = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
 
     tokenizer_used: Final = str(_tokenizer_used["type"])
-    total_tokens: Final = token_counter(
+    total_tokens: Final = await asyncify(litellm.token_counter)(
         model=model_to_use,
         text=prompt,
         messages=messages,
