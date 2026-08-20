@@ -79,6 +79,9 @@ def is_cli_token_fresh(token_data: Mapping[str, object], buffer_hours: float = 0
     `LITELLM_CLI_JWT_EXPIRATION_HOURS`."""
     from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 
+    expires_at: Final = token_data.get("expires_at")
+    if isinstance(expires_at, (int, float)):
+        return time.time() < expires_at - buffer_hours * 3600
     timestamp: Final = token_data.get("timestamp")
     if not isinstance(timestamp, (int, float)):
         return False

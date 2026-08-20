@@ -270,7 +270,7 @@ class _TeamRowGrants(BaseModel):
     litellm_model_table: _TeamModelAliasTable | None = None
 
 
-class _CliSsoTeamDetail(BaseModel):
+class CliSsoTeamDetail(BaseModel):
     """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
 
     team_id: str | None = None
@@ -279,8 +279,8 @@ class _CliSsoTeamDetail(BaseModel):
     team_model_aliases: Mapping[str, str] | None = None
 
 
-_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[_CliSsoTeamDetail, ...])
-_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = _CliSsoTeamDetail(team_models=())
+_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[CliSsoTeamDetail, ...])
+_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = CliSsoTeamDetail(team_models=())
 
 
 class _CustomSsoCall(Protocol):
@@ -2192,10 +2192,10 @@ async def _build_cli_sso_user_defined_values(
     )
 
 
-def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
+def _cli_sso_team_detail(team_row: Mapping[str, object]) -> CliSsoTeamDetail:
     team: Final = _TeamRowGrants.model_validate(team_row)
     alias_table: Final = team.litellm_model_table
-    return _CliSsoTeamDetail(
+    return CliSsoTeamDetail(
         team_id=team.team_id,
         team_alias=team.team_alias,
         team_models=team.models,
@@ -2203,10 +2203,10 @@ def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
     )
 
 
-async def _fetch_cli_sso_team_details(
+async def fetch_cli_sso_team_details(
     prisma_client: PrismaClient,
     teams: Sequence[str],
-) -> tuple[_CliSsoTeamDetail, ...] | None:
+) -> tuple[CliSsoTeamDetail, ...] | None:
     """``None`` means the lookup itself failed, which is not the same as the user having no teams."""
     if not teams:
         return ()
@@ -2221,7 +2221,7 @@ async def _fetch_cli_sso_team_details(
     return tuple(_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
 
 
-def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[str]:
+def _cli_sso_session_teams(team_details: Sequence[CliSsoTeamDetail]) -> list[str]:
     """The teams a login may bind to: only those whose row still exists.
 
     A team deleted out from under a membership, which is what deleting an organization
@@ -2231,7 +2231,7 @@ def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[st
     return [detail.team_id for detail in team_details if detail.team_id is not None]
 
 
-def _selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> _CliSsoTeamDetail | None:
+def selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> CliSsoTeamDetail | None:
     """``None`` means the team's grants are unknown. An empty grant is a real value meaning unrestricted,
     so an unknown one must not be minted as empty."""
     if team_id is None:
@@ -2282,7 +2282,7 @@ async def _complete_cli_sso_callback_session(
     if hasattr(user_info, "teams") and user_info.teams:
         teams = user_info.teams if isinstance(user_info.teams, list) else []
 
-    team_details: Final = await _fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
+    team_details: Final = await fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
     if team_details is None:
         raise HTTPException(
             status_code=500,
@@ -2483,7 +2483,7 @@ async def cli_poll_key(
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
-            selected_team: Final = _selected_cli_sso_team_detail(
+            selected_team: Final = selected_cli_sso_team_detail(
                 team_details=user_team_details,
                 team_id=team_id,
             )
