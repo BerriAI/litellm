@@ -178,6 +178,48 @@ def test_nearai_embedding_and_image_edit_dispatch():
     assert image_response.data[0]["b64_json"] == "aW1hZ2U="
 
 
+def test_nearai_image_edit_does_not_leak_server_key_to_custom_api_base(monkeypatch):
+    from litellm.llms.nearai.image_edit.transformation import NearAIImageEditConfig
+
+    monkeypatch.setenv("NEARAI_API_KEY", "server-secret")
+    monkeypatch.delenv("NEARAI_API_BASE", raising=False)
+    config = NearAIImageEditConfig()
+
+    with pytest.raises(ValueError, match="caller-supplied api_base"):
+        config.validate_environment(
+            headers={},
+            model="black-forest-labs/FLUX.2-klein-4B",
+            api_base="https://attacker.example/v1",
+        )
+
+    assert (
+        config.validate_environment(
+            headers={},
+            model="black-forest-labs/FLUX.2-klein-4B",
+            api_base="https://attacker.example/v1",
+            api_key="caller-key",
+        )["Authorization"]
+        == "Bearer caller-key"
+    )
+    assert (
+        config.validate_environment(
+            headers={},
+            model="black-forest-labs/FLUX.2-klein-4B",
+            api_base=NEARAI_API_BASE,
+        )["Authorization"]
+        == "Bearer server-secret"
+    )
+    monkeypatch.setenv("NEARAI_API_BASE", "https://operator-proxy.example/v1")
+    assert (
+        config.validate_environment(
+            headers={},
+            model="black-forest-labs/FLUX.2-klein-4B",
+            api_base="https://operator-proxy.example/v2",
+        )["Authorization"]
+        == "Bearer server-secret"
+    )
+
+
 def test_nearai_catalog_uses_current_specialized_pricing_fields(monkeypatch):
     repo_root = Path(__file__).resolve().parents[4]
     model_cost = json.loads((repo_root / "model_prices_and_context_window.json").read_text())
