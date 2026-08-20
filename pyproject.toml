@@ -227,7 +227,6 @@ ci = [
     "Pillow==12.3.0",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
-    "pytest-codspeed==4.3.0",
     "pytest-retry==1.7.0",
     "pyarrow==23.0.1",
     "langchain==1.3.9",
