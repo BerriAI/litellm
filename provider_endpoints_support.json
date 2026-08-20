@@ -2364,6 +2364,24 @@
         "text_completion": false
       }
     },
+    "token_kiosk": {
+      "display_name": "Token Kiosk (`token_kiosk`)",
+      "url": "https://docs.litellm.ai/docs/providers/token_kiosk",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "text-completion-codestral": {
       "display_name": "Text Completion Codestral (`text-completion-codestral`)",
       "url": "https://docs.litellm.ai/docs/providers/codestral",

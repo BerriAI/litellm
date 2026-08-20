@@ -795,6 +795,7 @@ openai_compatible_endpoints: Final[list] = [
 
 
 openai_compatible_providers: Final[list] = [
+    "token_kiosk",
     "anyscale",
     "groq",
     "nvidia_nim",
