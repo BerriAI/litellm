@@ -797,16 +797,12 @@ class PrometheusMetricLabels:
 
     litellm_check_batch_cost_last_run_timestamp: list[str] = []
 
-    # Per-pod request pressure. status is a fixed set of shed codes; the limit
-    # gauge is unlabelled because it describes this worker.
+    # Unlabelled: the limit describes this worker.
     litellm_requests_shed_total: tuple[str, ...] = ()
     litellm_global_max_parallel_requests_limit: tuple[str, ...] = ()
 
-    # Scheduled background jobs. Labels are closed sets fixed at startup: job ids
-    # come from the scheduler registration, cronjob ids from the lock call sites,
-    # and results from an enum. No pod label: pod identity is unbounded, and the
-    # lock result already distinguishes the pod that owns a job from the ones
-    # that skipped it.
+    # No pod label: pod identity is unbounded, and the lock result already
+    # identifies the owner.
     litellm_scheduled_job_runs_total: tuple[str, ...] = ()
     litellm_scheduled_job_duration_seconds: tuple[str, ...] = ()
     litellm_scheduled_job_last_run_timestamp: tuple[str, ...] = ()
