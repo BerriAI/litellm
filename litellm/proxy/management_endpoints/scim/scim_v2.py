@@ -697,9 +697,7 @@ async def _resolve_group_member_ids(
         [
             (
                 user_id,
-                await _ensure_group_member_user(
-                    user_id=user_id, created_via=created_via, prisma_client=prisma_client
-                ),
+                await _ensure_group_member_user(user_id=user_id, created_via=created_via, prisma_client=prisma_client),
             )
             for user_id in unique_unknown_ids
         ]
