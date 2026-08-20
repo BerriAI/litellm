@@ -1,9 +1,19 @@
 import json
 import os
+import stat
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
+
+PRIVATE_DIR_MODE: Final = 0o700
+
+
+def ensure_private_dir(directory: Path) -> None:
+    """Create directory (and parents) owner-only, tightening it if it already exists group/world readable"""
+    directory.mkdir(mode=PRIVATE_DIR_MODE, parents=True, exist_ok=True)
+    if stat.S_IMODE(directory.stat().st_mode) & 0o077:
+        directory.chmod(PRIVATE_DIR_MODE)
 
 
 def write_private_json(path: str, data: Mapping[str, object]) -> None:

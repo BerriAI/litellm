@@ -14,10 +14,12 @@ from typing import IO, Final
 import click
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+from litellm.litellm_core_utils.cli_keyring import SecretVault
+from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh, load_cli_token
+from litellm.litellm_core_utils.private_json import ensure_private_dir
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import load_token, login
+from .auth import context_secret_vault, login
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
@@ -66,7 +68,7 @@ def secure_create(path: Path) -> Iterator[IO[str]]:
 
 def write_backup(record: BackupRecord, backup_path: Path | None = None) -> None:
     path: Final = backup_path if backup_path is not None else BACKUP_PATH
-    path.parent.mkdir(exist_ok=True)
+    ensure_private_dir(path.parent)
     with secure_create(path) as f:
         json.dump({"existed": record.existed, "content": record.content}, f, indent=2)
 
@@ -103,10 +105,17 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
     return record
 
 
+def _has_fresh_login(base_url: str, vault: SecretVault) -> bool:
+    token_data: Final = load_cli_token(vault=vault)
+    if token_data is None or token_data.key is None or token_data.base_url != base_url:
+        return False
+    return is_cli_token_fresh(token_data)
+
+
 def _ensure_fresh_login(ctx: click.Context) -> None:
     base_url: Final = ctx.obj["base_url"].rstrip("/")
-    token_data = load_token()
-    if token_data and token_data.get("base_url") == base_url and is_cli_token_fresh(token_data):
+    vault: Final = context_secret_vault(ctx)
+    if _has_fresh_login(base_url, vault):
         return
 
     if not sys.stdin.isatty():
@@ -117,8 +126,7 @@ def _ensure_fresh_login(ctx: click.Context) -> None:
 
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
     ctx.invoke(login)
-    token_data = load_token()
-    if not token_data or token_data.get("base_url") != base_url or not is_cli_token_fresh(token_data):
+    if not _has_fresh_login(base_url, vault):
         raise UpError("Login did not produce a usable token; cannot start `lite up`.")
 
 

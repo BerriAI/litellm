@@ -1,16 +1,67 @@
 """
 CLI Token Utilities
 
-SDK-level utilities for reading CLI authentication tokens.
+SDK-level utilities for reading the credential minted by `lite login`.
+
+Non-secret metadata lives in ~/.litellm/token.json. The secret material (the
+bearer key, plus a JWT when one is issued) lives in the OS keychain when the
+machine has one, and in that same 0600 file otherwise. This module hides the
+split from callers, and migrates a legacy plaintext file into the keychain the
+first time it reads one.
+
 This module has no dependencies on proxy code and can be safely imported at the SDK level.
 """
 
-import json
-import os
+import contextlib
 import time
-from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
+
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from litellm.litellm_core_utils.cli_keyring import (
+    SYSTEM_KEYRING,
+    SecretFound,
+    SecretMissing,
+    SecretUnavailable,
+    SecretVault,
+)
+from litellm.litellm_core_utils.private_json import ensure_private_dir, write_private_json
+
+
+class CliTokenRecord(BaseModel):
+    """A stored CLI credential.
+
+    `key is None` means the metadata was found but the secret could not be
+    produced: the keychain holds nothing for us, or we could not reach it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    base_url: str = ""
+    key: str | None = None
+    user_id: str = ""
+    user_email: str = ""
+    user_role: str = ""
+    auth_header_name: str = "Authorization"
+    jwt_token: str = ""
+    timestamp: float = 0.0
+
+
+class CliTokenSecret(BaseModel):
+    """The secret material as stored in the OS keychain.
+
+    `base_url` is duplicated from the metadata file purely as a pairing tag: a
+    secret minted for one server is never handed to another, even if the
+    metadata file is edited underneath us.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    base_url: str
+    key: str
+    jwt_token: str = ""
 
 
 def get_cli_token_file_path() -> str:
@@ -20,26 +71,39 @@ def get_cli_token_file_path() -> str:
     return str(config_dir / "token.json")
 
 
-def load_cli_token() -> dict | None:
-    """Load CLI token data from file"""
-    token_file: Final = get_cli_token_file_path()
-    if not os.path.exists(token_file):
+def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | None:
+    """Load the stored CLI credential, or None when this machine has none"""
+    record: Final = _read_token_file()
+    if record is None:
         return None
+    return _resolve_secret(record, vault)
 
-    try:
-        with open(token_file, "r") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+
+def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRING) -> bool:
+    """Store a freshly minted credential. Returns whether the keychain took the secret"""
+    if record.key is None or not vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)):
+        _write_token_file(record)
+        return False
+    _write_token_file(_without_secret(record))
+    return True
+
+
+def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> bool:
+    """Remove the credential from both stores. Returns whether the keychain is now free of it"""
+    erased: Final = vault.erase()
+    Path(get_cli_token_file_path()).unlink(missing_ok=True)
+    return erased
 
 
 def get_litellm_gateway_api_key(
     expected_base_url: str | None = None,
+    *,
+    vault: SecretVault = SYSTEM_KEYRING,
 ) -> str | None:
     """
     Get the stored CLI API key for use with LiteLLM SDK.
 
-    This function reads the token file created by `lite login`
+    This function reads the credential created by `lite login`
     and returns the API key for use in Python scripts.
 
     Args:
@@ -47,6 +111,7 @@ def get_litellm_gateway_api_key(
             originally issued for this URL. Pass the target server URL to
             prevent credential leakage when the client is pointed at a
             different (possibly malicious) server.
+        vault: Where the secret material is stored. Defaults to the OS keychain.
 
     Returns:
         str: The API key if found (and origin matches), None otherwise
@@ -62,25 +127,84 @@ def get_litellm_gateway_api_key(
         >>>         base_url="https://your-proxy.com/v1"
         >>>     )
     """
-    token_data: Final = load_cli_token()
-    if not token_data or "key" not in token_data:
+    record: Final = _read_token_file()
+    if record is None:
         return None
-    if expected_base_url is not None:
-        stored_url: Final = token_data.get("base_url")
-        if stored_url != expected_base_url.rstrip("/"):
-            return None
-    return token_data["key"]
+    if expected_base_url is not None and record.base_url != expected_base_url.rstrip("/"):
+        return None
+    resolved: Final = _resolve_secret(record, vault)
+    return None if resolved is None else resolved.key
 
 
-def is_cli_token_fresh(token_data: Mapping[str, object], buffer_hours: float = 0.1) -> bool:
-    """Check whether a cached CLI token (as stored in token.json) is still
-    within its expiration window. Used by `lite auth print-token` to fail
-    fast, without a network round trip, once the cached token is past
-    `LITELLM_CLI_JWT_EXPIRATION_HOURS`."""
+def is_cli_token_fresh(token_data: CliTokenRecord, buffer_hours: float = 0.1) -> bool:
+    """Check whether a cached CLI token is still within its expiration window.
+    Used by `lite auth print-token` to fail fast, without a network round trip,
+    once the cached token is past `LITELLM_CLI_JWT_EXPIRATION_HOURS`."""
     from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 
-    timestamp: Final = token_data.get("timestamp")
-    if not isinstance(timestamp, (int, float)):
-        return False
-    age_hours: Final = (time.time() - timestamp) / 3600
+    age_hours: Final = (time.time() - token_data.timestamp) / 3600
     return age_hours < (CLI_JWT_EXPIRATION_HOURS - buffer_hours)
+
+
+def _read_token_file() -> CliTokenRecord | None:
+    try:
+        raw: Final = Path(get_cli_token_file_path()).read_text()
+    except OSError:
+        return None
+    try:
+        return CliTokenRecord.model_validate_json(raw)
+    except ValidationError:
+        return None
+
+
+def _resolve_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord | None:
+    match vault.read():
+        case SecretFound(blob=blob):
+            return _apply_vault_secret(record, blob, vault)
+        case SecretMissing():
+            return _migrate_file_secret(record, vault)
+        case SecretUnavailable():
+            return record
+
+
+def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -> CliTokenRecord | None:
+    if record.key is not None:
+        # a secret still on disk means the last keychain write failed: the file outranks the vault
+        return _migrate_file_secret(record, vault)
+    try:
+        secret: Final = CliTokenSecret.model_validate_json(blob)
+    except ValidationError:
+        return _migrate_file_secret(record, vault)
+    if secret.base_url != record.base_url:
+        return _migrate_file_secret(record, vault)
+    _scrub_file_secret(record)
+    return record.model_copy(update=MappingProxyType({"key": secret.key, "jwt_token": secret.jwt_token}))
+
+
+def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliTokenRecord | None:
+    if record.key is None:
+        return None
+    if vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)):
+        _scrub_file_secret(record)
+    return record
+
+
+def _scrub_file_secret(record: CliTokenRecord) -> None:
+    if record.key is None and not record.jwt_token:
+        return
+    with contextlib.suppress(OSError):
+        _write_token_file(_without_secret(record))
+
+
+def _without_secret(record: CliTokenRecord) -> CliTokenRecord:
+    return record.model_copy(update=MappingProxyType({"key": None, "jwt_token": ""}))
+
+
+def _encode_secret(base_url: str, key: str, jwt_token: str) -> str:
+    return CliTokenSecret(base_url=base_url, key=key, jwt_token=jwt_token).model_dump_json()
+
+
+def _write_token_file(record: CliTokenRecord) -> None:
+    path: Final = Path(get_cli_token_file_path())
+    ensure_private_dir(path.parent)
+    write_private_json(str(path), record.model_dump(exclude_none=True))
