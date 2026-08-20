@@ -1,4 +1,94 @@
+import logging
+
+import litellm
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+
+
+class _ListHandler(logging.Handler):
+    """Capture emitted LogRecords so we can count warnings deterministically."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def _capture_reasoning_warnings(messages):
+    """
+    Run _fill_reasoning_content while capturing the WARNING records emitted by
+    litellm.verbose_logger. Returns (result, warning_records).
+    """
+    handler = _ListHandler()
+    logger = litellm.verbose_logger
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        result = DeepSeekChatConfig()._fill_reasoning_content(messages)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+    reasoning_records = [
+        record
+        for record in handler.records
+        if "reasoning_content" in record.getMessage()
+    ]
+    return result, reasoning_records
+
+
+def test_fill_reasoning_content_warns_once_per_request_with_count():
+    """
+    Reproduces issue #37629: _fill_reasoning_content used to emit one identical
+    WARNING per historical assistant message that lacked reasoning_content. In a
+    multi-turn conversation this floods the logs (6 messages -> 6 warnings on a
+    single request) and buries genuine errors.
+
+    Expected behaviour: at most ONE aggregated warning per request, and it must
+    report how many assistant messages were back-filled with the placeholder.
+    """
+    messages = [{"role": "system", "content": "You are helpful."}]
+    for i in range(6):
+        messages.append({"role": "user", "content": f"q{i}"})
+        messages.append({"role": "assistant", "content": f"a{i}"})
+
+    result, warning_records = _capture_reasoning_warnings(messages)
+
+    # All six assistant messages still get the single-space placeholder.
+    assistant_placeholders = [
+        msg
+        for msg in result
+        if msg.get("role") == "assistant" and msg.get("reasoning_content") == " "
+    ]
+    assert len(assistant_placeholders) == 6
+
+    # Exactly one aggregated warning, not one-per-message.
+    assert len(warning_records) == 1, (
+        f"expected a single aggregated warning, got {len(warning_records)}: "
+        f"{[r.getMessage() for r in warning_records]}"
+    )
+    # And that warning must surface the count of affected messages.
+    assert "6" in warning_records[0].getMessage()
+
+
+def test_fill_reasoning_content_no_warning_when_nothing_missing():
+    """When every assistant message already carries reasoning_content, the
+    aggregated warning must not fire at all."""
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello", "reasoning_content": "thinking"},
+        {"role": "user", "content": "again"},
+        {
+            "role": "assistant",
+            "content": "sure",
+            "provider_specific_fields": {"reasoning_content": "stored"},
+        },
+    ]
+
+    _result, warning_records = _capture_reasoning_warnings(messages)
+
+    assert warning_records == []
 
 
 def _function_tool(name: str) -> dict:
