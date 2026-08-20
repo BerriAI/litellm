@@ -33,7 +33,7 @@ describe("PluginSettings config payload", () => {
     const user = userEvent.setup();
     getConfigFieldSettingMock.mockResolvedValue({ field_value: [] });
     render(<PluginSettings />);
-    expect(await screen.findAllByText("No data")).not.toHaveLength(0);
+    expect(await screen.findByText("No data", { ignore: "title" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /add plugin/i }));
     fireEvent.change(await screen.findByLabelText(/Name \(identifier\)/), { target: { value: "beta" } });
@@ -62,7 +62,7 @@ describe("PluginSettings config payload", () => {
     render(<PluginSettings />);
     expect(await screen.findByText("Alpha")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "edit" }));
+    await user.click(screen.getByRole("button", { name: "Edit alpha" }));
     expect(await screen.findByLabelText(/Plugin Key/)).toHaveValue("");
 
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -88,7 +88,7 @@ describe("PluginSettings config payload", () => {
     render(<PluginSettings />);
     expect(await screen.findByText("Alpha")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "edit" }));
+    await user.click(screen.getByRole("button", { name: "Edit alpha" }));
     fireEvent.change(await screen.findByLabelText(/Plugin Key/), { target: { value: "sk-brand-new" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
@@ -119,7 +119,7 @@ describe("PluginSettings plugin key reveal (post-migration shadcn affordance)", 
     render(<PluginSettings />);
     expect(await screen.findByText("Alpha")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "edit" }));
+    await user.click(screen.getByRole("button", { name: "Edit alpha" }));
     const keyInput = await screen.findByLabelText(/Plugin Key/);
     expect(keyInput).toHaveAttribute("type", "password");
 

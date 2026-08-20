@@ -1,9 +1,10 @@
+import { Info } from "lucide-react";
 import React from "react";
-import { Input, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { antdRequired } from "@/components/common_components/antdFormRules";
+import { Textarea } from "@/components/ui/textarea";
 import { parsesAsJson, textControl } from "./mcpFieldRules";
 
 interface StdioConfigurationProps {
@@ -36,9 +37,9 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
       label={
         <span className="text-sm font-medium text-gray-700 flex items-center">
           Stdio Configuration (JSON)
-          <Tooltip title="Paste your stdio MCP server configuration in JSON format. You can use the full mcpServers structure from config.yaml or just the inner server configuration.">
-            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-          </Tooltip>
+          <SimpleTooltip content="Paste your stdio MCP server configuration in JSON format. You can use the full mcpServers structure from config.yaml or just the inner server configuration.">
+            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+          </SimpleTooltip>
         </span>
       }
       name="stdio_config"
@@ -51,7 +52,7 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
       }}
     >
       {(control) => (
-        <Input.TextArea
+        <Textarea
           {...textControl(control)}
           placeholder={PLACEHOLDER}
           rows={12}

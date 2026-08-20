@@ -1,7 +1,10 @@
+import { CircleMinus, Info, Plus } from "lucide-react";
 import React from "react";
-import { Input, Select, Tooltip, Typography } from "antd";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
 
 import {
@@ -10,10 +13,8 @@ import {
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
 import { antdRequired } from "@/components/common_components/antdFormRules";
-import { matchesPattern, selectControl, textControl } from "./mcpFieldRules";
+import { matchesPattern, selectControl, selectTriggerControl, textControl } from "./mcpFieldRules";
 import { listControl } from "./mcpFormStore";
-
-const { Text } = Typography;
 
 const SCOPE_OPTIONS = [
   { value: "global", label: "Instance" },
@@ -40,11 +41,9 @@ const EnvVarsSection: React.FC = () => {
   return (
     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
       <div className="flex items-center gap-2 mb-1">
-        <Text strong className="text-sm">
-          Variables
-        </Text>
-        <Tooltip
-          title={
+        <strong className="text-sm font-semibold">Variables</strong>
+        <SimpleTooltip
+          content={
             <>
               Define variables you can interpolate in Static Headers or Authentication using{" "}
               <code>{"${VAR_NAME}"}</code>. <br />
@@ -55,15 +54,15 @@ const EnvVarsSection: React.FC = () => {
             </>
           }
         >
-          <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
-        </Tooltip>
+          <Info className="size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+        </SimpleTooltip>
       </div>
-      <Text className="text-xs text-gray-600 block mb-3">
+      <span className="mb-3 block text-xs text-gray-600">
         Reference these in Static Headers or Authentication as <code>{"${VAR_NAME}"}</code>. For example:{" "}
         <code className="bg-white px-1 rounded-sm border border-gray-200">
           {"${DB_PROTOCOL}://${CORP_USERNAME}:${CORP_PASSWORD}@${DB_HOSTNAME}"}
         </code>
-      </Text>
+      </span>
 
       <div className="space-y-2">
         {fields.length > 0 && (
@@ -97,18 +96,31 @@ const EnvVarsSection: React.FC = () => {
               <ScopedValueOrDescription index={index} />
             </div>
             <MountedFormField name={["env_vars", String(index), "scope"]} className="mb-0 w-40" defaultValue="global">
-              {(control) => <Select {...selectControl<string>(control)} options={SCOPE_OPTIONS} />}
+              {(control) => (
+                <Select {...selectControl<string>(control)} items={SCOPE_OPTIONS}>
+                  <SelectTrigger {...selectTriggerControl(control)} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SCOPE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </MountedFormField>
             <div style={{ width: 24, height: 32 }} className="flex items-center justify-center">
-              <MinusCircleOutlined
+              <CircleMinus
                 onClick={() => remove(index)}
-                className="text-gray-500 hover:text-red-500 cursor-pointer"
+                className="size-4 text-gray-500 hover:text-red-500 cursor-pointer"
               />
             </div>
           </div>
         ))}
         <Button variant="outline" className="w-full border-dashed" onClick={() => append({ scope: "global" })}>
-          <PlusOutlined />
+          <Plus />
           Add Variable
         </Button>
       </div>
@@ -125,19 +137,17 @@ const ScopedValueOrDescription: React.FC<{ index: number }> = ({ index }) => {
     return (
       <MountedFormField name={["env_vars", String(index), "description"]} className="mb-0">
         {(control) => (
-          <Input
-            {...textControl(control)}
-            addonBefore={
-              <Tooltip title="Per-user variables have no shared value. This text is only a hint shown to each user when they fill in their own value.">
+          <InputGroup>
+            <InputGroupAddon>
+              <SimpleTooltip content="Per-user variables have no shared value. This text is only a hint shown to each user when they fill in their own value.">
                 <span className="text-xs text-gray-500 cursor-help whitespace-nowrap">
-                  <InfoCircleOutlined className="mr-1" />
+                  <Info className="mr-1 inline size-3 align-text-bottom" />
                   Hint
                 </span>
-              </Tooltip>
-            }
-            placeholder="e.g. Your DB username"
-            styles={{ input: { color: "#9ca3af" } }}
-          />
+              </SimpleTooltip>
+            </InputGroupAddon>
+            <InputGroupInput {...textControl(control)} placeholder="e.g. Your DB username" className="text-gray-400" />
+          </InputGroup>
         )}
       </MountedFormField>
     );

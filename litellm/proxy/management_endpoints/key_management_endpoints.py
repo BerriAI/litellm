@@ -1423,6 +1423,11 @@ async def _check_team_key_limits(
     )
 
 
+_INHERITED_MODEL_SENTINELS: Final = frozenset(
+    {SpecialModelNames.all_team_models.value, SpecialModelNames.all_proxy_models.value}
+)
+
+
 async def _check_project_key_limits(
     project_id: str,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -1432,7 +1437,8 @@ async def _check_project_key_limits(
     """
     Validate that key's models and budget respect its project's limits.
 
-    - Key models must be a subset of project models
+    - Key models must be a subset of project models, except the all-team-models / all-proxy-models
+      sentinels, which inherit a parent scope and are narrowed by the project at request time
     - Key max_budget must be <= project max_budget
     """
     project_obj: Final = await get_project_object(
@@ -1450,7 +1456,7 @@ async def _check_project_key_limits(
     # Validate key models are a subset of project models
     if data.models and len(project_obj.models) > 0:
         for m in data.models:
-            if m not in project_obj.models:
+            if m not in project_obj.models and m not in _INHERITED_MODEL_SENTINELS:
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -6266,6 +6272,7 @@ async def block_key(
     """
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -6312,7 +6319,7 @@ async def block_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if litellm.store_audit_logs is True:
+    if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -6379,6 +6386,7 @@ async def unblock_key(
     """
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -6425,7 +6433,7 @@ async def unblock_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if litellm.store_audit_logs is True:
+    if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(

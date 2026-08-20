@@ -194,8 +194,8 @@ describe("LoggingSettings", () => {
 
     renderWithProviders(<LoggingSettings value={initialValue} onChange={mockOnChange} />);
 
-    await user.click(screen.getByTitle("Success Only"));
-    await user.click(await screen.findByTitle("Failure Only"));
+    await user.click(screen.getByRole("combobox", { name: "Event Type" }));
+    await user.click(await screen.findByRole("option", { name: "Failure Only" }));
 
     expect(mockOnChange).toHaveBeenCalledWith([expect.objectContaining({ callback_type: "failure" })]);
   });

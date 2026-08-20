@@ -620,6 +620,12 @@ class AnthropicResponseUsageBlock(BaseModel):
     output_tokens: int
 
 
+class AnthropicOutputTokensDetails(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    thinking_tokens: int | None = None
+
+
 AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
 
 

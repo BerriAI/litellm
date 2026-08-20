@@ -4,6 +4,7 @@ import { heuristicScoringRoleFor } from "./ComplexityRouterConfig";
 import {
   dimensionLabel,
   hydrateDimensionWeights,
+  hydrateReasoningOverrideMinScore,
   hydrateTierBoundaries,
   hydrateTokenThresholds,
   weightTotal,
@@ -44,6 +45,21 @@ describe("hydrating the scorer knobs", () => {
 
   it("totals weights and rounds away float drift", () => {
     expect(weightTotal({ a: 0.1, b: 0.2 })).toBe(0.3);
+  });
+
+  it.each([[undefined], [null], ["0.15"], [Number.NaN], [Number.POSITIVE_INFINITY], [{ value: 0.15 }]])(
+    "hydrates the reasoning override floor %s to undefined",
+    (raw) => {
+      expect(hydrateReasoningOverrideMinScore(raw)).toBeUndefined();
+    },
+  );
+
+  // A stored 0 is an unconditional override, so hydrating it to undefined would silently retune the router
+  // back to tracking simple_medium on the next save.
+  it("hydrates a stored reasoning override floor, zero and negatives included", () => {
+    expect(hydrateReasoningOverrideMinScore(0)).toBe(0);
+    expect(hydrateReasoningOverrideMinScore(-0.3)).toBe(-0.3);
+    expect(hydrateReasoningOverrideMinScore(0.42)).toBe(0.42);
   });
 
   it("falls back to the raw key when a dimension has no label yet", () => {

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
@@ -504,6 +504,15 @@ describe("Teams - team detail deep link (?team=)", () => {
     expect(onUrlUpdate.mock.calls.at(-1)![0].searchParams.has("team")).toBe(false);
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
+
+  it("should preserve the legacy inset for the team detail view", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
+      searchParams: "?team=team-from-url",
+    });
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    expect(screen.getByRole("main")).toHaveClass("px-12", "py-6");
+  });
 });
 
 describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
@@ -512,21 +521,19 @@ describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
 
-  it("renders the Create Team button inside the tab bar, ahead of the tabs", () => {
+  it("should render the Create Team button inside the tab bar, ahead of the tabs", () => {
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
-    const createButton = screen.getByTestId("create-team-button");
-    const tabBar = screen.getByRole("tablist").parentElement!;
+    const tabNav = screen.getByRole("tablist");
+    const createButton = within(tabNav).getByTestId("create-team-button");
+    const firstTab = within(tabNav).getByRole("tab", { name: "Your Teams" });
 
-    // The CTA lives in the tab bar's left slot, not the standalone page header.
-    expect(tabBar.contains(createButton)).toBe(true);
-
-    // It reads as the left end of the cluster: it precedes the first tab in DOM order.
-    const firstTab = screen.getByRole("tab", { name: "Your Teams" });
+    expect(screen.getByRole("main")).toHaveClass("p-8");
+    expect(within(tabNav).getByRole("separator")).toBeInTheDocument();
     expect(createButton.compareDocumentPosition(firstTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("omits the Create Team CTA for a role that cannot manage teams", () => {
+  it("should omit the Create Team CTA for a role that cannot manage teams", () => {
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin Viewer" />);
     expect(screen.queryByTestId("create-team-button")).not.toBeInTheDocument();
   });

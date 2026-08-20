@@ -219,7 +219,7 @@ describe("AddModelPanel submit payload contract", () => {
     const { user, openAdvanced, fillRequired, submit } = await setup();
     await fillRequired();
     await openAdvanced();
-    await user.click(screen.getByLabelText("Custom Pricing"));
+    await user.click(screen.getByRole("switch", { name: "Custom Pricing" }));
     await user.type(await screen.findByLabelText("Input Cost (per 1M tokens)"), "3");
     await user.type(screen.getByLabelText("Output Cost (per 1M tokens)"), "9");
     await submit();
@@ -241,7 +241,7 @@ describe("AddModelPanel submit payload contract", () => {
     const { user, openAdvanced, fillRequired, submit } = await setup();
     await fillRequired();
     await openAdvanced();
-    await user.click(screen.getByLabelText("Cache Control Injection Points"));
+    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
     await screen.findByText("Add Injection Point");
     await submit();
 
@@ -260,7 +260,7 @@ describe("AddModelPanel submit payload contract", () => {
     const { user, openAdvanced, fillRequired, submit } = await setup();
     await fillRequired();
     await openAdvanced();
-    await user.click(screen.getByLabelText("Cache Control Injection Points"));
+    await user.click(screen.getByRole("switch", { name: "Cache Control Injection Points" }));
     await screen.findByText("Add Injection Point");
     await user.click(screen.getByText("Select a role"));
     await user.click(await screen.findByText("System"));
@@ -385,7 +385,7 @@ describe("AddModelPanel behaviours the removed Advanced Settings form instance n
     const { user, openAdvanced, fillRequired, submit } = await setup();
     await fillRequired();
     await openAdvanced();
-    await user.click(screen.getByLabelText("Use in pass through routes"));
+    await user.click(screen.getByRole("switch", { name: "Use in pass through routes" }));
     expect(screen.getByLabelText("LiteLLM Params")).toHaveValue("");
 
     await submit();
@@ -401,11 +401,11 @@ describe("AddModelPanel behaviours the removed Advanced Settings form instance n
     const { user, openAdvanced, fillRequired, submit } = await setup();
     await fillRequired();
     await openAdvanced();
-    await user.click(screen.getByLabelText("Custom Pricing"));
+    await user.click(screen.getByRole("switch", { name: "Custom Pricing" }));
     await user.type(await screen.findByLabelText("Input Cost (per 1M tokens)"), "3");
-    await user.click(screen.getByLabelText("Custom Pricing"));
+    await user.click(screen.getByRole("switch", { name: "Custom Pricing" }));
     await waitFor(() => expect(screen.queryByLabelText("Input Cost (per 1M tokens)")).not.toBeInTheDocument());
-    await user.click(screen.getByLabelText("Custom Pricing"));
+    await user.click(screen.getByRole("switch", { name: "Custom Pricing" }));
     expect(await screen.findByLabelText("Input Cost (per 1M tokens)")).toHaveValue("3");
 
     await submit();

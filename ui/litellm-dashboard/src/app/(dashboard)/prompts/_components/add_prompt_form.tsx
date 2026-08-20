@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Modal, Upload } from "antd";
+import { Upload } from "antd";
 import type { UploadFile, UploadProps } from "antd";
 import { Upload as UploadIcon } from "lucide-react";
 import { z } from "zod/v4";
@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddPromptFormProps {
   visible: boolean;
@@ -144,67 +145,70 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
   };
 
   return (
-    <Modal
-      title="Add New Prompt"
-      open={visible}
-      onCancel={handleCancel}
-      footer={[
-        <Button key="cancel" type="button" variant="outline" onClick={handleCancel}>
-          Cancel
-        </Button>,
-        <Button key="submit" type="button" disabled={loading} onClick={() => void form.handleSubmit(handleSubmit)()}>
-          {loading && <UiLoadingSpinner className="size-4" />}
-          Create Prompt
-        </Button>,
-      ]}
-      width={600}
-    >
-      <form onSubmit={(event) => event.preventDefault()} noValidate>
-        <FieldGroup>
-          <FormField control={form.control} name="prompt_id" label="Prompt ID">
-            {({ ref, ...field }) => (
-              <Input {...field} ref={ref} placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
-            )}
-          </FormField>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>Add New Prompt</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={(event) => event.preventDefault()} noValidate>
+          <FieldGroup>
+            <FormField control={form.control} name="prompt_id" label="Prompt ID">
+              {({ ref, ...field }) => (
+                <Input {...field} ref={ref} placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
+              )}
+            </FormField>
 
-          <FormField control={form.control} name="prompt_integration" label="Prompt Integration">
-            {({ id, value, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-              <Select items={PROMPT_INTEGRATION_OPTIONS} value={value} onValueChange={handleIntegrationChange}>
-                <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PROMPT_INTEGRATION_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </FormField>
+            <FormField control={form.control} name="prompt_integration" label="Prompt Integration">
+              {({ id, value, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                <Select items={PROMPT_INTEGRATION_OPTIONS} value={value} onValueChange={handleIntegrationChange}>
+                  <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROMPT_INTEGRATION_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </FormField>
 
-          {promptIntegration === "dotprompt" && (
-            <>
-              <FieldSeparator />
-              <Field>
-                <FieldTitle>Prompt File</FieldTitle>
-                <Upload {...uploadProps}>
-                  <Button type="button" variant="outline">
-                    <UploadIcon />
-                    Select .prompt File
-                  </Button>
-                </Upload>
-                {fileList.length > 0 && (
-                  <div className="mt-2 text-sm text-muted-foreground">Selected: {fileList[0].name}</div>
-                )}
-                <FieldDescription>Upload a .prompt file that follows the Dotprompt specification</FieldDescription>
-              </Field>
-            </>
-          )}
-        </FieldGroup>
-      </form>
-    </Modal>
+            {promptIntegration === "dotprompt" && (
+              <>
+                <FieldSeparator />
+                <Field>
+                  <FieldTitle>Prompt File</FieldTitle>
+                  <Upload {...uploadProps}>
+                    <Button type="button" variant="outline">
+                      <UploadIcon />
+                      Select .prompt File
+                    </Button>
+                  </Upload>
+                  {fileList.length > 0 && (
+                    <div className="mt-2 text-sm text-muted-foreground">Selected: {fileList[0].name}</div>
+                  )}
+                  <FieldDescription>Upload a .prompt file that follows the Dotprompt specification</FieldDescription>
+                </Field>
+              </>
+            )}
+          </FieldGroup>
+        </form>
+        <DialogFooter>
+          {" "}
+          <Button type="button" variant="outline" onClick={handleCancel}>
+            Cancel
+          </Button>
+          ,
+          <Button type="button" disabled={loading} onClick={() => void form.handleSubmit(handleSubmit)()}>
+            {loading && <UiLoadingSpinner className="size-4" />}
+            Create Prompt
+          </Button>
+          , ]
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

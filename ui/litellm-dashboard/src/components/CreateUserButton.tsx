@@ -10,8 +10,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Alert, Modal, Typography } from "antd";
-import { ChevronRight, CircleHelp, UserPlus } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Modal, Typography } from "antd";
+import { ChevronRight, CircleHelp, Info, UserPlus } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import TeamDropdown from "./common_components/team_dropdown";
@@ -134,20 +135,16 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 );
 
 const EmailInvitationsNotice: React.FC = () => (
-  <Alert
-    message="Email invitations"
-    description={
-      <>
-        New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.{" "}
-        <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
-          Learn how to set up email notifications
-        </Link>
-      </>
-    }
-    type="info"
-    showIcon
-    className="mb-4"
-  />
+  <Alert variant="info" className="mb-4">
+    <Info />
+    <AlertTitle>Email invitations</AlertTitle>
+    <AlertDescription>
+      New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.{" "}
+      <Link href="https://docs.litellm.ai/docs/proxy/email" target="_blank">
+        Learn how to set up email notifications
+      </Link>
+    </AlertDescription>
+  </Alert>
 );
 
 export const CreateUserButton: React.FC<CreateuserProps> = ({

@@ -719,6 +719,7 @@ class TestVertexAIPassThroughHandler:
 
         # Create mock logging object
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-123"
         mock_logging_obj.model_call_details = {}
 
@@ -895,6 +896,7 @@ class TestVertexAIPassThroughHandler:
 
         # Create mock logging object
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-123"
         mock_logging_obj.model_call_details = {}
 
@@ -965,6 +967,7 @@ class TestVertexAIPassThroughHandler:
         mock_httpx_response.status_code = 200
 
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-embed"
         mock_logging_obj.model_call_details = {}
 
@@ -1023,6 +1026,7 @@ class TestVertexAIPassThroughHandler:
         mock_httpx_response.status_code = 200
 
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-batch"
         mock_logging_obj.model_call_details = {}
 
@@ -1079,6 +1083,7 @@ class TestVertexAIPassThroughHandler:
         mock_httpx_response.status_code = 200
 
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-gemini-studio"
         mock_logging_obj.model_call_details = {}
 
@@ -1108,6 +1113,117 @@ class TestVertexAIPassThroughHandler:
         ), "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_vertex_passthrough_handler_prices_regional_endpoint_with_uplift(self, monkeypatch, streaming):
+        """
+        Both cost computations for a passthrough call must price on the URL's serving location:
+        the handler-computed cost, and the async success recompute, which re-resolves the
+        location from the logging object and previously fell through empty optional_params to
+        the us-central1 default, billing the regional uplift on global traffic too (#34393).
+        """
+        import datetime
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                **litellm.get_model_cost_map(url=""),
+                "vertex_ai/gemini-fake-regional": {
+                    "litellm_provider": "vertex_ai",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                    "regional_endpoint_uplift_multiplier": 1.1,
+                },
+            },
+        )
+
+        response_body: Final = {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "hello"}], "role": "model"},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 20,
+                "totalTokenCount": 30,
+            },
+        }
+
+        def costs_for(location: str) -> tuple[float, float]:
+            url_route: Final = (
+                f"https://{location}-aiplatform.googleapis.com/v1/projects/p/locations/{location}"
+                "/publishers/google/models/gemini-fake-regional:"
+                f"{'streamGenerateContent' if streaming else 'generateContent'}"
+            )
+            start_time: Final = datetime.datetime.now()
+            end_time: Final = datetime.datetime.now()
+            logging_obj: Final = Logging(
+                model="gemini-fake-regional",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=streaming,
+                call_type="pass_through_endpoint",
+                start_time=start_time,
+                litellm_call_id="call-id",
+                function_id="fn-id",
+            )
+            logging_obj.update_environment_variables(
+                model="gemini-fake-regional",
+                user="unknown",
+                optional_params={},
+                litellm_params={},
+                call_type="pass_through_endpoint",
+            )
+            if streaming:
+                result = VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
+                    litellm_logging_obj=logging_obj,
+                    passthrough_success_handler_obj=Mock(),
+                    url_route=url_route,
+                    request_body={},
+                    endpoint_type="vertex_ai",
+                    start_time=start_time,
+                    all_chunks=[json.dumps(response_body)],
+                    model=None,
+                    end_time=end_time,
+                )
+            else:
+                mock_httpx_response: Final = Mock()
+                mock_httpx_response.json.return_value = response_body
+                mock_httpx_response.headers = {}
+                mock_httpx_response.status_code = 200
+                result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                    httpx_response=mock_httpx_response,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result="test-result",
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=False,
+                )
+            recomputed: Final = logging_obj._response_cost_calculator(result=result["result"])
+            return result["kwargs"]["response_cost"], recomputed
+
+        global_handler_cost, global_recomputed_cost = costs_for("global")
+        regional_handler_cost, regional_recomputed_cost = costs_for("us-east5")
+
+        plain_cost: Final = 10 * 1e-06 + 20 * 2e-06
+        assert global_handler_cost == pytest.approx(plain_cost, rel=1e-9)
+        assert regional_handler_cost == pytest.approx(plain_cost * 1.10, rel=1e-9), (
+            "regional Vertex passthrough traffic must bill at 1.1x the global rate"
+        )
+        assert global_recomputed_cost == pytest.approx(plain_cost, rel=1e-9), (
+            "the logging recompute must not price global passthrough traffic as regional"
+        )
+        assert regional_recomputed_cost == pytest.approx(plain_cost * 1.10, rel=1e-9)
 
 
 class TestVertexAIDiscoveryPassThroughHandler:

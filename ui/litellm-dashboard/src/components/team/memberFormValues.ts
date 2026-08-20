@@ -56,7 +56,22 @@ export const buildMemberFormValues = (
   return pickFieldNames(config, { role: config.defaultRole || config.roleOptions[0]?.value });
 };
 
-export const emptyMemberFormValues = (config: MemberFieldsConfig): MemberFormValues => pickFieldNames(config, {});
+const emptyValueForType = (type: MemberFieldType | undefined): MemberFieldValue => {
+  switch (type) {
+    case "multi-select":
+      return [];
+    case "numerical":
+    case "budget-duration":
+      return null;
+    default:
+      return "";
+  }
+};
+
+export const emptyMemberFormValues = (config: MemberFieldsConfig): MemberFormValues => {
+  const typeByName = new Map((config.additionalFields ?? []).map((field) => [field.name, field.type]));
+  return Object.fromEntries(memberFieldNames(config).map((name) => [name, emptyValueForType(typeByName.get(name))]));
+};
 
 export const buildMemberFormData = (values: MemberFormValues): MemberFormValues =>
   Object.fromEntries(

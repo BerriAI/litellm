@@ -150,13 +150,13 @@ def test_parse_jsonl_empty_content_is_empty_list():
     assert bu._get_file_content_as_dictionary(b"") == []
 
 
-def test_parse_jsonl_malformed_raises():
-    with pytest.raises(Exception):
-        bu._get_file_content_as_dictionary(b"not valid json")
+def test_parse_jsonl_malformed_lines_skipped():
+    content = b'{"a": 1}\nnot valid json\n{"b": 2}\n'
+    assert bu._get_file_content_as_dictionary(content) == [{"a": 1}, {"b": 2}]
 
 
 # =========================================================================== #
-# _iter_batch_input_lines / _iter_batch_input_entries  (JSONL parsing)
+# _iter_batch_input_lines / _iter_batch_output_entries  (JSONL parsing)
 # =========================================================================== #
 
 
@@ -173,19 +173,22 @@ def test_iter_input_lines_empty():
     assert list(bu._iter_batch_input_lines(b"")) == []
 
 
-def test_iter_input_entries_parses_each_row():
+def test_iter_output_entries_parses_each_row():
     content = b'{"body": {"model": "gpt-4o"}}\n{"body": {"model": "claude-3"}}\n'
-    assert list(bu._iter_batch_input_entries(content)) == [
+    assert list(bu._iter_batch_output_entries(content)) == [
         {"body": {"model": "gpt-4o"}},
         {"body": {"model": "claude-3"}},
     ]
 
 
-def test_iter_input_entries_raises_on_malformed_line():
-    # _iter_batch_input_entries raises on a bad row; callers that must survive
-    # bad rows iterate _iter_batch_input_lines and parse per-row instead.
-    with pytest.raises(Exception):
-        list(bu._iter_batch_input_entries(b'{"ok":1}\nnot-json\n'))
+def test_iter_output_entries_skips_malformed_and_non_object_lines():
+    content = b'{"ok": 1}\nnot-json\n[1, 2]\n{"ok": 2}\n'
+    assert list(bu._iter_batch_output_entries(content)) == [{"ok": 1}, {"ok": 2}]
+
+
+def test_iter_output_entries_skips_undecodable_line():
+    content = b'{"ok": 1}\n{"note": "\xff-bad"}\n{"ok": 2}\n'
+    assert list(bu._iter_batch_output_entries(content)) == [{"ok": 1}, {"ok": 2}]
 
 
 # =========================================================================== #
@@ -469,6 +472,25 @@ def test_cost_from_content_completion_cost_path(monkeypatch):
 
     assert total == 1.0  # 2 successful * 0.5
     assert len(calls) == 2  # failed row not costed
+
+
+def test_empty_body_line_does_not_zero_whole_batch():
+    """A status-200 row with an empty body makes litellm.completion_cost raise;
+    that line must be skipped instead of zeroing the whole batch."""
+    rows = [
+        _success_row(usage=_usage(10, 5)),
+        {
+            "custom_id": "request-poison-empty",
+            "response": {"status_code": 200, "request_id": "inject-empty-body", "body": {}},
+        },
+        _success_row(usage=_usage(20, 10)),
+    ]
+
+    cost, usage, models = bu._aggregate_batch_cost_usage_models(entries=rows, custom_llm_provider="openai")
+
+    assert cost > 0.0
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
+    assert models == ["gpt-4o", "gpt-4o"]
 
 
 def test_cost_from_content_model_info_path(monkeypatch):

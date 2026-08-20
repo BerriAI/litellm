@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Spin, Select } from "antd";
+import { Spin, Select } from "antd";
 import { CircleCheck, FileDown } from "lucide-react";
 import { z } from "zod/v4";
 import { getGlobalLitellmHeaderName } from "@/components/networking";
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const cloudZeroSettingsSchema = z.object({
   api_key: z.string().min(1, "Please enter your CloudZero API key"),
@@ -241,85 +242,96 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
   ];
 
   return (
-    <Modal title="Export Data" open={isOpen} onCancel={handleModalClose} footer={null} width={600} destroyOnHidden>
-      <div className="space-y-4">
-        {/* Export Type Selection */}
-        <div>
-          <p className="text-sm font-medium mb-2 block">Export Destination</p>
-          <Select value={exportType} onChange={setExportType} options={exportOptions} className="w-full" size="large" />
-        </div>
-
-        {/* CloudZero Configuration */}
-        {exportType === "cloudzero" && (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && handleModalClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>Export Data</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          {/* Export Type Selection */}
           <div>
-            {settingsLoading ? (
-              <div className="flex justify-center py-8">
-                <Spin size="large" />
-              </div>
-            ) : (
-              <>
-                {existingSettings && (
-                  <Alert className="mb-4">
-                    <CircleCheck />
-                    <AlertTitle>Existing CloudZero Configuration</AlertTitle>
-                    <AlertDescription>
-                      API Key: {existingSettings.api_key_masked}
-                      <br />
-                      Connection ID: {existingSettings.connection_id}
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                {!existingSettings && (
-                  <form onSubmit={(event) => event.preventDefault()}>
-                    <FieldGroup>
-                      <FormField control={form.control} name="api_key" label="CloudZero API Key">
-                        {({ ref, ...field }) => (
-                          <PasswordInput {...field} ref={ref} placeholder="Enter your CloudZero API key" />
-                        )}
-                      </FormField>
-
-                      <FormField control={form.control} name="connection_id" label="Connection ID">
-                        {({ ref, ...field }) => (
-                          <Input {...field} ref={ref} placeholder="Enter CloudZero connection ID" />
-                        )}
-                      </FormField>
-                    </FieldGroup>
-                  </form>
-                )}
-              </>
-            )}
+            <p className="text-sm font-medium mb-2 block">Export Destination</p>
+            <Select
+              value={exportType}
+              onChange={setExportType}
+              options={exportOptions}
+              className="w-full"
+              size="large"
+            />
           </div>
-        )}
 
-        {/* CSV Export Info */}
-        {exportType === "csv" && (
-          <Alert variant="info">
-            <FileDown />
-            <AlertTitle>CSV Export</AlertTitle>
-            <AlertDescription>
-              Export your usage data as a CSV file for analysis in spreadsheet applications.
-            </AlertDescription>
-          </Alert>
-        )}
+          {/* CloudZero Configuration */}
+          {exportType === "cloudzero" && (
+            <div>
+              {settingsLoading ? (
+                <div className="flex justify-center py-8">
+                  <Spin size="large" />
+                </div>
+              ) : (
+                <>
+                  {existingSettings && (
+                    <Alert className="mb-4">
+                      <CircleCheck />
+                      <AlertTitle>Existing CloudZero Configuration</AlertTitle>
+                      <AlertDescription>
+                        API Key: {existingSettings.api_key_masked}
+                        <br />
+                        Connection ID: {existingSettings.connection_id}
+                      </AlertDescription>
+                    </Alert>
+                  )}
 
-        {/* Action Buttons */}
-        <div className="flex justify-end space-x-2 pt-4">
-          <Button type="button" variant="secondary" onClick={handleModalClose}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={handleExport}
-            disabled={loading || exportLoading}
-            aria-busy={loading || exportLoading}
-          >
-            {(loading || exportLoading) && <UiLoadingSpinner className="size-4" />}
-            {exportType === "cloudzero" ? "Export to CloudZero" : "Export CSV"}
-          </Button>
+                  {!existingSettings && (
+                    <form onSubmit={(event) => event.preventDefault()}>
+                      <FieldGroup>
+                        <FormField control={form.control} name="api_key" label="CloudZero API Key">
+                          {({ ref, ...field }) => (
+                            <PasswordInput {...field} ref={ref} placeholder="Enter your CloudZero API key" />
+                          )}
+                        </FormField>
+
+                        <FormField control={form.control} name="connection_id" label="Connection ID">
+                          {({ ref, ...field }) => (
+                            <Input {...field} ref={ref} placeholder="Enter CloudZero connection ID" />
+                          )}
+                        </FormField>
+                      </FieldGroup>
+                    </form>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* CSV Export Info */}
+          {exportType === "csv" && (
+            <Alert variant="info">
+              <FileDown />
+              <AlertTitle>CSV Export</AlertTitle>
+              <AlertDescription>
+                Export your usage data as a CSV file for analysis in spreadsheet applications.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex justify-end space-x-2 pt-4">
+            <Button type="button" variant="secondary" onClick={handleModalClose}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleExport}
+              disabled={loading || exportLoading}
+              aria-busy={loading || exportLoading}
+            >
+              {(loading || exportLoading) && <UiLoadingSpinner className="size-4" />}
+              {exportType === "cloudzero" ? "Export to CloudZero" : "Export CSV"}
+            </Button>
+          </div>
         </div>
-      </div>
-    </Modal>
+      </DialogContent>
+    </Dialog>
   );
 };
 

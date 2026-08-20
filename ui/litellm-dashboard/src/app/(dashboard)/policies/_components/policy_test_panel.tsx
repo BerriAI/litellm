@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
-import { Alert, Empty } from "antd";
+import { CircleAlert, Inbox } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { FieldGroup } from "@/components/shared/form/field";
@@ -258,7 +259,10 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
       {hasSearched && result && (
         <div className="bg-card border border-border rounded-lg p-6">
           {result.matched_policies.length === 0 ? (
-            <Empty description="No policies matched this context" />
+            <div className="py-6 text-center">
+              <Inbox className="mx-auto mb-2 size-8 text-muted-foreground" aria-hidden="true" />
+              <p className="text-sm text-muted-foreground">No policies matched this context</p>
+            </div>
           ) : (
             <>
               <div className="mb-4">
@@ -325,7 +329,11 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
       )}
 
       {hasSearched && !result && !isLoading && (
-        <Alert message="Error" description="Failed to resolve policies. Check the proxy logs." type="error" showIcon />
+        <Alert variant="error">
+          <CircleAlert />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>Failed to resolve policies. Check the proxy logs.</AlertDescription>
+        </Alert>
       )}
     </div>
   );

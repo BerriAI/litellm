@@ -17,7 +17,6 @@ import {
   InfoIcon,
   CircleHelp,
 } from "lucide-react";
-import { Modal } from "antd";
 import { z } from "zod/v4";
 import {
   listGuardrailSubmissions,
@@ -39,6 +38,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { isAntdUrl } from "@/lib/forms/antdUrl";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 const GUARDRAIL_MODES = [
   { value: "pre_call", label: "Pre Call" },
@@ -1001,6 +1002,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
             />
           </div>
           <select
+            aria-label="Filter by status"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
             className="border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-background"
@@ -1066,92 +1068,108 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
         />
       )}
 
-      <Modal
-        title="Submit Guardrail for Review"
+      <Dialog
         open={isSubmitModalOpen}
-        onCancel={() => {
-          setIsSubmitModalOpen(false);
-          submitForm.reset();
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsSubmitModalOpen(false);
+            submitForm.reset();
+          }
         }}
-        onOk={handleSubmitGuardrail}
-        okText="Submit for Review"
       >
-        <div className="rounded-md bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-900 px-4 py-3 text-sm text-blue-800 dark:text-blue-200 mb-4">
-          Your guardrail will be sent for admin review before it becomes active.
-        </div>
-        <TooltipProvider>
-          <form onSubmit={handleSubmitGuardrail}>
-            <FieldGroup>
-              <FormField control={submitForm.control} name="team_id" label="Team">
-                {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
-              </FormField>
-              <FormField control={submitForm.control} name="guardrail_name" label="Guardrail Name">
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. pii-detection" />}
-              </FormField>
-              <FormField control={submitForm.control} name="mode" label="Mode">
-                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <Select items={GUARDRAIL_MODES} value={value} onValueChange={onChange}>
-                    <SelectTrigger
-                      id={id}
-                      aria-invalid={ariaInvalid}
-                      aria-describedby={ariaDescribedBy}
-                      className="w-full"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
-                      {GUARDRAIL_MODES.map((mode) => (
-                        <SelectItem key={mode.value} value={mode.value} title={mode.label}>
-                          {mode.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </FormField>
-              <FormField control={submitForm.control} name="api_base" label="API Base URL">
-                {({ ref, ...field }) => (
-                  <Input
-                    {...field}
-                    ref={ref}
-                    placeholder="https://your-guardrail-api.com/v1/check"
-                    className="font-mono"
-                  />
-                )}
-              </FormField>
-              <FormField
-                control={submitForm.control}
-                name="extra_litellm_params"
-                label={labelWithHint(
-                  "Additional litellm_params (optional)",
-                  "JSON object merged into litellm_params. e.g. forward_api_key, headers, model, unreachable_fallback",
-                )}
-              >
-                {({ ref, ...field }) => (
-                  <Textarea
-                    {...field}
-                    ref={ref}
-                    rows={3}
-                    className="font-mono text-xs"
-                    placeholder='{"forward_api_key": true, "headers": {"X-Custom": "value"}}'
-                  />
-                )}
-              </FormField>
-              <FormField control={submitForm.control} name="guardrail_info" label="Guardrail Info (optional)">
-                {({ ref, ...field }) => (
-                  <Textarea
-                    {...field}
-                    ref={ref}
-                    rows={3}
-                    className="font-mono text-xs"
-                    placeholder='{"description": "Detects PII in requests"}'
-                  />
-                )}
-              </FormField>
-            </FieldGroup>
-          </form>
-        </TooltipProvider>
-      </Modal>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Submit Guardrail for Review</DialogTitle>
+          </DialogHeader>
+          <div className="rounded-md bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-900 px-4 py-3 text-sm text-blue-800 dark:text-blue-200 mb-4">
+            Your guardrail will be sent for admin review before it becomes active.
+          </div>
+          <TooltipProvider>
+            <form onSubmit={handleSubmitGuardrail}>
+              <FieldGroup>
+                <FormField control={submitForm.control} name="team_id" label="Team">
+                  {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
+                </FormField>
+                <FormField control={submitForm.control} name="guardrail_name" label="Guardrail Name">
+                  {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. pii-detection" />}
+                </FormField>
+                <FormField control={submitForm.control} name="mode" label="Mode">
+                  {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                    <Select items={GUARDRAIL_MODES} value={value} onValueChange={onChange}>
+                      <SelectTrigger
+                        id={id}
+                        aria-invalid={ariaInvalid}
+                        aria-describedby={ariaDescribedBy}
+                        className="w-full"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        {GUARDRAIL_MODES.map((mode) => (
+                          <SelectItem key={mode.value} value={mode.value} title={mode.label}>
+                            {mode.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </FormField>
+                <FormField control={submitForm.control} name="api_base" label="API Base URL">
+                  {({ ref, ...field }) => (
+                    <Input
+                      {...field}
+                      ref={ref}
+                      placeholder="https://your-guardrail-api.com/v1/check"
+                      className="font-mono"
+                    />
+                  )}
+                </FormField>
+                <FormField
+                  control={submitForm.control}
+                  name="extra_litellm_params"
+                  label={labelWithHint(
+                    "Additional litellm_params (optional)",
+                    "JSON object merged into litellm_params. e.g. forward_api_key, headers, model, unreachable_fallback",
+                  )}
+                >
+                  {({ ref, ...field }) => (
+                    <Textarea
+                      {...field}
+                      ref={ref}
+                      rows={3}
+                      className="font-mono text-xs"
+                      placeholder='{"forward_api_key": true, "headers": {"X-Custom": "value"}}'
+                    />
+                  )}
+                </FormField>
+                <FormField control={submitForm.control} name="guardrail_info" label="Guardrail Info (optional)">
+                  {({ ref, ...field }) => (
+                    <Textarea
+                      {...field}
+                      ref={ref}
+                      rows={3}
+                      className="font-mono text-xs"
+                      placeholder='{"description": "Detects PII in requests"}'
+                    />
+                  )}
+                </FormField>
+              </FieldGroup>
+            </form>
+          </TooltipProvider>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsSubmitModalOpen(false);
+                submitForm.reset();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSubmitGuardrail}>Submit for Review</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

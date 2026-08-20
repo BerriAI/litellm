@@ -267,6 +267,91 @@ class TestReasoningMarkerScoring:
         # 2+ reasoning markers should force REASONING tier
         assert tier == ComplexityTier.REASONING
 
+    def test_reasoning_override_does_not_rescue_a_simple_score(self, complexity_router):
+        """Reasoning markers on an otherwise trivial prompt must not reach REASONING."""
+        prompt = "hi, step by step, pros and cons"
+        tier, score, signals = complexity_router.classify(prompt)
+        assert score < complexity_router.config.tier_boundaries["simple_medium"]
+        assert any("step by step" in s and "pros and cons" in s for s in signals)
+        assert tier == ComplexityTier.SIMPLE
+
+    def test_reasoning_override_applies_at_the_simple_medium_boundary(self, complexity_router):
+        """A score sitting exactly on simple_medium is not SIMPLE, so the override still promotes it."""
+        prompt = (
+            "Give me the pros and cons, step by step, of moving our checkout service "
+            "to an event-driven architecture."
+        )
+        tier, score, signals = complexity_router.classify(prompt)
+        assert score == complexity_router.config.tier_boundaries["simple_medium"]
+        assert tier == ComplexityTier.REASONING
+
+    def test_explicit_zero_floor_restores_the_unconditional_override(self, mock_router_instance, basic_config):
+        """0 is a real floor, not an absent one, so the markers alone promote again."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "reasoning_override_min_score": 0.0},
+        )
+        tier, score, _ = router.classify("hi, step by step, pros and cons")
+        assert score < router.config.tier_boundaries["simple_medium"]
+        assert tier == ComplexityTier.REASONING
+
+    def test_floor_defaults_to_simple_medium_and_follows_it(self, mock_router_instance, basic_config):
+        """Unset tracks simple_medium, so moving that boundary moves the floor with it."""
+        prompt = (
+            "Give me the pros and cons, step by step, of moving our checkout service "
+            "to an event-driven architecture."
+        )
+        low = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_boundaries": {"simple_medium": 0.20}},
+        )
+        high = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "tier_boundaries": {"simple_medium": 0.30}},
+        )
+        assert low._effective_reasoning_override_min_score() == 0.20
+        assert high._effective_reasoning_override_min_score() == 0.30
+        assert low.classify(prompt)[0] == ComplexityTier.REASONING
+        assert high.classify(prompt)[0] != ComplexityTier.REASONING
+
+    def test_explicit_floor_overrides_the_boundary(self, mock_router_instance, basic_config):
+        """A configured floor decides the override, not simple_medium."""
+        prompt = (
+            "Give me the pros and cons, step by step, of moving our checkout service "
+            "to an event-driven architecture."
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "tier_boundaries": {"simple_medium": 0.10},
+                "reasoning_override_min_score": 0.90,
+            },
+        )
+        tier, score, _ = router.classify(prompt)
+        assert score > router.config.tier_boundaries["simple_medium"]
+        assert router._effective_reasoning_override_min_score() == 0.90
+        assert tier != ComplexityTier.REASONING
+
+    def test_configured_floor_is_applied_with_greater_or_equal(self, mock_router_instance, basic_config):
+        """A score landing exactly on the configured floor still promotes."""
+        prompt = (
+            "Give me the pros and cons, step by step, of moving our checkout service "
+            "to an event-driven architecture."
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "reasoning_override_min_score": 0.25},
+        )
+        tier, score, _ = router.classify(prompt)
+        assert score == 0.25
+        assert tier == ComplexityTier.REASONING
+
     def test_system_prompt_reasoning_not_counted(self, complexity_router):
         """Reasoning markers in system prompt should not count for override."""
         user_prompt = "What is 2+2?"
@@ -2082,6 +2167,38 @@ class TestRouterPreRoutingAliasOverrides:
         assert request_kwargs["cache_control_injection_points"] == [{"location": "message", "role": "system"}]
 
     @pytest.mark.asyncio
+    async def test_tier_litellm_params_are_applied_before_deployment_selection(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": {
+                                    "model_name": "gpt-4o-mini",
+                                    "litellm_params": {"reasoning_effort": "xhigh"},
+                                }
+                            }
+                        },
+                    },
+                },
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+            ]
+        )
+        request_kwargs: Dict = {"reasoning_effort": "low"}
+
+        deployment = await router.async_get_available_deployment(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert deployment["model_name"] == "gpt-4o-mini"
+        assert request_kwargs["reasoning_effort"] == "xhigh"
+
+    @pytest.mark.asyncio
     async def test_alias_custom_pricing_is_not_applied_to_request_kwargs(self):
         """Custom pricing on the alias prices the alias, not the tier deployment
         the hook picked. Unlike the router-only fields, pricing fields are real
@@ -3766,7 +3883,7 @@ class TestSessionAffinity:
         cache.async_set_cache.assert_called_once()
         call_kwargs = cache.async_set_cache.call_args.kwargs
         assert call_kwargs["ttl"] == 120
-        assert call_kwargs["value"] == "gpt-4o-mini"
+        assert call_kwargs["value"] == {"model": "gpt-4o-mini", "tier": "SIMPLE"}
 
     @pytest.mark.asyncio
     async def test_ttl_refreshed_on_cache_hit(self, mock_router_instance, basic_config):
@@ -3790,7 +3907,7 @@ class TestSessionAffinity:
         assert result.model == "o1-preview"
         cache.async_set_cache.assert_called_once()
         call_kwargs = cache.async_set_cache.call_args.kwargs
-        assert call_kwargs["value"] == "o1-preview"
+        assert call_kwargs["value"] == {"model": "o1-preview", "tier": "REASONING"}
         assert call_kwargs["ttl"] == 90
 
     @pytest.mark.asyncio
@@ -5460,12 +5577,14 @@ class TestRedactedLoggingDropsPromptText:
             "tier_boundaries": {"simple_medium": 0.15, "medium_complex": 0.35, "complex_reasoning": 0.6},
             "classifier_model": "claude-haiku",
             "escalated": True,
+            "tier_litellm_params": {"reasoning_effort": "xhigh"},
             "signals": ["code (python)"],
             "matched_keyword": "deploy to k8s",
             "escalation_keyword": "LITELLM ESCALATE",
         }
         kept = Router._redact_prompt_text_if_needed(request_kwargs={}, routing_decision=full)
         assert set(full) - set(kept) == {"signals", "matched_keyword", "escalation_keyword"}
+        assert kept["tier_litellm_params"] == {"reasoning_effort": "xhigh"}
 
     @pytest.mark.asyncio
     async def test_redaction_via_request_header_is_honored(self):
@@ -7188,8 +7307,6 @@ class TestClassificationRubrics:
             },
         )
         assert config.classifier_llm_config.system_prompt == "Grade the data sensitivity of the request."
-
-
 def _custom_tier_config(**overrides) -> Dict:
     """A valid operator-defined tier set: two built-in names plus one custom tier."""
     return {
@@ -8038,3 +8155,243 @@ class TestPlanModeTierFloor:
         assert result.model == "gpt-4o"
         assert result.routing_decision is not None
         assert result.routing_decision["tier"] == "MEDIUM"
+def test_tier_model_params_are_normalized_without_changing_model_pools():
+    config = ComplexityRouterConfig(
+        tiers={
+            "SIMPLE": "mini",
+            "REASONING": [
+                {"model_name": "opus", "litellm_params": {"reasoning_effort": "xhigh"}},
+                "abc",
+            ],
+        }
+    )
+
+    assert config.tiers == {"SIMPLE": "mini", "REASONING": ["opus", "abc"]}
+    assert config.tier_model_configs["REASONING"][0].litellm_params == {"reasoning_effort": "xhigh"}
+    rebuilt = ComplexityRouterConfig.model_validate(config.model_dump())
+    assert rebuilt.tier_model_configs["REASONING"][0].litellm_params == {"reasoning_effort": "xhigh"}
+
+
+def test_tier_model_params_accept_a_single_object():
+    config = ComplexityRouterConfig(
+        tiers={"REASONING": {"model_name": "opus", "litellm_params": {"thinking": {"type": "enabled"}}}}
+    )
+
+    assert config.tiers == {"REASONING": "opus"}
+    assert config.tier_model_configs["REASONING"][0].model_name == "opus"
+
+
+@pytest.mark.parametrize(
+    "tiers",
+    [
+        {"REASONING": [{"litellm_params": {"reasoning_effort": "xhigh"}}]},
+    ],
+)
+def test_tier_model_params_reject_malformed_entries(tiers):
+    with pytest.raises(ValidationError):
+        ComplexityRouterConfig(tiers=tiers)
+
+
+def test_tier_model_params_reject_duplicate_models():
+    with pytest.raises(ValidationError, match="duplicate model_name"):
+        ComplexityRouterConfig(
+            tiers={
+                "REASONING": [
+                    {"model_name": "opus", "litellm_params": {"reasoning_effort": "xhigh"}},
+                    {"model_name": "opus", "litellm_params": {"reasoning_effort": "low"}},
+                ]
+            }
+        )
+
+
+def test_non_adaptive_empty_tier_pool_remains_valid():
+    config = ComplexityRouterConfig(tiers={"SIMPLE": []})
+    assert config.tiers == {"SIMPLE": []}
+
+
+def test_adaptive_empty_tier_pool_is_rejected():
+    with pytest.raises(ValidationError, match="adaptive=True"):
+        ComplexityRouterConfig(adaptive=True, tiers={"SIMPLE": []})
+
+
+def test_tier_model_params_are_used_by_pools_and_savings_baseline(mock_router_instance):
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "tiers": {
+                "SIMPLE": "mini",
+                "REASONING": [{"model_name": "opus", "litellm_params": {"reasoning_effort": "xhigh"}}, "abc"],
+            }
+        },
+    )
+
+    assert router._tier_pools() == {"SIMPLE": ["mini"], "REASONING": ["opus", "abc"]}
+    assert router._hardest_tier_models() == ("opus", "abc")
+    assert router._litellm_params_for_model(ComplexityTier.REASONING, "opus") == {"reasoning_effort": "xhigh"}
+
+
+@pytest.mark.asyncio
+async def test_tier_model_params_reach_the_hook_response_and_override_client_values(mock_router_instance):
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "tiers": {
+                "REASONING": {
+                    "model_name": "opus",
+                    "litellm_params": {"reasoning_effort": "xhigh", "max_tokens": 512},
+                }
+            },
+            "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}],
+        },
+    )
+    request_kwargs = {"reasoning_effort": "low", "metadata": {}}
+
+    response = await router.async_pre_routing_hook(
+        model="test-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": "reason carefully about this"}],
+    )
+
+    assert response is not None
+    assert response.litellm_params == {"reasoning_effort": "xhigh", "max_tokens": 512}
+    assert response.routing_decision is not None
+    assert response.routing_decision["tier_litellm_params"] == response.litellm_params
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["classification", "keyword", "session"])
+async def test_tier_params_mask_credentials_in_routing_decision(route, mock_router_instance):
+    params = {"reasoning_effort": "xhigh", "api_key": "secret-tier-key"}
+    config = {
+        "tiers": {
+            tier.value: {"model_name": "opus", "litellm_params": params}
+            for tier in ComplexityTier
+        },
+        "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}]
+        if route == "keyword"
+        else None,
+        "session_affinity": route == "session",
+    }
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config=config,
+    )
+    request_kwargs = {"metadata": {"session_id": "masked-params-session"}}
+    if route == "session":
+        mock_router_instance.cache = DualCache()
+        await mock_router_instance.cache.async_set_cache(
+            key=router._get_session_affinity_cache_key("masked-params-session", request_kwargs),
+            value={"model": "opus", "tier": "REASONING"},
+        )
+    message = "reason carefully about this" if route == "keyword" else "hello"
+
+    response = await router.async_pre_routing_hook(
+        model="test-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": message}],
+    )
+
+    assert response is not None
+    assert response.litellm_params == params
+    assert response.routing_decision is not None
+    assert response.routing_decision["tier_litellm_params"] == {
+        "reasoning_effort": "xhigh",
+        "api_key": "secr*******-key",
+    }
+
+
+@pytest.mark.asyncio
+async def test_session_pin_outside_tiers_does_not_inherit_medium_params(mock_router_instance):
+    mock_router_instance.cache = DualCache()
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "tiers": {
+                "SIMPLE": "mini",
+                "MEDIUM": {"model_name": "medium", "litellm_params": {"reasoning_effort": "low"}},
+            },
+            "session_affinity": True,
+            "default_model": "orphan",
+        },
+    )
+    request_kwargs = {"metadata": {"session_id": "orphan-session"}}
+    await mock_router_instance.cache.async_set_cache(
+        key=router._get_session_affinity_cache_key("orphan-session", request_kwargs),
+        value="orphan",
+    )
+
+    response = await router.async_pre_routing_hook(
+        model="test-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert response is not None
+    assert response.model == "orphan"
+    assert response.litellm_params == {}
+
+
+@pytest.mark.asyncio
+async def test_session_pin_uses_recorded_tier_when_model_is_in_multiple_tiers(mock_router_instance):
+    mock_router_instance.cache = DualCache()
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "tiers": {
+                "SIMPLE": {"model_name": "shared", "litellm_params": {"reasoning_effort": "low"}},
+                "REASONING": {"model_name": "shared", "litellm_params": {"reasoning_effort": "xhigh"}},
+            },
+            "session_affinity": True,
+        },
+    )
+    request_kwargs = {"metadata": {"session_id": "shared-session"}}
+    await mock_router_instance.cache.async_set_cache(
+        key=router._get_session_affinity_cache_key("shared-session", request_kwargs),
+        value={"model": "shared", "tier": "SIMPLE"},
+    )
+
+    response = await router.async_pre_routing_hook(
+        model="test-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert response is not None
+    assert response.litellm_params == {"reasoning_effort": "low"}
+    assert response.routing_decision is not None
+    assert response.routing_decision["tier"] == "SIMPLE"
+
+
+@pytest.mark.asyncio
+async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
+    cache = AsyncMock()
+    cache.async_get_cache = AsyncMock(return_value=["shared", "SIMPLE"])
+    mock_router_instance.cache = cache
+    router = ComplexityRouter(
+        model_name="test-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "tiers": {
+                "SIMPLE": {"model_name": "shared", "litellm_params": {"reasoning_effort": "low"}},
+                "REASONING": {"model_name": "shared", "litellm_params": {"reasoning_effort": "xhigh"}},
+            },
+            "session_affinity": True,
+        },
+    )
+    request_kwargs = {"metadata": {"session_id": "json-round-trip-session"}}
+
+    response = await router.async_pre_routing_hook(
+        model="test-router",
+        request_kwargs=request_kwargs,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert response is not None
+    assert response.model == "shared"
+    assert response.litellm_params == {"reasoning_effort": "low"}
+    assert cache.async_set_cache.call_args.kwargs["value"] == {"model": "shared", "tier": "SIMPLE"}

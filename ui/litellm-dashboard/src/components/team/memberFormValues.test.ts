@@ -133,11 +133,31 @@ describe("buildMemberFormValues", () => {
 });
 
 describe("emptyMemberFormValues", () => {
-  it("unsets every rendered field so a reset clears the form", () => {
+  it("clears every rendered field to the empty value its control understands", () => {
     expect(emptyMemberFormValues(orgConfig)).toStrictEqual({
-      user_email: undefined,
-      user_id: undefined,
-      role: undefined,
+      user_email: "",
+      user_id: "",
+      role: "",
+    });
+  });
+
+  it("clears numeric, duration and multi-select fields to values their controls accept", () => {
+    expect(
+      emptyMemberFormValues({
+        ...orgConfig,
+        additionalFields: [
+          { name: "max_budget_in_team", label: "Budget", type: "numerical" },
+          { name: "budget_duration", label: "Reset", type: "budget-duration" },
+          { name: "allowed_models", label: "Models", type: "multi-select" },
+        ],
+      }),
+    ).toStrictEqual({
+      user_email: "",
+      user_id: "",
+      role: "",
+      max_budget_in_team: null,
+      budget_duration: null,
+      allowed_models: [],
     });
   });
 });

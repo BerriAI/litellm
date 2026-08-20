@@ -16,6 +16,13 @@ describe("SearchSelect", () => {
     expect(screen.getByPlaceholderText("Select Team…")).toBeInTheDocument();
   });
 
+  it("names the field from aria-label so callers can label it independently of the placeholder", () => {
+    render(
+      <SearchSelect options={OPTIONS} onValueChange={vi.fn()} placeholder="Select Team…" aria-label="Default model" />,
+    );
+    expect(screen.getByRole("combobox", { name: "Default model" })).toBeInTheDocument();
+  });
+
   it("shows the selected option's label in the field", () => {
     render(<SearchSelect options={OPTIONS} value="team-2" onValueChange={vi.fn()} />);
     expect(screen.getByRole("combobox")).toHaveValue("Growth");
@@ -67,5 +74,21 @@ describe("SearchSelect", () => {
     await user.click(screen.getByRole("combobox"));
     await user.click(await screen.findByText("Growth"));
     expect(onValueChange).toHaveBeenCalledWith("team-2");
+  });
+
+  it("makes the field non-interactive when disabled", async () => {
+    const onValueChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SearchSelect options={OPTIONS} value="team-1" onValueChange={onValueChange} disabled />);
+
+    const input = screen.getByRole("combobox");
+    expect(input).toBeDisabled();
+
+    await user.click(input);
+    await user.keyboard("Growth");
+
+    expect(input).toHaveValue("Acme Prod");
+    expect(screen.queryByText("Growth")).not.toBeInTheDocument();
+    expect(onValueChange).not.toHaveBeenCalled();
   });
 });
