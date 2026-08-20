@@ -146,13 +146,13 @@ function ChatMessageBubble({
                     const match = /language-(\w+)/.exec(className || "");
                     return !inline && match ? (
                       <SyntaxHighlighter
+                        {...props}
                         style={syntaxTheme}
                         language={match[1]}
                         PreTag="div"
                         className="rounded-md my-2"
                         wrapLines={true}
                         wrapLongLines={true}
-                        {...props}
                       >
                         {String(children).replace(/\n$/, "")}
                       </SyntaxHighlighter>
