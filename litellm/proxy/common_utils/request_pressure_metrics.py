@@ -16,6 +16,7 @@ See LIT-5460 for the enforcement gap itself.
 from __future__ import annotations
 
 from contextvars import ContextVar
+from functools import lru_cache
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
@@ -66,16 +67,27 @@ def is_global_limit_enforced() -> bool:
     return PROXY_HOOKS.get("parallel_request_limiter") is _PROXY_MaxParallelRequestsHandler
 
 
+@lru_cache(maxsize=8)
+def _warn_limit_not_enforced(limit: int) -> None:
+    """Say this once per configured value, not once per settings reload.
+
+    Settings refresh on a timer, so warning per call repeats the same line for
+    the life of the process and drowns out real output. The cached return is
+    what makes it once.
+    """
+    verbose_proxy_logger.warning(
+        "global_max_parallel_requests=%s is set but the active rate limiter does not enforce it, so "
+        "the limit metric reports unbounded. Set LEGACY_MULTI_INSTANCE_RATE_LIMITING=true to enforce it",
+        limit,
+    )
+
+
 def effective_global_limit(limit: int | None) -> float:
     """The ceiling actually applied to this worker's concurrency."""
     if limit is None:
         return UNBOUNDED
     if not is_global_limit_enforced():
-        verbose_proxy_logger.warning(
-            "global_max_parallel_requests=%s is set but the active rate limiter does not enforce it, so the "
-            "limit metric reports unbounded. Set LEGACY_MULTI_INSTANCE_RATE_LIMITING=true to enforce it",
-            limit,
-        )
+        _warn_limit_not_enforced(limit)
         return UNBOUNDED
     return float(limit)
 

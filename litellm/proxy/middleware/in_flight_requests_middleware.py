@@ -101,7 +101,7 @@ def _record_shed_response(status: int) -> None:
     try:
         from litellm.integrations.prometheus import PrometheusLogger
 
-        logger = PrometheusLogger.get_instance()
+        logger: Final = PrometheusLogger.get_instance()
         if logger is not None:
             logger.record_request_shed(status)
     except Exception as e:  # noqa: BLE001  # counting a shed response must not break the response

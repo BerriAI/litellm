@@ -133,3 +133,24 @@ def test_a_lazily_built_logger_publishes_the_ceiling_already_in_force(monkeypatc
 
     assert REGISTRY.get_sample_value("litellm_global_max_parallel_requests_limit") == 7.0
 
+def test_the_inert_limit_warning_is_not_repeated_on_every_reload(monkeypatch, caplog):
+    """Settings reload on a timer, so warning per call would repeat the same line
+    for the life of the process and drown out real output."""
+    import logging
+
+    from litellm.proxy.common_utils import request_pressure_metrics as rpm
+
+    monkeypatch.setattr(rpm, "is_global_limit_enforced", lambda: False)
+    rpm._warn_limit_not_enforced.cache_clear()
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            assert rpm.effective_global_limit(3) == rpm.UNBOUNDED
+        first_round = [r for r in caplog.records if "does not enforce it" in r.getMessage()]
+
+        rpm.effective_global_limit(9)
+        after_change = [r for r in caplog.records if "does not enforce it" in r.getMessage()]
+
+    assert len(first_round) == 1, f"five reloads of the same limit warned {len(first_round)} times"
+    assert len(after_change) == 2, "a changed limit is worth saying again"
+
