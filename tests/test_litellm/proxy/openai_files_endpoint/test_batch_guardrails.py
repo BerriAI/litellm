@@ -160,6 +160,24 @@ async def test_request_metadata_is_narrowed_to_what_guardrails_read():
 
 
 @pytest.mark.asyncio
+async def test_one_record_cannot_leak_a_metadata_write_into_the_next_one():
+    """`headers` and `tags` are nested and shared; an in-place write must not cross records."""
+    seen = []
+
+    def _tamper(data):
+        bag = data["litellm_metadata"]
+        seen.append((dict(bag["headers"]), list(bag["tags"])))
+        bag["headers"]["x-injected"] = "from-record-1"
+        bag["tags"].append("from-record-1")
+
+    metadata = {"guardrails": ["g"], "headers": {"x-real": "yes"}, "tags": ["real"]}
+    await _scan(_jsonl(_record("a"), _record("b")), FakeProxyLogging(_tamper), metadata=metadata)
+
+    assert seen == [({"x-real": "yes"}, ["real"]), ({"x-real": "yes"}, ["real"])]
+    assert metadata == {"guardrails": ["g"], "headers": {"x-real": "yes"}, "tags": ["real"]}
+
+
+@pytest.mark.asyncio
 async def test_records_are_scanned_under_the_headers_the_upload_carried():
     """Guardrails such as noma pick their application from a header, so dropping it changes the policy."""
     seen = []

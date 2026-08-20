@@ -221,7 +221,11 @@ async def _scan_record(
 
     scan_input: Final[dict[str, object]] = copy.deepcopy(body)  # mutable-ok: pre_call_hook mutates the dict it is given
     scan_input.pop("metadata", None)
-    scan_input[_SCAN_METADATA_KEY] = dict(scan_metadata)  # mutable-ok: guardrails write bookkeeping here
+    # Deep, and per record: `headers` and `tags` are nested containers shared with the upload
+    # request and with every other record in the window, and a guardrail that writes into one in
+    # place would otherwise leak across records and back into the request. The narrowing above
+    # already removed the values that cannot be copied.
+    scan_input[_SCAN_METADATA_KEY] = copy.deepcopy(dict(scan_metadata))  # mutable-ok: guardrails write here
 
     # The chain hands back the body it produced, which may be a replacement for the dict it was
     # given rather than that same dict mutated, so this is what gets compared.
