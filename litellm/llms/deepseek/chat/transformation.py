@@ -72,7 +72,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
              (LiteLLM stores provider-specific response fields there).
           2. Otherwise inject a single space — the minimum value the API accepts.
         """
-        result: Final[list[AllMessageValues]] = []
+        result: list[AllMessageValues] = []
+        placeholder_injections = 0
         for msg in messages:
             if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
                 patched = dict(cast(dict, msg))
@@ -84,20 +85,29 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                     cleaned.pop("reasoning_content", None)
                     patched["provider_specific_fields"] = cleaned
                 else:
-                    litellm.verbose_logger.warning(
-                        "DeepSeek thinking mode: assistant message is missing "
-                        "`reasoning_content` and none was saved in "
-                        "`provider_specific_fields`. A single-space placeholder "
-                        "is being injected to satisfy API validation, but the "
-                        "model will receive a blank reasoning chain for this turn, "
-                        "which may silently degrade multi-turn response quality. "
-                        "Preserve `reasoning_content` from the original assistant "
-                        "response when building multi-turn conversation history."
-                    )
+                    placeholder_injections += 1
                     patched["reasoning_content"] = " "
                 result.append(cast(AllMessageValues, patched))
             else:
                 result.append(msg)
+
+        # Emit a single aggregated warning per request instead of one per
+        # affected message. The old per-message warning produced an identical
+        # line for every historical assistant turn (issue #37629): a 6-message
+        # conversation logged 6 copies on every request, drowning out real
+        # errors. Aggregating keeps the diagnostic while reporting the count.
+        if placeholder_injections:
+            litellm.verbose_logger.warning(
+                "DeepSeek thinking mode: %d assistant message(s) were missing "
+                "`reasoning_content` and none was saved in "
+                "`provider_specific_fields`. A single-space placeholder was "
+                "injected for each to satisfy API validation, but the model "
+                "will receive a blank reasoning chain for those turns, which "
+                "may silently degrade multi-turn response quality. Preserve "
+                "`reasoning_content` from the original assistant response when "
+                "building multi-turn conversation history.",
+                placeholder_injections,
+            )
         return result
 
     @overload
