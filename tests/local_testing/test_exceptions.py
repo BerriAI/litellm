@@ -573,7 +573,7 @@ def test_content_policy_violation_error_streaming():
                     num_finish_reason += 1
                     print("finish_reason", chunk["choices"][0].get("finish_reason"))
 
-            pytest.fail(f"Expected to return 400 error In streaming{e}")
+            pytest.fail("Expected a content-policy error in streaming, got a clean stream")
         except Exception as e:
             pass
 
