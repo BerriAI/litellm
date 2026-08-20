@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ast
 import pathlib
 import re
 import sys
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Final
 
 import yaml
 
@@ -117,9 +120,11 @@ def _built_dockerfile_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
 
 
 def _glob_to_regex(token: str, *, subtree: bool) -> re.Pattern[str]:
-    parts = re.split(r"(\*\*/|\*\*|\*|\?)", token)
+    parts = re.split(r"(\*\*/|\*\*|\*|\?|\[[^\]]*\])", token)
     translated = "".join(
-        {"**/": r"(?:.*/)?", "**": r".*", "*": r"[^/]*", "?": r"[^/]"}.get(part, re.escape(part)) for part in parts
+        {"**/": r"(?:.*/)?", "**": r".*", "*": r"[^/]*", "?": r"[^/]"}.get(part)
+        or (part if part.startswith("[") and part.endswith("]") else re.escape(part))
+        for part in parts
     )
     return re.compile(rf"{translated}(?:/.*)?$" if subtree else rf"{translated}$")
 
@@ -185,6 +190,116 @@ def _describe(paths: tuple[str, ...]) -> str:
     names = ", ".join(path.rsplit("/", 1)[1] for path in paths[:3])
     suffix = f", +{len(paths) - 3} more" if len(paths) > 3 else ""
     return f"{len(paths)} test file(s) invoked by no job: {names}{suffix}"
+
+
+GLOB_CALL_RE = re.compile(r'circleci tests glob "([^"]+)"')
+KEYWORD_RE = re.compile(r"-k\s+\\?[\"']([^\"'\\]+)")
+
+
+@dataclass(frozen=True, slots=True)
+class Slice:
+    """One job's selection: the files it globs, narrowed by its `-k` expression."""
+
+    job: str
+    globs: tuple[str, ...]
+    named: frozenset[str]
+    required: tuple[str, ...]
+    excluded: tuple[str, ...]
+    understood: bool
+
+    def claims(self, relative_path: str, inner_names: frozenset[str]) -> bool:
+        if relative_path in self.named:
+            return True
+        if not any(_token_covers(glob, relative_path) for glob in self.globs):
+            return False
+        if not self.understood:
+            return True  # a `-k` this parser cannot model is assumed to claim everything
+        if any(term.lower() in relative_path.lower() for term in self.excluded):
+            return False  # the term is in the path, so every test in the file is deselected
+        return not self.required or any(
+            term.lower() in name.lower() for term in self.required for name in inner_names
+        )
+
+
+def _strings(node: object) -> Iterable[str]:
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _strings(value)
+
+
+def _keyword_terms(expressions: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+    """A `-k` expression as (required, excluded, understood).
+
+    Only flat `and` chains of bare terms are modelled. Anything with `or`, parentheses
+    or negation of a group is left unmodelled, and its job is then treated as claiming
+    every file it globs, so an unparsed selector can never raise a false alarm.
+    """
+    terms: Final = tuple(part.strip() for expression in expressions for part in expression.split(" and "))
+    if any(("or " in term) or ("(" in term) or (term.startswith("not ") and " " in term[4:]) for term in terms):
+        return (), (), False
+    return (
+        tuple(term for term in terms if term and not term.startswith("not ")),
+        tuple(term[4:].strip() for term in terms if term.startswith("not ")),
+        True,
+    )
+
+
+def _slices() -> tuple[Slice, ...]:
+    if not CIRCLECI_CONFIG.exists():
+        return ()
+    jobs: Final = yaml.safe_load(CIRCLECI_CONFIG.read_text()).get("jobs", {})
+    return tuple(
+        Slice(job=job, globs=globs, named=named, required=required, excluded=excluded, understood=understood)
+        for job, body in jobs.items()
+        for text in ("\n".join(_strings(body)),)
+        if "pytest" in text
+        for globs in (tuple(GLOB_CALL_RE.findall(text)),)
+        for named in (frozenset(TEST_TOKEN_RE.findall(text)) & frozenset(_test_files()),)
+        for required, excluded, understood in (_keyword_terms(tuple(KEYWORD_RE.findall(text))),)
+        if globs or named
+    )
+
+
+def _matchable_names(relative_path: str) -> frozenset[str]:
+    """Every name a `-k` term can match for this file: its path, plus the names inside it.
+
+    pytest matches a keyword against an item's own name and each of its parents', so a
+    positive term hits a file when it appears in the path or in a class or function name.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # test files carry stray escapes; their names still parse
+            tree: Final = ast.parse((REPO_ROOT / relative_path).read_text())
+    except (OSError, SyntaxError):
+        return frozenset({relative_path})
+    return frozenset({relative_path}) | frozenset(
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    )
+
+
+def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
+    slices: Final = _slices()
+    globbed: Final = tuple(
+        path
+        for path in _test_files()
+        if any(_token_covers(glob, path) for slice_ in slices for glob in slice_.globs)
+    )
+    return tuple(
+        Finding(
+            subject=path,
+            detail="globbed by a job, then deselected by every one of their -k expressions",
+        )
+        for path in globbed
+        if not allowlist.covers_test(path)
+        and not any(slice_.claims(path, _matchable_names(path)) for slice_ in slices)
+    )
 
 
 def _holds_tests(directory: pathlib.Path) -> bool:
@@ -289,6 +404,21 @@ def _report(title: str, findings: tuple[Finding, ...], remedy: str) -> None:
     _write("")
 
 
+def _check_slices() -> int:
+    findings: Final = _deselected_everywhere(_load_allowlist())
+    if findings:
+        _report(
+            "test files a -k expression removes from every job that globs them",
+            findings,
+            "Give each one a job whose -k keeps it, or list it in "
+            ".github/ci-coverage-allowlist.yml with the reason it may stay unrun.",
+        )
+        return 1
+
+    _write(f"OK: no test file is globbed by a job and then deselected by every -k across {len(_slices())} slices.")
+    return 0
+
+
 def _check_shards() -> int:
     findings = _unassigned_shard_children(_invoked_test_tokens(_all_scalars()))
     if findings:
@@ -308,6 +438,8 @@ def _check_shards() -> int:
 def main() -> int:
     if "--shards" in sys.argv[1:]:
         return _check_shards()
+    if "--slices" in sys.argv[1:]:
+        return _check_slices()
 
     allowlist = _load_allowlist()
     scalars = _all_scalars()
