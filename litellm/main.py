@@ -8589,6 +8589,7 @@ def stream_chunk_builder(
                 or delta.get("audio") is not None
                 or delta.get("images") is not None
                 or delta.get("provider_specific_fields") is not None
+                or delta.get("reasoning_items") is not None
             ):
                 is_simple_text_stream = False
                 break
@@ -8740,6 +8741,22 @@ def stream_chunk_builder(
             for chunk in image_chunks:
                 all_images.extend(chunk["choices"][0]["delta"]["images"])
             response["choices"][0]["message"]["images"] = all_images
+
+        # Reasoning items carry the provider's encrypted reasoning state, which the
+        # Responses API bridge reads back off the assembled assistant message.
+        reasoning_item_chunks: Final = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "reasoning_items" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["reasoning_items"] is not None
+        ]
+
+        if len(reasoning_item_chunks) > 0:
+            all_reasoning_items: Final[list] = []
+            for chunk in reasoning_item_chunks:
+                all_reasoning_items.extend(chunk["choices"][0]["delta"]["reasoning_items"])
+            response["choices"][0]["message"]["reasoning_items"] = all_reasoning_items
 
         # Combine provider_specific_fields from streaming chunks (e.g., web_search_results, citations)
         # See: https://github.com/BerriAI/litellm/issues/17737
