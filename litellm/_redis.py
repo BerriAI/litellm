@@ -648,6 +648,7 @@ def get_redis_async_client(
         for item in redis_kwargs["startup_nodes"]:
             new_startup_nodes.append(ClusterNode(**item))
         cluster_kwargs.pop("startup_nodes", None)
+        cluster_kwargs.pop("redis_connect_func", None)
 
         # Default to a periodic health check + TCP keepalive so a connection silently dropped
         # by a cluster restart (e.g. ElastiCache Serverless maintenance) is revalidated and
