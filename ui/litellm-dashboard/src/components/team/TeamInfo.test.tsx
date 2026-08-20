@@ -1667,6 +1667,21 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(payload.default_team_member_models).toEqual(["gpt-4"]);
   });
 
+  it("sends a null team_member_budget_duration when Default Budget Duration is set to never reset", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    await chooseSelectOption(user, screen.getByLabelText("Default Budget Duration"), "Never resets");
+
+    const payload = await save(user);
+
+    expect(payload.team_member_budget_duration).toBeNull();
+    expect(payload.team_member_budget).toBe(42);
+    expect(JSON.stringify(payload)).toContain('"team_member_budget_duration":null');
+  });
+
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
