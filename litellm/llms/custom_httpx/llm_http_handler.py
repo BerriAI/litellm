@@ -2111,12 +2111,13 @@ class BaseLLMHTTPHandler:
 
         additional_drop_params: Final[list[str]] = litellm_params.get("additional_drop_params") or []
         if additional_drop_params:
-            from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+            from litellm.litellm_core_utils.dot_notation_indexing import apply_additional_drop_params
 
-            for path in additional_drop_params:
-                anthropic_messages_optional_request_params = delete_nested_value(
-                    anthropic_messages_optional_request_params, path
+            anthropic_messages_optional_request_params = (
+                apply_additional_drop_params(  # rebind-ok: drop returns a new params dict
+                    anthropic_messages_optional_request_params, additional_drop_params
                 )
+            )
 
         # Prepare request body
         request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(

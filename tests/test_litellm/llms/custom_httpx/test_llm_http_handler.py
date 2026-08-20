@@ -895,7 +895,8 @@ async def test_async_anthropic_messages_handler_drops_top_level_and_nested_param
 
     def capture_transform(*args, **kwargs):
         captured["optional_params"] = kwargs["anthropic_messages_optional_request_params"]
-        return {"model": "claude-opus-4-7", "messages": []}
+        captured["messages"] = kwargs["messages"]
+        return {"model": "claude-opus-4-7", "messages": kwargs["messages"]}
 
     mock_config.transform_anthropic_messages_request = capture_transform
 
@@ -923,6 +924,17 @@ async def test_async_anthropic_messages_handler_drops_top_level_and_nested_param
         "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
         "metadata": {"user_id": "u1", "drop_me": "x"},
     }
+    history_messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "keep me", "signature": "sig"},
+                {"type": "text", "text": "4"},
+            ],
+        },
+        {"role": "user", "content": "And 3+3?"},
+    ]
 
     with patch(
         "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers"
@@ -931,7 +943,7 @@ async def test_async_anthropic_messages_handler_drops_top_level_and_nested_param
         try:
             await handler.async_anthropic_messages_handler(
                 model="claude-opus-4-7",
-                messages=[{"role": "user", "content": "Hello"}],
+                messages=history_messages,
                 anthropic_messages_provider_config=mock_config,
                 anthropic_messages_optional_request_params=optional_params,
                 custom_llm_provider="bedrock",
@@ -953,6 +965,8 @@ async def test_async_anthropic_messages_handler_drops_top_level_and_nested_param
     assert "context_management" not in transformed
     assert transformed["max_tokens"] == 1024
     assert transformed["metadata"] == {"user_id": "u1"}
+    # Bare "thinking" must not blank conversation-history thinking blocks.
+    assert captured["messages"][1]["content"][0]["thinking"] == "keep me"
 
 
 def test_google_genai_streaming_hidden_params_model_info_and_router_fallback():

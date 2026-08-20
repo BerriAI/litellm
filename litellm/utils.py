@@ -268,6 +268,7 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
     from litellm.litellm_core_utils.dot_notation_indexing import (
+        apply_additional_drop_params,
         delete_nested_value,
         is_nested_path,
     )
@@ -4522,13 +4523,13 @@ def get_optional_params(
         allowed_openai_params=allowed_openai_params,
     )
 
-    # Apply nested drops from additional_drop_params
+    # Apply additional_drop_params. Bare keys stay top-level only; nested JSONPath
+    # still deletes at the explicit path. Conversation payload keys are not walked.
     if additional_drop_params:
-        is_nested_path: Final = getattr(sys.modules[__name__], "is_nested_path")
-        delete_nested_value: Final = getattr(sys.modules[__name__], "delete_nested_value")
-        nested_paths: Final = [p for p in additional_drop_params if is_nested_path(p)]
-        for path in nested_paths:
-            optional_params = delete_nested_value(optional_params, path)
+        apply_additional_drop_params_fn: Final = getattr(sys.modules[__name__], "apply_additional_drop_params")
+        optional_params = apply_additional_drop_params_fn(  # rebind-ok: drop returns a new params dict
+            optional_params, additional_drop_params
+        )
 
     return optional_params
 

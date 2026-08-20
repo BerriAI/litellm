@@ -394,6 +394,7 @@ UTILS_MODULE_NAMES: Final = (
     "process_response_headers",
     "delete_nested_value",
     "is_nested_path",
+    "apply_additional_drop_params",
     "_get_base_model_from_litellm_call_metadata",
     "get_litellm_params",
     "_ensure_extra_body_is_safe",
@@ -1353,6 +1354,10 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     "is_nested_path": (
         "litellm.litellm_core_utils.dot_notation_indexing",
         "is_nested_path",
+    ),
+    "apply_additional_drop_params": (
+        "litellm.litellm_core_utils.dot_notation_indexing",
+        "apply_additional_drop_params",
     ),
     "_get_base_model_from_litellm_call_metadata": (
         "litellm.litellm_core_utils.get_litellm_params",
