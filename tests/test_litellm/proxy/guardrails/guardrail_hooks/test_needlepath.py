@@ -13,6 +13,7 @@ Tests cover:
   the messages come back byte-identical.
 """
 
+import asyncio
 import copy
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +21,8 @@ import httpx
 import pytest
 
 from litellm.proxy.guardrails.guardrail_hooks.needlepath.needlepath import (
+    _MAX_CONCURRENT_SELECTIONS,
+    _MAX_TARGETS_PER_REQUEST,
     DEFAULT_MAX_CONTEXT_TOKENS,
     DEFAULT_MIN_CHARS_TO_SELECT,
     DEFAULT_OPERATING_POINT,
@@ -395,3 +398,68 @@ async def test_one_message_declining_does_not_block_another():
     assert out[TOOL_INDEX]["content"] == SELECTED_BLOCK
     # The system message stood down, so it is byte-identical.
     assert out[0] == AGENT_MESSAGES[0]
+
+
+# ── fan-out bounds ────────────────────────────────────────────────────
+
+
+def _many_tool_messages(count: int) -> list:
+    """A user question plus `count` eligible tool outputs of strictly increasing size."""
+    messages = [{"role": "user", "content": USER_QUESTION}]
+    for i in range(count):
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": f"call_{i}",
+                # All above the min-chars threshold; index i is the (i+1)-th smallest.
+                "content": "a" * (DEFAULT_MIN_CHARS_TO_SELECT + 20 + i),
+            }
+        )
+    return messages
+
+
+@pytest.mark.asyncio
+async def test_target_cap_selects_only_the_largest_messages(guardrail: NeedlepathGuardrail):
+    """Past the per-request cap, only the largest messages are selected.
+
+    The smallest overflow messages come back byte-identical and no service
+    call is made for them.
+    """
+    overflow = 4
+    messages = _many_tool_messages(_MAX_TARGETS_PER_REQUEST + overflow)
+
+    post = AsyncMock(return_value=_select_response())
+    result = await _run(guardrail, post, messages=messages)
+
+    assert post.await_count == _MAX_TARGETS_PER_REQUEST
+    out = result["structured_messages"]
+    # Tool messages start at index 1 and grow with index: the first `overflow`
+    # are the smallest, so they are the ones left untouched.
+    for idx in range(1, 1 + overflow):
+        assert out[idx] == messages[idx]
+    for idx in range(1 + overflow, len(messages)):
+        assert out[idx]["content"] == SELECTED_BLOCK
+
+
+@pytest.mark.asyncio
+async def test_concurrent_selections_are_bounded(guardrail: NeedlepathGuardrail):
+    """No more than _MAX_CONCURRENT_SELECTIONS service calls are in flight at once."""
+    in_flight = 0
+    high_water = 0
+
+    async def _tracking_post(*args, **kwargs):
+        nonlocal in_flight, high_water
+        in_flight += 1
+        high_water = max(high_water, in_flight)
+        # Yield twice so every scheduled call gets a chance to start before
+        # this one finishes; without the semaphore all of them would overlap.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        in_flight -= 1
+        return _select_response()
+
+    messages = _many_tool_messages(_MAX_TARGETS_PER_REQUEST)
+    result = await _run(guardrail, _tracking_post, messages=messages)
+
+    assert high_water <= _MAX_CONCURRENT_SELECTIONS
+    assert all(m["content"] == SELECTED_BLOCK for m in result["structured_messages"][1:])

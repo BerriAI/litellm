@@ -72,6 +72,16 @@ DEFAULT_MIN_CHARS_TO_SELECT: Final = 500
 # to hold an inbound LLM request behind an optional optimisation. A stall past
 # this bound is a decline, and the original message is forwarded.
 _SELECT_TIMEOUT_SECONDS: Final = 30.0
+# A single proxy request can carry arbitrarily many eligible messages, and each
+# one becomes an outbound selection call. These two bounds keep a pathological
+# request (say, thousands of minimally qualifying tool outputs) from
+# monopolising the proxy's shared HTTP pool or burning selection quota: at most
+# _MAX_TARGETS_PER_REQUEST messages are selected per request -- the largest
+# first, where selection pays off most -- and at most
+# _MAX_CONCURRENT_SELECTIONS calls are in flight at once. Messages past the
+# cap are forwarded untouched, the same fail-open outcome as any decline.
+_MAX_TARGETS_PER_REQUEST: Final = 16
+_MAX_CONCURRENT_SELECTIONS: Final = 4
 # The service reports a deliberate no-op through the gate. Any reason under this
 # prefix means "the engine chose not to select"; the original content is what
 # the caller should send.
@@ -516,31 +526,56 @@ class NeedlepathGuardrail(CustomGuardrail):
         # One (idx, query) pair per eligible message whose query is non-blank.
         # Selection is conditioned on a query; without one there is nothing to
         # select against, so that message is left exactly as it arrived.
-        selected_pairs: Final = tuple(
+        eligible_pairs: Final = tuple(
             (idx, query)
             for idx in self._select_targets(messages, query_idx)
             if (query := _query_for_target(messages, idx, fallback_query)).strip()
         )
-        if not selected_pairs:
+        if not eligible_pairs:
             verbose_proxy_logger.debug("Needlepath: no messages eligible for selection")
             return inputs
 
-        start_time: Final = time.monotonic()
-        # One request per message: each carries its own query, and the service
-        # renders one block per call. Running them concurrently keeps the added
-        # latency at roughly one round trip rather than one per message.
-        selections: Final = await asyncio.gather(
-            *(
-                self._selected_text(
+        # Cap the fan-out: the largest messages are kept because that is where
+        # selection saves the most, and the choice must not depend on message
+        # order in the request. Everything past the cap is forwarded untouched.
+        selected_pairs: Final = (
+            eligible_pairs
+            if len(eligible_pairs) <= _MAX_TARGETS_PER_REQUEST
+            else tuple(
+                sorted(
+                    eligible_pairs,
+                    key=lambda pair: len(content_to_text(messages[pair[0]].get("content"))),
+                    reverse=True,
+                )[:_MAX_TARGETS_PER_REQUEST]
+            )
+        )
+        if len(selected_pairs) < len(eligible_pairs):
+            verbose_proxy_logger.debug(
+                "Needlepath: %d eligible messages, selecting only the %d largest",
+                len(eligible_pairs),
+                _MAX_TARGETS_PER_REQUEST,
+            )
+
+        semaphore: Final = asyncio.Semaphore(_MAX_CONCURRENT_SELECTIONS)
+
+        async def _bounded_selected_text(idx: int, query: str) -> str | None:
+            # The semaphore bounds how many selection calls this one proxy
+            # request holds open at a time; see _MAX_CONCURRENT_SELECTIONS.
+            async with semaphore:
+                return await self._selected_text(
                     text=content_to_text(messages[idx].get("content")),
                     query=query,
                     title=_title_for(messages, idx),
                     source=messages[idx].get("tool_call_id"),
                     kind=_record_kind(messages[idx].get("role")),
                 )
-                for idx, query in selected_pairs
-            )
-        )
+
+        start_time: Final = time.monotonic()
+        # One request per message: each carries its own query, and the service
+        # renders one block per call. Running them concurrently (up to the
+        # semaphore's bound) keeps the added latency near one round trip
+        # rather than one per message.
+        selections: Final = await asyncio.gather(*(_bounded_selected_text(idx, query) for idx, query in selected_pairs))
         end_time: Final = time.monotonic()
 
         # Needs in-place index assignment below to build the edited copy without
