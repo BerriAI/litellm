@@ -231,8 +231,23 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Unlimited Budget")).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeInTheDocument();
     });
+  });
+
+  it("should check unlimited budget when clicking its visible text", async () => {
+    renderWithProviders(<UserEditView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("spinbutton", { name: /max budget/i })).toBeEnabled();
+    });
+
+    await userEvent.click(screen.getByText("Unlimited Budget"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeChecked();
+    });
+    expect(screen.getByRole("spinbutton", { name: /max budget/i })).toBeDisabled();
   });
 
   it("should set unlimited budget checkbox when max_budget is null", async () => {
@@ -247,7 +262,7 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithNullBudget} />);
 
     await waitFor(() => {
-      const checkbox = screen.getByLabelText("Unlimited Budget");
+      const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
       expect(checkbox).toBeChecked();
     });
   });
@@ -282,10 +297,10 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Unlimited Budget")).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeInTheDocument();
     });
 
-    const checkbox = screen.getByLabelText("Unlimited Budget");
+    const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
     await userEvent.click(checkbox);
 
     await waitFor(() => {
@@ -400,7 +415,7 @@ describe("UserEditView", () => {
     const budgetInput = screen.getByRole("spinbutton", { name: /max budget/i });
     await userEvent.clear(budgetInput);
 
-    const checkbox = screen.getByLabelText("Unlimited Budget");
+    const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
     expect(checkbox).not.toBeChecked();
 
     const submitButton = screen.getByRole("button", { name: /save changes/i });
@@ -416,10 +431,10 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmitMock} />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Unlimited Budget")).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeInTheDocument();
     });
 
-    const checkbox = screen.getByLabelText("Unlimited Budget");
+    const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
     await userEvent.click(checkbox);
 
     await waitFor(() => {
@@ -494,7 +509,7 @@ describe("UserEditView", () => {
     renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithUndefinedBudget} />);
 
     await waitFor(() => {
-      const checkbox = screen.getByLabelText("Unlimited Budget");
+      const checkbox = screen.getByRole("checkbox", { name: "Unlimited Budget" });
       expect(checkbox).toBeChecked();
     });
   });

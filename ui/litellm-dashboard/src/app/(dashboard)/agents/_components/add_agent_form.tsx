@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Select, Steps, Tag } from "antd";
+import { Select, Steps, Tag } from "antd";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined } from "@ant-design/icons";
+import { Bot, CircleCheck, Key, LayoutGrid } from "lucide-react";
 import CreatedKeyDisplay from "@/components/shared/CreatedKeyDisplay";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -49,6 +49,7 @@ import {
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const { Step } = Steps;
 
@@ -706,7 +707,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                   }`}
                   onClick={() => handleAgentTypeChange(CUSTOM_AGENT_TYPE)}
                 >
-                  <AppstoreOutlined className="text-lg text-amber-600 dark:text-amber-400" />
+                  <LayoutGrid className="size-4.5 text-amber-600 dark:text-amber-400" />
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-amber-700 dark:text-amber-400">Custom / Other</span>
@@ -845,7 +846,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       <div>
         {/* Agent name chip */}
         <div className="mb-6 flex justify-center">
-          <Tag icon={<RobotOutlined />} color="purple" className="px-3 py-1 text-sm">
+          <Tag color="purple" className="inline-flex items-center gap-1.5 px-3 py-1 text-sm">
+            <Bot className="size-3.5" />
             {agentName}
           </Tag>
         </div>
@@ -883,7 +885,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                 <RadioGroupItem value="create_new" aria-label="Create a new key for this agent" />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <KeyOutlined className="text-indigo-600 dark:text-indigo-400" />
+                    <Key className="size-4 text-indigo-600 dark:text-indigo-400" />
                     <span className="font-medium text-foreground">Create a new key for this agent</span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">A dedicated key scoped to this agent.</p>
@@ -919,7 +921,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
               <RadioGroupItem value="existing_key" aria-label="Assign an existing key" />
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <KeyOutlined className="text-muted-foreground" />
+                  <Key className="size-4 text-muted-foreground" />
                   <span className="font-medium text-foreground">Assign an existing key</span>
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">Re-assign a key you already have to this agent.</p>
@@ -957,10 +959,11 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const renderReadyStep = () => (
     <div className="py-6 text-center">
-      <CheckCircleFilled className="mb-4 text-5xl text-green-500" style={{ fontSize: 48 }} />
+      <CircleCheck className="mb-4 size-12 text-green-500" />
       <h3 className="mb-2 text-xl font-semibold text-foreground">Agent Created!</h3>
       <div className="mb-4 flex justify-center">
-        <Tag icon={<RobotOutlined />} color="purple" className="px-3 py-1 text-sm">
+        <Tag color="purple" className="inline-flex items-center gap-1.5 px-3 py-1 text-sm">
+          <Bot className="size-3.5" />
           {createdAgentName}
         </Tag>
       </div>
@@ -983,72 +986,64 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
   );
 
   return (
-    <Modal
-      title={
-        <div className="flex items-center space-x-3 border-b border-border pb-4">
-          {selectedLogo && currentStep < 1 && (
-            <Logo src={selectedLogo} label="Agent" className="h-6 w-6 object-contain" />
-          )}
-          <h2 className="text-xl font-semibold text-foreground">Add New Agent</h2>
-        </div>
-      }
-      open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={900}
-      className="top-8"
-      styles={{
-        body: { padding: "24px" },
-        header: { padding: "24px 24px 0 24px", border: "none" },
-      }}
-    >
-      <TooltipProvider>
-        <div className="mt-4">
-          <Steps current={currentStep} size="small" className="mb-8">
-            <Step title="Configure" />
-            <Step title="Entitlements" />
-            <Step title="Governance" />
-            <Step title="Agent Management" />
-            <Step title="Ready" />
-          </Steps>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[900px]">
+        <DialogHeader>
+          <div className="flex items-center space-x-3 border-b border-border pb-4">
+            {selectedLogo && currentStep < 1 && (
+              <Logo src={selectedLogo} label="Agent" className="h-6 w-6 object-contain" />
+            )}
+            <DialogTitle className="text-xl font-semibold text-foreground">Add New Agent</DialogTitle>
+          </div>
+        </DialogHeader>
+        <TooltipProvider>
+          <div className="mt-4">
+            <Steps current={currentStep} size="small" className="mb-8">
+              <Step title="Configure" />
+              <Step title="Entitlements" />
+              <Step title="Governance" />
+              <Step title="Agent Management" />
+              <Step title="Ready" />
+            </Steps>
 
-          <FormProvider {...form}>
-            <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
-              {currentStep === 0 && renderConfigureStep()}
-              {currentStep === 1 && renderEntitlementsStep()}
-              {currentStep === 2 && renderObservabilityStep()}
-              {currentStep === 3 && renderAssignKeyStep()}
-              {currentStep === 4 && renderReadyStep()}
-            </form>
-          </FormProvider>
+            <FormProvider {...form}>
+              <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
+                {currentStep === 0 && renderConfigureStep()}
+                {currentStep === 1 && renderEntitlementsStep()}
+                {currentStep === 2 && renderObservabilityStep()}
+                {currentStep === 3 && renderAssignKeyStep()}
+                {currentStep === 4 && renderReadyStep()}
+              </form>
+            </FormProvider>
 
-          <div className="mt-6 flex items-center justify-between border-t border-border pt-6">
-            <div>
-              {currentStep > 0 && currentStep < 4 && (
-                <Button type="button" variant="outline" onClick={handleBack}>
-                  ← Back
-                </Button>
-              )}
-            </div>
-            <div className="flex gap-3">
-              {currentStep < 4 && (
-                <Button variant="secondary" onClick={handleClose}>
-                  Cancel
-                </Button>
-              )}
-              {currentStep < 3 && <Button onClick={handleNext}>Next →</Button>}
-              {currentStep === 3 && (
-                <Button disabled={isSubmitting} aria-busy={isSubmitting} onClick={handleCreateAgent}>
-                  {isSubmitting && <UiLoadingSpinner className="size-4" />}
-                  {isSubmitting ? "Creating..." : "Create Agent →"}
-                </Button>
-              )}
-              {currentStep === 4 && <Button onClick={handleClose}>Done</Button>}
+            <div className="mt-6 flex items-center justify-between border-t border-border pt-6">
+              <div>
+                {currentStep > 0 && currentStep < 4 && (
+                  <Button type="button" variant="outline" onClick={handleBack}>
+                    ← Back
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-3">
+                {currentStep < 4 && (
+                  <Button variant="secondary" onClick={handleClose}>
+                    Cancel
+                  </Button>
+                )}
+                {currentStep < 3 && <Button onClick={handleNext}>Next →</Button>}
+                {currentStep === 3 && (
+                  <Button disabled={isSubmitting} aria-busy={isSubmitting} onClick={handleCreateAgent}>
+                    {isSubmitting && <UiLoadingSpinner className="size-4" />}
+                    {isSubmitting ? "Creating..." : "Create Agent →"}
+                  </Button>
+                )}
+                {currentStep === 4 && <Button onClick={handleClose}>Done</Button>}
+              </div>
             </div>
           </div>
-        </div>
-      </TooltipProvider>
-    </Modal>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

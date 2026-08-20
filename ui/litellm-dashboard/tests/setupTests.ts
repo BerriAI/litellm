@@ -113,7 +113,26 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   }),
 }));
 
-afterEach(cleanup);
+// Unmounting a Base UI dialog that is still open leaves its scroll lock behind: the <html>
+// and <body> inline styles and the marker attribute survive cleanup() and make every later
+// test in the file see a locked page, where popups compute pointer-events: none and clicks
+// silently do nothing. Real users never unmount an open dialog, so undo it here.
+const releaseBaseUiScrollLock = () => {
+  const root = document.documentElement;
+  if (!root.hasAttribute("data-base-ui-scroll-locked")) return;
+  root.removeAttribute("data-base-ui-scroll-locked");
+  for (const property of ["scrollbar-gutter", "overflow-y", "overflow-x", "scroll-behavior"]) {
+    root.style.removeProperty(property);
+  }
+  for (const property of ["position", "height", "width", "box-sizing", "overflow", "scroll-behavior"]) {
+    document.body.style.removeProperty(property);
+  }
+};
+
+afterEach(() => {
+  cleanup();
+  releaseBaseUiScrollLock();
+});
 
 // Make toLocaleString deterministic in tests; individual tests can override
 // This returns ISO-like strings to keep assertions stable.

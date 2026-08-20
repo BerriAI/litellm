@@ -60,6 +60,9 @@ jobs:
     name: Run tests
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout-minutes }}
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       decision: ${{ steps.changes.outputs.decision }}
 

@@ -1,9 +1,8 @@
 import React, { useEffect } from "react";
 import { Select, Tooltip, Collapse, Input, Space, Switch } from "antd";
-import { TriangleAlert } from "lucide-react";
+import { CircleMinus, Info, Plus, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
-import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
 import { MCPServer, AUTH_TYPE } from "@/components/mcp_tools/types";
 import {
@@ -74,14 +73,14 @@ const StaticHeadersFieldArray: React.FC = () => {
               />
             )}
           </MountedFormField>
-          <MinusCircleOutlined
+          <CircleMinus
             onClick={() => remove(index)}
-            className="text-gray-500 hover:text-red-500 cursor-pointer"
+            className="size-4 text-gray-500 hover:text-red-500 cursor-pointer"
           />
         </Space>
       ))}
       <Button variant="outline" className="w-full border-dashed" onClick={() => append({})}>
-        <PlusOutlined />
+        <Plus />
         Add Static Header
       </Button>
     </div>
@@ -196,7 +195,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 Allow All LiteLLM Keys
                 <Tooltip title="When enabled, every API key can access this MCP server.">
-                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
               <p className="text-sm text-gray-600 mt-1">
@@ -213,7 +212,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 Internal network only
                 <Tooltip title="When on, only requests from within your internal network are accepted. Turn off to allow external clients (other clusters, ChatGPT, etc). API key authentication is always required regardless of this setting.">
-                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
               <p className="text-sm text-gray-600 mt-1">
@@ -231,7 +230,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   Delegate auth to upstream (PKCE passthrough)
                   <Tooltip title="When on, LiteLLM skips its own API key/SSO check for this server and lets the client complete PKCE directly with the upstream MCP server. Only honored when Auth Type is oauth2. No spend tracking or per-key rate limiting will run on this route.">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
                 <p className="text-sm text-gray-600 mt-1">
@@ -254,7 +253,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   OAuth pass-through
                   <Tooltip title="When on, this server is treated as an OAuth pass-through: the gateway proxies the upstream /.well-known/oauth-protected-resource metadata, emits spec-compliant 401 challenges when no bearer is supplied, and propagates upstream 401/403 responses. Only honored when Auth Type is None and 'Authorization' is in Extra Headers.">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
                 <p className="text-sm text-gray-600 mt-1">
@@ -289,7 +288,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 MCP Access Groups
                 <Tooltip title="Specify access groups for this MCP server. Users must be in at least one of these groups to access the server.">
-                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
             }
@@ -318,7 +317,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 Extra Headers
                 <Tooltip title="Forward custom headers from incoming requests to this MCP server (e.g., Authorization, X-Custom-Header, User-Agent)">
-                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
                 {mcpServer?.extra_headers && mcpServer.extra_headers.length > 0 && (
                   <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
@@ -351,7 +350,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
               <span className="text-sm font-medium text-gray-700 flex items-center">
                 Static Headers
                 <Tooltip title="Send these key-value headers with every request to this MCP server.">
-                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
             </FieldLabel>
