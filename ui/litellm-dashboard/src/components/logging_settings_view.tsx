@@ -60,8 +60,8 @@ export function LoggingSettingsView({
       {/* Logging Integrations Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <CogIcon className="h-4 w-4 text-blue-600" />
-          <span className="font-semibold text-gray-900">Logging Integrations</span>
+          <CogIcon className="h-4 w-4 text-info" />
+          <span className="font-semibold text-foreground">Logging Integrations</span>
           <Badge variant="secondary">{loggingConfigs.length}</Badge>
         </div>
 
@@ -73,7 +73,7 @@ export function LoggingSettingsView({
               return (
                 <div
                   key={index}
-                  className="flex items-center justify-between p-3 rounded-lg bg-blue-50 border border-blue-200"
+                  className="flex items-center justify-between p-3 rounded-lg bg-info/10 border border-info/20"
                 >
                   <div className="flex items-center gap-3">
                     <Logo
@@ -82,8 +82,8 @@ export function LoggingSettingsView({
                       className="w-5 h-5 object-contain"
                     />
                     <div>
-                      <span className="block font-medium text-blue-800">{displayName}</span>
-                      <span className="block text-xs text-blue-600">
+                      <span className="block font-medium text-info">{displayName}</span>
+                      <span className="block text-xs text-info">
                         {Object.keys(config.callback_vars).length} parameters configured
                       </span>
                     </div>
@@ -96,9 +96,9 @@ export function LoggingSettingsView({
             })}
           </div>
         ) : (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
-            <CogIcon className="h-4 w-4 text-gray-400" />
-            <span className="text-gray-500 text-sm">No logging integrations configured</span>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
+            <CogIcon className="h-4 w-4 text-muted-foreground" />
+            <span className="text-muted-foreground text-sm">No logging integrations configured</span>
           </div>
         )}
       </div>
@@ -106,8 +106,8 @@ export function LoggingSettingsView({
       {/* Disabled Callbacks Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <BanIcon className="h-4 w-4 text-red-600" />
-          <span className="font-semibold text-gray-900">Disabled Callbacks</span>
+          <BanIcon className="h-4 w-4 text-destructive" />
+          <span className="font-semibold text-foreground">Disabled Callbacks</span>
           <Badge variant="destructive">{disabledCallbacks.length}</Badge>
         </div>
 
@@ -120,7 +120,7 @@ export function LoggingSettingsView({
               return (
                 <div
                   key={index}
-                  className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-200"
+                  className="flex items-center justify-between p-3 rounded-lg bg-destructive/10 border border-destructive/20"
                 >
                   <div className="flex items-center gap-3">
                     <Logo
@@ -129,8 +129,8 @@ export function LoggingSettingsView({
                       className="w-5 h-5 object-contain"
                     />
                     <div>
-                      <span className="block font-medium text-red-800">{displayName}</span>
-                      <span className="block text-xs text-red-600">Disabled for this key</span>
+                      <span className="block font-medium text-destructive">{displayName}</span>
+                      <span className="block text-xs text-destructive">Disabled for this key</span>
                     </div>
                   </div>
                   <Badge variant="destructive">Disabled</Badge>
@@ -139,9 +139,9 @@ export function LoggingSettingsView({
             })}
           </div>
         ) : (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
-            <BanIcon className="h-4 w-4 text-gray-400" />
-            <span className="text-gray-500 text-sm">No callbacks disabled</span>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
+            <BanIcon className="h-4 w-4 text-muted-foreground" />
+            <span className="text-muted-foreground text-sm">No callbacks disabled</span>
           </div>
         )}
       </div>
@@ -150,11 +150,11 @@ export function LoggingSettingsView({
 
   if (variant === "card") {
     return (
-      <div className={`bg-white border border-gray-200 rounded-lg p-6 ${className}`}>
+      <div className={`bg-card border border-border rounded-lg p-6 ${className}`}>
         <div className="flex items-center gap-2 mb-6">
           <div>
-            <span className="block font-semibold text-gray-900">Logging Settings</span>
-            <span className="block text-xs text-gray-500">
+            <span className="block font-semibold text-foreground">Logging Settings</span>
+            <span className="block text-xs text-muted-foreground">
               Active logging integrations and disabled callbacks for this key
             </span>
           </div>
@@ -166,7 +166,7 @@ export function LoggingSettingsView({
 
   return (
     <div className={`${className}`}>
-      <span className="block font-medium text-gray-900 mb-3">Logging Settings</span>
+      <span className="block font-medium text-foreground mb-3">Logging Settings</span>
       {content}
     </div>
   );

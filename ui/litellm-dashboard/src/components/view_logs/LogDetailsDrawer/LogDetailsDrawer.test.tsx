@@ -153,7 +153,7 @@ describe("LogDetailsDrawer session sidebar auto-router icon", () => {
   it("marks the auto-routed entry with the router icon and leaves a direct call on the default icon", async () => {
     renderRoutedSession();
 
-    await waitFor(() => expect(screen.queryByText("claude-opus-4-8")).not.toBeNull());
+    expect(await screen.findByText("claude-opus-4-8")).toBeInTheDocument();
 
     const routedRow = rowFor("claude-opus-4-8");
     const directRow = rowFor("claude-haiku-4-5");

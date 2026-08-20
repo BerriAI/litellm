@@ -6,12 +6,15 @@
 import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
+import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
 import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { useBudgetList, useDeleteBudget, budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import BudgetModal from "./budget_modal";
 import BudgetTable from "./BudgetTable";
@@ -25,6 +28,7 @@ interface BudgetSettingsPageProps {
 }
 
 const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
+  const syntaxTheme = useSyntaxTheme(prism);
   const [isCreateModelVisible, setIsCreateModelVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
@@ -60,14 +64,10 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
     }
     try {
       await deleteBudget.mutateAsync(selectedBudget.budget_id);
-      NotificationsManager.success("Budget deleted.");
+      toast.success("Budget deleted.");
     } catch (error) {
       console.error("Error deleting budget:", error);
-      if (typeof NotificationsManager.fromBackend === "function") {
-        NotificationsManager.fromBackend("Failed to delete budget");
-      } else {
-        NotificationsManager.info("Failed to delete budget");
-      }
+      toast.fromError("Failed to delete budget");
     } finally {
       setIsDeleteModalVisible(false);
       setSelectedBudget(null);
@@ -80,7 +80,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
   return (
     <div className="flex h-full flex-col gap-4 p-6 px-12">
-      <PageHeader
+      <LegacyPageHeader
         icon={<Wallet className="size-5" />}
         title="Budgets"
         subtitle="Spend, TPM and RPM limits you can assign to customers."
@@ -105,7 +105,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             </TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col">
+        <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
           <div className="flex min-h-0 flex-1 flex-col pt-6">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
             {selectedBudget && (
@@ -138,7 +138,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             />
           </div>
         </TabsContent>
-        <TabsContent value="examples" className="min-h-0 flex-1 overflow-y-auto">
+        <TabsContent value="examples" className="min-h-0 flex-1 overflow-y-auto" keepMounted>
           <div className="pt-6">
             <p className="text-base text-muted-foreground">How to use budget id</p>
             <Tabs defaultValue="assign-budget">
@@ -153,14 +153,20 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                   Test it (OpenAI SDK)
                 </TabsTrigger>
               </TabsList>
-              <TabsContent value="assign-budget">
-                <SyntaxHighlighter language="bash">{CREATE_END_USER_CURL_COMMAND}</SyntaxHighlighter>
+              <TabsContent value="assign-budget" keepMounted>
+                <SyntaxHighlighter language="bash" style={syntaxTheme}>
+                  {CREATE_END_USER_CURL_COMMAND}
+                </SyntaxHighlighter>
               </TabsContent>
-              <TabsContent value="curl">
-                <SyntaxHighlighter language="bash">{CHAT_COMPLETIONS_CURL_COMMAND}</SyntaxHighlighter>
+              <TabsContent value="curl" keepMounted>
+                <SyntaxHighlighter language="bash" style={syntaxTheme}>
+                  {CHAT_COMPLETIONS_CURL_COMMAND}
+                </SyntaxHighlighter>
               </TabsContent>
-              <TabsContent value="openai-sdk">
-                <SyntaxHighlighter language="python">{OPENAI_SDK_PYTHON_CODE}</SyntaxHighlighter>
+              <TabsContent value="openai-sdk" keepMounted>
+                <SyntaxHighlighter language="python" style={syntaxTheme}>
+                  {OPENAI_SDK_PYTHON_CODE}
+                </SyntaxHighlighter>
               </TabsContent>
             </Tabs>
           </div>

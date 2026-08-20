@@ -1664,7 +1664,7 @@ class TestAuthCallbackRouting:
             key_id = cli_state.split(":", 1)[1]
             assert key_id == "cli-test1234567890"
         else:
-            assert False, "CLI state should have been detected"
+            pytest.fail("CLI state should have been detected")
 
     def test_non_cli_state_routing(self):
         """Test that non-CLI states don't trigger CLI routing"""
@@ -3266,7 +3266,7 @@ class TestCLIKeyRegenerationFlow:
         too, otherwise alias lookup at request time is a substring match on a string.
         """
         from litellm.proxy.management_endpoints.ui_sso import (
-            _fetch_cli_sso_team_details,
+            fetch_cli_sso_team_details,
         )
 
         team_row = MagicMock()
@@ -3285,7 +3285,7 @@ class TestCLIKeyRegenerationFlow:
         prisma_client = MagicMock()
         prisma_client.db.litellm_teamtable.find_many = find_many
 
-        details = await _fetch_cli_sso_team_details(
+        details = await fetch_cli_sso_team_details(
             prisma_client=prisma_client, teams=["team-a"]
         )
 
@@ -3308,7 +3308,7 @@ class TestCLIKeyRegenerationFlow:
         real empty answer means the team rows are genuinely gone.
         """
         from litellm.proxy.management_endpoints.ui_sso import (
-            _fetch_cli_sso_team_details,
+            fetch_cli_sso_team_details,
         )
 
         failing_client = MagicMock()
@@ -3316,7 +3316,7 @@ class TestCLIKeyRegenerationFlow:
             side_effect=Exception("connection reset")
         )
         assert (
-            await _fetch_cli_sso_team_details(
+            await fetch_cli_sso_team_details(
                 prisma_client=failing_client, teams=["team-a"]
             )
             is None
@@ -3325,7 +3325,7 @@ class TestCLIKeyRegenerationFlow:
         empty_client = MagicMock()
         empty_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
         assert (
-            await _fetch_cli_sso_team_details(
+            await fetch_cli_sso_team_details(
                 prisma_client=empty_client, teams=["team-a"]
             )
             == ()
@@ -8124,7 +8124,7 @@ async def test_cli_completion_persists_assertion_under_db_user_id():
             AsyncMock(return_value=user_info),
         ),
         patch(
-            "litellm.proxy.management_endpoints.ui_sso._fetch_cli_sso_team_details",
+            "litellm.proxy.management_endpoints.ui_sso.fetch_cli_sso_team_details",
             AsyncMock(return_value=[]),
         ),
         patch(
@@ -8202,11 +8202,11 @@ async def test_cli_completion_drops_teams_whose_rows_no_longer_exist():
     would be refused with no way for the user to recover.
     """
     from litellm.proxy.management_endpoints.ui_sso import (
-        _CliSsoTeamDetail,
+        CliSsoTeamDetail,
         _complete_cli_sso_callback_session,
     )
 
-    live_detail = _CliSsoTeamDetail(
+    live_detail = CliSsoTeamDetail(
         team_id="team-live", team_alias="Live", team_models=("gpt-4.1",)
     )
     flow = {}
@@ -8216,7 +8216,7 @@ async def test_cli_completion_drops_teams_whose_rows_no_longer_exist():
             AsyncMock(return_value=_cli_callback_user_info(["team-live", "team-deleted"])),
         ),
         patch(
-            "litellm.proxy.management_endpoints.ui_sso._fetch_cli_sso_team_details",
+            "litellm.proxy.management_endpoints.ui_sso.fetch_cli_sso_team_details",
             AsyncMock(return_value=(live_detail,)),
         ),
         patch(
@@ -8254,7 +8254,7 @@ async def test_cli_completion_fails_the_login_when_team_lookup_fails():
             AsyncMock(return_value=_cli_callback_user_info(["team-live"])),
         ),
         patch(
-            "litellm.proxy.management_endpoints.ui_sso._fetch_cli_sso_team_details",
+            "litellm.proxy.management_endpoints.ui_sso.fetch_cli_sso_team_details",
             AsyncMock(return_value=None),
         ),
         patch(

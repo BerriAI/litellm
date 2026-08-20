@@ -20,7 +20,7 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelInfo, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
 
 
@@ -1740,6 +1740,81 @@ def test_azure_ai_cache_cost_calculation():
     assert (
         abs(output_cost - expected_output_cost) < 1e-10
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
+
+
+def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/34393: two Vertex
+    deployments differing only in vertex_location must not price identically.
+    Google bills non-global endpoints at 1.1x for regional-pricing models, so the
+    regional request costs 1.1x the global one for the exact same usage, through
+    both vertex cost routes (Claude via cost_per_token, Gemini via
+    cost_per_character's token fallback).
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    usage = Usage(prompt_tokens=15, completion_tokens=5, total_tokens=20)
+    for model in ("claude-haiku-4-5@20251001", "gemini-3.5-flash"):
+        global_prompt, global_completion = cost_per_token(
+            model=model,
+            custom_llm_provider="vertex_ai",
+            usage_object=usage,
+            vertex_location="global",
+        )
+        regional_prompt, regional_completion = cost_per_token(
+            model=model,
+            custom_llm_provider="vertex_ai",
+            usage_object=usage,
+            vertex_location="us-east5",
+        )
+        global_total = global_prompt + global_completion
+        regional_total = regional_prompt + regional_completion
+        assert global_total > 0
+        assert regional_total == pytest.approx(global_total * 1.10, rel=1e-9), (
+            f"{model}: regional Vertex request must cost 1.1x the global one"
+        )
+
+
+def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
+    """The regional-endpoint uplift multiplies whatever rate the request priced at,
+    including the above-128k dynamic rates, so a synthetic model carrying both keys
+    prices regional above-128k usage at 1.1x the above-128k rate."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            "vertex_ai/fake-regional-128k-model": {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "input_cost_per_token_above_128k_tokens": 2e-06,
+                "output_cost_per_token_above_128k_tokens": 4e-06,
+                "regional_endpoint_uplift_multiplier": 1.1,
+            },
+        },
+    )
+
+    usage = Usage(prompt_tokens=200_000, completion_tokens=10, total_tokens=200_010)
+    global_prompt, global_completion = cost_per_token(
+        model="fake-regional-128k-model",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+        vertex_location="global",
+    )
+    regional_prompt, regional_completion = cost_per_token(
+        model="fake-regional-128k-model",
+        custom_llm_provider="vertex_ai",
+        usage_object=usage,
+        vertex_location="europe-west1",
+    )
+
+    assert global_prompt == pytest.approx(200_000 * 2e-06, rel=1e-9)
+    assert regional_prompt == pytest.approx(global_prompt * 1.10, rel=1e-9)
+    assert regional_completion == pytest.approx(global_completion * 1.10, rel=1e-9)
 
 
 def test_cost_discount_vertex_ai():
@@ -3562,16 +3637,18 @@ def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate(
     """
     from litellm.cost_calculator import batch_cost_calculator
 
+    model_info: ModelInfo = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "cache_read_input_token_cost": 3e-7,
+        "cache_creation_input_token_cost": 3.75e-6,
+    }
     prompt_cost, completion_cost_value = batch_cost_calculator(
         usage=_batch_cache_usage(),
         model="claude-sonnet-4-5-20250929",
         custom_llm_provider="anthropic",
-        model_info={  # type: ignore[arg-type]
-            "input_cost_per_token": 3e-6,
-            "output_cost_per_token": 15e-6,
-            "cache_read_input_token_cost": 3e-7,
-            "cache_creation_input_token_cost": 3.75e-6,
-        },
+        model_info=model_info,
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3.75e-6) / 2)
@@ -3581,18 +3658,67 @@ def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate(
 def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     from litellm.cost_calculator import batch_cost_calculator
 
+    model_info: ModelInfo = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "cache_read_input_token_cost": 3e-7,
+    }
     prompt_cost, _ = batch_cost_calculator(
         usage=_batch_cache_usage(),
         model="claude-sonnet-4-5-20250929",
         custom_llm_provider="anthropic",
-        model_info={  # type: ignore[arg-type]
-            "input_cost_per_token": 3e-6,
-            "output_cost_per_token": 15e-6,
-            "cache_read_input_token_cost": 3e-7,
-        },
+        model_info=model_info,
     )
 
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
+
+
+@pytest.mark.parametrize(
+    "batch_rate,expected_prompt,expected_completion",
+    [
+        (0.0, 0.0, 0.0),
+        (1e-6, 1000 * 1e-6, 500 * 1e-6),
+        (None, 1000 * 3e-6 / 2, 500 * 15e-6 / 2),
+    ],
+    ids=["explicit-zero", "explicit-nonzero", "unset"],
+)
+def test_batch_cost_calculator_honors_an_explicitly_zero_batch_rate(
+    batch_rate: float | None,
+    expected_prompt: float,
+    expected_completion: float,
+) -> None:
+    """A batch rate configured as 0.0 means free, not unset.
+
+    Gating the batch fields on truthiness read an explicit 0.0 as absent and
+    charged half the standard rate for that token direction instead.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    base_model_info: ModelInfo = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+    }
+    model_info: ModelInfo = (
+        base_model_info
+        if batch_rate is None
+        else {
+            **base_model_info,
+            "input_cost_per_token_batches": batch_rate,
+            "output_cost_per_token_batches": batch_rate,
+        }
+    )
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost_value == pytest.approx(expected_completion)
 
 
 def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():

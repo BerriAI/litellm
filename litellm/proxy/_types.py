@@ -287,6 +287,7 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
+    TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
@@ -451,6 +452,7 @@ class LiteLLMRoutes(enum.Enum):
 
     mapped_pass_through_routes = [
         "/bedrock",
+        "/comprehendmedical",
         "/vertex-ai",
         "/vertex_ai",
         "/cohere",
@@ -611,6 +613,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
+        KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -645,6 +648,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_update",
             "/team/permissions_bulk_update",
             "/team/daily/activity",
+            "/team/daily/activity/aggregated",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
             # model
@@ -680,6 +684,7 @@ class LiteLLMRoutes(enum.Enum):
         # permitted teams exactly like /spend/logs/ui — it belongs to the same
         # access tier, not to customer management.
         "/management/v1/spend_logs/end_users",
+        "/management/v1/spend_logs/users",
         "/cost/estimate",
     ]
 
@@ -799,12 +804,16 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
+        "/team/daily/activity/aggregated",
         "/team/{team_id}/members/me",
         "/model/new",
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        # Endpoint restricts results to organizations the caller is ORG_ADMIN
+        # of; a caller who administers none gets an empty result set.
+        "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
@@ -823,6 +832,10 @@ class LiteLLMRoutes(enum.Enum):
         # Team guardrail submissions - endpoint scopes results to caller's teams (non-admin)
         "/guardrails/submissions",
         "/guardrails/submissions/{guardrail_id}",
+        # Auto-router dry runs - both gate like the /model/new write they rehearse:
+        # proxy admin, or team admin naming their own team via team_id
+        "/auto_router/test_routing",
+        "/auto_router/validate_complexity_router_config",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -861,6 +874,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/available_roles",
             "/user/daily/activity",
             "/team/daily/activity",
+            "/team/daily/activity/aggregated",
             "/tag/daily/activity",
             "/tag/list",
             "/audit",
@@ -872,12 +886,13 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session) and the end-user filter
-            # facet. The list endpoint `/spend/logs/ui` is covered via
+            # UI Logs page detail drawer (single + session) and the filter facets.
+            # The list endpoint `/spend/logs/ui` is covered via
             # spend_tracking_routes below.
             "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
             "/management/v1/spend_logs/end_users",
+            "/management/v1/spend_logs/users",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
             # Invitations).
@@ -1987,6 +2002,18 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
         return values
 
 
+class TeamCallbackDeleteResponseData(LiteLLMPydanticObjectBase):
+    team_id: str
+    success_callbacks: tuple[str, ...]
+    failure_callbacks: tuple[str, ...]
+
+
+class TeamCallbackDeleteResponse(LiteLLMPydanticObjectBase):
+    status: Literal["success"]
+    message: str
+    data: TeamCallbackDeleteResponseData
+
+
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: list[str] | None = []
     failure_callback: list[str] | None = []
@@ -2415,6 +2442,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_request_size_mb: int | None = Field(
         None,
         description="max request size in MB, if a request is larger than this size it will be rejected",
+    )
+    max_batch_file_size_mb: int | None = Field(
+        None,
+        description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
     max_response_size_mb: int | None = Field(
         None,
@@ -3036,6 +3067,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     models: list[str] = []
     model_rpm_limit: dict | None = None
     model_tpm_limit: dict | None = None
+    model_itpm_limit: Mapping[str, int] | None = None
+    model_otpm_limit: Mapping[str, int] | None = None
     blocked: bool = False
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
@@ -3068,6 +3101,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     models: list[str] | None = None
     model_rpm_limit: dict | None = None
     model_tpm_limit: dict | None = None
+    model_itpm_limit: Mapping[str, int] | None = None
+    model_otpm_limit: Mapping[str, int] | None = None
     blocked: bool | None = None
     budget_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
@@ -4219,6 +4254,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "model_itpm_limit",
+    "model_otpm_limit",
     "default_estimated_output_tokens",
     "default_estimated_output_tokens_per_model",
     "mcp_rpm_limit",
