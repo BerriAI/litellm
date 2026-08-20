@@ -1,4 +1,5 @@
 import re
+from functools import lru_cache
 from typing import Final
 
 from fastapi import HTTPException, Request, status
@@ -437,12 +438,17 @@ class RouteChecks:
         return RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.management_routes.value)
 
     @staticmethod
+    @lru_cache(maxsize=2048)
     def is_info_route(route: str) -> bool:
         """
         Check if route is an info route
 
         Pattern-aware, like ``is_management_route``, so an info route carrying a path parameter is as
         reachable as one without: the incoming route holds a resolved id, never the ``{...}`` template.
+
+        Cached because this runs per request off ``_check_end_user_budget`` and the allowlist is a
+        module constant, so an uncached call rebuilds and matches 25 regexes to answer the same
+        question. ``normalize_request_route`` in ``auth_utils`` is bounded the same way.
         """
         return RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.info_routes.value)
 

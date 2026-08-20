@@ -3802,8 +3802,9 @@ async def key_budgets_fn(
     can be ruled out without opening every object.
 
     Parameters:
-    - key_id: str | None (path parameter) - The key to inspect. Accepts the plaintext key or its
-      hash. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
+    - key_id: str | None (path parameter) - The hash of the key to inspect. The key itself is
+      rejected here, because a URL path reaches access logs, tracing spans and error-logging
+      callbacks. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
     - end_user_id: str | None (query parameter) - Also report the budgets that would apply to this
       end user. Omitted end users produce no `end_user` rows, because nothing binds an end user to
       a key outside a request. Proxy admins only, since end users are a proxy-global namespace with
@@ -3830,11 +3831,13 @@ async def key_budgets_fn(
         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
         - status: str - `unlimited`, `ok` or `exceeded`
         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
-          to branch on, a `severity` of `info` or `warning`, and human-facing `text`
+          to branch on, a `severity` of `info` or `warning` for codes a client does not know yet,
+          and human-facing `text` that is free to be reworded. Ordered most to least specific to
+          this row's numbers, and empty rather than null when there is nothing to say
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:4000/key/sk-test-example-key-123/budgets" \
+    curl -X GET "http://0.0.0.0:4000/key/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2/budgets" \
 -H "Authorization: Bearer sk-1234"
     ```
 
@@ -3864,6 +3867,16 @@ async def key_budgets_fn(
                 detail=(
                     "Only proxy admins can resolve end user budgets, because end users are not scoped to a key, "
                     f"a team or an organization. Your role={user_api_key_dict.user_role}"
+                ),
+            )
+
+        if key_id is not None and key_id.startswith("sk-"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Pass the key's hash in the path, not the key itself. A URL path is recorded by access logs, "
+                    "tracing spans and error-logging callbacks, so a key placed there does not stay secret. "
+                    "Call GET /key/budgets with the key in the Authorization header to inspect your own key."
                 ),
             )
 
@@ -3907,11 +3920,6 @@ async def key_budgets_fn(
                 proxy_logging_obj=proxy_logging_obj,
                 general_settings=general_settings,
                 custom_auth_enabled=user_custom_auth is not None,
-            ),
-            token_end_user_max_budget=(
-                user_api_key_dict.end_user_max_budget
-                if end_user_id is not None and end_user_id == user_api_key_dict.end_user_id
-                else None
             ),
         )
         return KeyBudgetsResponse(key=key, budgets=budgets)

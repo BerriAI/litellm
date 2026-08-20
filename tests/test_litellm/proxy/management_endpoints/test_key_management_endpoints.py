@@ -16462,7 +16462,11 @@ from litellm.models.team import LiteLLM_TeamTable  # noqa: E402
 from litellm.proxy._types import LiteLLM_ProjectTableCachedObj  # noqa: E402
 from litellm.proxy.auth.auth_checks import TeamMemberBudget  # noqa: E402
 from litellm.proxy.management_endpoints.key_budget_resolver import (  # noqa: E402
+    _match_model_budget_key,
     _MODEL_BUDGET_COLD_NOTE,
+    _read_end_user_model_spend,
+    _read_key_model_spend,
+    _request_models,
     _RESERVATION_NOTE,
     KeyBudgetResolverDeps,
     resolve_key_budgets,
@@ -16470,6 +16474,10 @@ from litellm.proxy.management_endpoints.key_budget_resolver import (  # noqa: E4
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (  # noqa: E402
     KeyBudgetEntry,
 )
+from litellm.types.utils import BudgetConfig as _BudgetsBudgetConfig  # noqa: E402
+from types import MappingProxyType  # noqa: E402
+
+BudgetConfig = _BudgetsBudgetConfig
 
 _BUDGETS_RESOLVER = "litellm.proxy.management_endpoints.key_budget_resolver"
 _BUDGETS_KEY_HASH = "hash-of-the-budgets-key"
@@ -16516,10 +16524,9 @@ class _RecordingModelSpendReader:
         self.spend_by_model = default if spend_by_model is None else spend_by_model
         self.probed = []
 
-    async def __call__(self, *, entity_id, models, budget_config):
-        self.probed.append(tuple(models))
-        found = [self.spend_by_model[model] for model in models if model in self.spend_by_model]
-        return max(found) if found else None
+    async def __call__(self, *, entity_id, model, budget_config):
+        self.probed.append(model)
+        return self.spend_by_model.get(model)
 
 
 def _budgets_deps(read_spend=None, model_spend=None, match_model_budget_key=None, general_settings=None):
@@ -17076,10 +17083,14 @@ async def test_key_budgets_probe_every_request_model_that_maps_onto_a_per_model_
             ),
         )
 
-    entry = next(e for e in budgets if e.scope == "key_model")
-    assert "openai/gpt-5" in model_reader.probed[0], "the request model's counter was never probed"
-    assert entry.spend == 6.0
-    assert entry.status == "exceeded"
+    rows = {e.entity_id: e for e in budgets if e.scope == "key_model"}
+    assert "openai/gpt-5" in model_reader.probed, "the request model's counter was never probed"
+    assert set(rows) == {"gpt-5", "openai/gpt-5"}, "each counter under the cap needs its own row"
+    assert all(row.entity_label == "gpt-5" and row.source == "key.model_max_budget[gpt-5]" for row in rows.values())
+    assert rows["openai/gpt-5"].spend == 6.0
+    assert rows["openai/gpt-5"].status == "exceeded"
+    assert rows["gpt-5"].spend is None
+    assert rows["gpt-5"].status == "ok", "a model with no counter of its own is not over the cap"
 
 
 @pytest.mark.asyncio
@@ -17141,19 +17152,18 @@ async def test_key_budgets_keep_the_valid_model_caps_when_one_model_entry_is_mal
 
 
 @pytest.mark.asyncio
-async def test_key_budgets_prefer_the_request_token_end_user_cap_over_the_row():
-    """Reservation reads the token's cap first, so reporting the row's number would understate the block."""
+async def test_key_budgets_report_the_end_user_cap_from_the_budget_row_not_the_calling_request():
+    """A request-scoped cap belongs to whoever is calling, so attributing it to the inspected key is a lie."""
     with _budgets_world(**_fully_populated_world()):
         budgets = await resolve_key_budgets(
-            valid_token=_budgets_token(),
+            valid_token=_budgets_token(end_user_max_budget=25.0),
             end_user_id="end-user-budgets",
             deps=_budgets_deps(),
-            token_end_user_max_budget=25.0,
         )
 
     entry = next(e for e in budgets if e.scope == "end_user")
-    assert entry.max_budget == 25.0
-    assert entry.source == "token.end_user_max_budget"
+    assert entry.max_budget == 800.0
+    assert entry.source == "budget_table:budget-end-user"
 
 
 @pytest.mark.asyncio
@@ -17230,10 +17240,11 @@ async def test_key_budgets_separate_caveats_that_rule_a_row_out_from_caveats_tha
     budgets = await _budgets_at_limit()
 
     severity_by_code = {note.code: note.severity for entry in budgets for note in entry.notes}
-    assert severity_by_code["project_spend_not_tracked"] == "info"
+    assert severity_by_code["project_spend_not_tracked"] == "warning", "a budget that cannot trip is not a live row"
+    assert severity_by_code["request_tags_add_budgets"] == "warning", "the list of tag budgets is incomplete"
+    assert severity_by_code["reservation_blocks_at_limit"] == "info", "`comparison` already carries this"
+    assert severity_by_code["rolling_window"] == "info", "the numbers are right, the window just moves"
     assert severity_by_code["alert_only"] == "info"
-    assert severity_by_code["reservation_blocks_at_limit"] == "warning"
-    assert severity_by_code["rolling_window"] == "warning"
 
 
 @pytest.mark.asyncio
@@ -17259,7 +17270,9 @@ async def test_key_budgets_emit_each_caveat_as_its_own_note_instead_of_one_joine
         "end_user_route_only",
         "custom_auth_may_override_end_user_cap",
     ]
-    assert all("; " not in note.text for note in end_user.notes)
+    assert all(
+        other.text not in note.text for note in end_user.notes for other in end_user.notes if other is not note
+    ), "one note swallowing another is the joined string coming back"
 
 
 @pytest.mark.asyncio
@@ -17278,6 +17291,111 @@ async def test_key_budgets_always_send_notes_as_a_list_so_a_client_never_branche
         for row in serialized
         for note in row["notes"]
     )
+
+
+@pytest.mark.parametrize("scope", ["team", "tag", "end_user"])
+@pytest.mark.asyncio
+async def test_key_budgets_do_not_invent_a_denial_for_a_zero_cap(scope):
+    """The reservation builds no counter for a non-positive cap, so the read-time `>` is still the gate."""
+    world = _fully_populated_world()
+    world["team"] = LiteLLM_TeamTable(team_id="team-budgets", team_alias="Reporting Team", spend=0.0, max_budget=0.0)
+    world["tags"] = {
+        "prod": LiteLLM_TagTable(
+            tag_name="prod",
+            spend=0.0,
+            budget_id="budget-tag",
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-tag", max_budget=0.0),
+        )
+    }
+    world["end_user"] = LiteLLM_EndUserTable(
+        user_id="end-user-budgets",
+        blocked=False,
+        alias="End User",
+        spend=0.0,
+        budget_id="budget-end-user",
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-end-user", max_budget=0.0),
+    )
+    with _budgets_world(**world):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id="end-user-budgets", deps=_budgets_deps()
+        )
+
+    entry = next(e for e in budgets if e.scope == scope and e.enforcement == "hard")
+    assert entry.max_budget == 0.0, scope
+    assert entry.comparison == ">", scope
+    assert entry.status == "ok", scope
+    assert _RESERVATION_NOTE not in entry.notes, scope
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_still_tighten_a_positive_cap_in_the_same_scope():
+    """The zero-cap carve-out must not disarm the operator fix for every cap that does reserve."""
+    budgets = await _budgets_at_limit()
+
+    team = next(e for e in budgets if e.scope == "team" and e.enforcement == "hard")
+    assert team.comparison == ">="
+    assert _RESERVATION_NOTE in team.notes
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_probe_a_deployment_routed_at_directly():
+    """Routing straight at a deployment keys the counter on its name, which is not a model group."""
+    router = MagicMock()
+    router.get_model_names.return_value = ["gpt-5"]
+    router.deployment_names = ["azure/gpt-5-prod"]
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        assert _request_models(()) == ("gpt-5", "azure/gpt-5-prod")
+
+    with patch("litellm.proxy.proxy_server.llm_router", None):
+        assert _request_models(("only-the-key-models",)) == ("only-the-key-models",)
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_read_each_per_model_counter_from_the_enforcing_limiter():
+    """These readers exist to reuse enforcement's cache lookup; a fake in every other test hides a wrong call."""
+    limiter = MagicMock()
+    limiter.get_virtual_key_spend_for_model = AsyncMock(return_value=4.0)
+    limiter.get_end_user_spend_for_model = AsyncMock(return_value=9.0)
+    config = BudgetConfig(max_budget=5.0, budget_duration="1d")
+    with patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter):
+        key_spend = await _read_key_model_spend(entity_id="hash-1", model="openai/gpt-5", budget_config=config)
+        end_user_spend = await _read_end_user_model_spend(entity_id="cust-1", model="gpt-5", budget_config=config)
+
+    assert key_spend == 4.0
+    assert limiter.get_virtual_key_spend_for_model.await_args.kwargs == {
+        "user_api_key_hash": "hash-1",
+        "model": "openai/gpt-5",
+        "key_budget_config": config,
+    }
+    assert end_user_spend == 9.0
+    assert limiter.get_end_user_spend_for_model.await_args.kwargs == {
+        "end_user_id": "cust-1",
+        "model": "gpt-5",
+        "key_budget_config": config,
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [("gpt-5", "gpt-5"), ("openai/gpt-5", "gpt-5"), ("claude-sonnet-4-5", None)],
+)
+def test_key_budgets_match_a_request_model_to_a_cap_the_way_enforcement_does(model, expected):
+    """Introspection and enforcement must agree on which cap a request model is charged against."""
+    configured = MappingProxyType({"gpt-5": BudgetConfig(max_budget=5.0, budget_duration="1d")})
+
+    assert _match_model_budget_key(model=model, configured=configured) == expected
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_route_refuses_a_plaintext_key_in_the_url_path():
+    """An info route's path reaches error-logging callbacks and access logs, so a key must not sit in it."""
+    caller = UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value)
+    with _budgets_route_world(key_row=_budgets_key_row(), caller=caller) as resolver:
+        response = client.get("/key/sk-a-real-looking-secret/budgets")
+
+    assert response.status_code == 400
+    assert "hash" in json.dumps(response.json()).lower()
+    resolver.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

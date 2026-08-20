@@ -152,7 +152,14 @@ BudgetSpendState = Literal["live", "no_counter", "unavailable"]
 
 
 class KeyBudgetNote(BaseModel):
-    """One caveat about a budget row. Branch on ``code``; ``text`` is free to be reworded."""
+    """
+    One caveat about a budget row.
+
+    ``code`` is the contract: map it to whatever treatment the caveat deserves. ``text`` is free to be
+    reworded and must not be matched on. ``severity`` exists for the code a client has not been taught
+    yet, since this union grows: ``warning`` means the row's numbers may be incomplete or read as
+    something they are not, and ``info`` means they are accurate and the note is only context.
+    """
 
     model_config = ConfigDict(frozen=True)
 

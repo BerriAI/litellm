@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -202,7 +203,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return _current_spend
 
     def get_request_model_budget_key(
-        self, model: str, internal_model_max_budget: GenericBudgetConfigType
+        self, model: str, internal_model_max_budget: Mapping[str, BudgetConfig]
     ) -> str | None:
         """
         Which `model_max_budget` key a request model is charged against.

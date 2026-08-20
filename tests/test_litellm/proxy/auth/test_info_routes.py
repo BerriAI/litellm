@@ -194,3 +194,17 @@ def test_templated_route_matching_does_not_widen_unrelated_key_routes():
     assert RouteChecks.is_info_route("/key/some-hash/regenerate") is False
     assert RouteChecks.is_info_route("/key/some-hash/delete") is False
     assert RouteChecks.is_info_route("/key/some-hash/budgets") is True
+
+
+def test_info_route_matching_is_cached_without_answering_for_the_wrong_route():
+    """Pattern matching runs per request off the end-user budget check, so it is memoised; the cache must not blur routes."""
+    RouteChecks.is_info_route.cache_clear()
+
+    assert RouteChecks.is_info_route("/key/hash-a/budgets") is True
+    assert RouteChecks.is_info_route("/key/hash-a/regenerate") is False
+    assert RouteChecks.is_info_route("/chat/completions") is False
+    assert RouteChecks.is_info_route("/key/hash-b/budgets") is True
+    assert RouteChecks.is_info_route.cache_info().hits == 0, "four distinct routes cannot share an answer"
+
+    assert RouteChecks.is_info_route("/key/hash-a/regenerate") is False
+    assert RouteChecks.is_info_route.cache_info().hits == 1

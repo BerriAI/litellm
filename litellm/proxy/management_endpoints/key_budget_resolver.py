@@ -103,15 +103,15 @@ _ALERT_ONLY_NOTE: Final = KeyBudgetNote(
 )
 _ROLLING_WINDOW_NOTE: Final = KeyBudgetNote(
     code="rolling_window",
-    severity="warning",
+    severity="info",
     text="rolling window; the start moves with reset_at so consecutive windows can overlap",
 )
 _MODEL_BUDGET_NOTE: Final = KeyBudgetNote(
     code="per_model_counters",
     severity="warning",
     text=(
-        "per-model spend is counted separately for every request model that maps onto this cap, "
-        "and each counter is compared against it on its own, so the highest is reported"
+        "one row per request model that maps onto this cap, because each model's counter is compared "
+        "against it alone; a model this proxy cannot enumerate has a counter that is not reported here"
     ),
 )
 _MODEL_BUDGET_COLD_NOTE: Final = KeyBudgetNote(
@@ -121,15 +121,15 @@ _MODEL_BUDGET_COLD_NOTE: Final = KeyBudgetNote(
 )
 _RESERVATION_NOTE: Final = KeyBudgetNote(
     code="reservation_blocks_at_limit",
-    severity="warning",
+    severity="info",
     text=(
-        "the reservation layer blocks this scope as soon as spend reaches the limit, "
-        "before the read-time check would trip"
+        "the reservation layer usually blocks this scope as soon as spend reaches the limit, ahead of the "
+        "read-time check; requests it cannot price up front are still gated by the read-time check alone"
     ),
 )
 _PROJECT_SPEND_NOTE: Final = KeyBudgetNote(
     code="project_spend_not_tracked",
-    severity="info",
+    severity="warning",
     text="project spend is never incremented today, so this budget cannot trip",
 )
 _TAG_NOTE: Final = KeyBudgetNote(
@@ -177,7 +177,7 @@ class SpendReader(Protocol):
 
 
 class ModelSpendReader(Protocol):
-    async def __call__(self, *, entity_id: str, models: Sequence[str], budget_config: BudgetConfig) -> float | None: ...
+    async def __call__(self, *, entity_id: str, model: str, budget_config: BudgetConfig) -> float | None: ...
 
 
 class ModelBudgetKeyMatcher(Protocol):
@@ -207,62 +207,41 @@ async def _read_counter_spend(
     )
 
 
-def _highest(spends: Sequence[float | None]) -> float | None:
-    """Each request model has its own counter compared against the same cap, so the highest is the one that blocks."""
-    found: Final = tuple(spend for spend in spends if spend is not None)
-    return max(found) if found else None
-
-
-async def _read_key_model_spend(*, entity_id: str, models: Sequence[str], budget_config: BudgetConfig) -> float | None:
+async def _read_key_model_spend(*, entity_id: str, model: str, budget_config: BudgetConfig) -> float | None:
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
-    return _highest(
-        await asyncio.gather(
-            *(
-                model_max_budget_limiter.get_virtual_key_spend_for_model(
-                    user_api_key_hash=entity_id,
-                    model=model,
-                    key_budget_config=budget_config,
-                )
-                for model in models
-            )
-        )
+    return await model_max_budget_limiter.get_virtual_key_spend_for_model(
+        user_api_key_hash=entity_id, model=model, key_budget_config=budget_config
     )
 
 
-async def _read_end_user_model_spend(
-    *, entity_id: str, models: Sequence[str], budget_config: BudgetConfig
-) -> float | None:
+async def _read_end_user_model_spend(*, entity_id: str, model: str, budget_config: BudgetConfig) -> float | None:
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
-    return _highest(
-        await asyncio.gather(
-            *(
-                model_max_budget_limiter.get_end_user_spend_for_model(
-                    end_user_id=entity_id,
-                    model=model,
-                    key_budget_config=budget_config,
-                )
-                for model in models
-            )
-        )
+    return await model_max_budget_limiter.get_end_user_spend_for_model(
+        end_user_id=entity_id, model=model, key_budget_config=budget_config
     )
 
 
 def _match_model_budget_key(*, model: str, configured: Mapping[str, BudgetConfig]) -> str | None:
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
-    return model_max_budget_limiter.get_request_model_budget_key(
-        model=model, internal_model_max_budget=dict(configured)
-    )
+    return model_max_budget_limiter.get_request_model_budget_key(model=model, internal_model_max_budget=configured)
 
 
 def _request_models(allowed_models: tuple[str, ...]) -> tuple[str, ...]:
-    """Model names a request could carry, since per-model counters are keyed by the request model."""
+    """
+    Model names a request could carry, since per-model counters are keyed by the request model.
+
+    Deployment names are in here because routing straight at one bypasses the model group, and a
+    wildcard or non-router deployment can still produce a counter no enumeration can predict.
+    """
     from litellm.proxy.proxy_server import llm_router
 
-    router_models: Final = tuple(llm_router.get_model_names()) if llm_router is not None else ()
-    return tuple(dict.fromkeys((*allowed_models, *router_models)))
+    if llm_router is None:
+        return allowed_models
+    routable: Final = (*llm_router.get_model_names(), *llm_router.deployment_names)
+    return tuple(dict.fromkeys((*allowed_models, *routable)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,14 +275,14 @@ class _RecordedSpend:
 @dataclass(frozen=True, slots=True)
 class _KeyModelSpend:
     key_hash: str
-    models: tuple[str, ...]
+    model: str
     budget_config: BudgetConfig
 
 
 @dataclass(frozen=True, slots=True)
 class _EndUserModelSpend:
     end_user_id: str
-    models: tuple[str, ...]
+    model: str
     budget_config: BudgetConfig
 
 
@@ -457,7 +436,6 @@ class _KeyBudgetContext:
     valid_token: UserAPIKeyAuth
     token_inputs: _TokenBudgetInputs
     end_user_id: str | None
-    token_end_user_max_budget: float | None
     custom_auth_enabled: bool
     request_models: tuple[str, ...]
     match_model_budget_key: ModelBudgetKeyMatcher
@@ -478,15 +456,9 @@ async def resolve_key_budgets(
     valid_token: UserAPIKeyAuth,
     end_user_id: str | None,
     deps: KeyBudgetResolverDeps,
-    token_end_user_max_budget: float | None = None,
 ) -> tuple[KeyBudgetEntry, ...]:
     """Every budget that applies to ``valid_token``, configured or not, with live spend."""
-    context: Final = await _load_context(
-        valid_token=valid_token,
-        end_user_id=end_user_id,
-        deps=deps,
-        token_end_user_max_budget=token_end_user_max_budget,
-    )
+    context: Final = await _load_context(valid_token=valid_token, end_user_id=end_user_id, deps=deps)
     plans: Final = _plan_budgets(context)
     readings: Final = await asyncio.gather(*(_read_spend(plan=plan, deps=deps) for plan in plans))
     reservation_enabled: Final = deps.general_settings.get("disable_budget_reservation") is not True
@@ -523,13 +495,13 @@ async def _read_spend(plan: _PlannedBudget, deps: KeyBudgetResolverDeps) -> _Spe
             case _KeyModelSpend():
                 return _model_reading(
                     await deps.read_key_model_spend(
-                        entity_id=source.key_hash, models=source.models, budget_config=source.budget_config
+                        entity_id=source.key_hash, model=source.model, budget_config=source.budget_config
                     )
                 )
             case _EndUserModelSpend():
                 return _model_reading(
                     await deps.read_end_user_model_spend(
-                        entity_id=source.end_user_id, models=source.models, budget_config=source.budget_config
+                        entity_id=source.end_user_id, model=source.model, budget_config=source.budget_config
                     )
                 )
             case _:
@@ -543,8 +515,13 @@ def _effective_comparison(plan: _PlannedBudget, reservation_enabled: bool) -> Bu
     """
     Reservation runs ahead of the read-time check and blocks once spend reaches the cap, so for
     every scope it covers it, not the read-time comparison, decides when a request stops going through.
+
+    It builds no counter at all for a non-positive cap, though, which leaves the read-time operator
+    in charge there and is the one case where reporting the tightened one would invent a denial.
     """
     if plan.enforcement == "soft" or not reservation_enabled:
+        return plan.comparison
+    if plan.max_budget is None or plan.max_budget <= 0:
         return plan.comparison
     if plan.scope not in _RESERVATION_COVERED_SCOPES:
         return plan.comparison
@@ -592,7 +569,6 @@ async def _load_context(
     valid_token: UserAPIKeyAuth,
     end_user_id: str | None,
     deps: KeyBudgetResolverDeps,
-    token_end_user_max_budget: float | None,
 ) -> _KeyBudgetContext:
     token_inputs: Final = _token_budget_inputs(valid_token)
     proxy, team, user, project, tags, end_user = await asyncio.gather(
@@ -620,7 +596,6 @@ async def _load_context(
         valid_token=valid_token,
         token_inputs=token_inputs,
         end_user_id=end_user_id,
-        token_end_user_max_budget=token_end_user_max_budget,
         custom_auth_enabled=deps.custom_auth_enabled,
         request_models=_request_models(token_inputs.models),
         match_model_budget_key=deps.match_model_budget_key,
@@ -954,21 +929,18 @@ def _plan_key_models(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
     return tuple(
         _PlannedBudget(
             scope="key_model",
-            entity_id=model,
-            entity_label=token.key_alias,
+            entity_id=request_model,
+            entity_label=cap_key,
             enforcement="hard",
             max_budget=_positive_or_none(config.max_budget),
             comparison=">",
-            source=f"key.model_max_budget[{model}]",
-            spend_source=_KeyModelSpend(
-                key_hash=token.token or "",
-                models=_model_counter_candidates(config_key=model, configured=configured, context=context),
-                budget_config=config,
-            ),
+            source=f"key.model_max_budget[{cap_key}]",
+            spend_source=_KeyModelSpend(key_hash=token.token or "", model=request_model, budget_config=config),
             budget_duration=config.budget_duration,
             notes=(_MODEL_BUDGET_NOTE,),
         )
-        for model, config in configured.items()
+        for cap_key, config in configured.items()
+        for request_model in _model_counter_candidates(config_key=cap_key, configured=configured, context=context)
     )
 
 
@@ -1190,17 +1162,14 @@ def _plan_end_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         if end_user is not None and end_user.budget_id is not None
         else "litellm_settings.max_end_user_budget_id"
     )
-    # Reservation reads the request token's cap first and only falls back to the row, so mirror that order.
-    token_max_budget: Final = context.token_end_user_max_budget
-    source: Final = "token.end_user_max_budget" if token_max_budget is not None else row_source
     primary: Final = _PlannedBudget(
         scope="end_user",
         entity_id=end_user_id,
         entity_label=end_user.alias if end_user is not None else None,
         enforcement="hard",
-        max_budget=token_max_budget if token_max_budget is not None else (budget.max_budget if budget else None),
+        max_budget=budget.max_budget if budget is not None else None,
         comparison=">",
-        source=source,
+        source=row_source,
         spend_source=_CounterSpend(
             counter_key=end_user_spend_counter(end_user_id),
             fallback_spend=(end_user.spend or 0.0) if end_user is not None else 0.0,
@@ -1210,7 +1179,7 @@ def _plan_end_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         budget_reset_at=meta.budget_reset_at,
         notes=(
             (_END_USER_ROUTE_NOTE, _CUSTOM_AUTH_END_USER_NOTE)
-            if context.custom_auth_enabled and token_max_budget is None
+            if context.custom_auth_enabled
             else (_END_USER_ROUTE_NOTE,)
         ),
     )
@@ -1218,20 +1187,17 @@ def _plan_end_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
     per_model: Final = tuple(
         _PlannedBudget(
             scope="end_user_model",
-            entity_id=model,
-            entity_label=end_user_id,
+            entity_id=request_model,
+            entity_label=cap_key,
             enforcement="hard",
             max_budget=_positive_or_none(config.max_budget),
             comparison=">",
-            source=f"{row_source}.model_max_budget[{model}]",
-            spend_source=_EndUserModelSpend(
-                end_user_id=end_user_id,
-                models=_model_counter_candidates(config_key=model, configured=configured, context=context),
-                budget_config=config,
-            ),
+            source=f"{row_source}.model_max_budget[{cap_key}]",
+            spend_source=_EndUserModelSpend(end_user_id=end_user_id, model=request_model, budget_config=config),
             budget_duration=config.budget_duration,
             notes=(_MODEL_BUDGET_NOTE,),
         )
-        for model, config in configured.items()
+        for cap_key, config in configured.items()
+        for request_model in _model_counter_candidates(config_key=cap_key, configured=configured, context=context)
     )
     return (primary, *per_model)
