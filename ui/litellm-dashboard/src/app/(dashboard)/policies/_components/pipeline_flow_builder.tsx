@@ -971,6 +971,8 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
                 fontSize: 13,
                 resize: "vertical",
                 fontFamily: "inherit",
+                backgroundColor: "var(--color-card)",
+                color: "var(--color-foreground)",
               }}
             />
           </>
