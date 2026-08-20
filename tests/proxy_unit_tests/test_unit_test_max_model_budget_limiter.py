@@ -87,6 +87,13 @@ async def test_is_key_within_model_budget(budget_limiter):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
 
+    # Spend equal to the limit must block (>=, not >)
+    with patch.object(
+        budget_limiter, "_get_virtual_key_spend_for_model", return_value=100.0
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
+
     # Test model not in budget config
     assert (
         await budget_limiter.is_key_within_model_budget(user_api_key, "non-existent")
@@ -179,6 +186,17 @@ async def test_is_end_user_within_model_budget(budget_limiter):
     # Test when model exceeds budget
     with patch.object(
         budget_limiter, "_get_end_user_spend_for_model", return_value=150.0
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_end_user_within_model_budget(
+                "test-user",
+                {"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}},
+                "gpt-4",
+            )
+
+    # Spend equal to the limit must block (>=, not >)
+    with patch.object(
+        budget_limiter, "_get_end_user_spend_for_model", return_value=100.0
     ):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_end_user_within_model_budget(
