@@ -132,7 +132,7 @@ ENVIRON_READERS: Final = frozenset(("os.environ.get", "environ.get", "os.getenv"
 ENVIRON_MAPPINGS: Final = frozenset(("os.environ", "environ"))
 SKIP_CALLS: Final = frozenset(("pytest.skip", "skip"))
 CONFTEST_NAME: Final = "conftest.py"
-SNAPSHOT_DICT_NAMES: Final = frozenset(("original_state", "original_values", "saved_state"))
+SDK_MODULE: Final = "litellm"
 
 CREDENTIAL_NAME_RE: Final = re.compile(
     r"(?:API_KEY|_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|DATABASE_URL|ACCESS_KEY_ID)$"
@@ -558,14 +558,51 @@ def iter_credential_skip_violations(path: Path, tree: ast.Module) -> Iterator[Vi
                     )
 
 
-def _snapshot_dict_subscripts(node: ast.AST) -> Iterator[ast.Subscript]:
+def _reads_sdk_attribute(node: ast.AST) -> bool:
+    return any(
+        (
+            isinstance(inner, ast.Call)
+            and _dotted_name(inner.func) == "getattr"
+            and bool(inner.args)
+            and _dotted_name(inner.args[0]) == SDK_MODULE
+        )
+        or (isinstance(inner, ast.Attribute) and _dotted_name(inner.value) == SDK_MODULE)
+        for inner in ast.walk(node)
+    )
+
+
+def _subscript_targets(node: ast.AST) -> Iterator[ast.Subscript]:
     for inner in ast.walk(node):
-        if (
-            isinstance(inner, ast.Subscript)
-            and isinstance(inner.value, ast.Name)
-            and inner.value.id in SNAPSHOT_DICT_NAMES
-        ):
-            yield inner
+        if isinstance(inner, ast.Assign):
+            yield from (target for target in inner.targets if isinstance(target, ast.Subscript))
+
+
+def _saves_sdk_attribute_by_key(node: ast.AST) -> Iterator[ast.Subscript]:
+    """Every `<dict>["name"] = <something read off litellm>`, whatever the dict is called.
+
+    Matching on the shape rather than on a list of blessed dict names is what reaches
+    the conftest that builds its snapshot inside a helper and calls the dict `state`.
+    """
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Assign) and _reads_sdk_attribute(inner.value):
+            yield from (target for target in inner.targets if isinstance(target, ast.Subscript))
+
+
+def _saves_sdk_attributes_in_loop(node: ast.For) -> bool:
+    """A save loop reads the SDK and stores under the loop variable, in either order.
+
+    The read is often bound to a local first (`val = getattr(litellm, attr)`) and only
+    then stored, so the read and the store are separate statements and cannot be
+    required of the same assignment.
+    """
+    if not isinstance(node.target, ast.Name):
+        return False
+    stores_by_key: Final = any(
+        isinstance(subscript.slice, ast.Name) and subscript.slice.id == node.target.id
+        for statement in node.body
+        for subscript in _subscript_targets(statement)
+    )
+    return stores_by_key and any(_reads_sdk_attribute(statement) for statement in node.body)
 
 
 def _module_constants(tree: ast.Module) -> Mapping[str, ast.expr]:
@@ -596,12 +633,10 @@ def _snapshotted_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
         if isinstance(node, ast.Assign):
             yield from (
                 (subscript.slice.value, subscript.lineno)
-                for subscript in _snapshot_dict_subscripts(node)
+                for subscript in _saves_sdk_attribute_by_key(node)
                 if isinstance(subscript.slice, ast.Constant) and isinstance(subscript.slice.value, str)
             )
-        elif isinstance(node, ast.For) and any(
-            True for statement in node.body for _ in _snapshot_dict_subscripts(statement)
-        ):
+        elif isinstance(node, ast.For) and _saves_sdk_attributes_in_loop(node):
             iterable: Final = constants.get(node.iter.id) if isinstance(node.iter, ast.Name) else node.iter
             if iterable is not None:
                 yield from _string_members(iterable)

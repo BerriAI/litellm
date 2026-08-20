@@ -501,3 +501,50 @@ def _written(tmp_path, source, name="conftest.py"):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
     return path
+
+
+_HELPER_DICT_CONFTEST = """import litellm
+import pytest
+
+_CALLBACK_ATTRS = ("callbacks", "success_callback")
+
+
+def _copy_litellm_state():
+    state = {}
+    for attr in _CALLBACK_ATTRS:
+        if hasattr(litellm, attr):
+            value = getattr(litellm, attr)
+            state[attr] = value.copy() if isinstance(value, list) else value
+    return state
+
+
+@pytest.fixture(autouse=True)
+def restore_globals():
+    saved = _copy_litellm_state()
+    yield
+    for attr, value in saved.items():
+        setattr(litellm, attr, value)
+"""
+
+
+def test_a_snapshot_built_in_a_helper_under_any_dict_name_is_counted(tmp_path):
+    # Two conftests build their inventory inside a helper and call the dict `state`,
+    # so a rule keyed on blessed dict names sees neither.
+    reported = [v.message.split("`")[1] for v in checker.check_file(_written(tmp_path, _HELPER_DICT_CONFTEST))]
+    assert sorted(reported) == ["litellm.callbacks", "litellm.success_callback"]
+
+
+def test_the_read_may_sit_a_statement_above_the_store(tmp_path):
+    # `val = getattr(litellm, attr)` then `state[attr] = val.copy()` is the common
+    # shape; requiring the store itself to read litellm loses every one of them.
+    source = _HELPER_DICT_CONFTEST.replace(
+        "            state[attr] = value.copy() if isinstance(value, list) else value",
+        "            state[attr] = list(value)",
+    )
+    reported = [v.message.split("`")[1] for v in checker.check_file(_written(tmp_path, source))]
+    assert sorted(reported) == ["litellm.callbacks", "litellm.success_callback"]
+
+
+def test_a_loop_storing_under_a_key_that_is_not_the_loop_variable_is_not_an_inventory(tmp_path):
+    source = _HELPER_DICT_CONFTEST.replace("state[attr] =", 'state["fixed"] =')
+    assert [v.code for v in checker.check_file(_written(tmp_path, source))] == []
