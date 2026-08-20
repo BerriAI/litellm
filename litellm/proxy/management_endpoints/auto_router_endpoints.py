@@ -2,6 +2,7 @@
 AUTO ROUTER MANAGEMENT ENDPOINTS
 
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
+POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
 """
 
 from collections.abc import Mapping, Sequence
@@ -43,6 +44,8 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterCacheStats,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    ComplexityRouterConfigValidationRequest,
+    ComplexityRouterConfigValidationResponse,
     RequestComplexityRouterConfig,
     ShadowEvalDirection,
     ShadowEvalJobKeyResponse,
@@ -130,12 +133,13 @@ async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -
     return await prisma_client.db.query_raw(query, *args)
 
 
-async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> None:
+async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> None:
     """Allow exactly the callers who could create this router.
 
-    Routing a prompt can spend money (an `llm` classifier config calls its classifier, a
-    semantic config embeds the prompt), so this is gated like a write rather than a read:
-    a proxy admin, or a team admin naming their own team, matching /model/new.
+    Both dry runs are gated like the write they rehearse rather than as reads: a proxy
+    admin, or a team admin naming their own team, matching /model/new. Routing a test
+    prompt can also spend money (an `llm` classifier config calls its classifier, a
+    semantic config embeds the prompt), so a read-level gate would be too loose anyway.
     """
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
@@ -149,7 +153,7 @@ async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: st
         raise HTTPException(
             status_code=403,
             detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
-                "error": f"User does not have permission to test an auto router. Your role={user_api_key_dict.user_role}. Test as a PROXY_ADMIN, or as a team admin by specifying a team_id."
+                "error": f"User does not have permission to dry-run an auto router. Your role={user_api_key_dict.user_role}. Call as a PROXY_ADMIN, or as a team admin by specifying a team_id."
             },
         )
 
@@ -239,6 +243,35 @@ async def _authorize_models_this_test_can_call(
 
 
 @router.post(
+    "/auto_router/validate_complexity_router_config",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    response_model=ComplexityRouterConfigValidationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def validate_complexity_router_config(
+    data: ComplexityRouterConfigValidationRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ComplexityRouterConfigValidationResponse:
+    """
+    Validate a complexity-router config without saving it.
+
+    Runs the same check every write path runs (the router's own pydantic model), so a form can
+    show the backend's exact verdict while the operator is still editing rather than after a
+    rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
+    naming their own team. Nothing is created, routed, or billed.
+    """
+    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+
+    from litellm.router_utils.auto_router_model_naming import (
+        validate_complexity_router_config_write,
+    )
+
+    error: Final = validate_complexity_router_config_write(data.complexity_router_config)
+    return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
+
+
+@router.post(
     "/auto_router/test_routing",
     tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
     dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
@@ -270,9 +303,17 @@ async def preview_auto_router_routing(
     }
     ```
     """
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+        user_model,
+    )
+    from litellm.proxy.utils import get_available_models_for_user
 
-    await _authorize_routing_test(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
     if llm_router is None:
         raise HTTPException(
@@ -327,9 +368,19 @@ async def preview_auto_router_routing(
             },
         )
 
+    available_models: Final = await get_available_models_for_user(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=data.team_id,
+        user_api_key_cache=user_api_key_cache,
+    )
     return AutoRouterRoutingTestResponse(
         routed_model=hook_response.model,
-        routed_model_configured=hook_response.model in frozenset(llm_router.get_model_names()),
+        routed_model_configured=hook_response.model in frozenset(available_models),
         routing_decision=hook_response.routing_decision,
     )
 

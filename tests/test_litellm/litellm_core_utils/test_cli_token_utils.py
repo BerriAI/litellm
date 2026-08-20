@@ -80,8 +80,28 @@ def _write_metadata_only_file(home):
     return path
 
 
-def _blob(base_url=SERVER, key="sk-vault", jwt_token="", timestamp=0.0):
-    return json.dumps({"base_url": base_url, "key": key, "jwt_token": jwt_token, "timestamp": timestamp})
+def _blob(base_url=SERVER, key="sk-vault", jwt_token="", timestamp=0.0, refresh_token=None):
+    return json.dumps(
+        {
+            "base_url": base_url,
+            "key": key,
+            "jwt_token": jwt_token,
+            "refresh_token": refresh_token,
+            "timestamp": timestamp,
+        }
+    )
+
+
+def _write_key_only_keychain_file(home, *, refresh_token="rt-live", timestamp=2000.0):
+    """What the release that kept only the key in the keychain left on disk: metadata, plus the
+    refresh token in the clear."""
+    path = _token_file(home)
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(
+        json.dumps({"base_url": SERVER, "user_id": "u-1", "refresh_token": refresh_token, "timestamp": timestamp})
+    )
+    path.chmod(0o600)
+    return path
 
 
 _REAL_MKSTEMP = tempfile.mkstemp
@@ -160,6 +180,56 @@ class TestLoadCliToken:
         record = load_cli_token(vault=vault)
 
         assert (record.key, record.jwt_token) == ("sk-a", "jwt-a")
+
+    def test_the_refresh_token_round_trips_through_the_vault(self, isolated_home, secret_vault_factory):
+        """A refresh token mints a fresh key from the proxy on demand, so it is the credential just
+        as much as the key is, and it has to come back out of the keychain to be usable."""
+        _write_metadata_only_file(isolated_home)
+        vault = secret_vault_factory(blob=_blob(key="sk-a", refresh_token="rt-a"))
+
+        record = load_cli_token(vault=vault)
+
+        assert (record.key, record.refresh_token) == ("sk-a", "rt-a")
+
+    def test_a_plaintext_refresh_token_is_moved_off_disk(self, isolated_home, secret_vault_factory):
+        path = _write_legacy_file(isolated_home, refresh_token="rt-legacy")
+        vault = secret_vault_factory()
+
+        record = load_cli_token(vault=vault)
+
+        assert record.refresh_token == "rt-legacy"
+        assert "rt-legacy" not in path.read_text()
+        assert json.loads(vault.blob)["refresh_token"] == "rt-legacy"
+
+    def test_an_upgrade_that_left_the_refresh_token_on_disk_rejoins_it_with_the_key(
+        self, isolated_home, secret_vault_factory
+    ):
+        """The release before this one took the key into the keychain and left the refresh token
+        behind, so upgrading finds one sign-in split across both stores. The read has to end with
+        the whole credential in the keychain, not with whichever half it happened to prefer."""
+        path = _write_key_only_keychain_file(isolated_home)
+        vault = secret_vault_factory(blob=_blob(key="sk-live", timestamp=2000.0))
+
+        record = load_cli_token(vault=vault)
+
+        assert (record.key, record.refresh_token) == ("sk-live", "rt-live")
+        assert "rt-live" not in path.read_text()
+        assert json.loads(vault.blob)["key"] == "sk-live"
+        assert json.loads(vault.blob)["refresh_token"] == "rt-live"
+
+    def test_a_superseded_refresh_token_on_disk_never_outlives_the_keychain(
+        self, isolated_home, secret_vault_factory
+    ):
+        """Two stores, two sign-ins, and the newer one is in the keychain. Handing back its key with
+        the older one's refresh token would build a credential neither store ever held, and would
+        renew the login the user already replaced."""
+        path = _write_legacy_file(isolated_home, key="sk-old", refresh_token="rt-old", timestamp=1000.0)
+        vault = secret_vault_factory(blob=_blob(key="sk-new", refresh_token="rt-new", timestamp=2000.0))
+
+        record = load_cli_token(vault=vault)
+
+        assert (record.key, record.refresh_token) == ("sk-new", "rt-new")
+        assert "rt-old" not in path.read_text()
 
     def test_legacy_plaintext_file_still_authenticates_and_is_migrated(self, isolated_home, secret_vault_factory):
         """A token.json written by an older `lite` keeps working, and reading it moves the secret
@@ -360,6 +430,36 @@ class TestSaveCliToken:
         assert "sk-new" not in _token_file(isolated_home).read_text()
         assert json.loads(vault.blob)["key"] == "sk-new"
         assert load_cli_token(vault=vault).key == "sk-new"
+
+    def test_the_refresh_token_goes_to_the_keychain_and_never_to_the_file(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory()
+
+        stored = save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-new", refresh_token="rt-new", timestamp=time.time()),
+            vault=vault,
+        )
+
+        assert stored == SecretStored()
+        assert "rt-new" not in _token_file(isolated_home).read_text()
+        assert json.loads(vault.blob)["refresh_token"] == "rt-new"
+        assert load_cli_token(vault=vault).refresh_token == "rt-new"
+
+    def test_the_refresh_token_falls_back_to_the_owner_only_file_with_the_key(
+        self, isolated_home, secret_vault_factory
+    ):
+        """A machine with no keychain keeps the whole credential in the 0600 file, refresh token
+        included, because a renewal that cannot be stored logs the user out on the next command."""
+        vault = secret_vault_factory(available=False, failure=KeyringNotInstalled())
+
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-new", refresh_token="rt-new", timestamp=time.time()),
+            vault=vault,
+        )
+
+        assert json.loads(_token_file(isolated_home).read_text())["refresh_token"] == "rt-new"
+        assert load_cli_token(vault=vault).refresh_token == "rt-new"
 
     def test_falls_back_to_the_owner_only_file_when_there_is_no_keychain(self, isolated_home, secret_vault_factory):
         stored = save_cli_token(
@@ -628,6 +728,26 @@ class TestScrubFailure:
         assert json.loads(path.read_text()).get("key") is None
 
 
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+    def test_a_rejoin_the_file_refuses_never_takes_the_key_with_it(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
+        """Rolling the rejoined entry back would erase a key that was safely in the keychain before
+        this read began, and the file it would fall back to is the one that has just refused to be
+        rewritten. The duplicate refresh token stays until a later read can finish the move."""
+        path = _write_key_only_keychain_file(isolated_home)
+        vault = secret_vault_factory(blob=_blob(key="sk-live", timestamp=2000.0))
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.os.replace", _refuse_replace)
+        path.chmod(0o400)
+
+        record = load_cli_token(vault=vault)
+
+        assert (record.key, record.refresh_token) == ("sk-live", "rt-live")
+        assert json.loads(vault.blob)["key"] == "sk-live"
+        assert json.loads(vault.blob)["refresh_token"] == "rt-live"
+        assert vault.erases == 0
+
+
 class TestClearCliToken:
     def test_removes_the_credential_from_both_stores(self, isolated_home, secret_vault_factory):
         vault = secret_vault_factory()
@@ -717,12 +837,14 @@ class TestClearCliToken:
     ):
         """Keeping a record of the unreachable keychain must never mean keeping the cleartext copy
         the user just asked to be rid of."""
-        _write_legacy_file(isolated_home)
+        _write_legacy_file(isolated_home, refresh_token="rt-legacy")
         vault = secret_vault_factory(available=False, failure=KeyringUnreachable())
 
         clear_cli_token(vault=vault)
 
-        assert "sk-legacy" not in _token_file(isolated_home).read_text()
+        left_on_disk = _token_file(isolated_home).read_text()
+        assert "sk-legacy" not in left_on_disk
+        assert "rt-legacy" not in left_on_disk
 
     def test_a_repeat_logout_never_answers_its_own_warning_with_an_all_clear(
         self, isolated_home, secret_vault_factory

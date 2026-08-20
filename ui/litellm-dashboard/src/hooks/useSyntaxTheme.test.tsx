@@ -1,47 +1,50 @@
 import { act, renderHook } from "@testing-library/react";
+import { ThemeProvider, useTheme } from "next-themes";
+import type { ReactNode } from "react";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { useSyntaxTheme, type SyntaxTheme } from "./useSyntaxTheme";
 
 const callerLightTheme: SyntaxTheme = { 'code[class*="language-"]': { color: "rebeccapurple" } };
 
-const setRootDark = async (enabled: boolean) => {
-  await act(async () => {
-    document.documentElement.classList.toggle("dark", enabled);
-    await Promise.resolve();
+const renderSyntaxTheme = (defaultTheme: string) =>
+  renderHook(() => ({ syntax: useSyntaxTheme(callerLightTheme), setTheme: useTheme().setTheme }), {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <ThemeProvider attribute="class" enableSystem={false} defaultTheme={defaultTheme}>
+        {children}
+      </ThemeProvider>
+    ),
   });
-};
 
 beforeEach(() => {
-  document.documentElement.classList.remove("dark");
+  localStorage.clear();
+  document.documentElement.classList.remove("dark", "light");
 });
 
 afterAll(() => {
-  document.documentElement.classList.remove("dark");
+  document.documentElement.classList.remove("dark", "light");
 });
 
 describe("useSyntaxTheme", () => {
   it("keeps the caller's own stylesheet in light mode", () => {
-    const { result } = renderHook(() => useSyntaxTheme(callerLightTheme));
+    const { result } = renderSyntaxTheme("light");
 
-    expect(result.current).toBe(callerLightTheme);
+    expect(result.current.syntax).toBe(callerLightTheme);
   });
 
-  it("swaps to oneDark when the root element turns dark", async () => {
-    const { result } = renderHook(() => useSyntaxTheme(callerLightTheme));
+  it("serves oneDark when the resolved theme is dark", () => {
+    const { result } = renderSyntaxTheme("dark");
 
-    await setRootDark(true);
-
-    expect(result.current).toBe(oneDark);
+    expect(result.current.syntax).toBe(oneDark);
   });
 
-  it("restores the caller's stylesheet when dark mode is turned back off", async () => {
-    document.documentElement.classList.add("dark");
-    const { result } = renderHook(() => useSyntaxTheme(callerLightTheme));
-    expect(result.current).toBe(oneDark);
+  it("swaps stylesheets when the theme is changed at runtime", () => {
+    const { result } = renderSyntaxTheme("light");
 
-    await setRootDark(false);
+    act(() => result.current.setTheme("dark"));
+    expect(result.current.syntax).toBe(oneDark);
 
-    expect(result.current).toBe(callerLightTheme);
+    act(() => result.current.setTheme("light"));
+    expect(result.current.syntax).toBe(callerLightTheme);
   });
 });
