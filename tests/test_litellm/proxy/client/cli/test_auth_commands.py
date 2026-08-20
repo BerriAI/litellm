@@ -1429,23 +1429,49 @@ class TestPkceLogoutCommand:
             )
         ]
 
-    def test_logout_still_clears_when_revocation_fails(self):
-        class _FailingSession(_FakeSession):
+    def test_logout_still_clears_when_the_proxy_refuses_the_revocation(self):
+        class _RefusingSession(_FakeSession):
             def __init__(self):
                 super().__init__()
-                self.response = _FakeHttpResponse(503, {"error": "temporarily_unavailable"})
+                self.response = _FakeHttpResponse(401, {"error": "invalid_client"})
 
         with (
             patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
             patch("litellm.proxy.client.cli.commands.auth.clear_token") as clear,
-            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FailingSession),
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefusingSession),
         ):
             result = self.runner.invoke(logout)
 
         assert result.exit_code == 0
-        assert "Could not revoke the refresh token on the proxy (revocation failed with 503" in result.output
+        assert (
+            "Could not revoke the refresh token on the proxy (revocation failed with 401: invalid_client); "
+            "it expires on its own." in result.output
+        )
         assert "Logged out successfully" in result.output
         clear.assert_called_once()
+
+    def test_logout_keeps_the_record_when_the_proxy_cannot_record_the_revocation(self):
+        class _UnavailableSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(
+                    503, {"error": "temporarily_unavailable", "error_description": "the record is unavailable"}
+                )
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.clear_token") as clear,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _UnavailableSession),
+        ):
+            result = self.runner.invoke(logout)
+
+        assert result.exit_code == 1
+        assert (
+            "Error: The proxy could not record the revocation (revocation failed with 503: the record is unavailable). "
+            "Nothing was cleared; run `lite logout` again shortly." in result.output
+        )
+        assert "Logged out successfully" not in result.output
+        clear.assert_not_called()
 
     def test_logout_of_a_classic_token_makes_no_request(self):
         with (

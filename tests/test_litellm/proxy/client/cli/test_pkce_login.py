@@ -22,6 +22,7 @@ from litellm.proxy.client.cli.commands.pkce_login import (
     LoopbackServer,
     PkceCredential,
     PkceFailure,
+    RevocationUnavailable,
     _error_detail,
     authorize_url,
     discover_cli_auth,
@@ -406,6 +407,20 @@ def test_revoke_failures_name_the_cause(response, expected):
     result = revoke_credential(f"{BASE}/revoke", "llm_dcrc_abc", "t", _FakeHttp({("POST", f"{BASE}/revoke"): response}))
     assert isinstance(result, PkceFailure)
     assert expected in result.reason
+
+
+def test_revoke_reports_a_503_as_unavailable_so_the_caller_can_retry():
+    response = _FakeResponse(
+        503,
+        {
+            "error": "temporarily_unavailable",
+            "error_description": "the single-use record is unavailable right now; try again shortly",
+        },
+    )
+    result = revoke_credential(f"{BASE}/revoke", "llm_dcrc_abc", "t", _FakeHttp({("POST", f"{BASE}/revoke"): response}))
+    assert result == RevocationUnavailable(
+        "revocation failed with 503: the single-use record is unavailable right now; try again shortly"
+    )
 
 
 @pytest.mark.parametrize("status", [302, 307, 308])

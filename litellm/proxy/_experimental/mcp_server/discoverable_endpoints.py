@@ -1842,8 +1842,9 @@ async def authorize_complete(
 
 @router.post("/revoke")
 async def revoke_endpoint(request: Request, token: str = Form(...), client_id: str = Form(...)) -> Response:
-    """RFC 7009 revocation for the gateway's refresh tokens (``lite logout``). Always 200
-    for a known client, whatever the token's state; access tokens expire on their own."""
+    """RFC 7009 revocation for the gateway's refresh tokens (``lite logout``): 200 for a known
+    client whatever the token's state, 503 when the shared single-use record cannot be written;
+    access tokens expire on their own."""
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
         master_key,
         user_api_key_cache,
