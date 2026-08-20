@@ -659,6 +659,22 @@ class TestWhoamiCommand:
         assert "Team ID" not in result.output
         assert "Key expired. Run 'lite login' again" in result.output
 
+    def test_whoami_expired_pkce_record_that_could_not_be_renewed_asks_for_a_new_pkce_login(self):
+        token_data = {
+            "user_id": "user-1",
+            "team_id": "team-alpha",
+            "timestamp": time.time() - 3600,
+            "expires_at": time.time() - 60,
+            "refresh_token": "llm_srefresh_spent",
+        }
+
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+            result = self.runner.invoke(whoami)
+
+        assert result.exit_code == 0
+        assert "Key expired. Run 'lite login --pkce' again" in result.output
+        assert "renewed on next use" not in result.output
+
     def test_whoami_no_timestamp(self):
         """Test whoami with token missing timestamp"""
         token_data = {

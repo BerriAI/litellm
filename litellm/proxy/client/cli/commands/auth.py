@@ -854,10 +854,10 @@ def whoami():
 
 def _key_expiry_line(expires_at: float, renews: bool) -> str:
     remaining_hours: Final = (expires_at - time.time()) / 3600
-    status: Final = f"Key expires in: {remaining_hours:.1f} hours" if remaining_hours > 0 else "Key expired"
-    if renews:
-        return f"{status}, renewed on next use"
-    return status if remaining_hours > 0 else f"{status}. Run 'lite login' again"
+    if remaining_hours <= 0:
+        return f"Key expired. Run '{'lite login --pkce' if renews else 'lite login'}' again"
+    status: Final = f"Key expires in: {remaining_hours:.1f} hours"
+    return f"{status}, renewed on next use" if renews else status
 
 
 @click.group(name="auth")
