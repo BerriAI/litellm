@@ -656,7 +656,7 @@ def _configure_claude_code(base_url: str) -> None:
     ),
 )
 @click.pass_context
-def login(ctx: click.Context, config_claude: bool):
+def login(ctx: click.Context, config_claude: bool) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     from litellm.proxy.client.cli.interface import show_commands

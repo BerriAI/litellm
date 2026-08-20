@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 19955
+    "limit": 19950
   },
   "reportArgumentType": {
     "limit": 2566
@@ -57,7 +57,7 @@
     "limit": 5663
   },
   "reportMissingTypeArgument": {
-    "limit": 15555
+    "limit": 15554
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -105,13 +105,13 @@
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 39017
+    "limit": 39016
   },
   "reportUnknownParameterType": {
-    "limit": 19885
+    "limit": 19884
   },
   "reportUnknownVariableType": {
-    "limit": 30572
+    "limit": 30569
   },
   "reportUnnecessaryCast": {
     "limit": 117
