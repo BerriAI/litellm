@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { Tag } from "antd";
 import { z } from "zod/v4";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "@/components/policies/types";
 import { Guardrail } from "@/components/guardrails/types";
@@ -474,9 +473,9 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
                     </span>
                     <div className="flex flex-wrap gap-1">
                       {resolvedGuardrails.map((g) => (
-                        <Tag key={g} color="blue">
+                        <Badge key={g} variant="info">
                           {g}
-                        </Tag>
+                        </Badge>
                       ))}
                     </div>
                   </AlertDescription>

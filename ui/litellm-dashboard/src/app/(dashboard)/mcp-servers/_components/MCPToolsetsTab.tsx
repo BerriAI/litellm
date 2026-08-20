@@ -1,8 +1,7 @@
 import React, { useState, useCallback } from "react";
-import { Input, message, Spin } from "antd";
 import { z } from "zod/v4";
 import { SortingState } from "@tanstack/react-table";
-import { Inbox, Plus } from "lucide-react";
+import { Inbox, Plus, X } from "lucide-react";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
@@ -18,9 +17,11 @@ import { MCPToolset, MCPToolsetTool } from "@/components/mcp_tools/types";
 import { FieldGroup } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
-import { Input as ShadcnInput } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { toast } from "@/lib/toast";
 import { displayToolName, getMCPToolsetTableColumns } from "./MCPToolsetTableColumns";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -97,7 +98,7 @@ function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggl
         <div className="p-2">
           {loading ? (
             <div className="flex justify-center py-3">
-              <Spin size="small" />
+              <UiLoadingSpinner className="size-4" />
             </div>
           ) : tools.length === 0 ? (
             <p className="text-xs text-muted-foreground px-2 py-2">No tools found for this server.</p>
@@ -212,10 +213,10 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
         <form onSubmit={(event) => event.preventDefault()} className="mt-2">
           <FieldGroup className="mb-4 flex-row gap-4">
             <FormField control={form.control} name="toolset_name" label="Toolset Name" className="flex-1">
-              {(field) => <ShadcnInput {...field} placeholder="e.g. github-linear-tools" />}
+              {(field) => <Input {...field} placeholder="e.g. github-linear-tools" />}
             </FormField>
             <FormField control={form.control} name="description" label="Description" className="flex-1">
-              {(field) => <ShadcnInput {...field} placeholder="Optional description" />}
+              {(field) => <Input {...field} placeholder="Optional description" />}
             </FormField>
           </FieldGroup>
         </form>
@@ -226,13 +227,20 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-semibold text-foreground">Available Tools</p>
             </div>
-            <Input
-              placeholder="Search MCP servers..."
-              value={serverSearch}
-              onChange={(e) => setServerSearch(e.target.value)}
-              className="mb-2"
-              allowClear
-            />
+            <InputGroup className="mb-2">
+              <InputGroupInput
+                placeholder="Search MCP servers..."
+                value={serverSearch}
+                onChange={(e) => setServerSearch(e.target.value)}
+              />
+              {serverSearch && (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setServerSearch("")}>
+                    <X />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
             <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 300 }}>
               {filteredServers.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
@@ -381,14 +389,14 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
   const handleCreate = async (name: string, description: string | undefined, tools: MCPToolsetTool[]) => {
     if (!accessToken) return;
     await createMCPToolset(accessToken, { toolset_name: name, description, tools });
-    message.success("Toolset created");
+    toast.success("Toolset created");
     queryClient.invalidateQueries({ queryKey: ["mcpToolsets"] });
   };
 
   const handleUpdate = async (name: string, description: string | undefined, tools: MCPToolsetTool[]) => {
     if (!accessToken || !editToolset) return;
     await updateMCPToolset(accessToken, { toolset_id: editToolset.toolset_id, toolset_name: name, description, tools });
-    message.success("Toolset updated");
+    toast.success("Toolset updated");
     queryClient.invalidateQueries({ queryKey: ["mcpToolsets"] });
     setEditToolset(null);
   };
@@ -398,7 +406,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
     setDeleting(true);
     try {
       await deleteMCPToolset(accessToken, deleteId);
-      message.success("Toolset deleted");
+      toast.success("Toolset deleted");
       queryClient.invalidateQueries({ queryKey: ["mcpToolsets"] });
       setDeleteId(null);
     } finally {

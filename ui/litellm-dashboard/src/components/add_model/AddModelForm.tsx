@@ -5,7 +5,10 @@ import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { modelCreationScope } from "@/utils/modelPermissions";
 import { Switch } from "@/components/ui/switch";
 import { Field, FieldLabel } from "@/components/shared/form/field";
-import { Select as AntdSelect, Card, Col, Row, Tooltip, Typography } from "antd";
+import { Card, CardContent } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
@@ -24,6 +27,7 @@ import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, modelAvailableCall } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
+import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
 import ConditionalPublicModelName from "./conditional_public_model_name";
 import LiteLLMModelNameField from "./litellm_model_name";
@@ -56,8 +60,6 @@ const connectionTestModelName = (values: MountedFormValues): string | undefined 
   }
   return typeof named === "string" ? named : undefined;
 };
-
-const { Title, Link } = Typography;
 
 const AddModelForm: React.FC<AddModelFormProps> = ({
   form,
@@ -117,6 +119,34 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     return [...providerMetadata].sort((a, b) => a.provider_display_name.localeCompare(b.provider_display_name));
   }, [providerMetadata]);
 
+  const providerOptions: SearchSelectOption[] = useMemo(
+    () =>
+      sortedProviderMetadata.map((providerInfo) => ({
+        label: providerInfo.provider_display_name,
+        value: providerInfo.provider,
+        icon: <ProviderLogo provider={providerInfo.provider} className="w-5 h-5" />,
+      })),
+    [sortedProviderMetadata],
+  );
+
+  const credentialOptions: SearchSelectOption[] = useMemo(
+    () => [
+      { label: "None", value: "" },
+      ...credentials.map((credential) => ({
+        label: credential.credential_name,
+        value: credential.credential_name,
+      })),
+    ],
+    [credentials],
+  );
+
+  const applyProviderSelection = (provider: Providers) => {
+    setSelectedProvider(provider);
+    setProviderModelsFn(provider);
+    form.setValue("model", []);
+    form.setValue("model_name", undefined);
+  };
+
   const providerMetadataErrorText = providerMetadataError
     ? providerMetadataError instanceof Error
       ? providerMetadataError.message
@@ -132,311 +162,287 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
 
   return (
     <>
-      <Title level={2}>Add Model</Title>
+      <h2 className="mb-4 text-2xl font-semibold text-foreground">Add Model</h2>
 
       <Card>
-        <FormProvider {...form}>
-          <MountedFormProvider value={{ control: form.control, registry }}>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                void handleOk().then((submitted) => {
-                  if (submitted) {
-                    setTeamAdminSelectedTeam(null);
-                  }
-                });
-              }}
-            >
-              <>
-                {requiresTeamScope && (
-                  <>
-                    <MountedFormField
-                      label={labelWithHint("Select Team", "Select the team for which you want to add this model")}
-                      name="team_id"
-                      required
-                      rules={{ validate: { required: antdRequired("Please select a team to continue") } }}
-                      className="mb-4"
-                    >
-                      {(control) => (
-                        <TeamDropdown
-                          value={control.value as string | undefined}
-                          onChange={(value) => {
-                            control.onChange(value);
-                            setTeamAdminSelectedTeam(value);
-                          }}
-                        />
-                      )}
-                    </MountedFormField>
-                    {!teamAdminSelectedTeam && (
-                      <Alert variant="info" className="mb-4">
-                        <Info />
-                        <AlertTitle>Team Selection Required</AlertTitle>
-                        <AlertDescription>
-                          As a team admin, you need to select your team first before adding models.
-                        </AlertDescription>
-                      </Alert>
-                    )}
-                  </>
-                )}
-                {(isAdmin || (isTeamAdmin && teamAdminSelectedTeam)) && (
-                  <>
-                    <MountedFormField
-                      label={labelWithHint("Provider", "E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc.")}
-                      name="custom_llm_provider"
-                      required
-                      rules={{ validate: { required: antdRequired("Required") } }}
-                      className="mb-4"
-                    >
-                      {(control) => (
-                        <AntdSelect
-                          id={control.id}
-                          virtual={false}
-                          showSearch
-                          loading={isProviderMetadataLoading}
-                          placeholder={isProviderMetadataLoading ? "Loading providers..." : "Select a provider"}
-                          optionFilterProp="data-label"
-                          value={control.value as string | undefined}
-                          onBlur={control.onBlur}
-                          onChange={(value) => {
-                            control.onChange(value);
-                            setSelectedProvider(value as Providers);
-                            setProviderModelsFn(value as Providers);
-                            form.setValue("model", []);
-                            form.setValue("model_name", undefined);
-                          }}
-                        >
-                          {providerMetadataErrorText && sortedProviderMetadata.length === 0 && (
-                            <AntdSelect.Option key="__error" value="">
-                              {providerMetadataErrorText}
-                            </AntdSelect.Option>
-                          )}
-                          {sortedProviderMetadata.map((providerInfo) => {
-                            const displayName = providerInfo.provider_display_name;
-                            const providerKey = providerInfo.provider;
-
-                            return (
-                              <AntdSelect.Option key={providerKey} value={providerKey} data-label={displayName}>
-                                <div className="flex items-center space-x-2">
-                                  <ProviderLogo provider={providerKey} className="w-5 h-5" />
-                                  <span>{displayName}</span>
-                                </div>
-                              </AntdSelect.Option>
-                            );
-                          })}
-                        </AntdSelect>
-                      )}
-                    </MountedFormField>
-                    <LiteLLMModelNameField
-                      selectedProvider={selectedProvider}
-                      providerModels={providerModels}
-                      getPlaceholder={getPlaceholder}
-                    />
-
-                    {/* Conditionally Render "Public Model Name" */}
-                    <ConditionalPublicModelName />
-
-                    {/* Select Mode */}
-                    <MountedFormField label="Mode" name="mode" className="mb-1">
-                      {(control) => (
-                        <AntdSelect
-                          id={control.id}
-                          style={{ width: "100%" }}
-                          value={control.value as string | undefined}
-                          onBlur={control.onBlur}
-                          onChange={(value) => {
-                            control.onChange(value);
-                            setTestMode(value);
-                          }}
-                          options={TEST_MODES}
-                        />
-                      )}
-                    </MountedFormField>
-                    <Row>
-                      <Col span={10}></Col>
-                      <Col span={10}>
-                        <p className="text-sm mb-5 mt-1">
-                          <strong>Optional</strong> - LiteLLM endpoint to use when health checking this model{" "}
-                          <Link href="https://docs.litellm.ai/docs/proxy/health#health" target="_blank">
-                            Learn more
-                          </Link>
-                        </p>
-                      </Col>
-                    </Row>
-
-                    {/* Credentials */}
-                    <div className="mb-4">
-                      <Typography.Text className="text-sm text-muted-foreground mb-2">
-                        Either select existing credentials OR enter new provider credentials below
-                      </Typography.Text>
-                    </div>
-
-                    <MountedFormField
-                      label="Existing Credentials"
-                      name="litellm_credential_name"
-                      defaultValue={null}
-                      className="mb-4"
-                    >
-                      {(control) => (
-                        <AntdSelect
-                          id={control.id}
-                          showSearch
-                          placeholder="Select or search for existing credentials"
-                          optionFilterProp="children"
-                          filterOption={(input, option) =>
-                            (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-                          }
-                          value={control.value as string | null | undefined}
-                          onChange={control.onChange}
-                          onBlur={control.onBlur}
-                          options={[
-                            { value: null, label: "None" },
-                            ...credentials.map((credential) => ({
-                              value: credential.credential_name,
-                              label: credential.credential_name,
-                            })),
-                          ]}
-                          allowClear
-                        />
-                      )}
-                    </MountedFormField>
-
-                    {/* Only show provider specific fields if no credentials selected */}
-                    {!selectedCredentialName && (
-                      <>
-                        <div className="flex items-center my-4">
-                          <div className="grow border-t border-border"></div>
-                          <span className="px-4 text-muted-foreground text-sm">OR</span>
-                          <div className="grow border-t border-border"></div>
-                        </div>
-                        <ProviderSpecificFields selectedProvider={selectedProvider} />
-                      </>
-                    )}
-                    <div className="flex items-center my-4">
-                      <div className="grow border-t border-border"></div>
-                      <span className="px-4 text-muted-foreground text-sm">Additional Model Info Settings</span>
-                      <div className="grow border-t border-border"></div>
-                    </div>
-                    {/* Team-only Model Switch - Only show for proxy admins, not team admins */}
-                    {(isAdmin || !isTeamAdmin) && (
-                      <Field className="mb-4">
-                        <FieldLabel>
-                          {labelWithHint(
-                            "Team-BYOK Model",
-                            "Only use this model + credential combination for this team. Useful when teams want to onboard their own OpenAI keys.",
-                          )}
-                        </FieldLabel>
-                        <Tooltip
-                          title={
-                            !premiumUser
-                              ? "This is an enterprise-only feature. Upgrade to premium to restrict model+credential combinations to a specific team."
-                              : ""
-                          }
-                          placement="top"
-                        >
-                          <span className="inline-flex">
-                            <Switch
-                              checked={isTeamOnly}
-                              onCheckedChange={(checked) => {
-                                setIsTeamOnly(checked);
-                                if (!checked) {
-                                  form.setValue("team_id", undefined);
-                                }
-                              }}
-                              disabled={!premiumUser}
-                              aria-label="Team-BYOK Model"
-                            />
-                          </span>
-                        </Tooltip>
-                      </Field>
-                    )}
-
-                    {/* Conditional Team Selection */}
-                    {isTeamOnly && !requiresTeamScope && (
+        <CardContent>
+          <FormProvider {...form}>
+            <MountedFormProvider value={{ control: form.control, registry }}>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleOk().then((submitted) => {
+                    if (submitted) {
+                      setTeamAdminSelectedTeam(null);
+                    }
+                  });
+                }}
+              >
+                <>
+                  {requiresTeamScope && (
+                    <>
                       <MountedFormField
-                        label={labelWithHint("Select Team", "Only keys for this team will be able to call this model.")}
+                        label={labelWithHint("Select Team", "Select the team for which you want to add this model")}
                         name="team_id"
+                        required
+                        rules={{ validate: { required: antdRequired("Please select a team to continue") } }}
                         className="mb-4"
-                        required={isTeamOnly && !isAdmin}
-                        rules={
-                          isTeamOnly && !isAdmin
-                            ? { validate: { required: antdRequired("Please select a team.") } }
-                            : undefined
-                        }
                       >
                         {(control) => (
                           <TeamDropdown
                             value={control.value as string | undefined}
-                            onChange={control.onChange}
-                            disabled={!premiumUser}
+                            onChange={(value) => {
+                              control.onChange(value);
+                              setTeamAdminSelectedTeam(value);
+                            }}
                           />
                         )}
                       </MountedFormField>
-                    )}
-                    {isAdmin && (
-                      <>
+                      {!teamAdminSelectedTeam && (
+                        <Alert variant="info" className="mb-4">
+                          <Info />
+                          <AlertTitle>Team Selection Required</AlertTitle>
+                          <AlertDescription>
+                            As a team admin, you need to select your team first before adding models.
+                          </AlertDescription>
+                        </Alert>
+                      )}
+                    </>
+                  )}
+                  {(isAdmin || (isTeamAdmin && teamAdminSelectedTeam)) && (
+                    <>
+                      <MountedFormField
+                        label={labelWithHint("Provider", "E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc.")}
+                        name="custom_llm_provider"
+                        required
+                        rules={{ validate: { required: antdRequired("Required") } }}
+                        className="mb-4"
+                      >
+                        {(control) => (
+                          <SearchSelect
+                            inputId={control.id}
+                            options={providerOptions}
+                            emptyText={providerMetadataErrorText ?? "No providers found"}
+                            placeholder={isProviderMetadataLoading ? "Loading providers..." : "Select a provider"}
+                            value={(control.value as string | undefined) ?? ""}
+                            onValueChange={(value) => {
+                              control.onChange(value);
+                              applyProviderSelection(value as Providers);
+                            }}
+                          />
+                        )}
+                      </MountedFormField>
+                      <LiteLLMModelNameField
+                        selectedProvider={selectedProvider}
+                        providerModels={providerModels}
+                        getPlaceholder={getPlaceholder}
+                      />
+
+                      {/* Conditionally Render "Public Model Name" */}
+                      <ConditionalPublicModelName />
+
+                      {/* Select Mode */}
+                      <MountedFormField label="Mode" name="mode" className="mb-1">
+                        {(control) => (
+                          <Select
+                            items={TEST_MODES}
+                            value={(control.value as string | undefined) ?? null}
+                            onValueChange={(value: string | null) => {
+                              control.onChange(value);
+                              setTestMode(value ?? "");
+                            }}
+                          >
+                            <SelectTrigger id={control.id} className="w-full" aria-label="Mode">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {TEST_MODES.map((mode) => (
+                                <SelectItem key={mode.value} value={mode.value}>
+                                  {mode.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </MountedFormField>
+                      <div className="grid grid-cols-12">
+                        <div className="col-span-5" />
+                        <div className="col-span-5">
+                          <p className="text-sm mb-5 mt-1">
+                            <strong>Optional</strong> - LiteLLM endpoint to use when health checking this model{" "}
+                            <a
+                              href="https://docs.litellm.ai/docs/proxy/health#health"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary hover:underline"
+                            >
+                              Learn more
+                            </a>
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Credentials */}
+                      <div className="mb-4">
+                        <span className="text-sm text-muted-foreground">
+                          Either select existing credentials OR enter new provider credentials below
+                        </span>
+                      </div>
+
+                      <MountedFormField
+                        label="Existing Credentials"
+                        name="litellm_credential_name"
+                        defaultValue={null}
+                        className="mb-4"
+                      >
+                        {(control) => (
+                          <SearchSelect
+                            inputId={control.id}
+                            placeholder="Select or search for existing credentials"
+                            options={credentialOptions}
+                            value={(control.value as string | null | undefined) ?? ""}
+                            onValueChange={(value) => control.onChange(value === "" ? null : value)}
+                          />
+                        )}
+                      </MountedFormField>
+
+                      {/* Only show provider specific fields if no credentials selected */}
+                      {!selectedCredentialName && (
+                        <>
+                          <div className="flex items-center my-4">
+                            <div className="grow border-t border-border"></div>
+                            <span className="px-4 text-muted-foreground text-sm">OR</span>
+                            <div className="grow border-t border-border"></div>
+                          </div>
+                          <ProviderSpecificFields selectedProvider={selectedProvider} />
+                        </>
+                      )}
+                      <div className="flex items-center my-4">
+                        <div className="grow border-t border-border"></div>
+                        <span className="px-4 text-muted-foreground text-sm">Additional Model Info Settings</span>
+                        <div className="grow border-t border-border"></div>
+                      </div>
+                      {/* Team-only Model Switch - Only show for proxy admins, not team admins */}
+                      {(isAdmin || !isTeamAdmin) && (
+                        <Field className="mb-4">
+                          <FieldLabel>
+                            {labelWithHint(
+                              "Team-BYOK Model",
+                              "Only use this model + credential combination for this team. Useful when teams want to onboard their own OpenAI keys.",
+                            )}
+                          </FieldLabel>
+                          <SimpleTooltip
+                            content={
+                              !premiumUser
+                                ? "This is an enterprise-only feature. Upgrade to premium to restrict model+credential combinations to a specific team."
+                                : ""
+                            }
+                            side="top"
+                          >
+                            <span className="inline-flex">
+                              <Switch
+                                checked={isTeamOnly}
+                                onCheckedChange={(checked) => {
+                                  setIsTeamOnly(checked);
+                                  if (!checked) {
+                                    form.setValue("team_id", undefined);
+                                  }
+                                }}
+                                disabled={!premiumUser}
+                                aria-label="Team-BYOK Model"
+                              />
+                            </span>
+                          </SimpleTooltip>
+                        </Field>
+                      )}
+
+                      {/* Conditional Team Selection */}
+                      {isTeamOnly && !requiresTeamScope && (
                         <MountedFormField
                           label={labelWithHint(
-                            "Model Access Group",
-                            "Use model access groups to give users access to select models, and add new ones to the group over time.",
+                            "Select Team",
+                            "Only keys for this team will be able to call this model.",
                           )}
-                          name="model_access_group"
+                          name="team_id"
                           className="mb-4"
+                          required={isTeamOnly && !isAdmin}
+                          rules={
+                            isTeamOnly && !isAdmin
+                              ? { validate: { required: antdRequired("Please select a team.") } }
+                              : undefined
+                          }
                         >
                           {(control) => (
-                            <AntdSelect
-                              id={control.id}
-                              mode="tags"
-                              showSearch
-                              placeholder="Select existing groups or type to create new ones"
-                              optionFilterProp="children"
-                              tokenSeparators={[","]}
-                              value={control.value as string[] | undefined}
+                            <TeamDropdown
+                              value={control.value as string | undefined}
                               onChange={control.onChange}
-                              onBlur={control.onBlur}
-                              options={modelAccessGroups.map((group) => ({
-                                value: group,
-                                label: group,
-                              }))}
-                              maxTagCount="responsive"
-                              allowClear
+                              disabled={!premiumUser}
                             />
                           )}
                         </MountedFormField>
-                      </>
-                    )}
-                    <AdvancedSettings
-                      showAdvancedSettings={showAdvancedSettings}
-                      setShowAdvancedSettings={setShowAdvancedSettings}
-                      teams={teams}
-                      guardrailsList={guardrailsList || []}
-                      tagsList={tagsList || {}}
-                      accessToken={accessToken || ""}
-                    />
-                  </>
-                )}
-                <div className="flex justify-between items-center mb-4">
-                  <Tooltip title="Get help on our github">
-                    <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
-                  </Tooltip>
-                  <div className="space-x-2">
-                    <Button
-                      variant="outline"
-                      data-testid="test-connect-btn"
-                      onClick={handleTestConnection}
-                      disabled={isTestingConnection}
-                      aria-busy={isTestingConnection}
-                    >
-                      Test Connect
-                    </Button>
-                    <Button data-testid="add-model-btn" type="submit">
-                      Add Model
-                    </Button>
+                      )}
+                      {isAdmin && (
+                        <>
+                          <MountedFormField
+                            label={labelWithHint(
+                              "Model Access Group",
+                              "Use model access groups to give users access to select models, and add new ones to the group over time.",
+                            )}
+                            name="model_access_group"
+                            className="mb-4"
+                          >
+                            {(control) => (
+                              <AccessGroupTagsCombobox
+                                id={control.id}
+                                value={control.value as string[] | undefined}
+                                onChange={control.onChange}
+                                options={modelAccessGroups}
+                                ariaInvalid={control["aria-invalid"] ? true : undefined}
+                                ariaDescribedBy={control["aria-describedby"]}
+                              />
+                            )}
+                          </MountedFormField>
+                        </>
+                      )}
+                      <AdvancedSettings
+                        showAdvancedSettings={showAdvancedSettings}
+                        setShowAdvancedSettings={setShowAdvancedSettings}
+                        teams={teams}
+                        guardrailsList={guardrailsList || []}
+                        tagsList={tagsList || {}}
+                        accessToken={accessToken || ""}
+                      />
+                    </>
+                  )}
+                  <div className="flex justify-between items-center mb-4">
+                    <SimpleTooltip content="Get help on our github">
+                      <a
+                        href="https://github.com/BerriAI/litellm/issues"
+                        className="text-sm text-primary hover:underline"
+                      >
+                        Need Help?
+                      </a>
+                    </SimpleTooltip>
+                    <div className="space-x-2">
+                      <Button
+                        variant="outline"
+                        data-testid="test-connect-btn"
+                        onClick={handleTestConnection}
+                        disabled={isTestingConnection}
+                        aria-busy={isTestingConnection}
+                      >
+                        Test Connect
+                      </Button>
+                      <Button data-testid="add-model-btn" type="submit">
+                        Add Model
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </>
-            </form>
-          </MountedFormProvider>
-        </FormProvider>
+                </>
+              </form>
+            </MountedFormProvider>
+          </FormProvider>
+        </CardContent>
       </Card>
 
       {/* Test Connection Results Modal */}
