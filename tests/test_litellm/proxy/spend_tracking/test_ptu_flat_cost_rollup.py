@@ -2045,3 +2045,40 @@ def test_the_router_lookup_returns_none_outside_a_proxy():
     finally:
         if real is not None:
             sys.modules["litellm.proxy.proxy_server"] = real
+
+
+@pytest.mark.parametrize("chunk", [None, ("dep-a", "dep-b")], ids=["unbounded", "bounded"])
+def test_the_prune_filter_is_a_plain_dict(chunk):
+    """The query builder serialises the mapping it is handed and rejects a read-only view of
+    one, which the in-memory table in these tests accepts happily. Only a live run caught it."""
+    predicate = ptu_rollup._prune_filter(date_str=DAY.isoformat(), cutoff=datetime.now(timezone.utc), chunk=chunk)
+
+    assert type(predicate) is dict
+    assert type(predicate["updated_at"]) is dict
+    if chunk is None:
+        assert "model" not in predicate
+    else:
+        assert type(predicate["model"]) is dict
+        assert predicate["model"]["in"] == chunk
+
+
+@pytest.mark.asyncio
+async def test_the_catch_up_pass_reaches_a_config_declared_deployment(monkeypatch):
+    """The catch-up shares the loader, so config deployments join it without being wired in.
+    That is what prices the elapsed days of a reservation declared before today."""
+    table = _FakeSentinelTable()
+    now = datetime.now(timezone.utc)
+    started = (now - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
+    entry = _router_entry(
+        model_id="cfg-back",
+        model_info={"ptu_count": 100, "cost_per_ptu_per_hour": 0.02, "team_id": "t", "ptu_effective_from": started},
+    )
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(entry))
+
+    await run_scheduled_ptu_rollup(_prisma_for([], table), pod_lock_manager=_pod_lock(acquired=True))
+
+    charged = sorted(day for (_, day, _, model) in table.rows if model == "cfg-back")
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
+    assert len(charged) == 3, charged
+    assert charged[-1] == yesterday
+    assert all(row["ptu_flat_cost"] == pytest.approx(48.0) for row in table.rows.values())
