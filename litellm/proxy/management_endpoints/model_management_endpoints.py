@@ -24,6 +24,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.litellm_core_utils.ptu_pricing import (
+    CUSTOM_PRICING_FIELDS,
+    PTU_EMPTIED_PRICING_FIELDS,
+    PTU_ZEROED_PRICING_FIELDS,
+    PTU_ZEROED_TABLE_FIELDS,
+    SEARCH_CONTEXT_SIZES,
+)
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
@@ -89,7 +96,6 @@ from litellm.types.router import (
     ModelInfo,
     updateDeployment,
 )
-from litellm.types.utils import CustomPricingLiteLLMParams
 from litellm.utils import get_utc_datetime
 
 router: Final = APIRouter()
@@ -346,12 +352,8 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
 # tiered_pricing is the one mirrored field that is a table of ranges, not a rate, so it is stored
 # empty (see _PTU_EMPTIED_PRICING_FIELDS): its tiers outrank the zeros written beside them, so
 # dropping it would leave the cost map's tiers billing the traffic the reserved capacity covers.
-_PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in SPECIAL_MODEL_INFO_PARAMS if f != "tiered_pricing") + (
-    "cache_creation_input_token_cost_above_1hr",
-    "cache_creation_input_token_cost_above_200k_tokens",
-    "cache_read_input_token_cost_above_200k_tokens",
-)
-_PTU_EMPTIED_PRICING_FIELDS: Final = frozenset({"tiered_pricing"})
+_PTU_ZEROED_PRICING_FIELDS: Final = PTU_ZEROED_PRICING_FIELDS
+_PTU_EMPTIED_PRICING_FIELDS: Final = PTU_EMPTIED_PRICING_FIELDS
 _PTU_ZEROED_PRICING: Final[Mapping[str, float | tuple[()]]] = MappingProxyType(
     {
         **dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0),
@@ -363,13 +365,13 @@ _EMPTY_MODEL_INFO: Final[Mapping[str, object]] = _NO_PRICING_OVERRIDE
 # Rate fields only. CustomPricingLiteLLMParams also carries settings that are not charges
 # (an embedding's output_vector_size, the regional uplift multipliers), and zeroing one of
 # those would destroy the deployment's configuration rather than stop a charge.
-_CUSTOM_PRICING_FIELDS: Final = frozenset(f for f in CustomPricingLiteLLMParams.model_fields if "cost" in f)
+_CUSTOM_PRICING_FIELDS: Final = CUSTOM_PRICING_FIELDS
 # search_context_cost_per_query holds its rates in a table keyed by context size, and an absent
 # table means the provider's own default rate rather than free (litellm/llms/gemini/cost_calculator
 # falls back to $0.035), so it is zeroed in place rather than emptied like tiered_pricing, and
 # written on every PTU deployment rather than only where a table is already stored.
-_PTU_ZEROED_TABLE_FIELDS: Final = frozenset({"search_context_cost_per_query"})
-_SEARCH_CONTEXT_SIZES: Final = ("search_context_size_low", "search_context_size_medium", "search_context_size_high")
+_PTU_ZEROED_TABLE_FIELDS: Final = PTU_ZEROED_TABLE_FIELDS
+_SEARCH_CONTEXT_SIZES: Final = SEARCH_CONTEXT_SIZES
 
 
 def _is_nonzero_rate(value: object) -> bool:

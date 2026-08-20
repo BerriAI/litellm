@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -7695,7 +7696,16 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**_litellm_params)
+            zeroed_pricing: Final = (
+                zeroed_ptu_pricing(_model_info, _litellm_params) if _model_info.get("db_model") is not True else None
+            )
+            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
+                **(
+                    _litellm_params
+                    if zeroed_pricing is None
+                    else MappingProxyType({**_litellm_params, **zeroed_pricing})
+                )
+            )
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(
                 **deployment_info,
