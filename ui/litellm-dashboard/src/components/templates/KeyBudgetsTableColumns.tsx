@@ -33,11 +33,11 @@ const isAlertOnly = (entry: KeyBudgetEntry): boolean => entry.enforcement === "s
 
 /**
  * Whether a note means the row is dead: it cannot reject a request no matter what the numbers say.
- * Keyed by `code` rather than by `severity` because severity does not track this reliably, and
- * exhaustive over the union so a code added server-side fails this build until it is classified.
- * `alert_only` is not dead, it restates the `enforcement` column and a soft budget that is over
- * still outranks healthy rows. `end_user_route_only` is not dead either, it scopes which requests
- * the row applies to.
+ * Deadness is a property of the code alone. Severity does not imply it in either direction, since
+ * dead codes appear under both values, so an unclassified code is assumed live: calling a row dead
+ * when it is not invites dismissing the budget that actually stopped the request, which is the one
+ * failure this table exists to prevent. Exhaustive over the union, so a code added server-side
+ * fails this build until someone classifies it.
  */
 const CODE_KILLS_ROW: Readonly<Record<KeyBudgetNoteCode, boolean>> = {
   alert_only: false,
@@ -53,16 +53,21 @@ const CODE_KILLS_ROW: Readonly<Record<KeyBudgetNoteCode, boolean>> = {
   user_budget_not_applied_to_team_key: true,
 };
 
-/** Severity is the fallback for a code this build predates, never the primary signal. */
 const noteKillsRow = (note: KeyBudgetNote): boolean => {
   const classified: boolean | undefined = CODE_KILLS_ROW[note.code];
-  return classified ?? note.severity === "info";
+  return classified ?? false;
 };
 
 export const cannotTrip = (entry: KeyBudgetEntry): boolean => entry.notes.some(noteKillsRow);
 
-export const isBlockingRow = (entry: KeyBudgetEntry): boolean =>
-  entry.status === "exceeded" && !isAlertOnly(entry) && !cannotTrip(entry);
+/** Exceeding a throttled budget slows requests rather than rejecting them, so it never denies one. */
+export const isThrottled = (entry: KeyBudgetEntry): boolean =>
+  entry.notes.some((note) => note.code === "throttled_instead_of_blocked");
+
+/** Whether going over this budget rejects a request, as opposed to alerting, throttling or nothing. */
+const canDeny = (entry: KeyBudgetEntry): boolean => !isAlertOnly(entry) && !cannotTrip(entry) && !isThrottled(entry);
+
+export const isBlockingRow = (entry: KeyBudgetEntry): boolean => entry.status === "exceeded" && canDeny(entry);
 
 /** Ascending relevance to "what stopped my request", so a row that cannot answer it sorts last. */
 export const rowRank = (entry: KeyBudgetEntry): number => {
@@ -89,23 +94,33 @@ const COMPARISON_GLYPH: Record<string, string> = { ">=": "≥", ">": ">" };
  * to `>`. So this reads `comparison` off each row rather than assuming a constant per scope. Two
  * rows can show identical numbers and opposite statuses, so state the threshold each one enforces.
  */
+const thresholdVerb = (entry: KeyBudgetEntry): string => {
+  if (isAlertOnly(entry)) return "Alerts";
+  return isThrottled(entry) ? "Throttles" : "Blocks";
+};
+
 export const budgetThresholdRule = (entry: KeyBudgetEntry): string | null => {
   if (entry.max_budget == null) return null;
   const threshold = `${COMPARISON_GLYPH[entry.comparison] ?? entry.comparison} $${formatNumberWithCommas(entry.max_budget, 2)}`;
-  return isAlertOnly(entry) ? `Alerts at ${threshold}` : `Blocks at ${threshold}`;
+  return `${thresholdVerb(entry)} at ${threshold}`;
 };
 
 const statusPresentation = (entry: KeyBudgetEntry): { tone: StatusTone; label: string } => {
   if (entry.status === "unlimited") return { tone: "neutral", label: "Unlimited" };
   if (cannotTrip(entry)) return { tone: "neutral", label: "Cannot trip" };
   if (entry.status !== "exceeded") return { tone: "success", label: "Within budget" };
-  return isAlertOnly(entry)
-    ? { tone: "warning", label: "Exceeded (alert only)" }
+  if (isAlertOnly(entry)) return { tone: "warning", label: "Exceeded (alert only)" };
+  return isThrottled(entry)
+    ? { tone: "warning", label: "Exceeded (throttling)" }
     : { tone: "error", label: "Exceeded" };
 };
 
 function ScopeCell({ entry }: { entry: KeyBudgetEntry }) {
   const entity = entry.entity_label || entry.entity_id;
+  // Per-model rows split one cap across every request model that routes onto it, so `entity_id` is
+  // what tells two rows apart while `entity_label` repeats the cap. Showing only the label would
+  // render them as duplicates.
+  const measured = entry.entity_label && entry.entity_id !== entry.entity_label ? entry.entity_id : null;
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <CellTooltip
@@ -119,6 +134,11 @@ function ScopeCell({ entry }: { entry: KeyBudgetEntry }) {
       {entity && (
         <span className="truncate font-mono text-xs text-muted-foreground" title={entity}>
           {entity}
+        </span>
+      )}
+      {measured && (
+        <span className="truncate font-mono text-xs text-muted-foreground/70" title={measured}>
+          {measured}
         </span>
       )}
       {entry.notes.map((note) => (
@@ -136,13 +156,25 @@ function ScopeCell({ entry }: { entry: KeyBudgetEntry }) {
 }
 
 function EnforcementCell({ entry }: { entry: KeyBudgetEntry }) {
-  return isAlertOnly(entry) ? (
-    <StatusBadge
-      tone="neutral"
-      label="Alert only"
-      tooltip="Soft budget. Going over raises an alert and never rejects a request."
-    />
-  ) : (
+  if (isAlertOnly(entry)) {
+    return (
+      <StatusBadge
+        tone="neutral"
+        label="Alert only"
+        tooltip="Soft budget. Going over raises an alert and never rejects a request."
+      />
+    );
+  }
+  if (isThrottled(entry)) {
+    return (
+      <StatusBadge
+        tone="warning"
+        label="Throttles requests"
+        tooltip="This key opted into throttle_on_budget_exceeded, so going over slows requests instead of rejecting them."
+      />
+    );
+  }
+  return (
     <StatusBadge tone="info" label="Blocks requests" tooltip="Going over this budget rejects requests on this key." />
   );
 }

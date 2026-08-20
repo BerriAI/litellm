@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { KeyBudgetEntry, KeyBudgetNote } from "@/app/(dashboard)/hooks/keys/useKeyBudgets";
-import { budgetThresholdRule, cannotTrip, isBlockingRow, rowRank } from "./KeyBudgetsTableColumns";
+import { budgetThresholdRule, cannotTrip, isBlockingRow, isThrottled, rowRank } from "./KeyBudgetsTableColumns";
 
 const UNCONFIGURED_BUDGET = {
   scope: "key",
@@ -23,7 +23,7 @@ const UNCONFIGURED_BUDGET = {
 
 const PROJECT_DEAD_NOTE = {
   code: "project_spend_not_tracked",
-  severity: "info",
+  severity: "warning",
   text: "project spend is never incremented today, so this budget cannot trip",
 } as const;
 
@@ -35,8 +35,14 @@ const ALERT_ONLY_NOTE = {
 
 const ROLLING_NOTE = {
   code: "rolling_window",
-  severity: "warning",
+  severity: "info",
   text: "rolling window",
+} as const;
+
+const THROTTLE_NOTE = {
+  code: "throttled_instead_of_blocked",
+  severity: "warning",
+  text: "this key opted into throttle_on_budget_exceeded, so exceeding it slows requests instead of blocking",
 } as const;
 
 // Tagged info by the server, but it scopes which requests the row applies to rather than killing it.
@@ -157,11 +163,18 @@ describe("cannotTrip", () => {
     expect(cannotTrip(endUser)).toBe(false);
   });
 
-  it("falls back to severity for a code this build predates, so a newer server still renders sanely", () => {
+  it("ignores severity entirely, since dead codes ship under both values", () => {
+    expect(PROJECT_DEAD_NOTE.severity).toBe("warning");
+    expect(cannotTrip(INERT)).toBe(true);
+    expect(ROLLING_NOTE.severity).toBe("info");
+    expect(cannotTrip(WARNED)).toBe(false);
+  });
+
+  it("assumes a code this build predates is live, so an unknown caveat never hides a real blocker", () => {
     const future = { code: "some_code_added_later", severity: "info", text: "…" } as unknown as KeyBudgetNote;
-    const benign = { ...future, severity: "warning" } as KeyBudgetNote;
-    expect(cannotTrip({ ...HEALTHY, notes: [future] })).toBe(true);
-    expect(cannotTrip({ ...HEALTHY, notes: [benign] })).toBe(false);
+    const louder = { ...future, severity: "warning" } as KeyBudgetNote;
+    expect(cannotTrip({ ...HEALTHY, notes: [future] })).toBe(false);
+    expect(cannotTrip({ ...HEALTHY, notes: [louder] })).toBe(false);
   });
 
   it("branches on code and severity rather than on wording, so text is free to be reworded", () => {
@@ -170,6 +183,28 @@ describe("cannotTrip", () => {
       notes: [{ ...PROJECT_DEAD_NOTE, text: "totally different prose that never mentions tripping" }],
     };
     expect(cannotTrip(reworded)).toBe(true);
+  });
+});
+
+describe("isThrottled", () => {
+  it("never blames a throttled budget for a denial, because going over slows rather than rejects", () => {
+    const throttledOver: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      enforcement: "hard",
+      max_budget: 100,
+      spend: 140,
+      remaining: -40,
+      status: "exceeded",
+      notes: [THROTTLE_NOTE],
+    };
+    expect(isThrottled(throttledOver)).toBe(true);
+    expect(isBlockingRow(throttledOver)).toBe(false);
+    expect(budgetThresholdRule(throttledOver)).toBe("Throttles at ≥ $100.00");
+  });
+
+  it("still says a plain hard budget blocks", () => {
+    expect(isThrottled(TEAM_MEMBER_AT_LIMIT)).toBe(false);
+    expect(budgetThresholdRule(TEAM_MEMBER_AT_LIMIT)).toBe("Blocks at ≥ $50.00");
   });
 });
 

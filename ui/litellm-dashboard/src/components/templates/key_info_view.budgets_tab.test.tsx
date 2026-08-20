@@ -139,7 +139,7 @@ const ALERT_ONLY_NOTE = {
 
 const PROJECT_DEAD_NOTE = {
   code: "project_spend_not_tracked",
-  severity: "info",
+  severity: "warning",
   text: "project spend is never incremented today, so this budget cannot trip",
 } as const;
 
@@ -208,7 +208,7 @@ const ORG_UNCONFIGURED: KeyBudgetEntry = {
 const WORST_CASE_NOTES = [
   {
     code: "reservation_blocks_at_limit",
-    severity: "warning",
+    severity: "info",
     text:
       "the reservation layer blocks this scope as soon as spend reaches the limit, " +
       "before the read-time check would trip",
@@ -433,6 +433,94 @@ describe("KeyInfoView Budgets tab", () => {
     const panel = await renderAndOpenBudgetsTab();
 
     expect(panel.getByText(LONGEST_SINGLE_NOTE.text)).toBeInTheDocument();
+  });
+
+  it("keeps two per-model rows on one cap apart by the request model each measures", async () => {
+    const direct: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "key_model",
+      entity_type: "key",
+      entity_id: "claude-opus-5",
+      entity_label: "claude-opus-5",
+      max_budget: 40,
+      spend: 5,
+      remaining: 35,
+      comparison: ">",
+      source: "key.model_max_budget[claude-opus-5]",
+      status: "ok",
+    };
+    const routed: KeyBudgetEntry = {
+      ...direct,
+      entity_id: "bedrock/claude-opus-5",
+      spend: 38,
+      remaining: 2,
+    };
+    mockBudgets([direct, routed]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const routedRow = rowFor(panel, "bedrock/claude-opus-5");
+    expect(routedRow).toHaveTextContent("$38.0000 of $40.00");
+    // The cap is repeated on both rows, so it cannot be what tells them apart.
+    expect(panel.getAllByText("claude-opus-5")).toHaveLength(2);
+    expect(routedRow).toHaveTextContent("claude-opus-5");
+
+    const [, ...dataRows] = panel.getAllByRole("row");
+    expect(dataRows).toHaveLength(2);
+    expect(dataRows.filter((row) => row.textContent?.includes("bedrock/claude-opus-5"))).toHaveLength(1);
+  });
+
+  it("renders notes in the order the server sent them, most specific to these numbers first", async () => {
+    const endUser: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "end_user",
+      entity_type: "end_user",
+      entity_id: "customer-42",
+      entity_label: "customer-42",
+      max_budget: 25,
+      spend: 25,
+      remaining: 0,
+      source: "budget_table:b-end-user",
+      status: "exceeded",
+      notes: [...WORST_CASE_NOTES],
+    };
+    mockBudgets([endUser]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const texts = WORST_CASE_NOTES.map((note) => note.text);
+    const rendered = texts.map((text) => panel.getByText(text));
+    const positions = rendered.map((node) => Array.from(node.parentElement?.children ?? []).indexOf(node));
+    expect(positions).toStrictEqual([...positions].sort((a, b) => a - b));
+    // Server order is meaningful: the reservation note explains the comparison the row renders.
+    expect(positions[0]).toBeLessThan(positions[2]);
+  });
+
+  it("says a throttled budget slows requests rather than claiming it blocks them", async () => {
+    const throttled: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      entity_id: "ci-runner",
+      entity_label: "ci-runner",
+      max_budget: 100,
+      spend: 140,
+      remaining: -40,
+      source: "key.max_budget",
+      status: "exceeded",
+      notes: [
+        {
+          code: "throttled_instead_of_blocked",
+          severity: "warning",
+          text: "this key opted into throttle_on_budget_exceeded, so exceeding it slows requests instead of blocking",
+        },
+      ],
+    };
+    mockBudgets([throttled]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const row = rowFor(panel, "ci-runner");
+    expect(within(row).getByText("Throttles requests")).toBeInTheDocument();
+    expect(within(row).queryByText("Blocks requests")).not.toBeInTheDocument();
+    expect(row).toHaveTextContent("Throttles at ≥ $100.00");
+    expect(within(row).getByText("Exceeded (throttling)")).toBeInTheDocument();
+    expect(within(row).queryByTestId("key-budget-blocking")).not.toBeInTheDocument();
   });
 
   it("marks a budget that structurally cannot trip and sinks it below every live row", async () => {

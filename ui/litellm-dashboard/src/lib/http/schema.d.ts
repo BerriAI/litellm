@@ -6818,8 +6818,9 @@ export interface paths {
          *     can be ruled out without opening every object.
          *
          *     Parameters:
-         *     - key_id: str | None (path parameter) - The key to inspect. Accepts the plaintext key or its
-         *       hash. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
+         *     - key_id: str | None (path parameter) - The hash of the key to inspect. The key itself is
+         *       rejected here, because a URL path reaches access logs, tracing spans and error-logging
+         *       callbacks. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
          *     - end_user_id: str | None (query parameter) - Also report the budgets that would apply to this
          *       end user. Omitted end users produce no `end_user` rows, because nothing binds an end user to
          *       a key outside a request. Proxy admins only, since end users are a proxy-global namespace with
@@ -6846,11 +6847,13 @@ export interface paths {
          *         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
          *         - status: str - `unlimited`, `ok` or `exceeded`
          *         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
-         *           to branch on, a `severity` of `info` or `warning`, and human-facing `text`
+         *           to branch on, a `severity` of `info` or `warning` for codes a client does not know yet,
+         *           and human-facing `text` that is free to be reworded. Ordered most to least specific to
+         *           this row's numbers, and empty rather than null when there is nothing to say
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/sk-test-example-key-123/budgets" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/key/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2/budgets" -H "Authorization: Bearer sk-1234"
          *     ```
          *
          *     Example Curl - the budgets on the calling key itself
@@ -7512,8 +7515,9 @@ export interface paths {
          *     can be ruled out without opening every object.
          *
          *     Parameters:
-         *     - key_id: str | None (path parameter) - The key to inspect. Accepts the plaintext key or its
-         *       hash. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
+         *     - key_id: str | None (path parameter) - The hash of the key to inspect. The key itself is
+         *       rejected here, because a URL path reaches access logs, tracing spans and error-logging
+         *       callbacks. Defaults to the key in the Authorization header when omitted (`GET /key/budgets`).
          *     - end_user_id: str | None (query parameter) - Also report the budgets that would apply to this
          *       end user. Omitted end users produce no `end_user` rows, because nothing binds an end user to
          *       a key outside a request. Proxy admins only, since end users are a proxy-global namespace with
@@ -7540,11 +7544,13 @@ export interface paths {
          *         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
          *         - status: str - `unlimited`, `ok` or `exceeded`
          *         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
-         *           to branch on, a `severity` of `info` or `warning`, and human-facing `text`
+         *           to branch on, a `severity` of `info` or `warning` for codes a client does not know yet,
+         *           and human-facing `text` that is free to be reworded. Ordered most to least specific to
+         *           this row's numbers, and empty rather than null when there is nothing to say
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/sk-test-example-key-123/budgets" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/key/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2/budgets" -H "Authorization: Bearer sk-1234"
          *     ```
          *
          *     Example Curl - the budgets on the calling key itself
@@ -26392,7 +26398,12 @@ export interface components {
         };
         /**
          * KeyBudgetNote
-         * @description One caveat about a budget row. Branch on ``code``; ``text`` is free to be reworded.
+         * @description One caveat about a budget row.
+         *
+         *     ``code`` is the contract: map it to whatever treatment the caveat deserves. ``text`` is free to be
+         *     reworded and must not be matched on. ``severity`` exists for the code a client has not been taught
+         *     yet, since this union grows: ``warning`` means the row's numbers may be incomplete or read as
+         *     something they are not, and ``info`` means they are accurate and the note is only context.
          */
         KeyBudgetNote: {
             /**
