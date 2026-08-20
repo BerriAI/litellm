@@ -47,10 +47,15 @@ _SUMMARY_LIMIT: Final = 50
 
 _SCAN_METADATA_KEY: Final = "litellm_metadata"
 
-# `metadata` is dropped rather than diffed: guardrail dispatch writes its bookkeeping into it
-# whenever the payload has one, and a record's own metadata is not scanned content on the
-# online path either.
-_INJECTED_KEYS: Final = frozenset({_SCAN_METADATA_KEY, "metadata"})
+# Set by pre_call_hook when a guardrail rerouted the request to a different model.
+_ROUTE_APPLIED_KEY: Final = "sensitive_data_routing_applied"
+
+# Dropped before dispatch and restored afterwards rather than diffed. Guardrail dispatch writes
+# its bookkeeping into `metadata`, and a record's own metadata is not scanned content on the
+# online path either. `guardrails` is dropped because guardrail selection reads it ahead of the
+# proxy-injected list, so leaving it would let a record's own body opt out of the chain its key
+# and team selected; online that key can only add to the list, never replace it.
+_INJECTED_KEYS: Final = frozenset({_SCAN_METADATA_KEY, "metadata", "guardrails"})
 
 # Only what guardrail dispatch reads. The parent OTel span is deliberately left out: parenting one
 # guardrail span per record would put tens of thousands of spans on a single upload's trace.
@@ -97,7 +102,14 @@ class UnscannableRecord:
     url: str | None
 
 
-BatchScanFailure: TypeAlias = UnparseableRecord | UnscannableRecord
+@dataclass(frozen=True, slots=True)
+class UnroutableRecord:
+    line_number: int
+    custom_id: str | None
+    guardrail: str | None
+
+
+BatchScanFailure: TypeAlias = UnparseableRecord | UnscannableRecord | UnroutableRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +202,12 @@ def raise_public(failure: BatchScanFailure) -> NoReturn:
                 "and its body has no messages, prompt or input, so guardrails cannot read it. "
                 "Give the record a chat, completion, embedding, responses or messages body"
             )
+        case UnroutableRecord(line_number=line_number, custom_id=custom_id, guardrail=guardrail):
+            raise _rejected(
+                f"Batch input line {line_number}{_describe(custom_id)} was routed to a different model by "
+                f"{guardrail or 'a guardrail'}, and every record of a batch file goes to one provider, so "
+                "the file cannot be submitted. Send that record outside the batch"
+            )
         case _:
             assert_never(failure)
 
@@ -211,9 +229,16 @@ def _is_content_block(exc: BaseException) -> bool:
     the guardrail to fail closed, so treating it as a block would turn "refuse this request" into
     "drop this record and submit the rest", which is the silent loss of enforcement this whole
     path exists to prevent. A guardrail that does not say it blocked content aborts the upload.
+
+    Guardrails that report a technical failure as an ``HTTPException`` carrying a block status
+    are caught by ``__cause__``: raising ``from`` the underlying error is a deliberate statement
+    that something else caused this, which a verdict on content never is. Implicit context is
+    left alone, since a block raised inside an unrelated ``except`` would read as a failure.
     """
     if isinstance(exc, GuardrailRaisedException):
         return exc.blocked_content
+    if exc.__cause__ is not None:
+        return False
     return is_guardrail_intervention(exc)
 
 
@@ -334,7 +359,8 @@ async def _scan_record(
 
     scan_input: Final[dict[str, object]] = copy.deepcopy(body)  # mutable-ok: pre_call_hook mutates the dict it is given
     own_injected: Final = MappingProxyType({key: body[key] for key in _INJECTED_KEYS if key in body})
-    scan_input.pop("metadata", None)
+    for injected in _INJECTED_KEYS:
+        scan_input.pop(injected, None)
     # Deep, and per record: `headers` and `tags` are nested containers shared with the upload
     # request and with every other record in the window, and a guardrail that writes into one in
     # place would otherwise leak across records and back into the request. The narrowing above
@@ -354,6 +380,14 @@ async def _scan_record(
         if _is_content_block(exc):
             return RecordDropped(line_number=record.line_number, custom_id=custom_id, guardrail=_naming_guardrail(exc))
         raise
+
+    rerouted: Final = scanned.get("metadata")
+    if isinstance(rerouted, dict) and rerouted.get(_ROUTE_APPLIED_KEY):
+        return UnroutableRecord(
+            line_number=record.line_number,
+            custom_id=custom_id,
+            guardrail=rerouted.get("sensitive_data_routing_guardrail"),
+        )
 
     compared: Final = (frozenset(body) | frozenset(scanned)) - _INJECTED_KEYS
     if _fingerprint(scanned, compared) == _fingerprint(body, compared):
@@ -449,14 +483,20 @@ async def scan_batch_input_file(
                     break
         if not problems:
             await drain()
+    except BaseException:
+        redactions.close()
+        raise
     finally:
         file_source.seek(0)
 
     if problems:
+        redactions.close()
         worst: Final = _worst(tuple(problems))
         if isinstance(worst, BaseException):
             raise worst
         return worst
+    if not changes:
+        redactions.close()
     return BatchScanResult(
         changes=tuple(sorted(changes, key=lambda change: change.line_number)),
         scanned_records=sum(scanned),

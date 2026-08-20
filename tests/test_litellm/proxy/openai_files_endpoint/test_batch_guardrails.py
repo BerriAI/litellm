@@ -673,6 +673,143 @@ async def test_an_unreachable_guardrail_aborts_instead_of_quietly_dropping_the_r
 
 
 @pytest.mark.asyncio
+async def test_a_guardrail_subclass_that_blocks_content_drops_only_that_record():
+    """A subclass has to opt in too, or a real block takes the whole upload down with it."""
+    from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix import OvalixGuardrailBlockedException
+
+    def _hook(data):
+        if "tripwire" in data["messages"][0]["content"]:
+            raise OvalixGuardrailBlockedException(guardrail_name="ovalix", message="blocked")
+
+    result = await _scan_full(_jsonl(_record("a"), _record("b", content="tripwire")), FakeProxyLogging(_hook))
+
+    assert result.changes == (RecordDropped(line_number=2, custom_id="b", guardrail="ovalix"),)
+    assert result.submitted_records == 1
+
+
+@pytest.mark.asyncio
+async def test_a_record_a_guardrail_rerouted_aborts_rather_than_shipping_to_the_original_provider():
+    """pre_call_hook honours a reroute by rewriting `model`; a batch file cannot follow it."""
+    from litellm.proxy.openai_files_endpoints.batch_guardrails import UnroutableRecord
+
+    def _hook(data):
+        if "tripwire" in data["messages"][0]["content"]:
+            data["model"] = "on-prem-model"
+            data["metadata"] = {
+                "sensitive_data_routing_applied": True,
+                "sensitive_data_routing_guardrail": "router-guard",
+            }
+
+    failure = await _scan(_jsonl(_record("a"), _record("b", content="tripwire")), FakeProxyLogging(_hook))
+
+    assert failure == UnroutableRecord(line_number=2, custom_id="b", guardrail="router-guard")
+    with pytest.raises(HTTPException) as caught:
+        raise_public(failure)
+    assert "routed to a different model" in str(caught.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_the_scan_spool_is_closed_when_nothing_will_read_it():
+    """The spool is opened for every scan, so a clean file must not leave a temp handle behind."""
+    result = await _scan_full(_jsonl(_record("a")), FakeProxyLogging())
+
+    assert result.changes == ()
+    assert result.redactions.closed
+
+
+@pytest.mark.asyncio
+async def test_the_scan_spool_is_closed_when_the_upload_is_refused():
+    def _hook(data):
+        if "tripwire" in data["messages"][0]["content"]:
+            raise RuntimeError("infrastructure is down")
+
+    source = _jsonl(_record("a"), _record("b", content="tripwire"))
+    spools = []
+    import litellm.proxy.openai_files_endpoints.batch_guardrails as bg
+
+    real = bg.tempfile.SpooledTemporaryFile
+
+    def _tracking(*args, **kwargs):
+        handle = real(*args, **kwargs)
+        spools.append(handle)
+        return handle
+
+    bg.tempfile.SpooledTemporaryFile = _tracking
+    try:
+        with pytest.raises(RuntimeError):
+            await _scan_full(source, FakeProxyLogging(_hook))
+    finally:
+        bg.tempfile.SpooledTemporaryFile = real
+
+    assert spools and all(handle.closed for handle in spools)
+
+
+@pytest.mark.asyncio
+async def test_the_scan_spool_is_closed_when_a_record_escapes_the_iterator():
+    """A raise from inside the read loop bypasses the per-record outcome path entirely."""
+    import litellm.proxy.openai_files_endpoints.batch_guardrails as bg
+
+    spools = []
+    real = bg.tempfile.SpooledTemporaryFile
+
+    def _tracking(*args, **kwargs):
+        handle = real(*args, **kwargs)
+        spools.append(handle)
+        return handle
+
+    bg.tempfile.SpooledTemporaryFile = _tracking
+    try:
+        with pytest.raises(json.JSONDecodeError):
+            await _scan_full(io.BytesIO(b"{not json at all}\n"), FakeProxyLogging())
+    finally:
+        bg.tempfile.SpooledTemporaryFile = real
+
+    assert spools and all(handle.closed for handle in spools)
+
+
+@pytest.mark.asyncio
+async def test_a_technical_failure_dressed_as_a_block_status_still_aborts():
+    """xecguard and purview report an unreachable backend as HTTPException(400) under fail-closed."""
+
+    def _hook(data):
+        if "tripwire" in data["messages"][0]["content"]:
+            try:
+                raise ConnectionError("backend unreachable")
+            except ConnectionError as exc:
+                raise HTTPException(
+                    status_code=400, detail={"error": "XecGuard API unreachable (block_on_error=True)"}
+                ) from exc
+
+    with pytest.raises(HTTPException):
+        await _scan_full(_jsonl(_record("a"), _record("b", content="tripwire")), FakeProxyLogging(_hook))
+
+
+@pytest.mark.asyncio
+async def test_a_record_body_cannot_opt_itself_out_of_the_guardrail_chain():
+    """Guardrail selection reads a body-level `guardrails` key first; online it can only add."""
+    seen = []
+
+    await _scan_full(
+        _jsonl({**_record("a"), "body": {**_record("a")["body"], "guardrails": []}}),
+        FakeProxyLogging(lambda d: seen.append(sorted(d))),
+        metadata={"guardrails": ["team-guard"]},
+    )
+
+    assert seen and "guardrails" not in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_a_redacted_record_keeps_its_own_guardrails_key():
+    """Stripping it for the scan must not rewrite what the caller asked the provider to run."""
+    record = _record("m", content="my secret is here")
+    record["body"]["guardrails"] = ["extra-guard"]
+
+    body = await _rewritten_body(record, _redact_containing("secret"))
+
+    assert body["guardrails"] == ["extra-guard"]
+
+
+@pytest.mark.asyncio
 async def test_a_400_that_is_not_a_guardrail_decision_still_aborts():
     """A guardrail's own HTTP client can raise a 400 because OUR payload was rejected, not the content."""
     from litellm.exceptions import BadRequestError
