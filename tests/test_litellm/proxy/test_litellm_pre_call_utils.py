@@ -7380,6 +7380,12 @@ async def test_newrelic_team_callback_vars_reach_trusted_field():
     assert dynamic_otlp_headers("newrelic", params) == {"api-key": "team-nr-key"}
     assert dynamic_otlp_endpoint("newrelic", params) == "https://otlp.eu01.nr-data.net"
 
+    from litellm.utils import get_non_default_completion_params
+
+    forwarded = get_non_default_completion_params(updated)
+    assert not any(param.startswith("newrelic_") for param in forwarded)
+    assert TRUSTED_CALLBACK_VARS_FIELD not in forwarded
+
 
 def test_newrelic_vars_scoped_to_newrelic_callback_entry():
     """New Relic routing reads these vars from the trusted overlay with no
