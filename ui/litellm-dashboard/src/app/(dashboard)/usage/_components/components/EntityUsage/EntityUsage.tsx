@@ -351,7 +351,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [],
   );
 
-  const chev = "size-3 text-muted-foreground/70";
+  const chev = "size-3 text-muted-foreground";
   const expandIcon = showCostBreakdown ? <ChevronDown className={chev} /> : <ChevronRight className={chev} />;
 
   const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
@@ -366,7 +366,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           {tooltip ? (
             <Tooltip>
               <TooltipTrigger
-                render={<Info className="size-4 text-muted-foreground/70 hover:text-muted-foreground" />}
+                render={<Info className="size-4 text-muted-foreground hover:text-muted-foreground" />}
               />
               <TooltipContent>{tooltip}</TooltipContent>
             </Tooltip>

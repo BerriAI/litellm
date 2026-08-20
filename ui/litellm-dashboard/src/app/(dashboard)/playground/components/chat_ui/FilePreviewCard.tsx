@@ -35,7 +35,7 @@ function FilePreviewCard({ file, previewUrl, onRemove }: FilePreviewCardProps) {
           variant="ghost"
           size="icon-xs"
           aria-label={`Remove ${file.name}`}
-          className="text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent"
+          className="text-muted-foreground hover:text-muted-foreground hover:bg-accent"
           onClick={onRemove}
         >
           <X className="size-3" />

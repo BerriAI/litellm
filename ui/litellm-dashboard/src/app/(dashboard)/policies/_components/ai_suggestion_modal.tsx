@@ -393,7 +393,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
       return (
         <div className="text-center py-12 text-muted-foreground">
           <svg
-            className="w-12 h-12 mx-auto mb-3 text-muted-foreground/70"
+            className="w-12 h-12 mx-auto mb-3 text-muted-foreground"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -478,7 +478,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                           </span>
                         ))}
                       {template.guardrails && template.guardrails.length > 4 && (
-                        <span className="text-[10px] text-muted-foreground/70">
+                        <span className="text-[10px] text-muted-foreground">
                           +{template.guardrails.length - 4} more
                         </span>
                       )}
@@ -528,7 +528,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                 setTestResults(null);
                 setTestOverallAction(null);
               }}
-              className="text-muted-foreground/70 hover:text-muted-foreground"
+              className="text-muted-foreground hover:text-muted-foreground"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -879,7 +879,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                     {attackExamples.length > 1 && (
                       <button
                         onClick={() => handleRemoveExample(index)}
-                        className="absolute top-2.5 right-2.5 text-muted-foreground/70 hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
+                        className="absolute top-2.5 right-2.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

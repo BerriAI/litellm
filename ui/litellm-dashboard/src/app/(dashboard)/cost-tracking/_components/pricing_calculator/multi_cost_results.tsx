@@ -101,7 +101,7 @@ const SingleModelBreakdown: React.FC<{
       )}
 
       {(result.input_cost_per_token || result.output_cost_per_token) && (
-        <div className="text-xs text-muted-foreground/70 pt-2 border-t border-border">
+        <div className="text-xs text-muted-foreground pt-2 border-t border-border">
           Token Pricing:{" "}
           {result.input_cost_per_token && (
             <span>Input ${formatNumberWithCommas(result.input_cost_per_token * 1_000_000, 2)}/1M</span>
@@ -294,17 +294,17 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
                     </TableCell>
                     <TableCell className="text-right">
                       {record.error ? (
-                        <span className="text-muted-foreground/70">-</span>
+                        <span className="text-muted-foreground">-</span>
                       ) : (
                         <span className="font-mono text-sm">{formatCost(record.cost_per_request)}</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
                       {record.error ? (
-                        <span className="text-muted-foreground/70">-</span>
+                        <span className="text-muted-foreground">-</span>
                       ) : (
                         <span
-                          className={`font-mono text-sm ${(record.margin_cost_per_request ?? 0) > 0 ? "text-warning" : "text-muted-foreground/70"}`}
+                          className={`font-mono text-sm ${(record.margin_cost_per_request ?? 0) > 0 ? "text-warning" : "text-muted-foreground"}`}
                         >
                           {formatCost(record.margin_cost_per_request)}
                         </span>
@@ -312,7 +312,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
                     </TableCell>
                     <TableCell className="text-right">
                       {record.error ? (
-                        <span className="text-muted-foreground/70">-</span>
+                        <span className="text-muted-foreground">-</span>
                       ) : (
                         <span className="font-mono text-sm">{formatCost(periodCost)}</span>
                       )}
@@ -325,7 +325,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
                           aria-expanded={isExpanded}
                           aria-label={`${isExpanded ? "Hide" : "Show"} cost breakdown for ${record.model}`}
                           onClick={() => toggleExpanded(record.id)}
-                          className="text-muted-foreground/70 hover:text-muted-foreground"
+                          className="text-muted-foreground hover:text-muted-foreground"
                         >
                           {isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
                         </Button>

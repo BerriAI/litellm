@@ -98,7 +98,7 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
               <label className="text-sm text-foreground">Show Unknown</label>
               <Tooltip>
                 <TooltipTrigger
-                  render={<Info className="size-4 text-muted-foreground/70 hover:text-muted-foreground" />}
+                  render={<Info className="size-4 text-muted-foreground hover:text-muted-foreground" />}
                 />
                 <TooltipContent>Requests that failed to route to a provider</TooltipContent>
               </Tooltip>
