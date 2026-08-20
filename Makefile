@@ -160,6 +160,7 @@ lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 # Linting targets
 lint-ruff: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) ruff check . && cd ..
+	$(UV_RUN) ruff check --config ruff-tests.toml tests
 
 # faster linter for developing ...
 # inspiration from:

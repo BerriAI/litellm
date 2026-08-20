@@ -122,6 +122,11 @@ jobs:
           uv run --no-sync ruff check .
           cd ..
 
+      - name: Run Ruff linting (test tree)
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync ruff check --config ruff-tests.toml tests
+
       - name: Check strict-rule budget (delta vs base)
         if: steps.changes.outputs.decision != 'skip'
         run: |
