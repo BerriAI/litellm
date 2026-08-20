@@ -2461,8 +2461,9 @@ async def get_team_model_aliases(
     if cached is not None:
         return _TEAM_MODEL_ALIASES_ADAPTER.validate_python(cached)
 
-    where: Final[Mapping[str, object]] = MappingProxyType({"id": model_id})
-    row: Final = await _model_aliases_table(ModelTableRepository(prisma_client)).find_unique(where=where)
+    row: Final = await _model_aliases_table(ModelTableRepository(prisma_client)).find_unique(
+        where={"id": model_id}  # mutable-ok: prisma json-serializes query args, and a mappingproxy is not serializable
+    )
     if row is None or row.model_aliases is None:
         return None
 

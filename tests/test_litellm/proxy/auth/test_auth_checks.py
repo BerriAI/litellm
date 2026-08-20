@@ -47,6 +47,7 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
     get_key_object,
+    get_team_model_aliases,
     get_team_model_aliases_for_team,
     get_user_object,
     vector_store_access_check,
@@ -1354,6 +1355,32 @@ async def test_get_team_model_aliases_for_team_guards_incomplete_context_and_del
         prisma_client=prisma_client,
         user_api_key_cache=cache,
     )
+
+
+@pytest.mark.asyncio
+async def test_get_team_model_aliases_passes_json_serializable_query_args():
+    """Prisma json-serializes query args, so a non-dict mapping makes every JWT request fail auth."""
+
+    class _JsonSerializingModelTable:
+        def __init__(self):
+            self.serialized_where = None
+
+        async def find_unique(self, *, where, include=None):
+            self.serialized_where = json.dumps(where)
+            return SimpleNamespace(model_aliases={"claude-opus-4-8": "anthropic-haiku-4-5"})
+
+    model_table = _JsonSerializingModelTable()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_modeltable = model_table
+
+    aliases = await get_team_model_aliases(
+        model_id=11,
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+    assert aliases == {"claude-opus-4-8": "anthropic-haiku-4-5"}
+    assert json.loads(model_table.serialized_where) == {"id": 11}
 
 
 # Vector Store Auth Check Tests
