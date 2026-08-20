@@ -20,6 +20,7 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
+from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
@@ -1689,11 +1690,77 @@ def test_nothing_is_zeroed_while_the_feature_is_off():
 
 
 @pytest.mark.parametrize("dropped", ["team_id", "ptu_effective_from"], ids=["no team_id", "no ptu_effective_from"])
-def test_a_deployment_the_rollup_will_not_charge_is_not_zeroed(dropped):
-    """The rollup refuses to price a reservation missing either field, so zeroing on the
-    looser count-and-rate test alone would leave the deployment serving for free with
-    nothing charged in its place."""
+def test_an_incomplete_reservation_is_refused_rather_than_served(dropped):
+    """POST /model/new answers 400 for exactly this config, so config.yaml must not quietly
+    accept it. Serving it would bill per token while accruing no flat cost, which is the
+    state the operator was trying to leave."""
     incomplete = {k: v for k, v in _PTU_MODEL_INFO.items() if k != dropped}
-    entry = _ptu_router(model_info=incomplete, litellm_params={"input_cost_per_token": 5e-06}).model_list[0]
+
+    with pytest.raises(ValueError) as raised:
+        _ptu_router(model_info=incomplete, litellm_params={"input_cost_per_token": 5e-06})
+
+    assert "gpt-4o-ptu" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "dropped, expected",
+    [
+        ("team_id", "team_id is required when PTU fields are set (one model maps to one team)"),
+        ("cost_per_ptu_per_hour", "ptu_count and cost_per_ptu_per_hour must be set together"),
+    ],
+    ids=["no team_id", "count without rate"],
+)
+def test_the_refusal_reason_is_the_one_the_model_endpoint_answers_with(dropped, expected):
+    """One rule, stated once. If these drift, an operator gets contradictory guidance
+    depending on which path they used."""
+    incomplete = {k: v for k, v in _PTU_MODEL_INFO.items() if k != dropped}
+
+    assert ptu_config_error(incomplete) == expected
+    with pytest.raises(ValueError) as raised:
+        _ptu_router(model_info=incomplete)
+
+    assert expected in str(raised.value)
+
+
+@pytest.mark.parametrize("dropped", ["team_id", "ptu_effective_from"], ids=["no team_id", "no ptu_effective_from"])
+def test_an_incomplete_reservation_is_left_alone_while_the_feature_is_off(dropped):
+    """Nothing accrues with the flag off, so refusing a deployment there would take a
+    serving model away from an operator who never opted in."""
+    incomplete = {k: v for k, v in _PTU_MODEL_INFO.items() if k != dropped}
+    entry = _ptu_router(
+        model_info=incomplete, litellm_params={"input_cost_per_token": 5e-06}, ptu_enabled=False
+    ).model_list[0]
 
     assert entry["litellm_params"]["input_cost_per_token"] == 5e-06
+
+
+@pytest.mark.parametrize("dropped", ["team_id", "ptu_effective_from"], ids=["no team_id", "no ptu_effective_from"])
+def test_the_proxy_drops_the_deployment_rather_than_failing_to_boot(dropped):
+    """The proxy builds its router with ignore_invalid_deployments, so one bad entry must
+    cost that entry and not the whole config."""
+    incomplete = {k: v for k, v in _PTU_MODEL_INFO.items() if k != dropped}
+    with patch.dict(os.environ, {"LITELLM_ENABLE_PTU_COST_ATTRIBUTION": "True"}, clear=False):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-ptu",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-5-20250929", "api_key": "sk-not-used"},
+                    "model_info": dict(incomplete),
+                },
+                {
+                    "model_name": "plain-sibling",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-4-5-20250929", "api_key": "sk-not-used"},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+    assert [entry["model_name"] for entry in router.model_list] == ["plain-sibling"]
+
+
+def test_a_complete_reservation_still_registers():
+    """The refusal must be scoped to a broken reservation, not to PTU configuration."""
+    entry = _ptu_router().model_list[0]
+
+    assert entry["model_name"] == "gpt-4o-ptu"
+    assert entry["litellm_params"]["input_cost_per_token"] == 0.0

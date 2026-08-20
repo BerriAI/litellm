@@ -1224,14 +1224,28 @@ def _decode_user_credential(stored: str) -> str | None:
         return None
 
 
-def _decode_oauth_payload(stored: str) -> OAuthCredentialPayload | None:
-    """Return the OAuth2 payload dict if ``stored`` holds one, else ``None``.
+def _warn_undecryptable_credential(user_id: str, server_id: str) -> None:
+    """Log the one credential state that otherwise reads as "user never authorized"."""
+    verbose_proxy_logger.warning(
+        "MCP user credential for user=%s server=%s could not be decrypted (likely written under a "
+        "previous LITELLM_SALT_KEY); the user is treated as not connected and must re-authorize.",
+        user_id,
+        server_id,
+    )
+
+
+def _parse_oauth_payload(decoded: str | None) -> OAuthCredentialPayload | None:
+    """Return the OAuth2 payload dict if ``decoded`` holds one, else ``None``.
 
     A row is considered an OAuth2 credential iff its decoded value parses as
     a JSON object with ``"type": "oauth2"``.  Plain BYOK credentials (which
     share the same column) decode to a non-JSON string and return ``None``.
+
+    Callers that need to tell an unreadable row from a readable non-OAuth2 one
+    pass the result of :func:`_decode_user_credential` so a single decode
+    answers both questions: ``None`` there means the value can be neither
+    decrypted nor base64-decoded, so no caller can ever recover it.
     """
-    decoded: Final = _decode_user_credential(stored)
     if decoded is None:
         return None
     parsed: OAuthCredentialPayload | None
@@ -1242,6 +1256,11 @@ def _decode_oauth_payload(stored: str) -> OAuthCredentialPayload | None:
     if isinstance(parsed, dict) and parsed.get("type") == "oauth2":
         return parsed
     return None
+
+
+def _decode_oauth_payload(stored: str) -> OAuthCredentialPayload | None:
+    """Return the OAuth2 payload dict held in ``stored``, else ``None``."""
+    return _parse_oauth_payload(_decode_user_credential(stored))
 
 
 async def rotate_mcp_user_credentials_master_key(prisma_client: PrismaClient, new_master_key: str):
@@ -1415,15 +1434,25 @@ async def store_user_oauth_credential(
     # (e.g. during token refresh), saving an extra DB round-trip.
     if not skip_byok_guard:
         existing: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
-        if existing is not None and _decode_oauth_payload(existing.credential_b64) is None:
-            # Existing row is either a BYOK secret or an OAuth2 row that no
-            # longer decrypts (e.g. after a salt-key rotation).  In either
-            # case, refuse to overwrite — the caller would clobber data
-            # that may still be recoverable.
-            raise ValueError(
-                f"Existing credential for user {user_id} and server "
-                f"{server_id} could not be verified as an OAuth2 token. "
-                f"Refusing to overwrite."
+        decoded: Final = _decode_user_credential(existing.credential_b64) if existing is not None else None
+        if existing is not None and _parse_oauth_payload(decoded) is None:
+            # Refuse only while the row still holds readable content, which is a live BYOK
+            # secret that overwriting would destroy.  A row that does not decode was written
+            # under a different LITELLM_SALT_KEY, and one that decodes to nothing holds no
+            # secret at all; refusing either preserves nothing and instead wedges the user
+            # out of the OAuth flow for good, since re-authorizing is their only recovery.
+            if decoded:
+                raise ValueError(
+                    f"Existing credential for user {user_id} and server "
+                    f"{server_id} could not be verified as an OAuth2 token. "
+                    f"Refusing to overwrite."
+                )
+            verbose_proxy_logger.warning(
+                "store_user_oauth_credential: existing credential for user=%s server=%s could not be "
+                "decrypted (likely written under a previous LITELLM_SALT_KEY); replacing it with the "
+                "newly authorized OAuth2 token.",
+                user_id,
+                server_id,
             )
 
     encoded: Final = encrypt_value_helper(json.dumps(payload))
@@ -1461,7 +1490,10 @@ async def get_user_oauth_credential(
     row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
     if row is None:
         return None
-    return _decode_oauth_payload(row.credential_b64)
+    decoded: Final = _decode_user_credential(row.credential_b64)
+    if decoded is None:
+        _warn_undecryptable_credential(user_id, server_id)
+    return _parse_oauth_payload(decoded)
 
 
 async def list_user_oauth_credentials(
@@ -1473,7 +1505,10 @@ async def list_user_oauth_credentials(
     rows: Final = await _db_find_user_credential_rows(prisma_client, {"user_id": user_id})
     results: Final[list[OAuthCredentialPayload]] = []
     for row in rows:
-        payload = _decode_oauth_payload(row.credential_b64)
+        decoded = _decode_user_credential(row.credential_b64)
+        if decoded is None:
+            _warn_undecryptable_credential(user_id, row.server_id)
+        payload = _parse_oauth_payload(decoded)
         if payload is None:
             continue
         payload["server_id"] = row.server_id
