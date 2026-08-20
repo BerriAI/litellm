@@ -2994,6 +2994,13 @@ async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
     return spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is not None
 
 
+async def increment_spend_counter(counter_key: str, increment: float):
+    """Public raw-counter increment for budget domains outside the entity scopes (e.g.
+    shadow eval's per-leg spend), sharing the primitive the entity counters use so
+    invalidation and read semantics can never drift."""
+    return await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+
+
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
     if spend_counter_cache.redis_cache is not None:
         try:
@@ -6308,7 +6315,8 @@ class ProxyConfig:
         # Schedule new job if retention period is set (not None)
         retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
         autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
-        if retention_period is not None or autorouter_retention is not None:
+        health_check_retention: Final = general_settings.get("maximum_health_check_retention_period")
+        if retention_period is not None or autorouter_retention is not None or health_check_retention is not None:
             from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
                 SpendLogCleanup,
             )
@@ -6461,6 +6469,13 @@ class ProxyConfig:
             new_session_value: Final = _general_settings["maximum_autorouter_session_retention_period"]
             general_settings["maximum_autorouter_session_retention_period"] = new_session_value
             if old_session_value != new_session_value:
+                await self._reschedule_spend_log_cleanup_job()
+
+        if "maximum_health_check_retention_period" in _general_settings:
+            old_health_check_value: Final = general_settings.get("maximum_health_check_retention_period")
+            new_health_check_value: Final = _general_settings["maximum_health_check_retention_period"]
+            general_settings["maximum_health_check_retention_period"] = new_health_check_value
+            if old_health_check_value != new_health_check_value:
                 await self._reschedule_spend_log_cleanup_job()
 
         ## SPEND LOG CLEANUP BOUNDS ##
@@ -9078,6 +9093,7 @@ class ProxyStartupEvent:
         if (
             general_settings.get("maximum_spend_logs_retention_period") is not None
             or general_settings.get("maximum_autorouter_session_retention_period") is not None
+            or general_settings.get("maximum_health_check_retention_period") is not None
         ):
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
@@ -15813,6 +15829,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "store_model_in_db": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
         "maximum_spend_logs_retention_period": "String",
+        "maximum_health_check_retention_period": "String",
         "maximum_spend_logs_cleanup_batch_size": "Integer",
         "maximum_spend_logs_cleanup_max_batches": "Integer",
         "maximum_spend_logs_cleanup_run_budget": "String",

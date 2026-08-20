@@ -22,7 +22,7 @@ from fastapi import (
     Response,
 )
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -166,6 +166,12 @@ class UserProvisionerHelpers:
         """
         Check if a user with the given email already exists and update them if found.
 
+        The matched row keeps its existing user_id even when the SCIM userName differs.
+        Virtual keys, team rosters, team/organization memberships and spend logs all
+        reference that id, so re-keying the user row would strand every one of them and
+        make removals against rosters holding the old id no-op. SCIM ids are opaque to
+        the client, which reads the stable id back from the response.
+
         When admin_group is configured the resolved global role on new_user_request
         is persisted too, so re-upserting an existing email demotes a user who is no
         longer in the admin group instead of leaving the stale role.
@@ -191,19 +197,21 @@ class UserProvisionerHelpers:
         new_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
 
         if new_user_request.user_id != existing_user.user_id:
-            await _table(UserRepository(prisma_client)).update(
-                where={"user_id": existing_user.user_id},
-                data={"user_id": new_user_request.user_id},
+            verbose_proxy_logger.info(
+                "SCIM: email %s already provisioned as user_id=%s, keeping that id instead of re-keying to %s",
+                new_user_request.user_email,
+                existing_user.user_id,
+                new_user_request.user_id,
             )
 
         await _handle_team_membership_changes(
-            user_id=new_user_request.user_id,
+            user_id=existing_user.user_id,
             existing_teams=existing_user.teams or [],
             new_teams=new_teams,
         )
 
         updated_user: Final = await _table(UserRepository(prisma_client)).update(
-            where={"user_id": new_user_request.user_id},
+            where={"user_id": existing_user.user_id},
             data={
                 "user_email": new_user_request.user_email,
                 "user_alias": new_user_request.user_alias,
@@ -620,6 +628,40 @@ def _admitted_member_ids(classified: Iterable[_ClassifiedGroupMember], created_i
     )
 
 
+class _UserIdWhere(TypedDict):
+    user_id: ReadOnly[str]
+
+
+class _ScimErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+async def _ensure_group_member_user(
+    user_id: str,
+    created_via: str,
+    prisma_client: PrismaClient,
+) -> NewUserResponse | None:
+    """The created user, or None when the id already resolves to a user row (a
+    concurrent provisioning request won the creation race after our lookup missed).
+
+    Raises:
+        HTTPException: 500 when the user can neither be created nor found. The
+        request has to fail so the identity provider retries, instead of recording
+        success for a member the roster silently dropped.
+    """
+    created: Final = await _create_user_if_not_exists(user_id=user_id, created_via=created_via)
+    if created is not None:
+        return created
+    where: Final[_UserIdWhere] = {"user_id": user_id}
+    existing: Final = await _table(UserRepository(prisma_client)).find_unique(where=where)
+    if existing is not None:
+        return None
+    detail: Final[_ScimErrorDetail] = {
+        "error": f"Failed to create user '{user_id}' while provisioning group membership."
+    }
+    raise HTTPException(status_code=500, detail=detail)
+
+
 async def _resolve_group_member_ids(
     members: Sequence[SCIMMember],
     created_via: str,
@@ -637,7 +679,8 @@ async def _resolve_group_member_ids(
     Raises:
         HTTPException: 400 when a member id is empty, or when scim_upsert_user is
         False and a member id is neither an existing user, an existing team, nor a
-        member declared to be something other than a user.
+        member declared to be something other than a user. 500 when a member's
+        user row can neither be created nor found.
     """
     classified: Final = tuple([await _classify_group_member(member, prisma_client) for member in members])
     partition: Final = _partition_classified_members(classified)
@@ -658,10 +701,14 @@ async def _resolve_group_member_ids(
             },
         )
 
+    unique_unknown_ids: Final = tuple(dict.fromkeys(partition.unknown_ids))
     creations: Final = tuple(
         [
-            (user_id, await _create_user_if_not_exists(user_id=user_id, created_via=created_via))
-            for user_id in partition.unknown_ids
+            (
+                user_id,
+                await _ensure_group_member_user(user_id=user_id, created_via=created_via, prisma_client=prisma_client),
+            )
+            for user_id in unique_unknown_ids
         ]
     )
     created_users: Final = tuple(created for _, created in creations if created is not None)
@@ -669,10 +716,7 @@ async def _resolve_group_member_ids(
     return GroupMemberExtractionResult(
         existing_member_ids=partition.resolved_ids,
         created_users=created_users,
-        all_member_ids=_admitted_member_ids(
-            classified,
-            frozenset(user_id for user_id, created in creations if created is not None),
-        ),
+        all_member_ids=_admitted_member_ids(classified, frozenset(unique_unknown_ids)),
     )
 
 

@@ -127,6 +127,11 @@ from litellm.proxy.db.spend_log_batching import (
     spend_log_row_bytes,
     spend_log_write_batches,
 )
+from litellm.proxy.db.token_auth import (
+    DatabaseTokenAuth,
+    mint_database_token,
+    resolve_database_token_auth,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -3304,7 +3309,7 @@ class PrismaClient:
     ):
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
-        self.iam_token_db_auth: bool | None = str_to_bool(os.getenv("IAM_TOKEN_DB_AUTH"))
+        self.token_auth: DatabaseTokenAuth | None = resolve_database_token_auth()
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma
@@ -3313,22 +3318,22 @@ class PrismaClient:
             verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
             raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
-        iam_flag: Final = self.iam_token_db_auth if self.iam_token_db_auth is not None else False
+        token_auth: Final = self.token_auth
         # When read-replica routing is on, tag log lines with [writer]/[reader]
-        # so the two wrappers' interleaved IAM refresh logs can be told apart.
+        # so the two wrappers' interleaved token refresh logs can be told apart.
         # Single-DB deployments get an empty prefix (logs unchanged).
         read_replica_url = os.getenv("DATABASE_URL_READ_REPLICA")
         writer_log_prefix: Final = "[writer]" if read_replica_url else ""
         if http_client is not None:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                iam_token_db_auth=iam_flag,
+                token_auth=token_auth,
                 log_prefix=writer_log_prefix,
             )
         else:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                iam_token_db_auth=iam_flag,
+                token_auth=token_auth,
                 log_prefix=writer_log_prefix,
             )
 
@@ -3340,29 +3345,22 @@ class PrismaClient:
         self.db: PrismaWrapper | RoutingPrismaWrapper
         if read_replica_url:
             try:
-                # If IAM auth is enabled, the reader refreshes its own token on
+                # If token auth is enabled, the reader refreshes its own token on
                 # the same cadence as the writer. We parse the static endpoint
                 # pieces (host/port/user/db) once from the reader URL — only
-                # the IAM token rotates after that.
-                reader_iam_endpoint: Final = parse_iam_endpoint_from_url(read_replica_url) if iam_flag else None
-                # Mint a fresh IAM token for the reader BEFORE constructing the
+                # the token rotates after that.
+                reader_iam_endpoint: Final = (
+                    parse_iam_endpoint_from_url(read_replica_url) if token_auth is not None else None
+                )
+                # Mint a fresh token for the reader BEFORE constructing the
                 # Prisma client. Mirrors what `proxy_cli.py` already does for
-                # the writer (proxy_cli.py:812-832) — without this, the reader
-                # Prisma is built with whatever placeholder URL the user
-                # supplied (no real token), and the first query falls through
-                # to the synchronous fallback path in
-                # `PrismaWrapper.__getattr__`, which deadlocks the event loop
-                # and times out after 30s.
-                if iam_flag and reader_iam_endpoint is not None:
-                    from litellm.proxy.auth.rds_iam_token import (
-                        generate_iam_auth_token,
-                    )
-
-                    reader_token: Final = generate_iam_auth_token(
-                        db_host=reader_iam_endpoint.host,
-                        db_port=reader_iam_endpoint.port,
-                        db_user=reader_iam_endpoint.user,
-                    )
+                # the writer — without this, the reader Prisma is built with
+                # whatever placeholder URL the user supplied (no real token),
+                # and the first query falls through to the synchronous fallback
+                # path in `PrismaWrapper.__getattr__`, which deadlocks the event
+                # loop and times out after 30s.
+                if token_auth is not None and reader_iam_endpoint is not None:
+                    reader_token: Final = mint_database_token(token_auth, reader_iam_endpoint)
                     read_replica_url = reader_iam_endpoint.build_url(reader_token)
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
                 reader_kwargs: Final[dict[str, Any]] = {"datasource": {"url": read_replica_url}}
@@ -3372,7 +3370,7 @@ class PrismaClient:
                     reader_prisma = Prisma(**reader_kwargs)
                 reader_wrapper: Final = PrismaWrapper(
                     original_prisma=reader_prisma,
-                    iam_token_db_auth=iam_flag,
+                    token_auth=token_auth,
                     db_url_env_var="DATABASE_URL_READ_REPLICA",
                     iam_endpoint=reader_iam_endpoint,
                     recreate_uses_datasource=True,
@@ -3381,15 +3379,15 @@ class PrismaClient:
                 self.db = RoutingPrismaWrapper(writer=writer_wrapper, reader=reader_wrapper)
                 verbose_proxy_logger.info(
                     "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA"
-                    + (" (with IAM token auto-refresh)" if iam_flag else "")
+                    + (f" (with {token_auth.label} auto-refresh)" if token_auth is not None else "")
                 )
             except Exception as e:
                 # Reader is opt-in; never let its construction fail proxy
                 # startup. Mirrors the runtime contract from
                 # `RoutingPrismaWrapper.connect`: reader-side failures are
                 # logged and we keep serving traffic via the writer alone.
-                # This recovers from transient AWS STS hiccups during the
-                # reader IAM token mint, malformed DATABASE_URL_READ_REPLICA,
+                # This recovers from transient credential-provider hiccups
+                # during the reader token mint, malformed DATABASE_URL_READ_REPLICA,
                 # and Prisma construction errors. Operator restart is required
                 # to retry read-routing once the underlying issue is resolved.
                 verbose_proxy_logger.warning(
