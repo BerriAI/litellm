@@ -72,7 +72,7 @@ class LiteLLM_Proxy_MCP_Handler:
     """
 
     @staticmethod
-    def _prepare_chained_call_params(
+    def prepare_chained_call_params(
         params: Mapping[str, Any],
     ) -> dict[str, Any]:  # mutable-ok: returns a sanitized copy for the next provider call
         """Copy request params without state owned by the previous LLM call.
@@ -1261,14 +1261,14 @@ class LiteLLM_Proxy_MCP_Handler:
         return initial_params
 
     @staticmethod
-    def _prepare_follow_up_call_params(call_params: dict[str, Any], original_stream_setting: bool) -> dict[str, Any]:
+    def prepare_follow_up_call_params(call_params: dict[str, Any], original_stream_setting: bool) -> dict[str, Any]:
         """
         Prepare call parameters for the follow-up LLM call after tool execution.
 
         Restores the original streaming setting and removes tool_choice since
         we're now providing tool results, not requesting tool calls.
         """
-        follow_up_params: Final = LiteLLM_Proxy_MCP_Handler._prepare_chained_call_params(call_params)
+        follow_up_params: Final = LiteLLM_Proxy_MCP_Handler.prepare_chained_call_params(call_params)
 
         # Restore original streaming setting for follow-up call
         follow_up_params["stream"] = original_stream_setting
@@ -1277,6 +1277,8 @@ class LiteLLM_Proxy_MCP_Handler:
         follow_up_params.pop("tool_choice", None)
 
         return follow_up_params
+
+    _prepare_follow_up_call_params = prepare_follow_up_call_params
 
     @staticmethod
     def _add_mcp_output_elements_to_response(

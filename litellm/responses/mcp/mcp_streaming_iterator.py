@@ -782,7 +782,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 )
 
                 # Make follow-up call with streaming
-                follow_up_params: Final = LiteLLM_Proxy_MCP_Handler._prepare_chained_call_params(
+                follow_up_params: Final = LiteLLM_Proxy_MCP_Handler.prepare_chained_call_params(
                     self.original_request_params
                 )
                 follow_up_params.update(

@@ -459,7 +459,7 @@ def test_prepare_follow_up_call_params_resets_per_call_logging_state():
         },
     }
 
-    follow_up = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(original, original_stream_setting=True)
+    follow_up = LiteLLM_Proxy_MCP_Handler.prepare_follow_up_call_params(original, original_stream_setting=True)
 
     assert "litellm_call_id" not in follow_up
     assert "litellm_logging_obj" not in follow_up
