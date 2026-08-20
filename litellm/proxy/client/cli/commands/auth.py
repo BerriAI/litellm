@@ -11,11 +11,26 @@ import click
 import requests
 from rich.console import Console
 from rich.table import Table
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
+from .claude_settings import (
+    CLAUDE_SETTINGS_PATH,
+    SETTINGS_FILE_OWNERS,
+    ClaudeSettingsError,
+    write_claude_settings,
+)
+from .pkce_login import (
+    Http,
+    PkceFailure,
+    RevocationUnavailable,
+    fresh_api_key,
+    pkce_token_record,
+    revoke_stored_credential,
+    run_pkce_login,
+)
 from .private_json import write_private_json
 
 
@@ -28,6 +43,13 @@ class CliTokenData(TypedDict):
     auth_header_name: str
     jwt_token: str
     timestamp: float
+    expires_at: ReadOnly[NotRequired[float]]
+    refresh_token: ReadOnly[NotRequired[str]]
+    client_id: ReadOnly[NotRequired[str]]
+    token_endpoint: ReadOnly[NotRequired[str]]
+    revocation_endpoint: ReadOnly[NotRequired[str]]
+    resource: ReadOnly[NotRequired[str]]
+    team_id: ReadOnly[NotRequired[str | None]]
 
 
 class CliTeam(TypedDict, total=False):
@@ -40,6 +62,8 @@ class CliTeam(TypedDict, total=False):
 class CliContextObj(TypedDict):
     base_url: str
     base_url_explicit: NotRequired[bool]
+    api_key: ReadOnly[NotRequired[str | None]]
+    api_key_from_token_file: ReadOnly[NotRequired[bool]]
 
 
 class CliPollData(TypedDict, total=False):
@@ -73,10 +97,7 @@ class CliAuthResult(TypedDict):
 # Token storage utilities
 def get_token_file_path() -> str:
     """Get the path to store the authentication token"""
-    home_dir: Final = Path.home()
-    config_dir: Final = home_dir / ".litellm"
-    config_dir.mkdir(exist_ok=True)
-    return str(config_dir / "token.json")
+    return str(Path.home() / ".litellm" / "token.json")
 
 
 def save_token(token_data: CliTokenData) -> None:
@@ -109,11 +130,23 @@ def get_stored_api_key(expected_base_url: str | None = None) -> str | None:
 
     If expected_base_url is provided, the key is only returned when it was
     originally issued for that URL. This prevents credential leakage when the
-    CLI is pointed at a different (possibly malicious) server.
+    CLI is pointed at a different (possibly malicious) server. A key obtained by
+    ``lite login --pkce`` is refreshed here once it nears expiry.
     """
-    from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+    token_data: Final = load_token()
+    if token_data is None:
+        return None
+    if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
+        return None
+    return fresh_api_key(token_data, save_token, requests.Session(), reload=load_token, warn=_warn)
 
-    return get_litellm_gateway_api_key(expected_base_url=expected_base_url)
+
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
+def _login_command(renews: bool) -> str:
+    return "lite login --pkce" if renews else "lite login"
 
 
 # Team selection utilities
@@ -629,17 +662,83 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
             return None
 
 
+def _configure_claude_code(base_url: str) -> None:
+    """Point Claude Code at base_url by patching ~/.claude/settings.json."""
+    try:
+        write_claude_settings(base_url, CLAUDE_SETTINGS_PATH, SETTINGS_FILE_OWNERS)
+    except ClaudeSettingsError as e:
+        raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
+    click.echo(f"\nConfigured Claude Code: {CLAUDE_SETTINGS_PATH} now routes through {base_url.rstrip('/')}.")
+    click.echo("Your other Claude Code settings were left untouched. Restart Claude Code to pick this up.")
+
+
+def _finish_login(base_url: str, api_key: str, config_claude: bool) -> None:
+    from litellm.proxy.client.cli.interface import show_commands
+
+    click.echo("\nLogin successful!")
+    click.echo(f"JWT Token: {api_key[:20]}...")
+    click.echo("You can now use the CLI without specifying --api-key")
+    if config_claude:
+        _configure_claude_code(base_url)
+    click.echo("\n" + "=" * 60)
+    show_commands()
+
+
+def _replace_stored_token(record: CliTokenData, http: Http) -> None:
+    previous: Final = load_token()
+    save_token(record)
+    if previous is None:
+        return
+    revocation: Final = revoke_stored_credential(previous, http)
+    if revocation is not None:
+        click.echo(
+            f"Could not revoke the previous login's refresh token on the proxy ({revocation.reason}); "
+            "it expires on its own."
+        )
+
+
+def _pkce_login(base_url: str, config_claude: bool) -> None:
+    http: Final = requests.Session()
+    credential: Final = run_pkce_login(base_url, http, echo=click.echo)
+    if isinstance(credential, PkceFailure):
+        click.echo(f"Authentication failed: {credential.reason}")
+        return
+    _replace_stored_token(pkce_token_record(base_url, credential), http)
+    _finish_login(base_url, credential.access_token, config_claude)
+
+
 @click.command(name="login")
+@click.option(
+    "--config-claude",
+    is_flag=True,
+    default=False,
+    help=(
+        "After logging in, update ~/.claude/settings.json so Claude Code routes through this proxy. "
+        "Unrelated settings are preserved."
+    ),
+)
+@click.option(
+    "--pkce",
+    is_flag=True,
+    default=False,
+    help=(
+        "Sign in with OAuth authorization code + PKCE through your system browser (loopback redirect), "
+        "with a refresh token that renews the key automatically. Requires a proxy that serves "
+        "/.well-known/litellm-cli-auth."
+    ),
+)
 @click.pass_context
-def login(ctx: click.Context):
+def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
-    from litellm.proxy.client.cli.interface import show_commands
 
     ctx_obj: Final[CliContextObj] = ctx.obj
     base_url: Final = ctx_obj["base_url"]
 
     try:
+        if pkce:
+            _pkce_login(base_url, config_claude)
+            return
         cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)
         key_id: Final = cli_sso_flow["login_id"]
         poll_secret: Final = cli_sso_flow["poll_secret"]
@@ -666,7 +765,7 @@ def login(ctx: click.Context):
 
             # Save token data. base_url is stored so we can verify origin
             # before reusing the key on a subsequent CLI invocation.
-            save_token(
+            _replace_stored_token(
                 {
                     "base_url": base_url.rstrip("/"),
                     "key": api_key,
@@ -676,16 +775,11 @@ def login(ctx: click.Context):
                     "auth_header_name": "Authorization",
                     "jwt_token": "",
                     "timestamp": time.time(),
-                }
+                },
+                requests.Session(),
             )
 
-            click.echo("\nLogin successful!")
-            click.echo(f"JWT Token: {api_key[:20]}...")
-            click.echo("You can now use the CLI without specifying --api-key")
-
-            # Show available commands after successful login
-            click.echo("\n" + "=" * 60)
-            show_commands()
+            _finish_login(base_url, api_key, config_claude)
             return
         else:
             click.echo("Authentication timed out. Please try again.")
@@ -698,6 +792,10 @@ def login(ctx: click.Context):
     except KeyboardInterrupt:
         click.echo("\nAuthentication cancelled by user.")
         return
+    except click.ClickException:
+        # Login itself already succeeded; only the post-login step failed, so this
+        # must not be relabelled as an authentication failure by the handler below.
+        raise
     except Exception as e:
         click.echo(f"Authentication failed: {e}")
         return
@@ -706,7 +804,20 @@ def login(ctx: click.Context):
 @click.command(name="logout")
 def logout():
     """Logout and clear stored authentication"""
-    clear_token()
+    token_data: Final = load_token()
+    revocation: Final = revoke_stored_credential(token_data, requests.Session()) if token_data is not None else None
+    match revocation:
+        case RevocationUnavailable(reason=reason):
+            raise click.ClickException(
+                f"The proxy could not record the revocation ({reason}). Nothing was cleared; run `lite logout` again shortly."
+            )
+        case PkceFailure(reason=reason):
+            clear_token()
+            click.echo(f"Could not revoke the refresh token on the proxy ({reason}); it expires on its own.")
+        case None:
+            clear_token()
+        case _:
+            assert_never(revocation)
     click.echo("Logged out successfully. Authentication token cleared.")
 
 
@@ -718,8 +829,9 @@ def print_token(ctx: click.Context):
     Designed to be used as Claude Code's `apiKeyHelper`
     (https://docs.claude.com/en/docs/claude-code/settings): stdout must
     contain only the token, so all diagnostics go to stderr. The token
-    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
-    expired, run `lite login` again.
+    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); a
+    `lite login --pkce` token renews itself here first, and once a token
+    has expired for good, run the same `lite login` command again.
     """
     token_data: Final = load_token()
     if not token_data:
@@ -731,19 +843,23 @@ def print_token(ctx: click.Context):
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
     ctx_obj: Final[CliContextObj] = ctx.obj
-    if ctx_obj.get("base_url_explicit"):
-        base_url: Final = ctx_obj["base_url"]
-        if token_data.get("base_url") != base_url.rstrip("/"):
-            click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
-            sys.exit(1)
+    issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
+    if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
+        click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+        sys.exit(1)
 
-    if not is_cli_token_fresh(token_data):
+    renews: Final = "refresh_token" in token_data
+    if not is_cli_token_fresh(token_data) and not renews:
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
-    api_key: Final = token_data.get("key")
+    api_key: Final = (
+        ctx_obj.get("api_key")
+        if issued_for_this_server and ctx_obj.get("api_key_from_token_file")
+        else fresh_api_key(token_data, save_token, requests.Session(), reload=load_token, warn=_warn)
+    )
     if not api_key:
-        click.echo("No token available. Run 'lite login'.", err=True)
+        click.echo(f"Key expired. Run '{_login_command(renews)}' again.", err=True)
         sys.exit(1)
 
     click.echo(api_key)
@@ -762,14 +878,27 @@ def whoami():
     click.echo(f"User Email: {token_data.get('user_email', 'Unknown')}")
     click.echo(f"User ID: {token_data.get('user_id', 'Unknown')}")
     click.echo(f"User Role: {token_data.get('user_role', 'Unknown')}")
+    team_id: Final = token_data.get("team_id")
+    if team_id:
+        click.echo(f"Team ID: {team_id}")
 
-    # Check if token is still valid (basic timestamp check)
     timestamp: Final = token_data.get("timestamp", 0)
     age_hours: Final = (time.time() - timestamp) / 3600
     click.echo(f"Token age: {age_hours:.1f} hours")
 
-    if age_hours > CLI_JWT_EXPIRATION_HOURS:
+    expires_at: Final = token_data.get("expires_at")
+    if isinstance(expires_at, (int, float)):
+        click.echo(_key_expiry_line(expires_at, renews="refresh_token" in token_data))
+    elif age_hours > CLI_JWT_EXPIRATION_HOURS:
         click.echo(f"Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
+
+
+def _key_expiry_line(expires_at: float, renews: bool) -> str:
+    remaining_hours: Final = (expires_at - time.time()) / 3600
+    if remaining_hours <= 0:
+        return f"Key expired. Run '{_login_command(renews)}' again"
+    status: Final = f"Key expires in: {remaining_hours:.1f} hours"
+    return f"{status}, renewed on next use" if renews else status
 
 
 @click.group(name="auth")

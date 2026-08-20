@@ -40,6 +40,13 @@ interface UsePaginatedDailyActivityParams {
   args: any[];
   /** Whether the hook should fetch. Set to false to disable. */
   enabled: boolean;
+  /**
+   * Optional single-shot endpoint returning the whole range at once (e.g.
+   * teamDailyActivityAggregatedCall). Called with `args` as-is (no page).
+   * On success pagination is skipped entirely; on failure the hook falls
+   * back to the paginated flow.
+   */
+  aggregatedFetchFn?: (...args: any[]) => Promise<DailyActivityResponse>;
 }
 
 interface UsePaginatedDailyActivityReturn {
@@ -96,6 +103,7 @@ export function usePaginatedDailyActivity({
   fetchFn,
   args,
   enabled,
+  aggregatedFetchFn,
 }: UsePaginatedDailyActivityParams): UsePaginatedDailyActivityReturn {
   const [data, setData] = useState<DailyActivityResponse>(EMPTY_DATA);
   const [loading, setLoading] = useState(false);
@@ -158,6 +166,20 @@ export function usePaginatedDailyActivity({
       setLoading(true);
       setIsFetchingMore(false);
       setProgress({ currentPage: 1, totalPages: 1 });
+
+      if (aggregatedFetchFn) {
+        try {
+          const aggregated = await aggregatedFetchFn(...currentArgs);
+          if (isStale()) return;
+          setData(aggregated);
+          setProgress({ currentPage: 1, totalPages: 1 });
+          setLoading(false);
+          return;
+        } catch (error) {
+          if (isStale()) return;
+          console.error("Aggregated daily activity failed, falling back to pagination:", error);
+        }
+      }
 
       try {
         // Inject page=1 as the 4th argument.
@@ -239,7 +261,7 @@ export function usePaginatedDailyActivity({
     };
     // argsKey is a stable JSON string so the effect only re-fires when arg values change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, fetchFn, argsKey]);
+  }, [enabled, fetchFn, aggregatedFetchFn, argsKey]);
 
   return { data, loading, isFetchingMore, progress, cancelled, cancel };
 }

@@ -1,14 +1,24 @@
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Card, Collapse, Divider, Input, Space, Switch, Tooltip, Typography } from "antd";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ChevronRight, Info, X } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Card, CardContent } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { Separator } from "@/components/ui/separator";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import { resolveComplexityDefaultModel, tierOptions } from "./complexity_router_tiers";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
+import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
 
-const { Text } = Typography;
+export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
@@ -82,6 +92,24 @@ export interface AdaptiveRouterWeights {
 
 export const DEFAULT_ADAPTIVE_WEIGHTS: AdaptiveRouterWeights = { quality: 0.3, cost: 0.7 };
 
+export type HeuristicScoringRole = "decides" | "fallback_only" | "never";
+
+/**
+ * Whether the heuristic scorer runs on this router at all, which is what gates its knobs. An LLM
+ * classifier still falls back to the scorer unless the fallback is the default model, so the gate cannot be
+ * a plain classifier_type check.
+ */
+export const heuristicScoringRoleFor = (
+  classifierType: ClassifierType,
+  classifierFallback: ClassifierFallback | undefined,
+): HeuristicScoringRole => {
+  if (classifierType === "heuristic") return "decides";
+  return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
+};
+
+export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
+  heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+
 export type AdaptiveEligible = "all" | "classified_tier";
 
 export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>>;
@@ -89,6 +117,8 @@ export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
   tier_labels?: ComplexityTierLabels;
+  /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
+  default_model?: string;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
@@ -97,11 +127,25 @@ export interface ComplexityRouterConfigValue {
   classifier_fallback?: ClassifierFallback;
   session_affinity?: boolean;
   deployment_affinity?: boolean;
+  /** Tier floor for coding-agent plan-mode requests. Unset means detection is off, matching the backend. */
+  plan_mode_min_tier?: string;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  /**
+   * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
+   * payload so the router tracks the backend defaults rather than freezing today's numbers.
+   */
+  tier_boundaries?: TierBoundaries;
+  token_thresholds?: TokenThresholds;
+  dimension_weights?: DimensionWeights;
+  /**
+   * Score floor the reasoning-marker override must clear. Undefined keeps the key out of the payload, so the
+   * floor tracks tier_boundaries.simple_medium; an explicit 0 is a real floor that promotes on the markers alone.
+   */
+  reasoning_override_min_score?: number;
 }
 
 interface ComplexityRouterConfigProps {
@@ -156,6 +200,10 @@ export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof Complexit
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
+/** Tiers the plan-mode floor may name: the backend rejects a floor whose tier has no models. */
+export const planModeEligibleTiers = (tiers: ComplexityTiers): Array<keyof ComplexityTiers> =>
+  TIER_KEYS.filter((tier) => (tiers[tier] ?? []).length > 0);
+
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
   value,
@@ -174,11 +222,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
-  // The deployment's default model is derived from the tiers on submit, mirroring the order
-  // add_auto_router_tab uses, so the fallback option is offered exactly when one will exist.
-  const hasDefaultModel = Boolean(
-    value.tiers.MEDIUM[0] || value.tiers.SIMPLE[0] || value.tiers.COMPLEX[0] || value.tiers.REASONING[0],
+  const planModeTiers = planModeEligibleTiers(value.tiers);
+  const planModeTierOptions = tierOptions(value.tier_labels).filter((option) =>
+    (planModeTiers as string[]).includes(option.value),
   );
+  const derivedDefaultModel = resolveComplexityDefaultModel(value.tiers);
+  const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
@@ -195,6 +244,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     });
   };
 
+  // Clearing the select drops the key entirely rather than storing "", so an emptied pin reads as
+  // "track the tiers" everywhere downstream instead of as a blank model name.
+  const handleDefaultModelChange = (model: string | undefined) => {
+    onChange({ ...value, default_model: model || undefined });
+  };
+
   const handleTierLabelChange = (tier: keyof ComplexityTiers, label: string) => {
     onChange({
       ...value,
@@ -204,98 +259,119 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
   return (
     <div className="w-full max-w-none">
-      <Space align="center" style={{ marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          Complexity Tier Configuration
-        </Typography.Title>
-        <Tooltip title="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-          <InfoCircleOutlined className="text-gray-400" />
-        </Tooltip>
-      </Space>
+      <div className="inline-flex items-center gap-2 mb-4">
+        <h4 className="m-0 text-xl font-semibold text-foreground">Complexity Tier Configuration</h4>
+        <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
+          <Info className="size-4 text-muted-foreground" />
+        </SimpleTooltip>
+      </div>
 
-      <Text type="secondary" style={{ display: "block", marginBottom: 24 }}>
+      <span className="block mb-6 text-muted-foreground">
         The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls,
         &lt;1ms latency). Configure which model(s) handle each tier.
-      </Text>
+      </span>
 
-      <Text type="secondary" style={{ display: "block", marginBottom: 16, fontSize: 12 }}>
+      <span className="block mb-4 text-xs text-muted-foreground">
         Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn&apos;t change how
         requests are classified, and callers never see these names.
         {value.classifier_type === "llm" &&
           " Your classifier model reads these names, so clearer ones can sharpen its choices."}
-      </Text>
+      </span>
 
       <Card>
-        {TIER_KEYS.map((tier, index) => {
-          const tierInfo = TIER_DESCRIPTIONS[tier];
-          const label = effectiveTierLabel(tier, value.tier_labels);
-          const tierMissing = showValidationErrors && value.tiers[tier].length === 0;
-          return (
-            <div key={tier}>
-              {index > 0 && <Divider style={{ margin: "16px 0" }} />}
-              <div className="mb-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Text strong style={{ fontSize: 16 }}>
-                    {label} Tier
-                  </Text>
-                  <Tooltip title={tierInfo.description}>
-                    <InfoCircleOutlined className="text-gray-400" />
-                  </Tooltip>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
-                  </Text>
+        <CardContent>
+          {TIER_KEYS.map((tier, index) => {
+            const tierInfo = TIER_DESCRIPTIONS[tier];
+            const label = effectiveTierLabel(tier, value.tier_labels);
+            const tierMissing = showValidationErrors && value.tiers[tier].length === 0;
+            return (
+              <div key={tier}>
+                {index > 0 && <Separator className="my-4" />}
+                <div className="mb-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <strong className="text-base font-semibold">{label} Tier</strong>
+                    <SimpleTooltip content={tierInfo.description}>
+                      <Info className="size-4 text-muted-foreground" />
+                    </SimpleTooltip>
+                    <span className="text-xs text-muted-foreground">
+                      Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
+                    </span>
+                  </div>
+                  <span className="block mb-2 text-xs text-muted-foreground">Examples: {tierInfo.examples}</span>
+                  <InputGroup className="mb-2">
+                    <InputGroupInput
+                      value={value.tier_labels?.[tier] ?? ""}
+                      onChange={(event) => handleTierLabelChange(tier, event.target.value)}
+                      placeholder={`Display name (default: ${tierInfo.label})`}
+                      aria-label={`Display name for the ${tierInfo.label} tier`}
+                    />
+                    {value.tier_labels?.[tier] && (
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupButton
+                          size="icon-xs"
+                          aria-label={`Clear display name for the ${tierInfo.label} tier`}
+                          onClick={() => handleTierLabelChange(tier, "")}
+                        >
+                          <X />
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    )}
+                  </InputGroup>
+                  <MultiSelect
+                    options={modelOptions}
+                    value={value.tiers[tier]}
+                    onValueChange={(models: string[]) => handleTierChange(tier, models)}
+                    placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
+                    emptyText="No models found"
+                    className={tierMissing ? "w-full border-destructive" : "w-full"}
+                  />
+                  {value.tiers[tier].length > 1 && (
+                    <span className="text-xs text-muted-foreground">
+                      Multiple models selected — the router randomly picks among them per request (or Thompson-samples
+                      within the pool when adaptive routing is on).
+                    </span>
+                  )}
+                  {tierMissing && <span className="text-xs text-destructive">The {label} tier is required</span>}
                 </div>
-                <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
-                  Examples: {tierInfo.examples}
-                </Text>
-                <Input
-                  value={value.tier_labels?.[tier] ?? ""}
-                  onChange={(event) => handleTierLabelChange(tier, event.target.value)}
-                  placeholder={`Display name (default: ${tierInfo.label})`}
-                  aria-label={`Display name for the ${tierInfo.label} tier`}
-                  style={{ marginBottom: 8 }}
-                  allowClear
-                />
-                <AntdSelect
-                  mode="multiple"
-                  value={value.tiers[tier]}
-                  onChange={(models) => handleTierChange(tier, models)}
-                  placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
-                  showSearch
-                  style={{ width: "100%" }}
-                  options={modelOptions}
-                  status={tierMissing ? "error" : undefined}
-                />
-                {value.tiers[tier].length > 1 && (
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    Multiple models selected — the router randomly picks among them per request (or Thompson-samples
-                    within the pool when adaptive routing is on).
-                  </Text>
-                )}
-                {tierMissing && (
-                  <Text type="danger" style={{ fontSize: 12 }}>
-                    The {label} tier is required
-                  </Text>
-                )}
               </div>
+            );
+          })}
+          <Separator className="my-4" />
+
+          <div className="mb-2">
+            <div className="flex items-center gap-2 mb-2">
+              <strong className="text-base font-semibold">Default Model</strong>
+              <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
+                <Info className="size-4 text-muted-foreground" />
+              </SimpleTooltip>
             </div>
-          );
-        })}
+            <SearchSelect
+              options={modelOptions}
+              value={value.default_model ?? ""}
+              onValueChange={handleDefaultModelChange}
+              placeholder={
+                derivedDefaultModel
+                  ? `Derived from tiers: ${derivedDefaultModel}`
+                  : "Add a model to the Simple or Medium tier"
+              }
+              emptyText="No models found"
+              aria-label="Default model"
+            />
+            <span className="block mt-1 text-xs text-muted-foreground">
+              Used when the tier the request lands in has no model, and when the classifier fails with &quot;Route to
+              the default model&quot; selected.
+            </span>
+          </div>
+        </CardContent>
       </Card>
 
-      <Divider />
+      <Separator className="my-6" />
 
-      <Collapse
-        ghost
-        style={{ background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" }}
-        items={[
+      <div className="rounded-lg border border-border bg-muted">
+        {[
           {
             key: "classifier",
-            label: (
-              <Text strong style={{ color: "#374151" }}>
-                Advanced: Classification Method
-              </Text>
-            ),
+            label: <strong className="text-foreground font-semibold">Advanced: Classification Method</strong>,
             children: (
               <ClassificationMethodConfig
                 value={value}
@@ -304,74 +380,111 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}
-                hasDefaultModel={hasDefaultModel}
+                defaultModel={defaultModel}
               />
             ),
           },
           {
             key: "adaptive",
-            label: (
-              <Text strong style={{ color: "#374151" }}>
-                Advanced: Adaptive Routing
-              </Text>
-            ),
+            label: <strong className="text-foreground font-semibold">Advanced: Adaptive Routing</strong>,
             children: <AdaptiveRoutingConfig value={value} onChange={onChange} />,
           },
           {
             key: "affinity",
-            label: (
-              <Text strong style={{ color: "#374151" }}>
-                Advanced: Affinity
-              </Text>
-            ),
+            label: <strong className="text-foreground font-semibold">Advanced: Affinity</strong>,
             children: (
               <>
                 <div className="flex items-center gap-2 mb-2">
                   <Switch
                     checked={value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY}
-                    onChange={(deploymentAffinity) => onChange({ ...value, deployment_affinity: deploymentAffinity })}
+                    onCheckedChange={(deploymentAffinity) =>
+                      onChange({ ...value, deployment_affinity: deploymentAffinity })
+                    }
                     aria-label="Pin a session to one deployment per model group"
                   />
-                  <Text strong>Pin a session to one deployment per model group</Text>
+                  <strong className="font-semibold">Pin a session to one deployment per model group</strong>
                 </div>
-                <Text type="secondary" style={{ display: "block", fontSize: 12, marginBottom: 12 }}>
+                <span className="block text-xs mb-3 text-muted-foreground">
                   Keeps a session on the same deployment within a group, so provider prompt caches stay warm. Turn off
                   to load-balance every turn.
-                </Text>
+                </span>
                 <div className="flex items-center gap-2 mb-2">
                   <Switch
                     checked={value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
-                    onChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
+                    onCheckedChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
                     aria-label="Pin a session to its first model"
                   />
-                  <Text strong>Pin a session to its first model</Text>
+                  <strong className="font-semibold">Pin a session to its first model</strong>
                 </div>
-                <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+                <span className="block text-xs text-muted-foreground">
                   Keeps a session on its first turn&apos;s model instead of re-classifying each turn. Also pins the
                   deployment.
-                </Text>
+                </span>
+              </>
+            ),
+          },
+          {
+            key: "plan-mode",
+            label: <strong className="text-foreground font-semibold">Advanced: Plan-Mode Override</strong>,
+            children: (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <Switch
+                    checked={value.plan_mode_min_tier !== undefined}
+                    disabled={planModeTiers.length === 0}
+                    onCheckedChange={(enabled) =>
+                      onChange({ ...value, plan_mode_min_tier: enabled ? planModeTiers.at(-1) : undefined })
+                    }
+                    aria-label="Route plan-mode requests to a minimum tier"
+                  />
+                  <strong className="font-semibold">Route plan-mode requests to a minimum tier</strong>
+                </div>
+                <span className="block text-xs mb-3 text-muted-foreground">
+                  Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier.
+                  The classifier still wins when it picks higher, and the override only lasts while plan mode is active.
+                  {planModeTiers.length === 0 && " Add models to a tier to enable this."}
+                </span>
+                {value.plan_mode_min_tier !== undefined && (
+                  <div style={{ maxWidth: 320 }}>
+                    <Select
+                      items={planModeTierOptions}
+                      value={value.plan_mode_min_tier}
+                      onValueChange={(tier: string | null) => tier && onChange({ ...value, plan_mode_min_tier: tier })}
+                    >
+                      <SelectTrigger aria-label="Plan-mode minimum tier" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {planModeTierOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </>
             ),
           },
           {
             key: "response",
-            label: (
-              <Text strong style={{ color: "#374151" }}>
-                Advanced: Response Format
-              </Text>
-            ),
+            label: <strong className="text-foreground font-semibold">Advanced: Response Format</strong>,
             children: (
               <>
                 <div className="flex items-center gap-2 mb-2">
                   <Switch
                     checked={value.return_raw_model_name ?? false}
-                    onChange={(returnRawModelName) => onChange({ ...value, return_raw_model_name: returnRawModelName })}
+                    onCheckedChange={(returnRawModelName) =>
+                      onChange({ ...value, return_raw_model_name: returnRawModelName })
+                    }
+                    aria-label="Return raw model name"
                   />
-                  <Text strong>Return raw model name</Text>
+                  <strong className="font-semibold">Return raw model name</strong>
                 </div>
-                <Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+                <span className="block text-xs text-muted-foreground">
                   Return the resolved underlying model name in responses instead of the autorouter alias.
-                </Text>
+                </span>
               </>
             ),
           },
@@ -379,11 +492,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             ? [
                 {
                   key: "escalation",
-                  label: (
-                    <Text strong style={{ color: "#374151" }}>
-                      Advanced: Escalation Keywords
-                    </Text>
-                  ),
+                  label: <strong className="text-foreground font-semibold">Advanced: Escalation Keywords</strong>,
                   children: <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />,
                 },
               ]
@@ -392,11 +501,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             ? [
                 {
                   key: "keyword-semantic",
-                  label: (
-                    <Text strong style={{ color: "#374151" }}>
-                      Advanced: Keyword/Semantic Matching
-                    </Text>
-                  ),
+                  label: <strong className="text-foreground font-semibold">Advanced: Keyword/Semantic Matching</strong>,
                   children: (
                     <>
                       {onKeywordTierRulesChange && (
@@ -406,9 +511,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                           tierLabels={value.tier_labels}
                         />
                       )}
-                      {onKeywordTierRulesChange && onSemanticMatchingEnabledChange && (
-                        <Divider style={{ margin: "16px 0" }} />
-                      )}
+                      {onKeywordTierRulesChange && onSemanticMatchingEnabledChange && <Separator className="my-4" />}
                       {onSemanticMatchingEnabledChange && (
                         <SemanticKeywordMatching
                           enabled={semanticMatchingEnabled}
@@ -426,8 +529,16 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 },
               ]
             : []),
-        ]}
-      />
+        ].map(({ key, label, children }) => (
+          <Collapsible key={key} className="border-b border-border last:border-b-0">
+            <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left">
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
+              {label}
+            </CollapsibleTrigger>
+            <CollapsibleContent className="px-4 pb-4">{children}</CollapsibleContent>
+          </Collapsible>
+        ))}
+      </div>
     </div>
   );
 };

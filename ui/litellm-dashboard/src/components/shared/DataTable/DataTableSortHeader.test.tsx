@@ -64,7 +64,7 @@ function SortHeaderHarness({ variant, canSort = true, onSortingChange }: Harness
 describe("DataTableSortHeader", () => {
   it("renders a plain label and no button when the column cannot sort", () => {
     render(<SortHeaderHarness variant="header-cycle" canSort={false} />);
-    expect(screen.queryByTestId("sort-header-name")).toBeNull();
+    expect(screen.queryByTestId("sort-header-name")).not.toBeInTheDocument();
     expect(screen.getByText("Name")).toBeInTheDocument();
   });
 
