@@ -54,13 +54,7 @@ function MarkdownCodeRenderer({
   const syntaxTheme = useSyntaxTheme(coy);
   const match = /language-(\w+)/.exec(className || "");
   return match ? (
-    <SyntaxHighlighter
-      style={syntaxTheme}
-      language={match[1]}
-      PreTag="div"
-      className="rounded-md my-2"
-      {...(props as Record<string, unknown>)}
-    >
+    <SyntaxHighlighter {...props} style={syntaxTheme} language={match[1]} PreTag="div" className="rounded-md my-2">
       {String(children).replace(/\n$/, "")}
     </SyntaxHighlighter>
   ) : (
