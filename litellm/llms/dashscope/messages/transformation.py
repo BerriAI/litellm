@@ -28,6 +28,10 @@ from litellm.types.router import GenericLiteLLMParams
 class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
     """Adapter for Alibaba Bailian's Anthropic-compatible Messages endpoint."""
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+    """Adapter for Alibaba Bailian's Anthropic-compatible Messages endpoint."""
+
     # Models Bailian explicitly documents on the Anthropic-compatible endpoint.
     # Extend this set when Bailian onboards more models.
     SUPPORTED_MODELS = frozenset({
