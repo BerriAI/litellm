@@ -129,6 +129,13 @@ jobs:
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
           DIST: ${{ inputs.dist }}
+          # coverage.py's sys.monitoring backend (PEP 669), the cheapest core it has.
+          # It is only the default from Python 3.14, and these shards run 3.12, so it
+          # has to be asked for. Coverage refuses it when branch measurement is on
+          # (`branch_right_left` needs > 3.14.0a5) and falls back to the slow core with
+          # a `no-sysmon` warning, so turning on `branch = true` here means giving this
+          # back until the runners move to 3.14.
+          COVERAGE_CORE: sysmon
         run: |
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} \
