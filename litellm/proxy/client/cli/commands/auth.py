@@ -803,7 +803,7 @@ def logout(ctx: click.Context):
             click.echo(STRANDED_CREDENTIAL_MESSAGE)
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
         case KeyringNotInstalled():
-            click.echo(STRANDED_CREDENTIAL_MESSAGE)
+            click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
             click.echo(f"Install the keyring package with: {KEYRING_INSTALL_HINT}, then run 'lite logout' again.")
         case KeyringDisabled():
             click.echo(UNCHECKED_KEYCHAIN_MESSAGE)

@@ -459,7 +459,7 @@ class TestLogoutCommand:
 
         assert result.exit_code == 0
         assert "Logged out successfully" not in result.output
-        assert "still in the OS keychain" in result.output
+        assert "could not be checked" in result.output
         assert "pip install 'litellm[cli]'" in result.output
 
     def test_logout_does_not_call_an_unusable_keychain_clean(self, isolated_home, secret_vault_factory):
@@ -492,9 +492,12 @@ class TestLogoutCommand:
         assert "still in the OS keychain" in result.output
         assert "Unlock your keychain" in result.output
 
-    def test_logout_from_a_file_only_login_stays_quiet(self, isolated_home, secret_vault_factory):
-        """The credential never went to a keychain, so removing the file is the whole logout and
-        warning about a keychain entry would send the user chasing one that cannot exist."""
+    def test_logout_without_the_keyring_package_still_warns_about_a_file_held_secret(
+        self, isolated_home, secret_vault_factory
+    ):
+        """A file holding its own secret only says the login that wrote it had no keychain to write
+        to. An earlier login on this machine may have had one, and no install without the package
+        can look, so the honest answer is that the keychain went unchecked."""
         _write_token_file(isolated_home, key="sk-in-file")
 
         result = self.runner.invoke(
@@ -502,8 +505,9 @@ class TestLogoutCommand:
         )
 
         assert result.exit_code == 0
-        assert "Logged out successfully" in result.output
-        assert "still in the OS keychain" not in result.output
+        assert "Logged out successfully" not in result.output
+        assert "could not be checked" in result.output
+        assert "pip install 'litellm[cli]'" in result.output
 
 
 class TestWhoamiCommand:
