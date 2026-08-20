@@ -191,7 +191,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                     href={server.byok_api_key_help_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-info hover:text-info text-sm mt-2 flex items-center gap-1"
+                    className="text-info hover:text-info/80 text-sm mt-2 flex items-center gap-1"
                   >
                     Where do I find my API key? <Link2 className="size-3.5" />
                   </a>
@@ -223,7 +223,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               <button
                 onClick={handleAuthorize}
                 disabled={loading}
-                className="w-full bg-info hover:bg-info disabled:opacity-60 text-white font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
+                className="w-full bg-info hover:bg-info/80 disabled:opacity-60 text-white font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
               >
                 <Lock className="size-4" /> Connect &amp; Authorize
               </button>

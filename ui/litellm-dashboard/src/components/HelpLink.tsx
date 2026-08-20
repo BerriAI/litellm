@@ -50,10 +50,10 @@ export const HelpLink: React.FC<HelpLinkProps> = ({
     "inline-flex items-center gap-1.5 transition-colors focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-1 rounded-sm";
 
   const variantClasses = {
-    inline: "text-info hover:text-info text-sm font-medium hover:underline",
+    inline: "text-info text-sm font-medium hover:underline",
     subtle: "text-muted-foreground hover:text-foreground text-xs",
     button:
-      "text-info hover:text-info border border-border hover:border-border px-3 py-1.5 rounded-md bg-card hover:bg-accent text-sm font-medium shadow-xs",
+      "text-info border border-border px-3 py-1.5 rounded-md bg-card hover:bg-accent text-sm font-medium shadow-xs",
   };
 
   return (

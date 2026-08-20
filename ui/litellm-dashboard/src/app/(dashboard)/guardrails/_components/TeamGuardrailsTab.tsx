@@ -199,7 +199,7 @@ const STATUS_CONFIG: Record<GuardrailStatus, { label: string; bg: string; text: 
 };
 
 const TEAM_COLORS: Record<string, string> = {
-  "ML Platform": "bg-purple-100 text-purple-700",
+  "ML Platform": "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
   "Data Science": "bg-info/15 text-info",
   Security: "bg-destructive/15 text-destructive",
   "Customer Success": "bg-warning/15 text-warning",
@@ -311,7 +311,7 @@ function GuardrailCard({
   return (
     <div
       className={`bg-card border rounded-lg p-4 transition-all ${
-        isSelected ? "border-info ring-1 ring-blue-200" : "border-border"
+        isSelected ? "border-info ring-1 ring-info/30" : "border-border"
       }`}
     >
       <div className="flex items-start justify-between gap-4">
@@ -358,7 +358,7 @@ function GuardrailCard({
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs bg-success hover:bg-success/80 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Approve
                 </button>
@@ -600,7 +600,7 @@ function DetailPanel({
                       setNewStaticHeaderValue("");
                     }
                   }}
-                  className="text-xs font-medium text-info hover:text-info border border-info/20 bg-info/10 hover:bg-info/15 px-2 py-1.5 rounded-sm transition-colors shrink-0"
+                  className="text-xs font-medium text-info border border-info/20 bg-info/10 hover:bg-info/15 px-2 py-1.5 rounded-sm transition-colors shrink-0"
                 >
                   Add
                 </button>
@@ -671,7 +671,7 @@ function DetailPanel({
                       setNewExtraHeader("");
                     }
                   }}
-                  className="text-xs font-medium text-info hover:text-info border border-info/20 bg-info/10 hover:bg-info/15 px-2 py-1.5 rounded-sm transition-colors"
+                  className="text-xs font-medium text-info border border-info/20 bg-info/10 hover:bg-info/15 px-2 py-1.5 rounded-sm transition-colors"
                 >
                   Add
                 </button>
@@ -682,7 +682,7 @@ function DetailPanel({
             <button
               type="button"
               onClick={() => setConfigExpanded(!configExpanded)}
-              className="w-full flex items-center justify-between px-3 py-2 text-left text-xs font-semibold text-foreground bg-muted hover:bg-muted transition-colors"
+              className="w-full flex items-center justify-between px-3 py-2 text-left text-xs font-semibold text-foreground bg-muted hover:bg-border transition-colors"
             >
               <span>Equivalent config</span>
               {configExpanded ? (
@@ -727,7 +727,7 @@ function DetailPanel({
               <button
                 type="button"
                 onClick={onApprove}
-                className="flex-1 flex items-center justify-center gap-1.5 bg-success hover:bg-success text-white text-sm font-medium py-2 rounded-md transition-colors"
+                className="flex-1 flex items-center justify-center gap-1.5 bg-success hover:bg-success/80 text-white text-sm font-medium py-2 rounded-md transition-colors"
               >
                 <CheckIcon className="h-4 w-4" />
                 Approve
@@ -793,7 +793,7 @@ function ConfirmDialog({ action, guardrailName, onConfirm, onCancel }: ConfirmDi
             type="button"
             onClick={onConfirm}
             className={`flex-1 text-white text-sm font-medium py-2 rounded-md transition-colors ${
-              isApprove ? "bg-success hover:bg-success" : "bg-destructive hover:bg-destructive"
+              isApprove ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"
             }`}
           >
             {isApprove ? "Approve" : "Reject"}
@@ -1015,7 +1015,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           <button
             type="button"
             onClick={() => setIsSubmitModalOpen(true)}
-            className="ml-auto flex items-center gap-2 bg-info hover:bg-info text-white text-sm font-medium px-4 py-2 rounded-md transition-colors"
+            className="ml-auto flex items-center gap-2 bg-info hover:bg-info/80 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors"
           >
             <PlusIcon className="h-4 w-4" />
             Add Guardrail

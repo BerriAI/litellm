@@ -280,7 +280,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                 <button
                   onClick={handleAddLink}
                   disabled={!newLink.url || !newLink.displayName}
-                  className={`flex items-center px-4 py-2 rounded-md text-sm ${!newLink.url || !newLink.displayName ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-success text-white hover:bg-success"}`}
+                  className={`flex items-center px-4 py-2 rounded-md text-sm ${!newLink.url || !newLink.displayName ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-success text-white hover:bg-success/80"}`}
                 >
                   <PlusCircleIcon className="w-4 h-4 mr-1" />
                   Add Link
@@ -312,7 +312,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                 <div className="flex space-x-2">
                   <button
                     onClick={handleSaveRearranging}
-                    className="text-xs bg-success text-white px-3 py-1.5 rounded-sm hover:bg-success"
+                    className="text-xs bg-success text-white px-3 py-1.5 rounded-sm hover:bg-success/80"
                   >
                     Save Order
                   </button>

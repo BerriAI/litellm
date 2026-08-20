@@ -186,7 +186,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
                   type="button"
                   variant="ghost"
                   size="xs"
-                  className="h-auto gap-1 px-1 py-0 text-xs text-info hover:text-info"
+                  className="h-auto gap-1 px-1 py-0 text-xs text-info hover:text-info/80"
                   onClick={() => void handleDownload(annotation)}
                 >
                   <Download className="size-3" />

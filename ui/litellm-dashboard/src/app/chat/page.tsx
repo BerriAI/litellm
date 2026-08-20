@@ -518,7 +518,7 @@ export default function ChatConversationPage() {
             variant="ghost"
             size="icon-xs"
             onClick={() => setStorageBannerDismissed(true)}
-            className="text-warning hover:bg-warning/15 hover:text-warning"
+            className="text-warning hover:bg-warning/15 "
           >
             <X className="size-3.5" />
           </Button>
@@ -585,7 +585,7 @@ export default function ChatConversationPage() {
                     }
                   }
                 }}
-                className="absolute bottom-[100px] left-1/2 -translate-x-1/2 z-10 rounded-full border bg-background/75 text-muted-foreground shadow-sm backdrop-blur-md hover:bg-background/95 hover:text-muted-foreground"
+                className="absolute bottom-[100px] left-1/2 -translate-x-1/2 z-10 rounded-full border bg-background/75 text-muted-foreground shadow-sm backdrop-blur-md hover:bg-background/95"
                 aria-label="Scroll to bottom"
               >
                 <ChevronDown className="h-3 w-3" />

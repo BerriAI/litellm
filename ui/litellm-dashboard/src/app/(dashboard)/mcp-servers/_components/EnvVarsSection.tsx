@@ -54,7 +54,7 @@ const EnvVarsSection: React.FC = () => {
             </>
           }
         >
-          <Info className="size-4 text-info hover:text-info cursor-help" />
+          <Info className="size-4 text-info hover:text-info/80 cursor-help" />
         </SimpleTooltip>
       </div>
       <span className="mb-3 block text-xs text-muted-foreground">

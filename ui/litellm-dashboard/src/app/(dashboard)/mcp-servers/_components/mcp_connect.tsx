@@ -198,7 +198,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
   const LiteLLMProxyTab = () => (
     <div className="flex w-full flex-col gap-6">
-      <div className="bg-linear-to-r from-emerald-50 to-green-50 p-6 rounded-lg border border-success/15">
+      <div className="bg-linear-to-r from-success/15 to-success/5 p-6 rounded-lg border border-success/15">
         <div className="flex items-center gap-3 mb-3">
           <Zap className="text-success" size={24} />
           <h4 className="mb-0 text-xl font-semibold text-success">LiteLLM Proxy API Integration</h4>
@@ -268,7 +268,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
   const OpenAITab = () => (
     <div className="flex w-full flex-col gap-6">
-      <div className="bg-linear-to-r from-blue-50 to-indigo-50 p-6 rounded-lg border border-info/15">
+      <div className="bg-linear-to-r from-info/15 to-info/5 p-6 rounded-lg border border-info/15">
         <div className="flex items-center gap-3 mb-3">
           <Code className="text-info" size={24} />
           <h4 className="mb-0 text-xl font-semibold text-info">OpenAI Responses API Integration</h4>
@@ -292,7 +292,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
                   href="https://platform.openai.com/api-keys"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-info hover:text-info inline-flex items-center gap-1"
+                  className="text-info hover:text-info/80 inline-flex items-center gap-1"
                 >
                   OpenAI platform <ExternalLinkIcon size={12} />
                 </a>
@@ -348,12 +348,12 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
   const CursorTab = () => (
     <div className="flex w-full flex-col gap-6">
-      <div className="bg-linear-to-r from-purple-50 to-blue-50 p-6 rounded-lg border border-purple-100">
+      <div className="bg-linear-to-r from-purple-50 to-blue-50 p-6 rounded-lg border border-purple-100 dark:from-purple-950 dark:to-blue-950 dark:border-purple-900">
         <div className="flex items-center gap-3 mb-3">
-          <Terminal className="text-purple-600" size={24} />
-          <h4 className="mb-0 text-xl font-semibold text-purple-900">Cursor IDE Integration</h4>
+          <Terminal className="text-purple-600 dark:text-purple-400" size={24} />
+          <h4 className="mb-0 text-xl font-semibold text-purple-900 dark:text-purple-100">Cursor IDE Integration</h4>
         </div>
-        <span className="text-purple-700">
+        <span className="text-purple-700 dark:text-purple-300">
           Use tools directly from Cursor IDE with LiteLLM MCP. Enable your AI assistant to perform real-world tasks
           without leaving your coding environment.
         </span>
@@ -381,7 +381,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
                 <code className="bg-muted px-2 py-1 rounded-sm">Ctrl+S</code>
               </span>
               <FeatureCard
-                icon={<Code className="text-purple-600" size={16} />}
+                icon={<Code className="text-purple-600 dark:text-purple-400" size={16} />}
                 title="Configuration"
                 description="Cursor MCP configuration"
                 serverName="Zapier Gmail"
@@ -412,7 +412,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
 
   const StreamableHTTPTab = () => (
     <div className="flex w-full flex-col gap-6">
-      <div className="bg-linear-to-r from-green-50 to-teal-50 p-6 rounded-lg border border-success/15">
+      <div className="bg-linear-to-r from-success/15 to-success/5 p-6 rounded-lg border border-success/15">
         <div className="flex items-center gap-3 mb-3">
           <Globe className="text-success" size={24} />
           <h4 className="mb-0 text-xl font-semibold text-success">Streamable HTTP Transport</h4>
@@ -449,7 +449,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           <div className="mt-4">
             <Button
               variant="link"
-              className="p-0 h-auto text-info hover:text-info"
+              className="p-0 h-auto text-info hover:text-info/80"
               nativeButton={false}
               render={
                 <a

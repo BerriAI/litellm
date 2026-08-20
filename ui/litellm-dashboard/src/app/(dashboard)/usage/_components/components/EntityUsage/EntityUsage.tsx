@@ -484,7 +484,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                 <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
                 <a
                   href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
-                  className="text-info hover:text-info ml-1"
+                  className="text-info hover:text-info/80 ml-1"
                 >
                   here
                 </a>
