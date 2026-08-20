@@ -492,12 +492,37 @@ class TestLogoutCommand:
         assert "still in the OS keychain" in result.output
         assert "Unlock your keychain" in result.output
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
-    def test_logout_reports_a_token_file_it_cannot_remove(self, isolated_home, secret_vault_factory):
-        """`lite logout` on a read-only ~/.litellm used to end in a PermissionError traceback with
-        the credential still sitting in the file. The user has to be told what is left and where."""
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+    def test_logout_reports_a_token_file_it_cannot_clear(self, isolated_home, secret_vault_factory):
+        """`lite logout` on a read-only ~/.litellm holding a read-only token file used to end in a
+        PermissionError traceback with the credential still sitting in the file. The user has to be
+        told what is left and where."""
         _write_token_file(isolated_home, key="sk-in-file")
         config_dir = isolated_home / ".litellm"
+        path = config_dir / "token.json"
+        path.chmod(0o400)
+        config_dir.chmod(0o500)
+        try:
+            result = self.runner.invoke(logout, obj={"secret_vault": secret_vault_factory()})
+        finally:
+            config_dir.chmod(0o700)
+            path.chmod(0o600)
+
+        assert result.exit_code == 0
+        assert "Logged out successfully" not in result.output
+        assert "still in" in result.output
+        assert str(config_dir / "token.json") in result.output
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+    def test_logout_on_a_read_only_directory_still_takes_the_secret_out_of_the_file(
+        self, isolated_home, secret_vault_factory
+    ):
+        """A ~/.litellm that will accept no replacement file and no removal still lets the file it
+        has be shortened, so the logout the user asked for happens rather than being handed back to
+        them with instructions."""
+        _write_token_file(isolated_home, key="sk-in-file")
+        config_dir = isolated_home / ".litellm"
+        path = config_dir / "token.json"
         config_dir.chmod(0o500)
         try:
             result = self.runner.invoke(logout, obj={"secret_vault": secret_vault_factory()})
@@ -505,9 +530,8 @@ class TestLogoutCommand:
             config_dir.chmod(0o700)
 
         assert result.exit_code == 0
-        assert "Logged out successfully" not in result.output
-        assert "still in" in result.output
-        assert str(config_dir / "token.json") in result.output
+        assert "Logged out successfully" in result.output
+        assert "sk-in-file" not in path.read_text()
 
     def test_logout_without_the_keyring_package_still_warns_about_a_file_held_secret(
         self, isolated_home, secret_vault_factory

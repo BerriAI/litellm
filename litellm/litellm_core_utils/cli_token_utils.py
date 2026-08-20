@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.private_json import (
     commit_staged_json,
     discard_staged_json,
     ensure_private_dir,
+    overwrite_private_json,
     stage_private_json,
     write_private_json,
 )
@@ -180,7 +181,7 @@ def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
     if not settled and _keep_the_unchecked_keychain_on_record(outcome, record):
         return outcome
     removal: Final = _remove_token_file()
-    if removal is not None and record is not None and record.key is not None:
+    if removal is not None and record is not None and not _scrub_file_secret(record):
         return removal
     return SecretErased() if settled else outcome
 
@@ -198,8 +199,9 @@ def _keep_the_unchecked_keychain_on_record(outcome: SecretErase, record: CliToke
 
     Only a keychain that could not be reached leaves the question open. One that answered for itself
     is remembered without any help from the file, and a file it can still pair a live entry with
-    would leave the machine signed in to the login that was just ended. A copy that cannot be
-    replaced with a secret-free one is not kept either, because the secret goes first.
+    would leave the machine signed in to the login that was just ended. A copy that will give up
+    its secret neither to a staged replacement nor to an overwrite is not kept either, because the
+    secret goes first.
     """
     if record is None or isinstance(outcome, SecretStranded):
         return False
@@ -210,11 +212,12 @@ def _nothing_left_behind(outcome: SecretErase, record: CliTokenRecord | None) ->
     """Whether the keychain can be trusted to hold no credential of ours once the file is gone.
 
     A machine with no token file has no stored login to end, and `clear_cli_token` keeps one behind
-    whenever the keychain is left unconfirmed, so a missing file is real evidence rather than the
-    absence of it. Past that, a keychain that could not be reached is never trusted, whatever the
-    file looks like. Even a file holding its own secret says only that the login which wrote it had
-    no keychain to write to, and the login before it may well have had one: the entry that login
-    left outlives both the uninstalled package and the file that replaced it. `SecretStranded` is
+    whenever the keychain is left unconfirmed, taking the secret out in place when it cannot stage a
+    replacement, so a missing file is real evidence rather than the absence of it. Past that, a
+    keychain that could not be reached is never trusted, whatever the file looks like. Even a file
+    holding its own secret says only that the login which wrote it had no keychain to write to, and
+    the login before it may well have had one: the entry that login left outlives both the
+    uninstalled package and the file that replaced it. `SecretStranded` is
     the keychain answering for itself and outranks the file.
     """
     match outcome:
@@ -323,6 +326,11 @@ def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliToken
     before the keychain is handed anything. Copying the credential into a second store and only
     then discovering the first one cannot be cleaned would widen exposure instead of narrowing it,
     which is the opposite of what moving it into the keychain is for.
+
+    A staged file that will not go into place is overwritten where it lies before the keychain is
+    asked to take the new entry back, so the migration finishes on a directory that would only ever
+    have refused it. Rolling back is the last resort, and a rollback the keychain also refuses
+    leaves the secret in both stores until the next read, which retries this same migration.
     """
     if record.key is None:
         return None
@@ -332,7 +340,7 @@ def _migrate_file_secret(record: CliTokenRecord, vault: SecretVault) -> CliToken
     if not isinstance(vault.write(_encode_secret(record.base_url, record.key, record.jwt_token)), SecretStored):
         discard_staged_json(staged)
         return record
-    if not _commit_token_file(staged):
+    if not _commit_token_file(staged) and not _overwrite_file_secret(record):
         vault.erase()
     return record
 
@@ -342,7 +350,24 @@ def _scrub_file_secret(record: CliTokenRecord) -> bool:
     if record.key is None and not record.jwt_token:
         return True
     staged: Final = _stage_scrubbed_file(record)
-    return staged is not None and _commit_token_file(staged)
+    if staged is not None and _commit_token_file(staged):
+        return True
+    return _overwrite_file_secret(record)
+
+
+def _overwrite_file_secret(record: CliTokenRecord) -> bool:
+    """Take the secret out of the token file where it lies, when no replacement can be put in place.
+
+    The atomic rewrite wants room for a second file and a directory that will accept it. A full disk
+    refuses the first and a read-only `~/.litellm` the second, and neither stands in the way of
+    shortening the file that is already there. It is worth the loss of atomicity because a partial
+    write reads as no login at all, which is where the refused rewrite left the next run anyway.
+    """
+    try:
+        overwrite_private_json(get_cli_token_file_path(), _without_secret(record).model_dump(exclude_none=True))
+    except OSError:
+        return False
+    return True
 
 
 def _stage_scrubbed_file(record: CliTokenRecord) -> str | None:
