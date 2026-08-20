@@ -45,6 +45,21 @@ def commit_staged_json(staged: str, path: str) -> None:
         raise
 
 
+def overwrite_private_json(path: str, data: Mapping[str, object]) -> None:
+    """Rewrite a file that is already there, in place, keeping the mode it was created with.
+
+    `write_private_json` needs room for a second file and a directory that will accept it, which is
+    what a full disk and a read-only `~/.litellm` respectively refuse. Shortening the file already
+    in place needs neither. It is not atomic, so an interrupted write leaves a partial file, and it
+    never creates one, so it cannot put a world-readable file where a private one was.
+    """
+    fd: Final = os.open(path, os.O_WRONLY | os.O_TRUNC)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def discard_staged_json(staged: str) -> None:
     """Throw a staged file away when the change it was part of is abandoned"""
     Path(staged).unlink(missing_ok=True)
