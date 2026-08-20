@@ -190,19 +190,15 @@ class TestTokenUtilities:
             result = get_token_file_path()
 
             assert result == "/home/user/.litellm/token.json"
-            mock_mkdir.assert_called_once_with(exist_ok=True)
+            mock_mkdir.assert_not_called()
 
-    def test_get_token_file_path_creates_directory(self):
-        """Test that get_token_file_path creates the config directory"""
-        with (
-            patch("pathlib.Path.home") as mock_home,
-            patch("pathlib.Path.mkdir") as mock_mkdir,
-        ):
-            mock_home.return_value = Path("/home/user")
-
-            get_token_file_path()
-
-            mock_mkdir.assert_called_once_with(exist_ok=True)
+    def test_reading_the_token_never_creates_the_config_directory(self, tmp_path):
+        """Every `lite` invocation reads the token; only saving one may touch ~/.litellm"""
+        with patch("pathlib.Path.home", return_value=tmp_path):
+            assert load_token() is None
+            assert not (tmp_path / ".litellm").exists()
+            save_token({"key": "sk-test"})
+            assert load_token() == {"key": "sk-test"}
 
     def test_save_token(self, tmp_path):
         """Test saving token data to file"""
@@ -309,7 +305,7 @@ class TestTokenUtilities:
         token_data = {"key": "test-api-key-123", "user_id": "test-user"}
 
         with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.load_token",
             return_value=token_data,
         ):
             result = get_stored_api_key()
@@ -318,7 +314,7 @@ class TestTokenUtilities:
     def test_get_stored_api_key_no_token(self):
         """Test getting stored API key when no token exists"""
         with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.load_token",
             return_value=None,
         ):
             result = get_stored_api_key()
@@ -329,7 +325,7 @@ class TestTokenUtilities:
         token_data = {"user_id": "test-user"}
 
         with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.load_token",
             return_value=token_data,
         ):
             result = get_stored_api_key()
@@ -339,7 +335,7 @@ class TestTokenUtilities:
         """Stored key is returned when expected_base_url matches stored origin"""
         token_data = {"key": "sk-prod", "base_url": "https://real-proxy.com"}
         with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.load_token",
             return_value=token_data,
         ):
             assert get_stored_api_key(expected_base_url="https://real-proxy.com") == "sk-prod"
@@ -348,7 +344,7 @@ class TestTokenUtilities:
         """Trailing slash on expected_base_url is normalised before comparison"""
         token_data = {"key": "sk-prod", "base_url": "https://real-proxy.com"}
         with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.load_token",
             return_value=token_data,
         ):
             assert get_stored_api_key(expected_base_url="https://real-proxy.com/") == "sk-prod"
@@ -357,7 +353,7 @@ class TestTokenUtilities:
         """Stored key is NOT returned when expected_base_url differs from stored origin"""
         token_data = {"key": "sk-prod", "base_url": "https://real-proxy.com"}
         with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.load_token",
             return_value=token_data,
         ):
             assert get_stored_api_key(expected_base_url="https://evil.com") is None
@@ -366,7 +362,7 @@ class TestTokenUtilities:
         """Old tokens without a base_url field are rejected when origin check is requested"""
         token_data = {"key": "sk-old-token"}
         with patch(
-            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            "litellm.proxy.client.cli.commands.auth.load_token",
             return_value=token_data,
         ):
             assert get_stored_api_key(expected_base_url="https://real-proxy.com") is None
@@ -1110,3 +1106,292 @@ class TestLoginConfigClaude:
         assert "could not configure Claude Code" in result.output
         assert "invalid JSON" in result.output
         assert "Authentication failed" not in result.output
+
+
+class _FakeHttpResponse:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = json.dumps(payload)
+        self.content = self.text.encode()
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSession:
+    """Stands in for ``requests.Session`` so the CLI's refresh and revoke calls can be observed."""
+
+    instances = []
+
+    def __init__(self):
+        self.posts = []
+        self.response = _FakeHttpResponse(200, {})
+        _FakeSession.instances.append(self)
+
+    def post(self, url, *, data=None, json=None, timeout):
+        self.posts.append((url, data))
+        return self.response
+
+    def get(self, url, *, timeout):
+        raise AssertionError(f"unexpected GET {url}")
+
+
+PKCE_BASE_URL = "https://llm.example.com"
+PKCE_TOKEN_RESPONSE = {
+    "access_token": "sk-cli-rotated",
+    "token_type": "Bearer",
+    "expires_in": 3600,
+    "refresh_token": "llm_srefresh_rotated",
+    "user_id": "u1",
+    "team_id": "team-b",
+}
+
+
+def _pkce_record(**overrides):
+    return {
+        "base_url": PKCE_BASE_URL,
+        "key": "sk-cli-old",
+        "user_id": "u1",
+        "user_email": "unknown",
+        "user_role": "cli",
+        "auth_header_name": "Authorization",
+        "jwt_token": "",
+        "timestamp": time.time(),
+        "expires_at": time.time() + 30,
+        "refresh_token": "llm_srefresh_old",
+        "client_id": "llm_dcrc_abc",
+        "token_endpoint": f"{PKCE_BASE_URL}/token",
+        "revocation_endpoint": f"{PKCE_BASE_URL}/revoke",
+        "resource": PKCE_BASE_URL,
+        "team_id": "team-b",
+        **overrides,
+    }
+
+
+def _pkce_credential():
+    from litellm.proxy.client.cli.commands.pkce_login import PkceCredential
+
+    return PkceCredential(
+        access_token="sk-cli-fresh",
+        refresh_token="llm_srefresh_fresh",
+        expires_at=time.time() + 3600,
+        client_id="llm_dcrc_abc",
+        token_endpoint=f"{PKCE_BASE_URL}/token",
+        revocation_endpoint=f"{PKCE_BASE_URL}/revoke",
+        resource=PKCE_BASE_URL,
+        user_id="u1",
+        team_id="team-b",
+    )
+
+
+class TestPkceLoginCommand:
+    """``lite login --pkce`` swaps the proxy-mediated SSO poll for the browser PKCE flow."""
+
+    def setup_method(self):
+        self.runner = CliRunner()
+        _FakeSession.instances.clear()
+
+    def test_pkce_login_saves_the_refreshable_record_and_skips_the_sso_poll(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()) as run,
+            patch("litellm.proxy.client.cli.commands.auth._start_cli_sso_flow") as sso_start,
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            result = self.runner.invoke(login, ["--pkce"], obj={"base_url": f"{PKCE_BASE_URL}/"})
+
+        assert result.exit_code == 0, result.output
+        assert "Login successful!" in result.output
+        assert "JWT Token: sk-cli-fresh..." in result.output
+        sso_start.assert_not_called()
+        assert run.call_args.args[0] == f"{PKCE_BASE_URL}/"
+        saved = save.call_args.args[0]
+        assert saved["base_url"] == PKCE_BASE_URL
+        assert saved["key"] == "sk-cli-fresh"
+        assert saved["refresh_token"] == "llm_srefresh_fresh"
+        assert saved["client_id"] == "llm_dcrc_abc"
+        assert saved["token_endpoint"] == f"{PKCE_BASE_URL}/token"
+        assert saved["revocation_endpoint"] == f"{PKCE_BASE_URL}/revoke"
+        assert saved["resource"] == PKCE_BASE_URL
+        assert saved["user_id"] == "u1"
+        assert saved["team_id"] == "team-b"
+
+    def test_pkce_login_failure_is_reported_and_nothing_is_saved(self):
+        from litellm.proxy.client.cli.commands.pkce_login import PkceFailure
+
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.run_pkce_login",
+                return_value=PkceFailure("sign-in was not approved (access_denied): no details"),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+        ):
+            result = self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL})
+
+        assert result.exit_code == 0
+        assert "Authentication failed: sign-in was not approved (access_denied): no details" in result.output
+        save.assert_not_called()
+
+    def test_login_without_the_flag_never_touches_the_pkce_flow(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login") as run,
+            patch("litellm.proxy.client.cli.commands.auth._start_cli_sso_flow", side_effect=KeyboardInterrupt),
+        ):
+            result = self.runner.invoke(login, obj={"base_url": PKCE_BASE_URL})
+
+        assert "cancelled" in result.output
+        run.assert_not_called()
+
+
+class TestPkceLogoutCommand:
+    def setup_method(self):
+        self.runner = CliRunner()
+        _FakeSession.instances.clear()
+
+    def test_logout_revokes_the_refresh_token_before_clearing(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.clear_token") as clear,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        ):
+            result = self.runner.invoke(logout)
+
+        assert result.exit_code == 0
+        assert result.output == "Logged out successfully. Authentication token cleared.\n"
+        clear.assert_called_once()
+        assert _FakeSession.instances[0].posts == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+
+    def test_logout_still_clears_when_revocation_fails(self):
+        class _FailingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(503, {"error": "temporarily_unavailable"})
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.clear_token") as clear,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FailingSession),
+        ):
+            result = self.runner.invoke(logout)
+
+        assert result.exit_code == 0
+        assert "Could not revoke the refresh token on the proxy (revocation failed with 503" in result.output
+        assert "Logged out successfully" in result.output
+        clear.assert_called_once()
+
+    def test_logout_of_a_classic_token_makes_no_request(self):
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value={"key": "sk-classic"}),
+            patch("litellm.proxy.client.cli.commands.auth.clear_token") as clear,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        ):
+            result = self.runner.invoke(logout)
+
+        assert result.output == "Logged out successfully. Authentication token cleared.\n"
+        clear.assert_called_once()
+        assert _FakeSession.instances[0].posts == []
+
+
+class TestPkcePrintToken:
+    """``lite print-token`` is Claude Code's apiKeyHelper, so a near-expiry PKCE key must be
+    refreshed silently and stdout must carry nothing but the key."""
+
+    def setup_method(self):
+        self.runner = CliRunner()
+        _FakeSession.instances.clear()
+
+    def test_print_token_refreshes_a_near_expiry_key_and_saves_the_rotation(self):
+        class _RefreshingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefreshingSession),
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout == "sk-cli-rotated\n"
+        assert _FakeSession.instances[0].posts[0][0] == f"{PKCE_BASE_URL}/token"
+        assert _FakeSession.instances[0].posts[0][1]["refresh_token"] == "llm_srefresh_old"
+        saved = save.call_args.args[0]
+        assert saved["key"] == "sk-cli-rotated"
+        assert saved["refresh_token"] == "llm_srefresh_rotated"
+
+    def test_print_token_prints_a_fresh_pkce_key_without_a_request(self):
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value=_pkce_record(expires_at=time.time() + 3600),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.stdout == "sk-cli-old\n"
+        assert _FakeSession.instances[0].posts == []
+
+    def test_print_token_fails_when_the_key_expired_and_refresh_is_refused(self):
+        class _RefusingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(400, {"error": "invalid_grant"})
+
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value=_pkce_record(expires_at=time.time() - 1),
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefusingSession),
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert "Token expired. Run 'lite login' again." in result.output
+        save.assert_not_called()
+
+    def test_print_token_for_an_expired_classic_token_makes_no_request(self):
+        with (
+            patch(
+                "litellm.proxy.client.cli.commands.auth.load_token",
+                return_value={"key": "sk-classic", "timestamp": time.time() - (CLI_JWT_EXPIRATION_HOURS + 1) * 3600},
+            ),
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+        ):
+            result = self.runner.invoke(print_token, obj={})
+
+        assert result.exit_code == 1
+        assert "Token expired" in result.output
+        assert _FakeSession.instances == []
+
+
+class TestGetStoredApiKeyRefresh:
+    def test_get_stored_api_key_refreshes_a_near_expiry_pkce_key(self):
+        _FakeSession.instances.clear()
+
+        class _RefreshingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefreshingSession),
+        ):
+            assert get_stored_api_key(PKCE_BASE_URL) == "sk-cli-rotated"
+            assert get_stored_api_key("https://other.example.com") is None
+
+        assert save.call_count == 1
+        assert len(_FakeSession.instances) == 1

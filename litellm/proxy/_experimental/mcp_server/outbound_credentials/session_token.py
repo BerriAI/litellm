@@ -76,6 +76,13 @@ SessionTokenKind = Literal["session", "session_refresh"]
 on open, so a signature-valid token of one kind cannot be replayed as the other even if its
 wire prefix is swapped (the prefix is not part of the signed payload; this claim is)."""
 
+SessionAudience = Literal["proxy_api"]
+"""The non-MCP audience a session REFRESH token can be minted for. ``None`` (the default and
+the only value ever on an MCP wire) means the aggregate MCP gateway; ``"proxy_api"`` means the
+refresh grant re-mints the proxy-API CLI credential instead of an MCP session pair. The audience
+is read only from the signed claims, never from the request, so a token of one audience can
+never be redeemed as the other."""
+
 
 class SessionPrincipal(BaseModel):
     """The litellm user a session token identifies and the DCR client it was issued to.
@@ -97,6 +104,8 @@ class SessionPrincipal(BaseModel):
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     resource_server_id: str | None = None
+    audience: SessionAudience | None = None
+    team_id: str | None = None
 
 
 class SessionKeys(BaseModel):
@@ -194,6 +203,8 @@ class _SessionClaims(BaseModel):
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     resource_server_id: str | None = None
+    audience: SessionAudience | None = None
+    team_id: str | None = None
 
 
 def is_session_token(candidate: str) -> bool:
@@ -295,6 +306,8 @@ def _mint(
         user_id=principal.user_id,
         client_id=principal.client_id,
         resource_server_id=principal.resource_server_id,
+        audience=principal.audience,
+        team_id=principal.team_id,
     )
     token: Final = prefix + jwt.encode(
         claims.model_dump(exclude_none=True), keys.signing_key.get_secret_value(), algorithm=_SESSION_JWT_ALGORITHM
@@ -333,7 +346,11 @@ def _open(
         return SessionExpired()
     return OpenedSessionToken(
         principal=SessionPrincipal(
-            user_id=claims.user_id, client_id=claims.client_id, resource_server_id=claims.resource_server_id
+            user_id=claims.user_id,
+            client_id=claims.client_id,
+            resource_server_id=claims.resource_server_id,
+            audience=claims.audience,
+            team_id=claims.team_id,
         ),
         jti=claims.jti,
     )
