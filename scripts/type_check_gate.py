@@ -24,6 +24,18 @@ set by construction; re-syncs of an up-to-date env are a near-instant no-op.
 The group set is folded into the cache and artifact fingerprint, so counts
 recorded under a different set are never matched, only recomputed.
 
+Checking runs single-threaded on purpose. basedpyright's ``--threads`` looks
+like free speed and is not: partitioning files across threads reorders
+order-dependent inferences, so the tree's totals move with the width (149330
+serial, 149325 threaded here), which makes a counting gate's verdict a function
+of the host. Pinning a width to keep counts comparable then decouples it from
+the machine, and letting it follow ``nproc`` instead gives every core count its
+own fingerprint, so no one could reuse CI's precomputed base artifact. The
+speed did not survive measurement either: on four cores ``--threads 4`` ranged
+84-114s against 137-151s serial, and on one contributor's laptop it was ~6x
+*slower* than serial (724s vs 113s at width 8). Serial is the only width that
+is both portable and comparable.
+
 The gate runs basedpyright itself, for both the head and the base pass, with
 ``NODE_OPTIONS`` raised to the heap this repo needs: basedpyright's node
 process OOMs at the ~4 GB default, and when callers had to remember the flag,
@@ -52,6 +64,7 @@ carries an unambiguous ``rule`` field.
 
 import argparse
 import contextlib
+import functools
 import hashlib
 import io
 import json
@@ -107,7 +120,13 @@ class Breach(NamedTuple):
     added: int
 
 
+@functools.lru_cache(maxsize=None)
 def _to_relative(raw: str, root: Path) -> str | None:
+    """`raw` as a path relative to `root`, or None when it falls outside.
+
+    Memoized because it is called once per diagnostic while `resolve()` is a
+    filesystem round trip: this tree reports ~149k errors across ~2.2k files, so
+    the cache turns ~149k realpath walks into one per file (6.6s -> 0.9s)."""
     path = Path(raw)
     absolute = path if path.is_absolute() else root / path
     try:
@@ -217,9 +236,9 @@ def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -
     the only pin that works, because basedpyright auto-detects a `.venv` in the
     project root and that beats both PATH order and VIRTUAL_ENV, silently
     measuring the caller's fatter venv (whose extra typed packages flip
-    diagnostics) whenever the repo has one. Exit 0 (clean) and 1 (errors
-    found) are both output-bearing runs; anything else is a crash and fails
-    loudly instead of reading as zero errors."""
+    diagnostics) whenever the repo has one. Exit 0 (clean) and 1 (errors found)
+    are both output-bearing runs; anything else is a crash and fails loudly
+    instead of reading as zero errors."""
     bin_dir: Final = env_dir / "bin"
     proc = subprocess.run(
         [

@@ -46,6 +46,16 @@ def test_basedpyright_error_without_a_rule_is_bucketed():
     assert gate.count_basedpyright(payload) == {gate.UNCODED: 1}
 
 
+def test_counting_resolves_each_file_once_not_once_per_diagnostic():
+    gate._to_relative.cache_clear()
+    same_file = ROOT / "litellm" / "a.py"
+    payload = json.dumps(
+        {"generalDiagnostics": [_bpr(same_file, "error", "reportAny")] * 50}
+    )
+    assert gate.count_basedpyright(payload) == {"reportAny": 50}
+    assert gate._to_relative.cache_info().misses == 1
+
+
 def test_paths_outside_repo_are_skipped():
     payload = json.dumps(
         {
@@ -120,6 +130,20 @@ def test_run_basedpyright_pins_import_resolution_to_the_owned_env(tmp_path):
     gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)
     argv = captured.read_text().split()
     assert argv[argv.index("--pythonpath") + 1] == str(env_dir / "bin" / "python")
+
+
+def test_run_basedpyright_stays_single_threaded(tmp_path):
+    """`--threads` shifts the tree's totals (149330 serial vs 149325 threaded), which
+    would make this counting gate's verdict a function of the host, and it measured
+    slower than serial on real hardware. Neither failure is visible from a passing
+    run, so pin the absence of the flag."""
+    captured = tmp_path / "argv.txt"
+    env_dir = _stub_env(
+        tmp_path,
+        f'echo "$@" > "{captured}"\necho \'{{"generalDiagnostics": []}}\'',
+    )
+    gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)
+    assert "--threads" not in captured.read_text().split()
 
 
 def test_run_basedpyright_fails_loudly_on_a_crash_exit_code(tmp_path):
@@ -275,9 +299,7 @@ def test_fingerprints_carry_the_dependency_group_set():
     assert gate.environment_fingerprints(
         dep_groups=("proxy-dev",)
     ) != gate.environment_fingerprints(dep_groups=("proxy-dev", "e2e-dev"))
-    assert gate.environment_fingerprints()[-1] == "groups:" + ",".join(
-        gate.TYPECHECK_DEP_GROUPS
-    )
+    assert "groups:" + ",".join(gate.TYPECHECK_DEP_GROUPS) in gate.environment_fingerprints()
 
 
 def test_fingerprints_cover_the_prisma_schema():

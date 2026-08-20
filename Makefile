@@ -9,12 +9,14 @@
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
-	lint-install lint-fetch-base bootstrap
+	lint-install lint-fetch-base bootstrap bootstrap-python bootstrap-dashboard
 
 # Default target
 help:
 	@echo "Available commands:"
 	@echo "  make bootstrap          - Provision a fresh clone/worktree"
+	@echo "  make bootstrap-python   - Provision only the Python env (no dashboard npm install)"
+	@echo "  make bootstrap-dashboard - Provision only the dashboard's node_modules"
 	@echo "  make install-dev        - Install development dependencies"
 	@echo "  make install-proxy-dev  - Install proxy development dependencies"
 	@echo "  make install-dev-ci     - Install dev dependencies (CI-compatible, pins OpenAI)"
@@ -66,7 +68,7 @@ GATE_SLOT_LOCK := python3 scripts/gate_slot_lock.py
 LINT_DEP_INSTALL ?= install-dev
 LINT_E2E_DEP_INSTALL ?= lint-install
 LINT_DEP_BASE ?= lint-fetch-base
-LINT_JOBS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+LINT_JOBS ?= 2
 LINT_OUTPUT_SYNC := $(if $(filter output-sync,$(.FEATURES)),--output-sync=target,)
 
 # Show info
@@ -82,17 +84,21 @@ install-dev:
 
 # Deliberately unqueued: provisioning is I/O bound, so it doesn't need one of the
 # machine-wide slots the CPU-bound gates below share.
-bootstrap:
+bootstrap: bootstrap-python bootstrap-dashboard
+	@echo "bootstrap: done"
+
+bootstrap-python:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
-	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
 	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
 	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
 		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
 	else \
 		echo "bootstrap: .env left untouched"; \
 	fi
-	@echo "bootstrap: done"
+
+bootstrap-dashboard:
+	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
 
 install-proxy-dev:
 	$(UV) sync --frozen --group proxy-dev --extra proxy
@@ -241,10 +247,11 @@ check-import-safety: $(LINT_DEP_INSTALL)
 lint:
 	@$(GATE_SLOT_LOCK) $(MAKE) lint-inner
 
-lint-inner: lint-install lint-fetch-base
+lint-inner:
+	$(MAKE) -j 2 $(LINT_OUTPUT_SYNC) lint-install lint-fetch-base
 	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
-lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
+lint-checks: lint-basedpyright lint-type-discipline lint-e2e-basedpyright check-import-safety lint-gate lint-ruff check-circular-imports lint-format-check-changed
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
@@ -259,7 +266,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 check:
 	@$(GATE_SLOT_LOCK) $(MAKE) check-inner
 
-check-inner: bootstrap
+check-inner: bootstrap-python
 	./scripts/pre_commit_lint.sh
 
 pre-commit:

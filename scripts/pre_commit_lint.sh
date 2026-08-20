@@ -12,8 +12,10 @@
 #   - litellm/ Python  -> `make lint` (test-linting.yml's lint job)
 #   - tests/e2e Python -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #                         + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
-#   - dashboard        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
-#   - proxy/types      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
+#   - dashboard        -> `make bootstrap-dashboard` + prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
+#   - proxy/types      -> `make bootstrap-dashboard` + regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
+# `make check` provisions only the Python half, so the dashboard's npm install runs
+# here, for the scopes that reach a node block, and not for a Python-only change.
 #
 # Each block is skipped when no matching files are in scope, so unrelated commits
 # stay fast. This is intentionally not auto-installed as a git hook (see
@@ -166,9 +168,10 @@ EOF
         # counts are not diff-scoped, so a local pass here means the budget step will
         # pass in CI too.
         report=$(mktemp)
+        trap 'rm -f "$report"' EXIT
+        trap 'exit 130' INT TERM
         npx eslint . -f json -o "$report" || true
         node scripts/check-lint-budgets.mjs "$report" eslint-budgets.json || rc=1
-        rm -f "$report"
         exit $rc
     )
 }
@@ -224,6 +227,16 @@ if [ -n "$e2e_py_files" ]; then
         || { echo "✗ Raw HTTP client import in tests/e2e. Route the call through tests/e2e/e2e_http.py, then re-run make check." >&2; status=1; }
 fi
 
+dashboard_ready=1
+if [ -n "$ui_prettier_changed" ] || [ -n "$ui_eslint_changed" ] || [ -n "$spec_files" ]; then
+    echo "check: provisioning the dashboard toolchain (make bootstrap-dashboard)"
+    if ! make bootstrap-dashboard; then
+        echo "✗ make bootstrap-dashboard failed, so the dashboard lint and API-type checks are skipped rather than run against an unprovisioned toolchain. Fix the error above, then re-run make check." >&2
+        status=1
+        dashboard_ready=""
+    fi
+fi
+
 dashboard_checks() {
     echo "check: linting dashboard (prettier + eslint + lint budgets)"
     if [ ! -d ui/litellm-dashboard/node_modules ]; then
@@ -234,7 +247,7 @@ dashboard_checks() {
     lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; return 1; }
 }
 
-if [ -n "$ui_prettier_changed" ] || [ -n "$ui_eslint_changed" ]; then
+if [ -n "$dashboard_ready" ] && { [ -n "$ui_prettier_changed" ] || [ -n "$ui_eslint_changed" ]; }; then
     dash_log=$(mktemp)
     set -m
     dashboard_checks > "$dash_log" 2>&1 &
@@ -272,7 +285,7 @@ genapi_checks() {
     return $status
 }
 
-if [ -n "$spec_files" ]; then
+if [ -n "$dashboard_ready" ] && [ -n "$spec_files" ]; then
     gen_log=$(mktemp)
     set -m
     genapi_checks > "$gen_log" 2>&1 &
