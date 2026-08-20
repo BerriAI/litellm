@@ -3,13 +3,14 @@
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_MODULE_PATH = _REPO_ROOT / ".github" / "scripts" / "assert_workflow_dir_hygiene.py"
-_spec = importlib.util.spec_from_file_location("assert_workflow_dir_hygiene", _MODULE_PATH)
-hygiene = importlib.util.module_from_spec(_spec)
+_REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+_MODULE_PATH: Final = _REPO_ROOT / ".github" / "scripts" / "assert_workflow_dir_hygiene.py"
+_spec: Final = importlib.util.spec_from_file_location("assert_workflow_dir_hygiene", _MODULE_PATH)
+hygiene: Final = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = hygiene  # @dataclass(slots=True) rebuilds via sys.modules
 _spec.loader.exec_module(hygiene)
 
