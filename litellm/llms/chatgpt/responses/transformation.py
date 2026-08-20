@@ -101,6 +101,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "tool_choice",
             "reasoning",
             "prompt_cache_key",
+            "context_management",
             "previous_response_id",
             "truncation",
         }

@@ -121,14 +121,12 @@ class TestChatGPTResponsesAPITransformation:
                 "user": "user_123",
                 "temperature": 0.2,
                 "top_p": 0.9,
-                "context_management": [
-                    {"type": "compaction", "compact_threshold": 200000}
-                ],
                 "metadata": {"foo": "bar"},
                 "max_output_tokens": 123,
                 "stream_options": {"include_usage": True},
                 # supported and should be preserved
                 "prompt_cache_key": "session_123",
+                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
                 "truncation": "auto",
                 "previous_response_id": "resp_123",
                 "reasoning": {"effort": "medium"},
@@ -142,12 +140,14 @@ class TestChatGPTResponsesAPITransformation:
         assert "user" not in request
         assert "temperature" not in request
         assert "top_p" not in request
-        assert "context_management" not in request
         assert "metadata" not in request
         assert "max_output_tokens" not in request
         assert "stream_options" not in request
 
         assert request["prompt_cache_key"] == "session_123"
+        assert request["context_management"] == [
+            {"type": "compaction", "compact_threshold": 200000}
+        ]
         assert request["truncation"] == "auto"
         assert request["previous_response_id"] == "resp_123"
         assert request["reasoning"] == {"effort": "medium"}
