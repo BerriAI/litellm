@@ -219,8 +219,12 @@ class BaseConfig(ABC):
                 function=ChatCompletionToolParamFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, parameters=json_schema),
             )
 
-            optional_params.setdefault("tools", [])
-            optional_params["tools"].append(_tool)
+            # Rebind instead of appending: _map_openai_params aliases the caller's own
+            # tools list into optional_params, so append() would mutate it across calls.
+            optional_params["tools"] = [  # mutable-ok: JSON request body
+                *optional_params.get("tools", []),
+                _tool,
+            ]
             if enforce_tool_choice:
                 optional_params["tool_choice"] = _tool_choice
 
