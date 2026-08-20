@@ -1520,7 +1520,9 @@ class TestPkcePrintToken:
 
         assert result.exit_code == 1
         assert result.stdout == ""
-        assert "Token expired. Run 'lite login' again." in result.output
+        assert "Could not renew the key: token request failed with 400: invalid_grant" in result.output
+        assert "Key expired. Run 'lite login --pkce' again." in result.output
+        assert "Run 'lite login' again" not in result.output
         save.assert_not_called()
 
     def test_print_token_for_an_expired_classic_token_makes_no_request(self):
@@ -1557,3 +1559,23 @@ class TestGetStoredApiKeyRefresh:
 
         assert save.call_count == 1
         assert len(_FakeSession.instances) == 1
+
+    def test_get_stored_api_key_reports_a_refused_renewal_on_stderr_and_keeps_the_valid_key(self, capsys):
+        _FakeSession.instances.clear()
+
+        class _RefusingSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(503, {"error": "temporarily_unavailable"})
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=_pkce_record()),
+            patch("litellm.proxy.client.cli.commands.auth.save_token") as save,
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RefusingSession),
+        ):
+            assert get_stored_api_key(PKCE_BASE_URL) == "sk-cli-old"
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == "Could not renew the key: token request failed with 503: temporarily_unavailable\n"
+        save.assert_not_called()

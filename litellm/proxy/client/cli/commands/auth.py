@@ -135,7 +135,15 @@ def get_stored_api_key(expected_base_url: str | None = None) -> str | None:
         return None
     if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
         return None
-    return fresh_api_key(token_data, save_token, requests.Session(), reload=load_token)
+    return fresh_api_key(token_data, save_token, requests.Session(), reload=load_token, warn=_warn)
+
+
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
+def _login_command(renews: bool) -> str:
+    return "lite login --pkce" if renews else "lite login"
 
 
 # Team selection utilities
@@ -809,8 +817,9 @@ def print_token(ctx: click.Context):
     Designed to be used as Claude Code's `apiKeyHelper`
     (https://docs.claude.com/en/docs/claude-code/settings): stdout must
     contain only the token, so all diagnostics go to stderr. The token
-    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
-    expired, run `lite login` again.
+    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); a
+    `lite login --pkce` token renews itself here first, and once a token
+    has expired for good, run the same `lite login` command again.
     """
     token_data: Final = load_token()
     if not token_data:
@@ -828,13 +837,14 @@ def print_token(ctx: click.Context):
             click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
             sys.exit(1)
 
-    if not is_cli_token_fresh(token_data) and "refresh_token" not in token_data:
+    renews: Final = "refresh_token" in token_data
+    if not is_cli_token_fresh(token_data) and not renews:
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
-    api_key: Final = fresh_api_key(token_data, save_token, requests.Session(), reload=load_token)
+    api_key: Final = fresh_api_key(token_data, save_token, requests.Session(), reload=load_token, warn=_warn)
     if not api_key:
-        click.echo("Token expired. Run 'lite login' again.", err=True)
+        click.echo(f"Key expired. Run '{_login_command(renews)}' again.", err=True)
         sys.exit(1)
 
     click.echo(api_key)
@@ -871,7 +881,7 @@ def whoami():
 def _key_expiry_line(expires_at: float, renews: bool) -> str:
     remaining_hours: Final = (expires_at - time.time()) / 3600
     if remaining_hours <= 0:
-        return f"Key expired. Run '{'lite login --pkce' if renews else 'lite login'}' again"
+        return f"Key expired. Run '{_login_command(renews)}' again"
     status: Final = f"Key expires in: {remaining_hours:.1f} hours"
     return f"{status}, renewed on next use" if renews else status
 

@@ -476,6 +476,10 @@ def pkce_token_record(base_url: str, credential: PkceCredential) -> CliTokenData
     return record
 
 
+def _ignore_warning(_message: str) -> None:
+    return None
+
+
 def fresh_api_key(
     token_data: Mapping[str, object],
     save: Callable[[CliTokenData], None],
@@ -483,6 +487,7 @@ def fresh_api_key(
     *,
     reload: Callable[[], Mapping[str, object] | None],
     now: Callable[[], float] = time.time,
+    warn: Callable[[str], None] = _ignore_warning,
 ) -> str | None:
     """The stored key, refreshed first when it is about to expire and a refresh token is
     on file. The refresh fires at the same moment ``is_cli_token_fresh`` stops calling the
@@ -490,8 +495,10 @@ def fresh_api_key(
     with itself. The rotated pair is saved before the new key is returned, so a crash after
     this point never strands the CLI with a burned refresh token. A refresh that fails
     reads the record again, because a sibling ``lite`` process may have rotated the pair
-    first, in which case the key it saved for this same proxy is the live one. A record without
-    ``expires_at`` (the classic ``lite login`` credential) is returned as stored."""
+    first, in which case the key it saved for this same proxy is the live one; when no sibling
+    did, the reason the proxy gave goes to ``warn`` so a revoked or refused refresh token is
+    never a silent failure. A record without ``expires_at`` (the classic ``lite login``
+    credential) is returned as stored."""
     key: Final = token_data.get("key")
     if not isinstance(key, str) or not key:
         return None
@@ -506,7 +513,10 @@ def fresh_api_key(
         return still_valid
     refreshed: Final = refresh_credential(*refresh_inputs, http=http, now=now)
     if isinstance(refreshed, PkceFailure):
-        return _key_rotated_by_a_sibling(reload(), token_data, now()) or still_valid
+        sibling_key: Final = _key_rotated_by_a_sibling(reload(), token_data, now())
+        if sibling_key is None:
+            warn(f"Could not renew the key: {refreshed.reason}")
+        return sibling_key or still_valid
     base_url: Final = token_data.get("base_url")
     save(pkce_token_record(base_url if isinstance(base_url, str) else "", refreshed))
     return refreshed.access_token
