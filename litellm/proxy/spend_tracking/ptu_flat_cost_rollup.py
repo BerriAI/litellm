@@ -730,14 +730,12 @@ def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...] | 
     Returns a plain dict because the query builder serialises the mapping it is handed and
     rejects a read-only view of one.
     """
-    predicate: Final = {  # mutable-ok: prisma delete filter
+    return {  # mutable-ok: prisma delete filter
         "date": date_str,
         "api_key": PTU_SENTINEL_API_KEY,
         "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
+        **({} if chunk is None else {"model": {"in": chunk}}),  # mutable-ok: prisma membership filter
     }
-    if chunk is not None:
-        predicate["model"] = {"in": chunk}  # mutable-ok: prisma membership filter
-    return predicate
 
 
 async def _prune_unrefreshed_sentinel_rows(

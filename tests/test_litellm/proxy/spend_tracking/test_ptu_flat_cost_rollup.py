@@ -2067,7 +2067,8 @@ async def test_the_catch_up_pass_reaches_a_config_declared_deployment(monkeypatc
     """The catch-up shares the loader, so config deployments join it without being wired in.
     That is what prices the elapsed days of a reservation declared before today."""
     table = _FakeSentinelTable()
-    started = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
+    now = datetime.now(timezone.utc)
+    started = (now - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
     entry = _router_entry(
         model_id="cfg-back",
         model_info={"ptu_count": 100, "cost_per_ptu_per_hour": 0.02, "team_id": "t", "ptu_effective_from": started},
@@ -2077,7 +2078,7 @@ async def test_the_catch_up_pass_reaches_a_config_declared_deployment(monkeypatc
     await run_scheduled_ptu_rollup(_prisma_for([], table), pod_lock_manager=_pod_lock(acquired=True))
 
     charged = sorted(day for (_, day, _, model) in table.rows if model == "cfg-back")
-    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
     assert len(charged) == 3, charged
     assert charged[-1] == yesterday
     assert all(row["ptu_flat_cost"] == pytest.approx(48.0) for row in table.rows.values())
