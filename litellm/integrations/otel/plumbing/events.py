@@ -37,6 +37,15 @@ class GenAIEventRecorder:
         self.event_logger.emit(
             Event(
                 name=GenAIEvent.OPERATION_EXCEPTION,
+                # ``Event.body`` defaults to ``None``. The OTLP protobuf
+                # encoder has no representation for ``None`` (``_encode_value``
+                # raises ``Invalid type <class 'NoneType'>``) — which makes
+                # ``BatchLogRecordProcessor._export_batch`` discard the
+                # entire batch on the first unencodable record, including
+                # healthy records batched alongside. The exception message
+                # is the natural body for a WARN record and adds nothing
+                # the attributes don't already carry. See #36863.
+                body=message,
                 timestamp=timestamp_ns,
                 trace_id=span_context.trace_id,
                 span_id=span_context.span_id,
