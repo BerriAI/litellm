@@ -122,8 +122,10 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
           <button
             type="button"
             onClick={() => onConfirm(isApprove ? undefined : reviewNotes || undefined)}
-            className={`flex-1 text-success-foreground text-sm font-medium py-2 rounded-md transition-colors ${
-              isApprove ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"
+            className={`flex-1 text-sm font-medium py-2 rounded-md transition-colors ${
+              isApprove
+                ? "bg-success text-success-foreground hover:bg-success/80"
+                : "bg-destructive text-destructive-foreground hover:bg-destructive/80"
             }`}
           >
             {isApprove ? "Approve" : "Reject"}
