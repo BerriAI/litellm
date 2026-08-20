@@ -4,6 +4,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
 
+from openai.types.chat import ChatCompletionToolParam
+from openai.types.responses.function_tool_param import FunctionToolParam
+
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -30,14 +33,13 @@ from litellm.types.utils import (
     StandardLoggingMCPToolCall,
 )
 from litellm.utils import Rules, function_setup
-from openai.types.chat import ChatCompletionToolParam
-from openai.types.responses.function_tool_param import FunctionToolParam
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.utils import ProxyLogging
     from mcp.types import CallToolResult
     from mcp.types import Tool as MCPTool
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
 else:
     MCPTool = Any
 
@@ -667,6 +669,7 @@ class LiteLLM_Proxy_MCP_Handler:
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
+
         from litellm._uuid import uuid
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (

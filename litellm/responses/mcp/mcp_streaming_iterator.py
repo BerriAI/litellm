@@ -22,9 +22,10 @@ from litellm.types.llms.openai import (
 )
 
 if TYPE_CHECKING:
+    from mcp.types import Tool as MCPTool
+
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
-    from mcp.types import Tool as MCPTool
 else:
     MCPTool = Any
 
@@ -330,10 +331,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
 
+        from starlette.datastructures import Headers
+
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
-        from starlette.datastructures import Headers
 
         # Extract headers from secret_fields in original_request_params
         raw_headers_from_request: dict[str, str] | None = None
