@@ -2,6 +2,7 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.router import _model_info_nested_under_litellm_params
 
 BACKEND_MODEL = "deepinfra/deepseek-ai/DeepSeek-V4-Flash-0731"
 PUBLIC_MODEL = "deepseek-ai/DeepSeek-V4-Flash-0731"
@@ -61,6 +62,47 @@ def clean_cost_map():
 def _deployment_pricing(router):
     deployment = router.model_list[0]
     return deployment.get("model_info", {})
+
+
+def test_promotes_nothing_when_no_nested_block():
+    """No nested block, and a non-dict nested value, both promote nothing."""
+    assert _model_info_nested_under_litellm_params({"model": BACKEND_MODEL}, {}) == {}
+    assert _model_info_nested_under_litellm_params({"model_info": None}, {}) == {}
+    assert _model_info_nested_under_litellm_params({"model_info": "nope"}, {}) == {}
+
+
+def test_promotes_only_fields_the_deployment_does_not_define():
+    """Deployment-level values win; only unset fields are promoted."""
+    promoted = _model_info_nested_under_litellm_params(
+        {"model_info": {"input_cost_per_token": 1.0, "output_cost_per_token": 2.0}},
+        {"input_cost_per_token": INPUT_COST},
+    )
+
+    assert promoted == {"output_cost_per_token": 2.0}
+
+
+def test_never_promotes_id_and_skips_none_values():
+    """`id` is reserved for the generated deployment id, and None is not a value."""
+    promoted = _model_info_nested_under_litellm_params(
+        {
+            "model_info": {
+                "id": "nested-id",
+                "output_cost_per_token": None,
+                "input_cost_per_token": INPUT_COST,
+            }
+        },
+        {},
+    )
+
+    assert promoted == {"input_cost_per_token": INPUT_COST}
+
+
+def test_promoted_mapping_is_read_only():
+    """The caller updates its own dict; the returned view must not be mutable."""
+    promoted = _model_info_nested_under_litellm_params({"model_info": {"input_cost_per_token": INPUT_COST}}, {})
+
+    with pytest.raises(TypeError):
+        promoted["input_cost_per_token"] = 0.0  # type: ignore[index]
 
 
 def test_nested_model_info_pricing_is_applied():
