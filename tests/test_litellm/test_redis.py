@@ -929,8 +929,9 @@ GCP_IAM_CONNECT_FUNC = {"_gcp_service_account": "projects/-/serviceAccounts/sa@p
 def test_async_url_client_authenticates_through_credential_provider(markers, provider_cls):
     """A REDIS_URL config with Azure AD or GCP IAM must still reach the server with a credential.
 
-    The async client accepts redis_connect_func as a kwarg but never calls it, so the url
-    branch has to hand the connection a CredentialProvider or it authenticates with nothing.
+    The url branch forwards redis_connect_func straight to the async connection, which runs
+    its AUTH exchange with the blocking client API and dies, so the branch has to hand the
+    connection a CredentialProvider instead.
     """
     redis_kwargs = {
         "url": "rediss://redis-host:6380",
@@ -983,3 +984,24 @@ def test_async_url_client_drops_username_alongside_credential_provider():
     pool = client.connection_pool
     assert "username" not in pool.connection_kwargs
     pool.connection_class(**pool.connection_kwargs)
+
+
+@pytest.mark.parametrize("build_pool", [False, True], ids=["client", "pool"])
+def test_async_url_keeps_a_coroutine_connect_func(build_pool):
+    """redis-py awaits a coroutine redis_connect_func on an async connection, so one we cannot
+    turn into a credential provider has to be left where it is rather than dropped.
+    """
+
+    async def connect(connection):
+        return None
+
+    redis_kwargs = {
+        "url": "rediss://redis-host:6380",
+        "redis_connect_func": connect,
+    }
+
+    with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+        pool = get_redis_connection_pool() if build_pool else get_redis_async_client().connection_pool
+
+    assert pool.connection_kwargs["redis_connect_func"] is connect
+    assert "credential_provider" not in pool.connection_kwargs
