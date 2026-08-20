@@ -19,6 +19,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     _apply_group_patch_updates,
     _extract_group_member_ids,
     _extract_ids_from_path_filter,
+    _handle_group_membership_changes,
     _handle_team_membership_changes,
     _parse_member_entries,
     _process_group_patch_operations,
@@ -1244,6 +1245,10 @@ async def test_update_group_metadata_serialization_issue(mocker):
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
         AsyncMock(return_value=mock_scim_group_response),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
     )
 
     # Call the function that had the bug
@@ -4401,3 +4406,89 @@ async def test_get_groups_members_are_typed_as_users(mocker):
     response = await get_groups(startIndex=1, count=10, filter=None)
 
     assert [m.type for m in response.Resources[0].members] == ["User"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_raises_when_creation_fails(mocker, scim_upsert_user_enabled):
+    """A member whose user row can neither be found nor created must fail the
+    request. Regression: the resolver silently dropped that member and the group
+    write reported success, so the IdP recorded the user as provisioned while the
+    team roster was missing them."""
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=None),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_group_member_ids(
+            members=[SCIMMember(value="member-1")],
+            created_via="scim_group_membership",
+            prisma_client=_member_resolution_prisma(mocker, users=set(), teams=set()),
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "member-1" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_resolve_group_member_ids_admits_member_created_concurrently(mocker, scim_upsert_user_enabled):
+    """When creation fails because a concurrent request already created the user,
+    the member is still admitted: the id resolves to a real user row, so failing
+    or dropping it would be wrong either way."""
+    prisma_client = _member_resolution_prisma(mocker, users=set(), teams=set())
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=[None, LiteLLM_UserTable(user_id="raced-user")]
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(return_value=None),
+    )
+
+    result = await _resolve_group_member_ids(
+        members=[SCIMMember(value="raced-user")],
+        created_via="scim_group_membership",
+        prisma_client=prisma_client,
+    )
+
+    assert result.all_member_ids == ["raced-user"]
+    assert len(result.created_users) == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_group_membership_changes_propagates_add_failure(mocker):
+    """A genuine roster add failure must fail the group request so the IdP retries.
+    Regression: patch_team_membership ran with raise_on_error=False here, so a
+    failed team_member_add was logged and swallowed and the SCIM group sync
+    reported success with members missing from the team."""
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(side_effect=HTTPException(status_code=500, detail={"error": "db write failed"})),
+    )
+
+    with pytest.raises(HTTPException):
+        await _handle_group_membership_changes(
+            group_id="group-1", current_members=set(), final_members={"user-1"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_handle_group_membership_changes_already_in_team_is_noop(mocker):
+    """The strict path must keep treating an already-enrolled member as a no-op
+    and continue with the remaining members instead of failing the sync."""
+    mock_team_member_add = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(
+            side_effect=ProxyException(
+                message="already in team",
+                type=ProxyErrorTypes.team_member_already_in_team.value,
+                param=None,
+                code=400,
+            )
+        ),
+    )
+
+    await _handle_group_membership_changes(
+        group_id="group-1", current_members=set(), final_members={"user-1", "user-2"}
+    )
+
+    assert mock_team_member_add.await_count == 2
