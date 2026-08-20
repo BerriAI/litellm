@@ -230,7 +230,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
             </div>
             {updateAllUsers && (
               <div className="mt-2">
-                <span className="text-xs text-amber-600">
+                <span className="text-xs text-warning">
                   ⚠️ This will apply changes to ALL users in the system, not just the selected ones.
                 </span>
               </div>

@@ -84,12 +84,10 @@ function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggl
         onClick={handleToggle}
       >
         <span className="text-sm font-medium text-foreground flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+          <span className="inline-block w-2 h-2 rounded-full bg-info shrink-0" />
           {serverName}
           {selectedSet.size > 0 && (
-            <span className="ml-1 text-xs text-purple-600 font-semibold dark:text-purple-400">
-              {selectedSet.size} selected
-            </span>
+            <span className="ml-1 text-xs text-purple-600 font-semibold">{selectedSet.size} selected</span>
           )}
         </span>
         <span className="text-muted-foreground text-xs">{expanded ? "▲" : "▼"}</span>
@@ -112,14 +110,12 @@ function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggl
                     type="button"
                     onClick={() => onToggle({ server_id: serverId, tool_name: tool.name })}
                     className={`flex items-start justify-between px-3 py-2 rounded-lg text-left transition-colors ${
-                      selected
-                        ? "bg-purple-50 border border-purple-300 dark:bg-purple-950 dark:border-purple-700"
-                        : "bg-card border border-border hover:bg-muted"
+                      selected ? "bg-purple-50 border border-purple-300" : "bg-card border border-border hover:bg-muted"
                     }`}
                   >
                     <div className="min-w-0 flex-1">
                       <p
-                        className={`text-sm font-medium leading-tight ${selected ? "text-purple-800 dark:text-purple-200" : "text-foreground"}`}
+                        className={`text-sm font-medium leading-tight ${selected ? "text-purple-800" : "text-foreground"}`}
                       >
                         {tool.name}
                       </p>
@@ -129,11 +125,7 @@ function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggl
                         </p>
                       )}
                     </div>
-                    {selected && (
-                      <span className="text-purple-500 text-xs font-semibold ml-2 shrink-0 mt-0.5 dark:text-purple-400">
-                        ✓
-                      </span>
-                    )}
+                    {selected && <span className="text-purple-500 text-xs font-semibold ml-2 shrink-0 mt-0.5">✓</span>}
                   </button>
                 );
               })}
@@ -279,19 +271,15 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
                     key={idx}
                     type="button"
                     onClick={() => handleToggleTool(tool)}
-                    className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 hover:bg-red-50 hover:border-red-200 group transition-colors dark:border-purple-800 dark:bg-purple-950 dark:hover:bg-red-950 dark:hover:border-red-800"
+                    className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 hover:bg-destructive/10 hover:border-destructive/20 group transition-colors"
                   >
                     <div className="min-w-0 text-left">
-                      <span className="text-xs font-medium text-purple-800 group-hover:text-red-600 truncate block dark:text-purple-200 dark:group-hover:text-red-400">
+                      <span className="text-xs font-medium text-purple-800 group-hover:text-destructive truncate block">
                         {displayToolName(serverPrefixById.get(tool.server_id), tool.tool_name)}
                       </span>
-                      <span className="text-[10px] text-purple-400 truncate block dark:text-purple-500">
-                        {tool.server_id.slice(0, 8)}…
-                      </span>
+                      <span className="text-[10px] text-purple-400 truncate block">{tool.server_id.slice(0, 8)}…</span>
                     </div>
-                    <span className="ml-2 text-purple-300 group-hover:text-red-400 text-xs shrink-0 dark:text-purple-600">
-                      ✕
-                    </span>
+                    <span className="ml-2 text-purple-300 group-hover:text-destructive text-xs shrink-0">✕</span>
                   </button>
                 ))
               )}

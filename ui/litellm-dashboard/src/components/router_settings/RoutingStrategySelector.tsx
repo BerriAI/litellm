@@ -19,10 +19,10 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
   return (
     <div className="space-y-2 max-w-3xl">
       <div>
-        <label className="text-xs font-medium text-gray-700 uppercase tracking-wide">
+        <label className="text-xs font-medium text-foreground uppercase tracking-wide">
           {routerFieldsMetadata["routing_strategy"]?.ui_field_name || "Routing Strategy"}
         </label>
-        <p className="text-xs text-gray-500 mt-0.5 mb-2">
+        <p className="text-xs text-muted-foreground mt-0.5 mb-2">
           {routerFieldsMetadata["routing_strategy"]?.field_description || ""}
         </p>
       </div>

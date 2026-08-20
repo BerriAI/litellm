@@ -641,7 +641,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             <MountedFormProvider value={{ control: form.control, registry }}>
               <form onSubmit={handleSubmit} className="space-y-6">
                 {!isAdmin && (
-                  <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+                  <div className="rounded-md bg-info/10 border border-info/20 px-4 py-3 text-sm text-info">
                     Your submission will be sent for admin review. Once approved, the server will appear in your MCP
                     Servers list. The request must be made with a team-scoped API key.
                   </div>
@@ -649,10 +649,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 <div className="grid grid-cols-1 gap-6">
                   <MountedFormField
                     label={
-                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                      <span className="text-sm font-medium text-foreground flex items-center">
                         MCP Server Name
                         <SimpleTooltip content="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
-                          <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -663,17 +663,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       <Input
                         {...textControl(control)}
                         placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
-                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        className="rounded-lg border-border focus:border-info focus:ring-ring"
                       />
                     )}
                   </MountedFormField>
 
                   <MountedFormField
                     label={
-                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                      <span className="text-sm font-medium text-foreground flex items-center">
                         Alias
                         <SimpleTooltip content="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
-                          <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -684,7 +684,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       <Input
                         {...textControl(control)}
                         placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
-                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        className="rounded-lg border-border focus:border-info focus:ring-ring"
                         onChange={(event) => {
                           control.onChange(event);
                           setAliasManuallyEdited(true);
@@ -694,14 +694,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   </MountedFormField>
 
                   <MountedFormField
-                    label={<span className="text-sm font-medium text-gray-700">Description</span>}
+                    label={<span className="text-sm font-medium text-foreground">Description</span>}
                     name="description"
                   >
                     {(control) => (
                       <Input
                         {...textControl(control)}
                         placeholder="Brief description of what this server does"
-                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        className="rounded-lg border-border focus:border-info focus:ring-ring"
                       />
                     )}
                   </MountedFormField>
@@ -709,20 +709,20 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
 
                   <MountedFormField
-                    label={<span className="text-sm font-medium text-gray-700">GitHub / Source URL</span>}
+                    label={<span className="text-sm font-medium text-foreground">GitHub / Source URL</span>}
                     name="source_url"
                   >
                     {(control) => (
                       <Input
                         {...textControl(control)}
                         placeholder="https://github.com/org/mcp-server"
-                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        className="rounded-lg border-border focus:border-info focus:ring-ring"
                       />
                     )}
                   </MountedFormField>
 
                   <MountedFormField
-                    label={<span className="text-sm font-medium text-gray-700">Transport Type</span>}
+                    label={<span className="text-sm font-medium text-foreground">Transport Type</span>}
                     name="transport"
                     required
                     rules={{ validate: { required: requiredRule("Please select a transport type") } }}
@@ -750,7 +750,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   {/* URL field - only show for HTTP and SSE */}
                   {(transportType === "http" || transportType === "sse") && (
                     <MountedFormField
-                      label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
+                      label={<span className="text-sm font-medium text-foreground">MCP Server URL</span>}
                       name="url"
                       required
                       rules={{
@@ -764,7 +764,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         <Input
                           {...textControl(control)}
                           placeholder="https://your-mcp-server.com"
-                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
                         />
                       )}
                     </MountedFormField>
@@ -789,10 +789,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
                   <MountedFormField
                     label={
-                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                      <span className="text-sm font-medium text-foreground flex items-center">
                         Max Concurrent Requests (optional)
                         <SimpleTooltip content="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
-                          <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -813,8 +813,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   {transportType !== "stdio" && transportType !== "" && (
                     <Collapsible defaultOpen className="mb-4">
                       <CollapsibleTrigger className="group flex w-full items-center justify-between gap-4 py-2 text-left">
-                        <span className="text-sm font-semibold text-gray-700">Authentication settings</span>
-                        <ChevronDown className="size-4 text-gray-500 transition-transform group-data-[panel-open]:rotate-180" />
+                        <span className="text-sm font-semibold text-foreground">Authentication settings</span>
+                        <ChevronDown className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" />
                       </CollapsibleTrigger>
                       <CollapsibleContent keepMounted className="space-y-6 pt-2">
                         <MountedFormField
@@ -856,10 +856,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         {shouldShowAuthValueField && (
                           <MountedFormField
                             label={
-                              <span className="text-sm font-medium text-gray-700 flex items-center">
+                              <span className="text-sm font-medium text-foreground flex items-center">
                                 Authentication Value
                                 <SimpleTooltip content="Token, password, or header value to send with each request for the selected auth type.">
-                                  <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                                  <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                                 </SimpleTooltip>
                               </span>
                             }
@@ -874,7 +874,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                               <PasswordInput
                                 {...textControl(control)}
                                 placeholder="Enter token or secret"
-                                groupClassName="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                                groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
                               />
                             )}
                           </MountedFormField>
@@ -922,7 +922,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </div>
 
                 {/* Connection Status Section */}
-                <div className="mt-8 pt-6 border-t border-gray-200">
+                <div className="mt-8 pt-6 border-t border-border">
                   <MCPConnectionStatus
                     formValues={formValues}
                     tools={tools}
@@ -968,7 +968,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   />
                 </div>
 
-                <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
+                <div className="flex items-center justify-end space-x-3 pt-6 border-t border-border">
                   <Button variant="secondary" onClick={handleCancel}>
                     Cancel
                   </Button>
