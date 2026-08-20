@@ -138,7 +138,68 @@ def clear_pid_record(path: Path | None = None) -> None:
     resolved_path.unlink(missing_ok=True)
 
 
+_PROCESS_QUERY_LIMITED_INFORMATION: Final = 0x1000
+_STILL_ACTIVE: Final = 259
+_ERROR_ACCESS_DENIED: Final = 5
+
+
+def _windows_pid_exists(pid: int) -> bool:
+    """Liveness check for Windows that does not signal the process.
+
+    Opens a query-only handle and asks for the exit code.  ``OpenProcess``
+    failing with ``ERROR_ACCESS_DENIED`` means the pid exists but is not ours
+    to open, which is the case the ``PermissionError`` arm covers on POSIX.
+
+    Caveat kept deliberately: a process whose real exit code is 259 reads as
+    alive, because ``GetExitCodeProcess`` reports ``STILL_ACTIVE`` (259) for a
+    running process and cannot distinguish the two.  That is the standard
+    trade-off for this API and it is strictly better than the previous
+    behaviour, which killed the process it was asked about.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle: Final = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True
+        return exit_code.value == _STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def is_running(pid: int) -> bool:
+    """Report whether ``pid`` names a live process, without signalling it.
+
+    ``os.kill(pid, 0)`` is the POSIX idiom and is a genuine no-op there, but it
+    is not a probe on Windows.  ``signal.CTRL_C_EVENT`` is 0, so ``os.kill(pid,
+    0)`` *is* ``os.kill(pid, CTRL_C_EVENT)`` and reaches
+    ``GenerateConsoleCtrlEvent``.  That API's second argument is a process
+    *group*, and ``launch_proxy`` above starts the proxy through
+    ``subprocess.Popen`` with no ``CREATE_NEW_PROCESS_GROUP``, so the child
+    shares this console's group: the Ctrl-C is delivered to the proxy, to the
+    ``lite`` process asking the question, and to anything else on the console.
+
+    Measured on Windows 11, Python 3.12.10.  Probing a sleeping child returns
+    ``True`` with no exception raised; the child then exits with 3221225786
+    (``0xC000013A``, ``STATUS_CONTROL_C_EXIT``) and a ``KeyboardInterrupt``
+    arrives in the caller a moment later -- so the traceback does not point at
+    the probe.  ``KeyboardInterrupt`` is a ``BaseException``, so neither the
+    ``ProcessLookupError`` nor the ``PermissionError`` arm below ever sees it.
+    """
+    if sys.platform == "win32":
+        return _windows_pid_exists(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -149,17 +210,31 @@ def is_running(pid: int) -> bool:
 
 
 def terminate(pid: int, grace_period: float = 5.0) -> None:
-    """Terminate a process by pid, escalating from SIGTERM to SIGKILL if needed."""
+    """Terminate a process by pid, escalating from SIGTERM to SIGKILL if needed.
+
+    Both kills tolerate the same errors ``prisma_client`` already tolerates for
+    this exact case -- "already dead or inaccessible".  ``ProcessLookupError``
+    alone is not enough: on Windows ``os.kill`` routes to ``TerminateProcess``,
+    and a process that has already exited answers ``ERROR_ACCESS_DENIED``, so
+    the call raises ``PermissionError`` and escapes the suppression.
+    """
     if not is_running(pid):
         return
-    with contextlib.suppress(ProcessLookupError):
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
         os.kill(pid, signal.SIGTERM)
     deadline: Final = time.monotonic() + grace_period
     while time.monotonic() < deadline and is_running(pid):
         time.sleep(0.2)
     if is_running(pid):
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+        # signal.SIGKILL does not exist on Windows.  Referencing it raises
+        # AttributeError, which contextlib.suppress(ProcessLookupError) does
+        # not catch, so this escalation path crashed instead of hard-killing
+        # a proxy that ignored SIGTERM.  os.kill with any signal other than 0
+        # or 1 routes to TerminateProcess on Windows, so SIGTERM is a real
+        # kill there.  litellm/proxy/db/prisma_client.py already resolves the
+        # signal this way.
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
 
 
 def stream_log(log_path: Path, stop_event: threading.Event) -> None:
