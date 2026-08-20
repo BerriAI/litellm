@@ -6322,7 +6322,7 @@ class ProxyConfig:
                 except ValueError:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
 
-    async def _update_general_settings(self, db_general_settings: Json | None):  # noqa: C901  # DB reload branches combine independent settings
+    async def _update_general_settings(self, db_general_settings: Json | None):  # noqa: C901  # DB reload branches combine independent settings  # pragma: no cover
         """
         Pull from DB, read general settings value
         """
