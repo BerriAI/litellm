@@ -184,6 +184,20 @@ def test_keyword_terms_refuses_to_model_an_or_expression():
     assert coverage._keyword_terms(("cache or router",)) == ((), (), False)
 
 
+def test_keyword_terms_refuses_to_attribute_a_selector_across_several_commands():
+    # A job running two pytest commands offers no way to tell which glob a -k belongs
+    # to, and pairing one command's exclusion with the other's glob would invent a gap.
+    assert coverage._keyword_terms(("not cache",), attributable=False) == ((), (), False)
+    assert coverage._keyword_terms((), attributable=False) == ((), (), True)
+
+
+def test_an_excluded_term_matching_only_an_inner_name_leaves_the_file_claimed():
+    # -k "not cache" drops test_cache_key inside test_router.py and keeps the rest, so
+    # the file still runs. Reporting it would be a false alarm; the guard is per-file.
+    slice_ = _slice(excluded=("cache",))
+    assert slice_.claims("tests/x/test_router.py", frozenset({"test_cache_key"})) is True
+
+
 def test_character_class_globs_match_the_letter_shards_circleci_uses():
     # tests/local_testing is split by first letter; without character-class support every
     # file in it looks unglobbed, and the slice guard would report the whole directory.

@@ -208,6 +208,15 @@ class Slice:
     understood: bool
 
     def claims(self, relative_path: str, inner_names: frozenset[str]) -> bool:
+        """Whether this job runs any test in the file.
+
+        The question is deliberately per-file, not per-test. An excluded term is only
+        honoured when it appears in the path, because that is the case where it takes
+        the whole module with it; a term matching one function inside drops that test
+        and leaves the file claimed. Losing a whole file is the failure worth a gate,
+        and answering per-test would mean a baseline of test ids that churns on every
+        rename.
+        """
         if relative_path in self.named:
             return True
         if not any(_token_covers(glob, relative_path) for glob in self.globs):
@@ -215,7 +224,7 @@ class Slice:
         if not self.understood:
             return True  # a `-k` this parser cannot model is assumed to claim everything
         if any(term.lower() in relative_path.lower() for term in self.excluded):
-            return False  # the term is in the path, so every test in the file is deselected
+            return False
         return not self.required or any(
             term.lower() in name.lower() for term in self.required for name in inner_names
         )
@@ -232,14 +241,22 @@ def _strings(node: object) -> Iterable[str]:
             yield from _strings(value)
 
 
-def _keyword_terms(expressions: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+def _keyword_terms(
+    expressions: Sequence[str], *, attributable: bool = True
+) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
     """A `-k` expression as (required, excluded, understood).
 
     Only flat `and` chains of bare terms are modelled. Anything with `or`, parentheses
     or negation of a group is left unmodelled, and its job is then treated as claiming
     every file it globs, so an unparsed selector can never raise a false alarm.
+
+    `attributable` is False when a job runs several pytest commands, since a selector
+    read out of the job's text cannot then be tied to the glob it belongs to, and
+    pairing one command's exclusion with another's glob would invent a gap.
     """
     terms: Final = tuple(part.strip() for expression in expressions for part in expression.split(" and "))
+    if not attributable and terms:
+        return (), (), False
     if any(("or " in term) or ("(" in term) or (term.startswith("not ") and " " in term[4:]) for term in terms):
         return (), (), False
     return (
@@ -260,7 +277,9 @@ def _slices() -> tuple[Slice, ...]:
         if "pytest" in text
         for globs in (tuple(GLOB_CALL_RE.findall(text)),)
         for named in (frozenset(TEST_TOKEN_RE.findall(text)) & frozenset(_test_files()),)
-        for required, excluded, understood in (_keyword_terms(tuple(KEYWORD_RE.findall(text))),)
+        for required, excluded, understood in (
+            _keyword_terms(tuple(KEYWORD_RE.findall(text)), attributable=len(globs) < 2),
+        )
         if globs or named
     )
 
