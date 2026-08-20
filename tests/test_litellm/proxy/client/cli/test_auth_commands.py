@@ -1178,7 +1178,7 @@ class _FakeSession:
         self.response = _FakeHttpResponse(200, {})
         _FakeSession.instances.append(self)
 
-    def post(self, url, *, data=None, json=None, timeout):
+    def post(self, url, *, data=None, json=None, timeout, allow_redirects):
         self.posts.append((url, data))
         return self.response
 
