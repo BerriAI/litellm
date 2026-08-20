@@ -114,8 +114,8 @@ class TestGitHubCopilotAuthenticator:
             "content-type": "application/json",
             "copilot-integration-id": "vscode-chat",
             "editor-version": "vscode/1.115.0",
-            "editor-plugin-version": "copilot-chat/0.44.0",
-            "user-agent": "GitHubCopilotChat/0.44.0",
+            "editor-plugin-version": "copilot-chat/0.26.7",
+            "user-agent": "GitHubCopilotChat/0.26.7",
         }
 
     def test_auth_requests_support_opencode_identity(self, authenticator, mock_http_client):
