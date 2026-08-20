@@ -488,6 +488,46 @@ class TestSaveCliToken:
         assert path.read_text() == before
         assert list(path.parent.glob(".tmp-*")) == []
 
+    def test_a_login_is_stamped_past_the_one_it_replaces_even_on_a_clock_that_went_back(
+        self, isolated_home, secret_vault_factory
+    ):
+        """The stamp is what decides the keychain secret against the one on disk, so a login that
+        carries an earlier wall clock than the login before it must not be filed as the older of
+        the two."""
+        _write_legacy_file(isolated_home, key="sk-old", timestamp=2000.0)
+        vault = secret_vault_factory()
+
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-new", timestamp=1000.0), vault=vault)
+
+        assert json.loads(vault.blob)["timestamp"] > 2000.0
+
+    def test_a_clock_that_went_back_does_not_hand_the_win_to_the_superseded_login(
+        self, isolated_home, secret_vault_factory
+    ):
+        """The disk state a login reports as CredentialNotRecorded: the keychain took the new
+        secret and the file still holds the previous one. Reading it back has to produce the login
+        that was just made, and an earlier wall clock is no reason to serve the one it replaced."""
+        _write_legacy_file(isolated_home, key="sk-superseded", timestamp=2000.0)
+        vault = secret_vault_factory()
+
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-fresh", timestamp=1000.0), vault=vault)
+        _write_legacy_file(isolated_home, key="sk-superseded", timestamp=2000.0)
+
+        assert load_cli_token(vault=vault).key == "sk-fresh"
+
+    def test_a_login_on_a_clock_that_moved_forwards_keeps_its_own_time(
+        self, isolated_home, secret_vault_factory
+    ):
+        """Pinning the stamp above the previous login is only ever a floor. The ordinary case has
+        to record when the user actually signed in, because that is what decides expiry."""
+        _write_legacy_file(isolated_home, key="sk-old", timestamp=1000.0)
+        vault = secret_vault_factory()
+
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-new", timestamp=2000.0), vault=vault)
+
+        assert json.loads(vault.blob)["timestamp"] == 2000.0
+        assert json.loads(_token_file(isolated_home).read_text())["timestamp"] == 2000.0
+
 
 class TestScrubFailure:
     """A keychain that took the secret while the file kept it is the worst of both stores: the

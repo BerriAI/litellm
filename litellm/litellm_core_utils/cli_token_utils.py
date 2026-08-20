@@ -12,6 +12,7 @@ first time it reads one.
 This module has no dependencies on proxy code and can be safely imported at the SDK level.
 """
 
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,14 +145,29 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     keychain has already taken the new secret, and it reports itself as such rather than claiming
     the previous login survived.
     """
-    staged: Final = _stage_token_file(_without_secret(record))
+    stamped: Final = _stamped_past_the_login_on_disk(record)
+    staged: Final = _stage_token_file(_without_secret(stamped))
     if isinstance(staged, CredentialNotSaved):
         return staged
-    outcome: Final = SecretStored() if record.key is None else vault.write(_encode_secret(record, record.key))
+    outcome: Final = SecretStored() if stamped.key is None else vault.write(_encode_secret(stamped, stamped.key))
     if isinstance(outcome, SecretStored):
         return outcome if _commit_token_file(staged) else CredentialNotRecorded()
     discard_staged_json(staged)
-    return _keep_the_secret_in_the_file(record, outcome)
+    return _keep_the_secret_in_the_file(stamped, outcome)
+
+
+def _stamped_past_the_login_on_disk(record: CliTokenRecord) -> CliTokenRecord:
+    """Keep a sign-in's stamp ahead of the one it replaces, whatever the clock did in between.
+
+    The stamp is what decides a keychain secret against one still on disk, so a clock that stepped
+    backwards between two logins would hand the older of them the win and put a superseded
+    credential back in use. The file already names the login being replaced, and pinning the new
+    stamp just past it costs one read that changes nothing on a clock that only moves forwards.
+    """
+    previous: Final = _read_token_file()
+    if previous is None or previous.timestamp < record.timestamp:
+        return record
+    return record.model_copy(update=MappingProxyType({"timestamp": math.nextafter(previous.timestamp, math.inf)}))
 
 
 def _keep_the_secret_in_the_file(record: CliTokenRecord, outcome: SecretWrite) -> SecretSave:
@@ -331,7 +347,9 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
     The sign-in each secret came from decides it, because either store can be the stale one. A
     secret is usually left on disk by a keychain that would not take it, which makes the file the
     fresher of the two. It is the older one when a login the keychain did take could not replace
-    the file afterwards, and serving that one would put a superseded credential back in use.
+    the file afterwards, and serving that one would put a superseded credential back in use. Equal
+    stamps are one login sitting in both stores, left by a migration whose scrub was refused, so
+    that branch retries the migration rather than trading one credential for another.
 
     A scrub the file refuses leaves that superseded secret where it lies, which is the state the
     login already named when it could not replace the file, and which `lite logout` reports rather
