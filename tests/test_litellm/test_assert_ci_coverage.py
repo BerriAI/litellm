@@ -219,8 +219,6 @@ def _allowlist(*, tests: tuple[str, ...] = (), dockerfiles: tuple[str, ...] = ()
 
 
 def test_an_allowlist_path_whose_file_is_gone_is_reported():
-    # Deleting a suite without deleting its entry leaves a permanent exemption for a
-    # path nothing can ever match, which reads as coverage the repo does not have.
     findings = coverage._stale_allowlist_paths(
         _allowlist(tests=("tests/gone/test_a.py",)),
         test_files=("tests/live/test_b.py",),
@@ -273,3 +271,12 @@ def test_the_repo_as_it_stands_has_no_stale_allowlist_entry():
         dockerfiles=coverage._dockerfiles(),
     )
     assert [f.subject for f in findings] == []
+
+
+def test_a_dockerfile_directory_entry_is_stale_because_only_an_exact_path_exempts_one():
+    findings = coverage._stale_allowlist_paths(
+        _allowlist(dockerfiles=("docker",)),
+        test_files=(),
+        dockerfiles=("docker/Dockerfile.database",),
+    )
+    assert [f.subject for f in findings] == ["docker"]

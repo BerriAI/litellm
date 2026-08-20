@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import ast
+import operator
 import pathlib
 import re
 import sys
 import warnings
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -54,6 +55,14 @@ class Allowlist:
 
     def covers_dockerfile(self, relative_path: str) -> bool:
         return any(relative_path == path for entry in self.dockerfiles for path in entry.paths)
+
+
+@dataclass(frozen=True, slots=True)
+class Section:
+    name: str
+    entries: tuple[AllowEntry, ...]
+    candidates: tuple[str, ...]
+    matches: Callable[[str, str], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,16 +383,16 @@ def _stale_allowlist_paths(
     test_files: tuple[str, ...],
     dockerfiles: tuple[str, ...],
 ) -> tuple[Finding, ...]:
-    sections: Final[tuple[tuple[str, tuple[AllowEntry, ...], tuple[str, ...]], ...]] = (
-        ("test_paths", allowlist.test_paths, test_files),
-        ("dockerfiles", allowlist.dockerfiles, dockerfiles),
+    sections: Final[tuple[Section, ...]] = (
+        Section("test_paths", allowlist.test_paths, test_files, _token_covers),
+        Section("dockerfiles", allowlist.dockerfiles, dockerfiles, operator.eq),
     )
     return tuple(
-        Finding(subject=path, detail=f"listed under '{section}' but matches no file the census looks at")
-        for section, entries, candidates in sections
-        for entry in entries
+        Finding(subject=path, detail=f"listed under '{section.name}' but matches no file the census looks at")
+        for section in sections
+        for entry in section.entries
         for path in entry.paths
-        if not any(_token_covers(path, candidate) for candidate in candidates)
+        if not any(section.matches(path, candidate) for candidate in section.candidates)
     )
 
 
