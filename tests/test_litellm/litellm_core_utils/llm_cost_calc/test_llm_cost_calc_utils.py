@@ -1057,19 +1057,24 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
 
 
 @pytest.mark.parametrize(
-    "model,input_cost,output_cost,cache_read_cost",
+    "model,input_cost,output_cost,cache_write_cost,cache_read_cost",
     [
-        ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.6-sol", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.6-terra", 2e-6, 1.2e-5, 2e-7),
-        ("azure/gpt-5.6-luna", 2e-7, 1.2e-6, 2e-8),
-        ("azure/us/gpt-5.6", 5.5e-6, 3.3e-5, 5.5e-7),
-        ("azure/eu/gpt-5.6-terra", 2.2e-6, 1.32e-5, 2.2e-7),
-        ("azure/eu/gpt-5.6-luna", 2.2e-7, 1.32e-6, 2.2e-8),
+        ("azure/gpt-5.6", 5e-6, 3e-5, 6.25e-6, 5e-7),
+        ("azure/gpt-5.6-sol", 5e-6, 3e-5, 6.25e-6, 5e-7),
+        ("azure/gpt-5.6-terra", 2e-6, 1.2e-5, 2.5e-6, 2e-7),
+        ("azure/gpt-5.6-luna", 2e-7, 1.2e-6, 2.5e-7, 2e-8),
+        ("azure/us/gpt-5.6", 5.5e-6, 3.3e-5, 6.875e-6, 5.5e-7),
+        ("azure/us/gpt-5.6-sol", 5.5e-6, 3.3e-5, 6.875e-6, 5.5e-7),
+        ("azure/us/gpt-5.6-terra", 2.2e-6, 1.32e-5, 2.75e-6, 2.2e-7),
+        ("azure/us/gpt-5.6-luna", 2.2e-7, 1.32e-6, 2.75e-7, 2.2e-8),
+        ("azure/eu/gpt-5.6", 5.5e-6, 3.3e-5, 6.875e-6, 5.5e-7),
+        ("azure/eu/gpt-5.6-sol", 5.5e-6, 3.3e-5, 6.875e-6, 5.5e-7),
+        ("azure/eu/gpt-5.6-terra", 2.2e-6, 1.32e-5, 2.75e-6, 2.2e-7),
+        ("azure/eu/gpt-5.6-luna", 2.2e-7, 1.32e-6, 2.75e-7, 2.2e-8),
     ],
 )
 def test_generic_cost_per_token_azure_gpt56(
-    model, input_cost, output_cost, cache_read_cost
+    model, input_cost, output_cost, cache_write_cost, cache_read_cost
 ):
     """Azure gpt-5.6 (global + us/eu regional): pricing mirrors the openai
     family for global deployments and carries the standard 10% regional uplift.
@@ -1081,22 +1086,31 @@ def test_generic_cost_per_token_azure_gpt56(
     assert model_cost_map["litellm_provider"] == "azure"
     assert model_cost_map["input_cost_per_token"] == input_cost
     assert model_cost_map["output_cost_per_token"] == output_cost
+    assert model_cost_map["cache_creation_input_token_cost"] == cache_write_cost
     assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
 
     prompt_tokens = 1000
     completion_tokens = 500
+    cache_write_tokens = 800
     usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_write_tokens=cache_write_tokens
+        ),
     )
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider="azure",
     )
-    assert round(prompt_cost, 10) == round(input_cost * prompt_tokens, 10)
-    assert round(completion_cost, 10) == round(output_cost * completion_tokens, 10)
+    expected_prompt_cost = (
+        (prompt_tokens - cache_write_tokens) * input_cost
+        + cache_write_tokens * cache_write_cost
+    )
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost == pytest.approx(output_cost * completion_tokens)
 
 
 @pytest.mark.parametrize(
