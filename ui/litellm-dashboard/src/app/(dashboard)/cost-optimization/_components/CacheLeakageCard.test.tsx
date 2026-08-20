@@ -2,6 +2,7 @@ import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DailyData, KeyMetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
+import type { DailyActivityRange } from "./useDailyActivityRange";
 
 vi.mock("@/components/shared/advanced_date_picker", () => ({
   __esModule: true,
@@ -59,7 +60,7 @@ const dayWithModels = (date: string, models: Record<string, Partial<SpendMetrics
   },
 });
 
-const renderWith = (results: DailyData[]) =>
+const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange> = {}) =>
   render(
     <CacheLeakageCard
       activity={{
@@ -68,6 +69,10 @@ const renderWith = (results: DailyData[]) =>
         results,
         loading: false,
         isFetchingMore: false,
+        progress: { currentPage: 1, totalPages: 1 },
+        cancelled: false,
+        cancel: vi.fn(),
+        ...overrides,
       }}
     />,
   );
@@ -137,5 +142,39 @@ describe("CacheLeakageCard", () => {
 
     expect(getByText("No key usage in this range.")).toBeInTheDocument();
     expect(queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("tells the user the table is still filling in while fallback pages stream", () => {
+    const day = dayWithKeys("2026-07-12", {
+      "hash-leaky": key("leaky-key", { prompt_tokens: 10000, cache_read_input_tokens: 0 }),
+    });
+    const { getByText, getByRole } = renderWith([day], { isFetchingMore: true });
+
+    expect(getByRole("table")).toBeInTheDocument();
+    expect(
+      getByText("Data is still loading; rows and totals will update as the rest of the range arrives."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the streaming note off while a fresh range loads over the previous range's rows", () => {
+    const day = dayWithKeys("2026-07-12", {
+      "hash-leaky": key("leaky-key", { prompt_tokens: 10000, cache_read_input_tokens: 0 }),
+    });
+    const { queryByText } = renderWith([day], { loading: true });
+
+    expect(
+      queryByText("Data is still loading; rows and totals will update as the rest of the range arrives."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("drops the streaming note once the range has settled", () => {
+    const day = dayWithKeys("2026-07-12", {
+      "hash-leaky": key("leaky-key", { prompt_tokens: 10000, cache_read_input_tokens: 0 }),
+    });
+    const { queryByText } = renderWith([day]);
+
+    expect(
+      queryByText("Data is still loading; rows and totals will update as the rest of the range arrives."),
+    ).not.toBeInTheDocument();
   });
 });
