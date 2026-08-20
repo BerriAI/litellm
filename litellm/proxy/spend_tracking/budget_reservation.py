@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -351,6 +352,8 @@ async def _get_budget_counters(
                     entity_id=valid_token.token,
                 )
             )
+        from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+
         counters.extend(
             _get_budget_limit_counters(
                 entity_prefix=f"spend:key:{valid_token.token}",
@@ -358,6 +361,7 @@ async def _get_budget_counters(
                 entity_id=valid_token.token,
                 budget_limits=valid_token.budget_limits,
                 fallback_spend=float(valid_token.spend or 0.0),
+                temp_budget_increase=_get_temp_budget_increase(valid_token) or 0.0,
             )
         )
 
@@ -604,12 +608,29 @@ async def _get_org_budget_counter(
     )
 
 
+def apply_temp_budget_increase(max_budget: float, temp_budget_increase: float) -> float:
+    """Raise a finite budget by an active temp boost. Infinite limits stay infinite,
+    and a zero/absent boost is a no-op. Shared by every multi-window enforcement site
+    (auth check and pre-call reservation) so they can never diverge on issue #35247.
+
+    If the boosted result is not finite (a large finite boost can overflow the sum to
+    inf), fall back to the raw finite budget: an inf/nan ceiling would make every
+    enforcement site's math.isfinite guard skip its over-budget check and disable the
+    window."""
+    if temp_budget_increase and math.isfinite(max_budget):
+        boosted = max_budget + temp_budget_increase
+        if math.isfinite(boosted):
+            return boosted
+    return max_budget
+
+
 def _get_budget_limit_counters(
     entity_prefix: str,
     entity_type: str,
     entity_id: str,
     budget_limits: Sequence[object] | None,
     fallback_spend: float,
+    temp_budget_increase: float = 0.0,
 ) -> list[_BudgetCounter]:
     counters: Final[list[_BudgetCounter]] = []
     if not budget_limits:
@@ -633,7 +654,7 @@ def _get_budget_limit_counters(
         counters.append(
             _BudgetCounter(
                 counter_key=f"{entity_prefix}:window:{budget_duration}",
-                max_budget=float(max_budget),
+                max_budget=apply_temp_budget_increase(float(max_budget), temp_budget_increase),
                 fallback_spend=0.0,
                 entity_type=entity_type,
                 entity_id=f"{entity_id}:{budget_duration}",

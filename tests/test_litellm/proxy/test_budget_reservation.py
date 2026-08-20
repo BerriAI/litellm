@@ -2583,3 +2583,75 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
 
     assert received == [{"content": "hi"}]
     streaming_logging_obj.async_post_call_streaming_hook.assert_awaited_once()
+
+
+def _temp_boost_metadata(increase: float, hours_from_now: float) -> dict:
+    expiry = (datetime.now(timezone.utc) + timedelta(hours=hours_from_now)).isoformat()
+    return {"temp_budget_increase": increase, "temp_budget_expiry": expiry}
+
+
+def test_apply_temp_budget_increase():
+    """A finite boost that overflows the sum to inf must fall back to the raw finite
+    budget; otherwise each enforcement site's math.isfinite guard skips the over-budget
+    check and the window stops rejecting over-budget requests."""
+    import math
+
+    from litellm.proxy.spend_tracking.budget_reservation import apply_temp_budget_increase
+
+    assert apply_temp_budget_increase(0.05, 1.0) == pytest.approx(1.05)
+    assert apply_temp_budget_increase(0.05, 0.0) == 0.05
+    assert apply_temp_budget_increase(math.inf, 1.0) == math.inf
+
+    overflow = apply_temp_budget_increase(1e308, 1e308)
+    assert overflow == 1e308
+    assert math.isfinite(overflow)
+
+
+async def _key_window_counter(valid_token, key_cache):
+    from litellm.proxy.spend_tracking.budget_reservation import _get_budget_counters
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    counters = await _get_budget_counters(
+        request_body=_request_body(),
+        valid_token=valid_token,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    windows = [c for c in counters if c.counter_key.endswith(":window:24h")]
+    assert len(windows) == 1
+    return windows[0]
+
+
+@pytest.mark.asyncio
+async def test_reservation_window_applies_active_temp_budget_increase(spend_counter_state):
+    """Issue #35247: the pre-call reservation must honor an active temp_budget_increase
+    on a key's budget_limits window, not only the auth-time check. The window counter
+    it reserves against must carry the boosted ceiling."""
+    _, key_cache = spend_counter_state
+    valid_token = UserAPIKeyAuth(
+        token="key-window-boost",
+        spend=0.0,
+        budget_limits=[{"budget_duration": "24h", "max_budget": 1.0}],
+        metadata=_temp_boost_metadata(increase=5.0, hours_from_now=2),
+    )
+
+    counter = await _key_window_counter(valid_token, key_cache)
+    assert counter.max_budget == pytest.approx(6.0)  # 1.0 + 5.0 boost
+
+
+@pytest.mark.asyncio
+async def test_reservation_window_ignores_expired_temp_budget_increase(spend_counter_state):
+    """An expired boost must leave the reservation window ceiling at its raw limit."""
+    _, key_cache = spend_counter_state
+    valid_token = UserAPIKeyAuth(
+        token="key-window-boost-expired",
+        spend=0.0,
+        budget_limits=[{"budget_duration": "24h", "max_budget": 1.0}],
+        metadata=_temp_boost_metadata(increase=5.0, hours_from_now=-2),
+    )
+
+    counter = await _key_window_counter(valid_token, key_cache)
+    assert counter.max_budget == pytest.approx(1.0)

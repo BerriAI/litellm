@@ -4197,30 +4197,39 @@ async def _virtual_key_multi_budget_check(
     Note: counters are not seeded from DB on Redis cold-start. After a Redis flush,
     per-window spend resets to zero within the current window period. This is an acceptable
     trade-off: the DB stores reset_at timestamps but not per-window accumulated spend.
+
+    An active temp_budget_increase (see _get_temp_budget_increase) raises the effective
+    limit of every window by that amount, matching the single-max_budget behaviour where
+    the boost is added to the one limit that gates the key.
     """
     if not valid_token.budget_limits:
         return
 
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
     from litellm.proxy.proxy_server import get_current_spend
+    from litellm.proxy.spend_tracking.budget_reservation import apply_temp_budget_increase
+
+    temp_budget_increase = _get_temp_budget_increase(valid_token) or 0.0
 
     for window in valid_token.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
+        effective_max_budget = apply_temp_budget_increase(w["max_budget"], temp_budget_increase)
         counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
-            max_budget=w["max_budget"],
+            max_budget=effective_max_budget,
             window_entity_type="Key",
             window_entity_id=valid_token.token,
             window_start=get_budget_window_start(w),
         )
-        if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
+        if math.isfinite(effective_max_budget) and window_spend >= effective_max_budget:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
-                max_budget=w["max_budget"],
+                max_budget=effective_max_budget,
                 message=(
                     f"ExceededBudget: Key over {w['budget_duration']} budget. "
-                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                    f"Spend=${window_spend:.4f}, Limit=${effective_max_budget:.2f}"
                 ),
                 entity_type=Litellm_EntityType.KEY.value,
                 entity_id=valid_token.token,

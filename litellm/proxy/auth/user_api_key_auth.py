@@ -9,6 +9,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 
 import asyncio
 import fnmatch
+import math
 import re
 import secrets
 from datetime import datetime, timezone
@@ -2802,14 +2803,19 @@ def get_api_key_from_custom_header(request: Request, custom_litellm_key_header_n
     return api_key
 
 
-def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
+def _get_temp_budget_increase(valid_token: UserAPIKeyAuth) -> float | None:
     valid_token_metadata: Final = valid_token.metadata
-    if "temp_budget_increase" in valid_token_metadata and "temp_budget_expiry" in valid_token_metadata:
+    if "temp_budget_increase" not in valid_token_metadata or "temp_budget_expiry" not in valid_token_metadata:
+        return None
+    try:
         expiry = datetime.fromisoformat(valid_token_metadata["temp_budget_expiry"])
-        if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
-        if expiry > datetime.now(timezone.utc):
-            return valid_token_metadata["temp_budget_increase"]
+        increase = float(valid_token_metadata["temp_budget_increase"])
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    if expiry > datetime.now(timezone.utc) and math.isfinite(increase) and increase >= 0:
+        return increase
     return None
 
 
@@ -2821,7 +2827,10 @@ def _update_key_budget_with_temp_budget_increase(
     temp_budget_increase: Final = _get_temp_budget_increase(valid_token)
     if not temp_budget_increase:
         return valid_token
-    return valid_token.model_copy(update={"max_budget": valid_token.max_budget + temp_budget_increase})
+    from litellm.proxy.spend_tracking.budget_reservation import apply_temp_budget_increase
+
+    effective_max_budget = apply_temp_budget_increase(valid_token.max_budget, temp_budget_increase)
+    return valid_token.model_copy(update={"max_budget": effective_max_budget})
 
 
 async def _lookup_end_user_and_apply_budget(
