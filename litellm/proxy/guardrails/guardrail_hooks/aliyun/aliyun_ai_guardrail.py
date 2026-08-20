@@ -587,6 +587,18 @@ class AliyunAIGuardrail(AliyunGuardrailBase, CustomGuardrail):
             return ((None, image_urls),)
         return ()
 
+    @staticmethod
+    def _iter_responses_function_call_arguments(data: Mapping[str, object]) -> Iterator[str]:
+        input_value: Final = data.get("input")
+        if not isinstance(input_value, list):
+            return
+        for item in input_value:
+            if not isinstance(item, dict) or item.get("type") != "function_call":
+                continue
+            arguments = item.get("arguments")
+            if isinstance(arguments, str) and arguments:
+                yield arguments
+
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
@@ -610,10 +622,14 @@ class AliyunAIGuardrail(AliyunGuardrailBase, CustomGuardrail):
         new_messages: Final = cast(  # cast-ok: the upstream iterator is typed as plain dicts
             "Sequence[AllMessageValues]", tuple(_iter_inspection_messages(data))
         )
-        if not new_messages:
+        function_call_arguments: Final = tuple(self._iter_responses_function_call_arguments(data))
+        if not new_messages and not function_call_arguments:
             verbose_proxy_logger.warning("Aliyun AI Guardrail: not running guardrail. No messages in data")
             return data
-        user_prompt: Final = self.get_user_prompt(new_messages)
+        message_prompt: Final = self.get_user_prompt(new_messages)
+        user_prompt: Final = (
+            "\n".join(text for text in (message_prompt, *function_call_arguments) if text).strip() or None
+        )
         image_urls: Final = self.get_image_urls(new_messages)
         if not user_prompt and not image_urls:
             verbose_proxy_logger.warning("Aliyun AI Guardrail: No user prompt or image found")
@@ -649,8 +665,8 @@ class AliyunAIGuardrail(AliyunGuardrailBase, CustomGuardrail):
         messages: Final = data.get("messages", ())
         content: Final = messages[0].get("content", "") if messages else ""
         verbose_proxy_logger.info(
-            "Aliyun AI Guardrail: ★ MCP pre-call check started, content: %s",
-            content,
+            "Aliyun AI Guardrail: ★ MCP pre-call check started, content length: %d",
+            len(content),
         )
         if not content:
             return
@@ -1065,6 +1081,18 @@ class AliyunAIGuardrail(AliyunGuardrailBase, CustomGuardrail):
         """Normalise an HTTPException detail into a JSON object."""
         return detail if isinstance(detail, dict) else {"message": str(detail)}  # mutable-ok: JSON payload
 
+    def _stream_check_windows(self, text: str, last_check_position: int) -> tuple[str, ...]:
+        current_length: Final = len(text)
+        window_size: Final = self.stream_window_size
+        latest_window_start: Final = max(0, current_length - window_size)
+        if current_length - last_check_position <= window_size:
+            return (text[latest_window_start:],)
+        step: Final = max(1, min(self.stream_slide_step, window_size))
+        overlap: Final = window_size - step
+        first_window_start: Final = max(0, last_check_position - overlap)
+        window_starts: Final = (*range(first_window_start, latest_window_start, step), latest_window_start)
+        return tuple(text[start : min(start + window_size, current_length)] for start in window_starts)
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1106,10 +1134,10 @@ class AliyunAIGuardrail(AliyunGuardrailBase, CustomGuardrail):
                 new_chars_since_last_check = current_length - last_check_position
                 check_threshold = self.stream_first_check_step if is_first_check else self.stream_slide_step
                 if new_chars_since_last_check >= check_threshold:
-                    start = max(0, current_length - self.stream_window_size)
-                    text_to_check = accumulated_text[start:current_length]
-                    guardrail_response = await self.async_make_request(text=text_to_check, service_type="output")
-                    self._parse_response_and_check(guardrail_response, check_type="output")
+                    check_windows = self._stream_check_windows(accumulated_text, last_check_position)
+                    for text_to_check in check_windows:
+                        guardrail_response = await self.async_make_request(text=text_to_check, service_type="output")
+                        self._parse_response_and_check(guardrail_response, check_type="output")
                     verbose_proxy_logger.info(
                         "Aliyun AI Guardrail: Streaming check passed at position %d", current_length
                     )
@@ -1120,10 +1148,10 @@ class AliyunAIGuardrail(AliyunGuardrailBase, CustomGuardrail):
                     is_first_check = False
             # Stream ended - check any remaining unchecked content with a final window
             if len(accumulated_text) > last_check_position:
-                final_start: Final = max(0, len(accumulated_text) - self.stream_window_size)
-                remaining_text: Final = accumulated_text[final_start:]
-                final_response: Final = await self.async_make_request(text=remaining_text, service_type="output")
-                self._parse_response_and_check(final_response, check_type="output")
+                final_windows: Final = self._stream_check_windows(accumulated_text, last_check_position)
+                for remaining_text in final_windows:
+                    final_response = await self.async_make_request(text=remaining_text, service_type="output")
+                    self._parse_response_and_check(final_response, check_type="output")
             verbose_proxy_logger.info(
                 "Aliyun AI Guardrail: Streaming scan completed, total length: %d", len(accumulated_text)
             )

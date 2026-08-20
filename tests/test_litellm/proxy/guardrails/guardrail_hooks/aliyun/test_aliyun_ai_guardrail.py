@@ -837,6 +837,33 @@ class TestPreCallHook:
         assert "工具输出里的违规内容" in scanned
 
     @pytest.mark.asyncio
+    async def test_scans_responses_api_function_call_arguments(self):
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        data = {
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "send_message",
+                    "arguments": '{"text":"函数调用里的违规参数"}',
+                }
+            ]
+        }
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean) as mock_post:
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                cache=MagicMock(),
+                data=data,
+                call_type="responses",
+            )
+
+        scanned = "".join(
+            json.loads(call.kwargs["data"]["ServiceParameters"]).get("content", "") for call in mock_post.call_args_list
+        )
+        assert "函数调用里的违规参数" in scanned
+
+    @pytest.mark.asyncio
     async def test_blocks_violation(self):
         g = _make_guardrail(level="medium")
         mock_api_response = _make_aliyun_api_response(
@@ -1456,6 +1483,29 @@ class TestMcpPreCallCheck:
         assert service_parameters["content"] == "send_message hello"
 
     @pytest.mark.asyncio
+    async def test_logs_mcp_content_length_without_content(self):
+        g = _make_guardrail(level="medium")
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        sensitive_content = "send_message token=secret-value"
+        logger_path = "litellm.proxy.guardrails.guardrail_hooks.aliyun.aliyun_ai_guardrail.verbose_proxy_logger.info"
+        with (
+            patch(logger_path) as mock_info,
+            patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean),
+        ):
+            await g.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                cache=MagicMock(),
+                data={"messages": [{"role": "user", "content": sensitive_content}]},
+                call_type="call_mcp_tool",
+            )
+
+        mock_info.assert_any_call(
+            "Aliyun AI Guardrail: ★ MCP pre-call check started, content length: %d",
+            len(sensitive_content),
+        )
+        assert sensitive_content not in str(mock_info.call_args_list)
+
+    @pytest.mark.asyncio
     async def test_empty_content_skips_check(self):
         g = _make_guardrail()
         with patch.object(g.async_handler, "post", new_callable=AsyncMock) as mock_post:
@@ -1684,6 +1734,66 @@ class TestStreamingHook:
             json.loads(call.kwargs["data"]["ServiceParameters"])["content"] for call in mock_post.call_args_list
         )
         assert "普通流式内容" in scanned
+        assert emitted == [chunk]
+
+    @pytest.mark.asyncio
+    async def test_blocks_violation_in_oversized_delta_prefix(self):
+        g = _make_guardrail(
+            level="medium",
+            stream_window_size=10,
+            stream_first_check_step=1,
+            stream_slide_step=6,
+        )
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        blocked = _make_aliyun_api_response(
+            suggestion="block",
+            detail=[_make_detail(detection_type=CONTENT_MODERATION_TYPE, level="high")],
+        )
+        chunk = _make_stream_chunk(content="违规前缀" + "正常内容" * 8)
+
+        async def block_prefix(*args, **kwargs):
+            scanned = json.loads(kwargs["data"]["ServiceParameters"])["content"]
+            return blocked if "违规前缀" in scanned else clean
+
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, side_effect=block_prefix):
+            emitted = [
+                item
+                async for item in g.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    response=_aiter([chunk]),
+                    request_data={},
+                )
+            ]
+
+        assert chunk not in emitted
+
+    @pytest.mark.asyncio
+    async def test_scans_all_windows_before_emitting_oversized_delta_once(self):
+        g = _make_guardrail(
+            level="medium",
+            stream_window_size=10,
+            stream_first_check_step=1,
+            stream_slide_step=6,
+        )
+        clean = _make_aliyun_api_response(suggestion="pass", detail=[])
+        chunk = _make_stream_chunk(content="开头内容" + "中间内容" * 6 + "结尾内容")
+
+        with patch.object(g.async_handler, "post", new_callable=AsyncMock, return_value=clean) as mock_post:
+            emitted = [
+                item
+                async for item in g.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    response=_aiter([chunk]),
+                    request_data={},
+                )
+            ]
+
+        scanned_windows = tuple(
+            json.loads(call.kwargs["data"]["ServiceParameters"])["content"] for call in mock_post.call_args_list
+        )
+        assert all(len(window) <= g.stream_window_size for window in scanned_windows)
+        assert any("开头内容" in window for window in scanned_windows)
+        assert any("结尾内容" in window for window in scanned_windows)
         assert emitted == [chunk]
 
     @pytest.mark.asyncio
