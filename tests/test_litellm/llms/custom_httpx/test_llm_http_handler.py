@@ -1738,6 +1738,74 @@ async def test_realtime_backend_open_does_not_retry_auth_failure(rejection):
     assert fake.attempts == 1
 
 
+class _FakeClientWebSocket:
+    def __init__(self, send_error=None):
+        self.events = []
+        self._send_error = send_error
+
+    async def send_text(self, payload):
+        if self._send_error is not None:
+            raise self._send_error
+        self.events.append(("send_text", payload))
+
+    async def close(self, code=None, reason=None):
+        self.events.append(("close", (code, reason)))
+
+
+async def _run_async_realtime_with_backend_failure(client_ws):
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    handler = BaseLLMHTTPHandler()
+    provider_config = Mock()
+    provider_config.get_complete_url.return_value = "wss://backend.example/live"
+    provider_config.validate_environment.return_value = {}
+
+    with patch.object(
+        handler,
+        "_open_realtime_backend_ws",
+        AsyncMock(side_effect=Exception("vertex token refresh exploded")),
+    ):
+        await handler.async_realtime(
+            model="gemini-live-2.5-flash",
+            websocket=client_ws,
+            logging_obj=Mock(),
+            provider_config=provider_config,
+            headers={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_generic_failure_sends_error_event_then_reasoned_close():
+    """Regression for the realtime accept-then-silence hang: a generic backend
+    failure used to close the client socket without any error event, so callers
+    only saw a bare 1011. The client must receive an OpenAI-style error event
+    before the reasoned close."""
+    client_ws = _FakeClientWebSocket()
+
+    await _run_async_realtime_with_backend_failure(client_ws)
+
+    assert [name for name, _ in client_ws.events] == ["send_text", "close"]
+
+    error_event = json.loads(client_ws.events[0][1])
+    assert error_event["type"] == "error"
+    assert error_event["error"]["type"] == "server_error"
+    assert "vertex token refresh exploded" in error_event["error"]["message"]
+
+    assert client_ws.events[1][1] == (1011, "Internal server error: vertex token refresh exploded")
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_error_event_send_failure_still_closes():
+    """A client socket that already dropped must not turn the loud-failure path
+    into a new exception: the error-event send may fail, but the reasoned close
+    must still be attempted."""
+    client_ws = _FakeClientWebSocket(send_error=RuntimeError("client already disconnected"))
+
+    await _run_async_realtime_with_backend_failure(client_ws)
+
+    assert client_ws.events == [("close", (1011, "Internal server error: vertex token refresh exploded"))]
+
+
 class _JSONBodyAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(self, model):
         return []
