@@ -346,15 +346,14 @@ def _config_deployments(router: object | None, *, owned_by_db: frozenset[str]) -
     a fresh id, so pricing it would bill one reservation once per distinct client key.
     """
     entries: Final = tuple(getattr(router, "model_list", None) or ())
+    records: Final = tuple(_router_deployment(entry) for entry in entries)
     return tuple(
         record
-        for entry in entries
-        if isinstance(entry, Mapping)
-        and isinstance(entry.get("model_info"), Mapping)
-        and entry["model_info"].get("db_model") is not True
-        and entry["model_info"].get("original_model_id") is None
-        for record in (_router_deployment(entry),)
-        if record is not None and record.model_id not in owned_by_db
+        for record in records
+        if record is not None
+        and record.model_info.get("db_model") is not True
+        and record.model_info.get("original_model_id") is None
+        and record.model_id not in owned_by_db
     )
 
 

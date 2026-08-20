@@ -62,18 +62,21 @@ class PTUTerms:
     effective_to: datetime | None
 
 
+def _to_utc(parsed: datetime) -> datetime:
+    """``parsed`` as UTC, reading a naive value as UTC rather than local time."""
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
 def _as_utc(value: object) -> datetime | None:
     """A model_info datetime as UTC, parsing an ISO string, else None."""
     if isinstance(value, datetime):
-        parsed: Final = value
-    elif isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))  # rebind-ok: one parsed value, two sources
-        except ValueError:
-            return None
-    else:
+        return _to_utc(value)
+    if not isinstance(value, str):
         return None
-    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    try:
+        return _to_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError:
+        return None
 
 
 def ptu_terms(model_info: Mapping[str, object]) -> PTUTerms | None:
