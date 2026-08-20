@@ -11191,6 +11191,8 @@ class Router:
             if pre_routing_hook_response is not None:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
+                if pre_routing_hook_response.litellm_params:
+                    request_kwargs.update(pre_routing_hook_response.litellm_params)
             #########################################################
 
             # Resolve the strategy and logger AFTER the pre-routing hook, since
@@ -11300,6 +11302,8 @@ class Router:
             if pre_routing_hook_response is not None:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
+                if pre_routing_hook_response.litellm_params:
+                    request_kwargs.update(pre_routing_hook_response.litellm_params)
 
             # 2. Get healthy deployments
             healthy_deployments: Final = await self.async_get_healthy_deployments(
