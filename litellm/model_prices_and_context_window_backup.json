@@ -49327,6 +49327,7 @@
         "mode": "chat",
         "output_cost_per_audio_token": 2.1e-05,
         "output_cost_per_token": 2.1e-05,
+        "rpm": 10,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/realtime"
@@ -49338,7 +49339,8 @@
             "audio"
         ],
         "supports_audio_input": true,
-        "supports_audio_output": true
+        "supports_audio_output": true,
+        "tpm": 250000
     },
     "perplexity/pplx-embed-context-v1-0.6b": {
         "input_cost_per_token": 8e-09,
