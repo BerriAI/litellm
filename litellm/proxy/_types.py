@@ -3731,6 +3731,11 @@ class ProxyErrorTypes(str, enum.Enum):
     General authentication error
     """
 
+    auth_provider_unavailable = "auth_provider_unavailable"
+    """
+    The identity provider needed to authenticate the request (e.g. its JWKS endpoint) is unreachable
+    """
+
     internal_server_error = "internal_server_error"
     """
     Internal server error
@@ -3821,6 +3826,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
 DB_CONNECTION_ERROR_TYPES: Final = (
     httpx.ConnectError,
+    httpx.ConnectTimeout,
     httpx.ReadError,
     httpx.ReadTimeout,
 )
@@ -4499,6 +4505,9 @@ class JWTIssuerConfig(BaseModel):
         return self
 
 
+DEFAULT_JWKS_STALE_TTL: Final = 3600
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4514,6 +4523,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - user_allowed_email_subdomain: If specified, only emails from specified subdomain will be allowed to access proxy.
     - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
+    - public_key_stale_ttl: Default - 3600s. Extra time past `public_key_ttl` that the last-known-good JWKS response
+        stays usable while the identity provider is unreachable. Set to 0 to fail closed instead.
     - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
     - enforce_rbac: If true, enforce RBAC for all routes.
     - custom_validate: A custom function to validates the JWT token.
@@ -4564,6 +4575,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
     public_key_ttl: float = 600
+    public_key_stale_ttl: float = Field(
+        default=DEFAULT_JWKS_STALE_TTL,
+        ge=0,
+        description=(
+            "Seconds beyond `public_key_ttl` that the last-known-good JWKS response stays usable while the identity "
+            "provider is unreachable. Bounds how long a signing key the provider has since removed can still be "
+            "trusted. Set to 0 to fail closed and reject requests as soon as the cached keys expire."
+        ),
+    )
     public_allowed_routes: list[str] = ["public_routes"]
     enforce_rbac: bool = False
     roles_jwt_field: str | None = None  # v2 on role mappings
