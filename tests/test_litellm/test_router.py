@@ -8721,3 +8721,87 @@ class TestAzureBaseModelFallbackLogging:
             deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
         )
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
+
+def test_model_group_info_intersects_supported_reasoning_efforts():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "anthropic/opus-like"},
+                "model_info": {"id": "opus-like-deployment"},
+            },
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "openai/mini-like"},
+                "model_info": {"id": "mini-like-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        if model_id == "opus-like-deployment":
+            return {
+                "key": model_name,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_xhigh_reasoning_effort": True,
+                "supports_max_reasoning_effort": True,
+            }
+        return {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": False,
+            "supports_minimal_reasoning_effort": True,
+            "supports_xhigh_reasoning_effort": False,
+        }
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="smart-group",
+            user_facing_model_group_name="smart-group",
+        )
+
+    assert result is not None
+    # opus-like offers all seven levels, mini-like lacks none/xhigh/max; only the common set survives,
+    # so the group never advertises an effort routing could hand to a deployment that rejects it.
+    assert result.supported_reasoning_efforts == ("minimal", "low", "medium", "high")
+
+
+def test_model_group_info_reasoning_efforts_ignore_deployments_without_metadata():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "anthropic/opus-like"},
+                "model_info": {"id": "opus-like-deployment"},
+            },
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "openai/unmapped-model"},
+                "model_info": {"id": "unmapped-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        if model_id == "opus-like-deployment":
+            return {
+                "key": model_name,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_max_reasoning_effort": True,
+            }
+        return {"key": model_name, "litellm_provider": "openai", "mode": "chat"}
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="smart-group",
+            user_facing_model_group_name="smart-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high", "max")

@@ -7,6 +7,7 @@ export interface ModelGroup {
   model_group: string;
   mode?: string;
   supports_reasoning?: boolean;
+  supported_reasoning_efforts?: string[];
 }
 
 interface AvailableModel {
@@ -15,6 +16,7 @@ interface AvailableModel {
   id?: string | null;
   mode?: string | null;
   supports_reasoning?: boolean | null;
+  supported_reasoning_efforts?: string[] | null;
 }
 
 export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
@@ -39,6 +41,7 @@ export const fetchAvailableModels = async (accessToken: string): Promise<ModelGr
           model_group: item.model_group || item.id || item.model_name || "",
           mode: item.mode || undefined,
           supports_reasoning: item.supports_reasoning === true || undefined,
+          supported_reasoning_efforts: item.supported_reasoning_efforts ?? undefined,
         }))
         .filter((model: ModelGroup) => model.model_group !== "");
 

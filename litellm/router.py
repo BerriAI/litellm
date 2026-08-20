@@ -165,6 +165,10 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
+from litellm.router_utils.reasoning_effort_capability import (
+    intersect_supported_reasoning_efforts,
+    resolve_supported_reasoning_efforts,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
@@ -9540,6 +9544,11 @@ class Router:
                     _deployment_tpm = model_info.get("tpm")
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
+
+            model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
+                model_group_info.supported_reasoning_efforts,
+                resolve_supported_reasoning_efforts(model_info),
+            )
 
             if _deployment_tpm is not None:
                 if total_tpm is None:

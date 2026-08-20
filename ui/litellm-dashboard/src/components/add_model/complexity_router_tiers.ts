@@ -90,7 +90,7 @@ export const setTierModelReasoningEffort = (
   current: TierModelParamsByTier | undefined,
   tier: string,
   model: string,
-  effort: ReasoningEffort | undefined,
+  effort: string | undefined,
 ): TierModelParamsByTier | undefined => {
   const { reasoning_effort: _dropped, ...rest } = current?.[tier]?.[model] ?? {};
   const params = effort === undefined ? rest : { ...rest, reasoning_effort: effort };

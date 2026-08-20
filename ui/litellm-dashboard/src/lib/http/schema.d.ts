@@ -29522,6 +29522,8 @@ export interface components {
              * @default []
              */
             supported_openai_params: string[] | null;
+            /** Supported Reasoning Efforts */
+            supported_reasoning_efforts?: string[] | null;
             /**
              * Supports Function Calling
              * @default false

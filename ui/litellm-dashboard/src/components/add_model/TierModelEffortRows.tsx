@@ -2,35 +2,41 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
 import React from "react";
-import { REASONING_EFFORT_OPTIONS, ReasoningEffort, TierModelParams } from "./complexity_router_tiers";
+import { TierModelParams } from "./complexity_router_tiers";
 
 const PROVIDER_DEFAULT = "__provider_default__";
 
-const asEffort = (params: TierModelParams | undefined): ReasoningEffort | undefined => {
+const storedEffort = (params: TierModelParams | undefined): string | undefined => {
   const stored = params?.reasoning_effort;
-  if (typeof stored !== "string") return undefined;
-  return REASONING_EFFORT_OPTIONS.find((option) => option === stored);
+  return typeof stored === "string" && stored ? stored : undefined;
 };
 
 interface TierModelEffortRowsProps {
   tierLabel: string;
   models: string[];
-  reasoningModels: ReadonlySet<string>;
+  effortOptionsByModel: Record<string, string[]>;
   paramsByModel: Record<string, TierModelParams> | undefined;
-  onEffortChange: (model: string, effort: ReasoningEffort | undefined) => void;
+  onEffortChange: (model: string, effort: string | undefined) => void;
 }
 
 const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = ({
   tierLabel,
   models,
-  reasoningModels,
+  effortOptionsByModel,
   paramsByModel,
   onEffortChange,
 }) => {
-  const shown = models.filter(
-    (model) => reasoningModels.has(model) || Object.keys(paramsByModel?.[model] ?? {}).length > 0,
-  );
-  if (shown.length === 0) return null;
+  const rows = models
+    .map((model) => {
+      const effort = storedEffort(paramsByModel?.[model]);
+      const supported = effortOptionsByModel[model] ?? [];
+      // A stored effort outside the supported set (hand-authored, or capabilities changed since it
+      // was saved) stays listed so it renders and can be cleared.
+      const options = effort !== undefined && !supported.includes(effort) ? [...supported, effort] : supported;
+      return { model, effort, options };
+    })
+    .filter(({ model, options }) => options.length > 0 || Object.keys(paramsByModel?.[model] ?? {}).length > 0);
+  if (rows.length === 0) return null;
   return (
     <div className="mt-2 space-y-1">
       <div className="flex items-center gap-1">
@@ -41,18 +47,17 @@ const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = ({
           <Info className="size-3 text-muted-foreground/70" />
         </SimpleTooltip>
       </div>
-      {shown.map((model) => (
+      {rows.map(({ model, effort, options }) => (
         <div key={model} className="flex items-center justify-between gap-2">
           <span className="truncate text-xs">{model}</span>
           <Select
             items={[
               { value: PROVIDER_DEFAULT, label: "Default" },
-              ...REASONING_EFFORT_OPTIONS.map((option) => ({ value: option, label: option })),
+              ...options.map((option) => ({ value: option, label: option })),
             ]}
-            value={asEffort(paramsByModel?.[model]) ?? PROVIDER_DEFAULT}
+            value={effort ?? PROVIDER_DEFAULT}
             onValueChange={(selected: string | null) =>
-              selected !== null &&
-              onEffortChange(model, selected === PROVIDER_DEFAULT ? undefined : (selected as ReasoningEffort))
+              selected !== null && onEffortChange(model, selected === PROVIDER_DEFAULT ? undefined : selected)
             }
           >
             <SelectTrigger
@@ -64,7 +69,7 @@ const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = ({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={PROVIDER_DEFAULT}>Default</SelectItem>
-              {REASONING_EFFORT_OPTIONS.map((option) => (
+              {options.map((option) => (
                 <SelectItem key={option} value={option}>
                   {option}
                 </SelectItem>
