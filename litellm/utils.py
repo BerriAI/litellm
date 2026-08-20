@@ -242,6 +242,9 @@ from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
     type_to_response_format_param,
 )
+from litellm.litellm_core_utils.thinking_param_translation import (
+    apply_thinking_param_translation,
+)
 
 if TYPE_CHECKING:
     # Heavy types that are only needed for type checking; avoid importing
@@ -3808,6 +3811,51 @@ def pre_process_optional_params(passed_params: dict, non_default_params: dict, c
     return optional_params
 
 
+def _apply_model_info_thinking_translation(
+    *,
+    model_info: Mapping[str, object] | None,
+    passed_params: dict,
+    non_default_params: dict,
+) -> None:
+    prior_thinking: Final = non_default_params.get("thinking", passed_params.get("thinking"))
+    prior_effort: Final = non_default_params.get(
+        "reasoning_effort", passed_params.get("reasoning_effort")
+    )
+    existing_extra_raw: Final = passed_params.get("extra_body")
+    existing_extra: Final = existing_extra_raw if isinstance(existing_extra_raw, Mapping) else None
+    translated: Final = apply_thinking_param_translation(
+        model_info=model_info,
+        thinking=prior_thinking,
+        reasoning_effort=prior_effort,
+        existing_extra_body=existing_extra,
+    )
+    prior_extra: Final = dict(existing_extra) if existing_extra is not None else {}
+    if (
+        translated.thinking is prior_thinking
+        and translated.reasoning_effort is prior_effort
+        and dict(translated.extra_body) == prior_extra
+    ):
+        return
+
+    # mutable-ok: get_optional_params already mutates passed_params / non_default_params in place
+    if translated.thinking is None:
+        non_default_params.pop("thinking", None)
+        passed_params["thinking"] = None
+    else:
+        non_default_params["thinking"] = translated.thinking
+        passed_params["thinking"] = translated.thinking
+
+    if translated.reasoning_effort is None:
+        non_default_params.pop("reasoning_effort", None)
+        passed_params["reasoning_effort"] = None
+    else:
+        non_default_params["reasoning_effort"] = translated.reasoning_effort
+        passed_params["reasoning_effort"] = translated.reasoning_effort
+
+    if translated.extra_body:
+        passed_params["extra_body"] = dict(translated.extra_body)
+
+
 def get_optional_params(
     # use the openai defaults
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -3850,6 +3898,7 @@ def get_optional_params(
     web_search_options: OpenAIWebSearchOptions | None = None,
     safety_identifier: str | None = None,
     base_model: str | None = None,
+    model_info: Mapping[str, object] | None = None,
     **kwargs,
 ):
     passed_params: Final = locals().copy()
@@ -3858,6 +3907,7 @@ def get_optional_params(
     # non_default_params / _check_valid_arg — it's a routing hint, not an
     # OpenAI param.
     passed_params.pop("base_model", None)
+    model_info_for_translation: Final = passed_params.pop("model_info", None)
     provider_config: BaseConfig | None = None
     if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
         provider_config = ProviderConfigManager.get_provider_chat_config(
@@ -3872,6 +3922,11 @@ def get_optional_params(
         additional_drop_params=additional_drop_params,
         model=model,
         provider_config=provider_config,
+    )
+    _apply_model_info_thinking_translation(
+        model_info=model_info_for_translation if isinstance(model_info_for_translation, Mapping) else None,
+        passed_params=passed_params,
+        non_default_params=non_default_params,
     )
     optional_params = pre_process_optional_params(
         passed_params=passed_params,
