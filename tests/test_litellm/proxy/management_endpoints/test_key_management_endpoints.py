@@ -16693,7 +16693,8 @@ async def test_key_budgets_reports_every_scope_that_applies():
     assert by_scope[("team_member", "hard")].budget_reset_at == _BUDGETS_RESET_AT
     assert by_scope[("organization", "hard")].entity_label == "Reporting Org"
     assert by_scope[("end_user_model", "hard")].entity_id == "claude-sonnet-4-5"
-    assert by_scope[("project", "hard")].note is not None and "never incremented" in by_scope[("project", "hard")].note
+    project_notes = [note.code for note in by_scope[("project", "hard")].notes]
+    assert "project_spend_not_tracked" in project_notes
 
 
 @pytest.mark.asyncio
@@ -16860,7 +16861,7 @@ async def test_key_budgets_keep_soft_budgets_on_their_alerting_operator():
     soft = [entry for entry in budgets if entry.enforcement == "soft"]
     assert soft, "expected the fully populated world to configure soft budgets"
     assert all(entry.comparison == ">=" for entry in soft)
-    assert all(_RESERVATION_NOTE not in (entry.note or "") for entry in soft)
+    assert all(_RESERVATION_NOTE not in entry.notes for entry in soft)
 
 
 @pytest.mark.asyncio
@@ -16870,8 +16871,8 @@ async def test_key_budgets_explain_a_scope_whose_operator_the_reservation_tighte
 
     team = next(e for e in budgets if e.scope == "team" and e.enforcement == "hard")
     key = next(e for e in budgets if e.scope == "key" and e.enforcement == "hard")
-    assert _RESERVATION_NOTE in (team.note or "")
-    assert _RESERVATION_NOTE not in (key.note or ""), "the key check already blocks at >=, nothing was tightened"
+    assert _RESERVATION_NOTE in team.notes
+    assert _RESERVATION_NOTE not in key.notes, "the key check already blocks at >=, nothing was tightened"
 
 
 @pytest.mark.asyncio
@@ -16900,7 +16901,7 @@ async def test_key_budgets_report_the_personal_budget_as_inapplicable_on_a_team_
 
     user_entry = next(entry for entry in budgets if entry.scope == "user")
     assert user_entry.max_budget is None
-    assert user_entry.note is not None and "apply_user_budget_to_team_keys" in user_entry.note
+    assert "user_budget_not_applied_to_team_key" in [note.code for note in user_entry.notes]
 
 
 @pytest.mark.asyncio
@@ -16923,7 +16924,7 @@ async def test_key_budgets_skip_scopes_that_do_not_exist_for_the_key():
     assert scopes == {"proxy", "key", "user"}
     user_entry = next(entry for entry in budgets if entry.scope == "user")
     assert user_entry.max_budget == 400.0
-    assert user_entry.note is None
+    assert user_entry.notes == ()
 
 
 @_budgets_contextlib.contextmanager
@@ -16971,6 +16972,7 @@ async def test_key_budgets_route_returns_the_resolved_budgets():
         enforcement="hard",
         max_budget=100.0,
         spend=91.0,
+        spend_state="live",
         remaining=9.0,
         comparison=">=",
         source="key.max_budget",
@@ -16992,6 +16994,7 @@ async def test_key_budgets_route_returns_the_resolved_budgets():
             "enforcement": "hard",
             "max_budget": 100.0,
             "spend": 91.0,
+            "spend_state": "live",
             "remaining": 9.0,
             "comparison": ">=",
             "budget_duration": None,
@@ -16999,7 +17002,7 @@ async def test_key_budgets_route_returns_the_resolved_budgets():
             "window_start": None,
             "source": "key.max_budget",
             "status": "ok",
-            "note": None,
+            "notes": [],
         }
     ]
 
@@ -17090,7 +17093,8 @@ async def test_key_budgets_say_a_per_model_counter_is_missing_rather_than_claimi
 
     warm_entry = next(e for e in budgets if e.scope == "key_model" and e.entity_id == "gpt-5")
     assert warm_entry.spend == 6.0
-    assert warm_entry.note != _MODEL_BUDGET_COLD_NOTE
+    assert warm_entry.spend_state == "live"
+    assert _MODEL_BUDGET_COLD_NOTE not in warm_entry.notes
 
     cold = _RecordingModelSpendReader({})
     with _budgets_world(**_fully_populated_world()):
@@ -17100,7 +17104,8 @@ async def test_key_budgets_say_a_per_model_counter_is_missing_rather_than_claimi
 
     cold_entry = next(e for e in cold_budgets if e.scope == "key_model" and e.entity_id == "gpt-5")
     assert cold_entry.spend is None
-    assert cold_entry.note == _MODEL_BUDGET_COLD_NOTE
+    assert cold_entry.spend_state == "no_counter"
+    assert _MODEL_BUDGET_COLD_NOTE in cold_entry.notes
 
 
 @pytest.mark.asyncio
@@ -17168,8 +17173,8 @@ async def test_key_budgets_warn_that_custom_auth_can_hide_an_end_user_cap():
 
     plain = next(e for e in budgets if e.scope == "end_user")
     warned = next(e for e in with_custom_auth if e.scope == "end_user")
-    assert "custom auth" not in (plain.note or "")
-    assert "custom auth" in (warned.note or "")
+    assert "custom_auth_may_override_end_user_cap" not in [note.code for note in plain.notes]
+    assert "custom_auth_may_override_end_user_cap" in [note.code for note in warned.notes]
 
 
 @pytest.mark.parametrize("max_budget", [0, 0.0, -5.0])
@@ -17195,6 +17200,84 @@ async def test_key_budgets_treat_a_non_positive_cap_as_unset(max_budget):
     assert by_scope["organization"].status == "unlimited"
     assert by_scope["key_model"].max_budget is None
     assert by_scope["key_model"].status == "unlimited"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_call_an_unreadable_counter_unreadable_rather_than_reporting_no_spend():
+    """A null spend that means "the read failed" renders as untouched headroom unless the row says so."""
+
+    async def _explode(**kwargs):
+        raise RuntimeError("redis is down")
+
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps(read_spend=_explode)
+        )
+
+    key_entry = next(e for e in budgets if e.scope == "key" and e.enforcement == "hard")
+    assert key_entry.spend is None
+    assert key_entry.spend_state == "unavailable"
+    assert key_entry.remaining is None
+    assert "unavailable" not in [note.code for note in key_entry.notes], "a failed read is not a caveat"
+
+    project_entry = next(e for e in budgets if e.scope == "project" and e.enforcement == "hard")
+    assert project_entry.spend_state == "live", "the recorded-spend scopes do not go through the counter"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_separate_caveats_that_rule_a_row_out_from_caveats_that_change_how_to_read_it():
+    """Severity is what lets a reader skip a budget that cannot trip without skipping one that blocks early."""
+    budgets = await _budgets_at_limit()
+
+    severity_by_code = {note.code: note.severity for entry in budgets for note in entry.notes}
+    assert severity_by_code["project_spend_not_tracked"] == "info"
+    assert severity_by_code["alert_only"] == "info"
+    assert severity_by_code["reservation_blocks_at_limit"] == "warning"
+    assert severity_by_code["rolling_window"] == "warning"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_emit_each_caveat_as_its_own_note_instead_of_one_joined_string():
+    """The widest row carries three caveats; joining them into prose is what forced the UI to guess at width."""
+    world = _fully_populated_world()
+    with _budgets_world(**world):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id="end-user-budgets",
+            deps=dataclasses.replace(
+                _budgets_deps(
+                    read_spend=_RecordingSpendReader(_BUDGETS_SPEND_AT_LIMIT),
+                    general_settings={"apply_user_budget_to_team_keys": True},
+                ),
+                custom_auth_enabled=True,
+            ),
+        )
+
+    end_user = next(e for e in budgets if e.scope == "end_user")
+    assert [note.code for note in end_user.notes] == [
+        "reservation_blocks_at_limit",
+        "end_user_route_only",
+        "custom_auth_may_override_end_user_cap",
+    ]
+    assert all("; " not in note.text for note in end_user.notes)
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_always_send_notes_as_a_list_so_a_client_never_branches_on_null():
+    """An absent caveat is an empty list; `null` would make every consumer special-case the field."""
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id="end-user-budgets", deps=_budgets_deps()
+        )
+
+    serialized = [entry.model_dump(mode="json") for entry in budgets]
+    assert all(isinstance(row["notes"], list) for row in serialized)
+    assert any(row["notes"] == [] for row in serialized)
+    assert all(
+        set(note) == {"code", "severity", "text"} and note["severity"] in {"info", "warning"} and note["text"]
+        for row in serialized
+        for note in row["notes"]
+    )
 
 
 @pytest.mark.parametrize(

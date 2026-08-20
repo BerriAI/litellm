@@ -3822,12 +3822,15 @@ async def key_budgets_fn(
           but places no limit on it
         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
           counter, not the periodically-synced database column
+        - spend_state: str - Whether `spend` is `live`, missing because no counter exists yet
+          (`no_counter`), or missing because the read failed (`unavailable`)
         - remaining: float | None - `max_budget - spend`, when both are known
         - comparison: str - The operator the enforcing check uses, which differs per scope
         - budget_duration / budget_reset_at / window_start: When spend next resets to zero
         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
         - status: str - `unlimited`, `ok` or `exceeded`
-        - note: str | None - A caveat worth knowing before trusting the row
+        - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
+          to branch on, a `severity` of `info` or `warning`, and human-facing `text`
 
     Example Curl:
     ```

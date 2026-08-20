@@ -67,8 +67,10 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BudgetComparison,
     BudgetEnforcement,
     BudgetScope,
+    BudgetSpendState,
     BudgetStatus,
     KeyBudgetEntry,
+    KeyBudgetNote,
 )
 from litellm.types.utils import BudgetConfig
 
@@ -94,32 +96,70 @@ _RESERVATION_COVERED_SCOPES: Final[frozenset[BudgetScope]] = frozenset(
     {"key", "key_window", "team", "team_window", "team_member", "user", "organization", "tag", "end_user"}
 )
 
-_ALERT_ONLY_NOTE: Final = "alert only, never blocks; compared against recorded spend rather than the live counter"
-_ROLLING_WINDOW_NOTE: Final = "rolling window; the start moves with reset_at so consecutive windows can overlap"
-_MODEL_BUDGET_NOTE: Final = (
-    "per-model spend is counted separately for every request model that maps onto this cap, "
-    "and each counter is compared against it on its own, so the highest is reported"
+_ALERT_ONLY_NOTE: Final = KeyBudgetNote(
+    code="alert_only",
+    severity="info",
+    text="alert only, never blocks; compared against recorded spend rather than the live counter",
 )
-_MODEL_BUDGET_COLD_NOTE: Final = (
-    "no per-model counter exists yet; these budgets are cache-only and fail open until one does"
+_ROLLING_WINDOW_NOTE: Final = KeyBudgetNote(
+    code="rolling_window",
+    severity="warning",
+    text="rolling window; the start moves with reset_at so consecutive windows can overlap",
 )
-_RESERVATION_NOTE: Final = (
-    "the reservation layer blocks this scope as soon as spend reaches the limit, before the read-time check would trip"
+_MODEL_BUDGET_NOTE: Final = KeyBudgetNote(
+    code="per_model_counters",
+    severity="warning",
+    text=(
+        "per-model spend is counted separately for every request model that maps onto this cap, "
+        "and each counter is compared against it on its own, so the highest is reported"
+    ),
 )
-_PROJECT_SPEND_NOTE: Final = "project spend is never incremented today, so this budget cannot trip"
-_TAG_NOTE: Final = "key tags are attached to every request; request-supplied tags add budgets not listed here"
-_END_USER_ROUTE_NOTE: Final = "only enforced on LLM routes that name this end user"
-_CUSTOM_AUTH_END_USER_NOTE: Final = (
-    "a custom auth callable can set a request-scoped end user cap that overrides this one and is not visible here"
+_MODEL_BUDGET_COLD_NOTE: Final = KeyBudgetNote(
+    code="model_budget_fails_open",
+    severity="info",
+    text="no per-model counter exists yet; these budgets are cache-only and fail open until one does",
 )
-_USER_ON_TEAM_KEY_NOTE: Final = (
-    "the owner's personal budget is not applied to team keys unless "
-    "general_settings.apply_user_budget_to_team_keys is enabled"
+_RESERVATION_NOTE: Final = KeyBudgetNote(
+    code="reservation_blocks_at_limit",
+    severity="warning",
+    text=(
+        "the reservation layer blocks this scope as soon as spend reaches the limit, "
+        "before the read-time check would trip"
+    ),
 )
-_THROTTLE_NOTE: Final = (
-    "this key opted into throttle_on_budget_exceeded, so exceeding it slows requests instead of blocking"
+_PROJECT_SPEND_NOTE: Final = KeyBudgetNote(
+    code="project_spend_not_tracked",
+    severity="info",
+    text="project spend is never incremented today, so this budget cannot trip",
 )
-_SPEND_UNREADABLE_NOTE: Final = "live spend could not be read"
+_TAG_NOTE: Final = KeyBudgetNote(
+    code="request_tags_add_budgets",
+    severity="warning",
+    text="key tags are attached to every request; request-supplied tags add budgets not listed here",
+)
+_END_USER_ROUTE_NOTE: Final = KeyBudgetNote(
+    code="end_user_route_only",
+    severity="info",
+    text="only enforced on LLM routes that name this end user",
+)
+_CUSTOM_AUTH_END_USER_NOTE: Final = KeyBudgetNote(
+    code="custom_auth_may_override_end_user_cap",
+    severity="warning",
+    text="a custom auth callable can set a request-scoped end user cap that overrides this one and is not visible here",
+)
+_USER_ON_TEAM_KEY_NOTE: Final = KeyBudgetNote(
+    code="user_budget_not_applied_to_team_key",
+    severity="info",
+    text=(
+        "the owner's personal budget is not applied to team keys unless "
+        "general_settings.apply_user_budget_to_team_keys is enabled"
+    ),
+)
+_THROTTLE_NOTE: Final = KeyBudgetNote(
+    code="throttled_instead_of_blocked",
+    severity="warning",
+    text="this key opted into throttle_on_budget_exceeded, so exceeding it slows requests instead of blocking",
+)
 
 
 class SpendReader(Protocol):
@@ -271,6 +311,14 @@ _SpendSource = _CounterSpend | _RecordedSpend | _KeyModelSpend | _EndUserModelSp
 
 
 @dataclass(frozen=True, slots=True)
+class _SpendReading:
+    """A spend number and why it is missing when it is, so a blank cell never reads as zero."""
+
+    value: float | None
+    state: BudgetSpendState
+
+
+@dataclass(frozen=True, slots=True)
 class _PlannedBudget:
     scope: BudgetScope
     entity_id: str | None
@@ -283,7 +331,7 @@ class _PlannedBudget:
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
     window_start: datetime | None = None
-    note: str | None = None
+    notes: tuple[KeyBudgetNote, ...] = ()
 
 
 class _MetadataTags(BaseModel):
@@ -440,43 +488,55 @@ async def resolve_key_budgets(
         token_end_user_max_budget=token_end_user_max_budget,
     )
     plans: Final = _plan_budgets(context)
-    spends: Final = await asyncio.gather(*(_read_spend(plan=plan, deps=deps) for plan in plans))
+    readings: Final = await asyncio.gather(*(_read_spend(plan=plan, deps=deps) for plan in plans))
     reservation_enabled: Final = deps.general_settings.get("disable_budget_reservation") is not True
     return tuple(
-        _to_entry(plan=plan, spend=spend, reservation_enabled=reservation_enabled)
-        for plan, spend in zip(plans, spends, strict=True)
+        _to_entry(plan=plan, reading=reading, reservation_enabled=reservation_enabled)
+        for plan, reading in zip(plans, readings, strict=True)
     )
 
 
-async def _read_spend(plan: _PlannedBudget, deps: KeyBudgetResolverDeps) -> float | None:
+def _model_reading(spend: float | None) -> _SpendReading:
+    """Per-model budgets are cache-only, so a missing counter means untouched rather than unreadable."""
+    return _SpendReading(value=spend, state="live" if spend is not None else "no_counter")
+
+
+async def _read_spend(plan: _PlannedBudget, deps: KeyBudgetResolverDeps) -> _SpendReading:
     source: Final = plan.spend_source
     try:
         match source:
             case _RecordedSpend():
-                return source.value
+                return _SpendReading(value=source.value, state="live")
             case _CounterSpend():
-                return await deps.read_spend(
-                    counter_key=source.counter_key,
-                    fallback_spend=source.fallback_spend,
-                    max_budget=plan.max_budget,
-                    window_entity_type=source.window_entity_type,
-                    window_entity_id=source.window_entity_id,
-                    window_start=source.window_start,
-                    fallback_authoritative=source.fallback_authoritative,
+                return _SpendReading(
+                    value=await deps.read_spend(
+                        counter_key=source.counter_key,
+                        fallback_spend=source.fallback_spend,
+                        max_budget=plan.max_budget,
+                        window_entity_type=source.window_entity_type,
+                        window_entity_id=source.window_entity_id,
+                        window_start=source.window_start,
+                        fallback_authoritative=source.fallback_authoritative,
+                    ),
+                    state="live",
                 )
             case _KeyModelSpend():
-                return await deps.read_key_model_spend(
-                    entity_id=source.key_hash, models=source.models, budget_config=source.budget_config
+                return _model_reading(
+                    await deps.read_key_model_spend(
+                        entity_id=source.key_hash, models=source.models, budget_config=source.budget_config
+                    )
                 )
             case _EndUserModelSpend():
-                return await deps.read_end_user_model_spend(
-                    entity_id=source.end_user_id, models=source.models, budget_config=source.budget_config
+                return _model_reading(
+                    await deps.read_end_user_model_spend(
+                        entity_id=source.end_user_id, models=source.models, budget_config=source.budget_config
+                    )
                 )
             case _:
                 assert_never(source)
     except Exception:  # noqa: BLE001  # one unreadable counter must not blank the whole report
         verbose_proxy_logger.exception("Unable to read live spend for budget scope %s", plan.scope)
-        return None
+        return _SpendReading(value=None, state="unavailable")
 
 
 def _effective_comparison(plan: _PlannedBudget, reservation_enabled: bool) -> BudgetComparison:
@@ -491,27 +551,23 @@ def _effective_comparison(plan: _PlannedBudget, reservation_enabled: bool) -> Bu
     return ">="
 
 
-def _entry_note(plan: _PlannedBudget, spend: float | None, comparison: BudgetComparison) -> str | None:
-    if spend is None:
-        return (
-            _MODEL_BUDGET_COLD_NOTE
-            if isinstance(plan.spend_source, _KeyModelSpend | _EndUserModelSpend)
-            else _SPEND_UNREADABLE_NOTE
-        )
-    if comparison == plan.comparison:
-        return plan.note
-    return _RESERVATION_NOTE if plan.note is None else f"{_RESERVATION_NOTE}; {plan.note}"
+def _entry_notes(
+    plan: _PlannedBudget, reading: _SpendReading, comparison: BudgetComparison
+) -> tuple[KeyBudgetNote, ...]:
+    tightened: Final = () if comparison == plan.comparison else (_RESERVATION_NOTE,)
+    cold: Final = (_MODEL_BUDGET_COLD_NOTE,) if reading.state == "no_counter" else ()
+    return (*tightened, *plan.notes, *cold)
 
 
-def _to_entry(plan: _PlannedBudget, spend: float | None, reservation_enabled: bool) -> KeyBudgetEntry:
+def _to_entry(plan: _PlannedBudget, reading: _SpendReading, reservation_enabled: bool) -> KeyBudgetEntry:
     comparison: Final = _effective_comparison(plan=plan, reservation_enabled=reservation_enabled)
+    spend: Final = reading.value
     exceeded: Final = (
         plan.max_budget is not None
         and spend is not None
         and (spend >= plan.max_budget if comparison == ">=" else spend > plan.max_budget)
     )
     status: Final[BudgetStatus] = "unlimited" if plan.max_budget is None else ("exceeded" if exceeded else "ok")
-    note: Final = _entry_note(plan=plan, spend=spend, comparison=comparison)
     return KeyBudgetEntry(
         scope=plan.scope,
         entity_type=_ENTITY_TYPE_BY_SCOPE[plan.scope],
@@ -520,6 +576,7 @@ def _to_entry(plan: _PlannedBudget, spend: float | None, reservation_enabled: bo
         enforcement=plan.enforcement,
         max_budget=plan.max_budget,
         spend=spend,
+        spend_state=reading.state,
         remaining=(plan.max_budget - spend) if plan.max_budget is not None and spend is not None else None,
         comparison=comparison,
         budget_duration=plan.budget_duration,
@@ -527,7 +584,7 @@ def _to_entry(plan: _PlannedBudget, spend: float | None, reservation_enabled: bo
         window_start=plan.window_start,
         source=plan.source,
         status=status,
-        note=note,
+        notes=_entry_notes(plan=plan, reading=reading, comparison=comparison),
     )
 
 
@@ -834,7 +891,7 @@ def _plan_key(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         spend_source=_CounterSpend(counter_key=key_spend_counter(token.token), fallback_spend=token.spend or 0.0),
         budget_duration=token.budget_duration,
         budget_reset_at=token.budget_reset_at,
-        note=_THROTTLE_NOTE if should_throttle_budget_exceeded(token) else None,
+        notes=(_THROTTLE_NOTE,) if should_throttle_budget_exceeded(token) else (),
     )
     soft: Final = _PlannedBudget(
         scope="key",
@@ -847,7 +904,7 @@ def _plan_key(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         spend_source=_RecordedSpend(token.spend or 0.0),
         budget_duration=token.budget_duration,
         budget_reset_at=token.budget_reset_at,
-        note=_ALERT_ONLY_NOTE,
+        notes=(_ALERT_ONLY_NOTE,),
     )
     return (hard, soft)
 
@@ -873,7 +930,7 @@ def _plan_key_windows(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
             budget_duration=window.budget_duration,
             budget_reset_at=window.reset_at,
             window_start=get_budget_window_start(window.model_dump()),
-            note=_ROLLING_WINDOW_NOTE,
+            notes=(_ROLLING_WINDOW_NOTE,),
         )
         for window in context.token_inputs.budget_limits
     )
@@ -909,7 +966,7 @@ def _plan_key_models(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
                 budget_config=config,
             ),
             budget_duration=config.budget_duration,
-            note=_MODEL_BUDGET_NOTE,
+            notes=(_MODEL_BUDGET_NOTE,),
         )
         for model, config in configured.items()
     )
@@ -947,7 +1004,7 @@ def _plan_team(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         spend_source=_RecordedSpend(team.spend or 0.0),
         budget_duration=team.budget_duration,
         budget_reset_at=team.budget_reset_at,
-        note=_ALERT_ONLY_NOTE,
+        notes=(_ALERT_ONLY_NOTE,),
     )
     return (hard, soft)
 
@@ -975,7 +1032,7 @@ def _plan_team_windows(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]
             budget_duration=window.budget_duration,
             budget_reset_at=window.reset_at,
             window_start=get_budget_window_start(window.model_dump()),
-            note=_ROLLING_WINDOW_NOTE,
+            notes=(_ROLLING_WINDOW_NOTE,),
         )
         for window in (team.budget_limits or ())
     )
@@ -1029,7 +1086,7 @@ def _plan_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
             spend_source=_CounterSpend(counter_key=user_spend_counter(user.user_id), fallback_spend=user.spend or 0.0),
             budget_duration=user.budget_duration,
             budget_reset_at=user.budget_reset_at,
-            note=None if applies else _USER_ON_TEAM_KEY_NOTE,
+            notes=() if applies else (_USER_ON_TEAM_KEY_NOTE,),
         ),
     )
 
@@ -1075,7 +1132,7 @@ def _plan_project(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         spend_source=_RecordedSpend(project.spend or 0.0),
         budget_duration=meta.budget_duration,
         budget_reset_at=meta.budget_reset_at,
-        note=_PROJECT_SPEND_NOTE,
+        notes=(_PROJECT_SPEND_NOTE,),
     )
     soft: Final = _PlannedBudget(
         scope="project",
@@ -1088,7 +1145,7 @@ def _plan_project(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         spend_source=_RecordedSpend(project.spend or 0.0),
         budget_duration=meta.budget_duration,
         budget_reset_at=meta.budget_reset_at,
-        note=_ALERT_ONLY_NOTE,
+        notes=(_ALERT_ONLY_NOTE,),
     )
     return (hard, soft)
 
@@ -1114,7 +1171,7 @@ def _plan_tags(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
             ),
             budget_duration=_budget_meta(context, tag.budget_id if tag is not None else None).budget_duration,
             budget_reset_at=_budget_meta(context, tag.budget_id if tag is not None else None).budget_reset_at,
-            note=_TAG_NOTE,
+            notes=(_TAG_NOTE,),
         )
         for tag_name, tag in context.tags
     )
@@ -1151,10 +1208,10 @@ def _plan_end_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
         ),
         budget_duration=meta.budget_duration,
         budget_reset_at=meta.budget_reset_at,
-        note=(
-            f"{_END_USER_ROUTE_NOTE}; {_CUSTOM_AUTH_END_USER_NOTE}"
+        notes=(
+            (_END_USER_ROUTE_NOTE, _CUSTOM_AUTH_END_USER_NOTE)
             if context.custom_auth_enabled and token_max_budget is None
-            else _END_USER_ROUTE_NOTE
+            else (_END_USER_ROUTE_NOTE,)
         ),
     )
     configured: Final = _model_budgets(budget.model_dump() if budget is not None else None)
@@ -1173,7 +1230,7 @@ def _plan_end_user(context: _KeyBudgetContext) -> tuple[_PlannedBudget, ...]:
                 budget_config=config,
             ),
             budget_duration=config.budget_duration,
-            note=_MODEL_BUDGET_NOTE,
+            notes=(_MODEL_BUDGET_NOTE,),
         )
         for model, config in configured.items()
     )
