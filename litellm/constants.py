@@ -1772,6 +1772,11 @@ PTU_PRUNE_SKEW_GRACE_SECONDS: Final[int] = 300
 # was never observed (e.g. proxy restart); expiry returns the tokens to the caller.
 BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
 
+# Key/team metadata field that opts batches into enqueued-token limiting. Only proxy
+# admins may write it: when present it replaces the standard RPM/TPM checks for
+# batch submissions.
+BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
 EMPTY_MAPPING: Final = MappingProxyType({})

@@ -1,7 +1,7 @@
 """
 Enqueued-token accounting for batch submissions.
 
-Opt-in via ``batch_enqueued_token_limit`` in key or team metadata: batch
+Opt-in via admin-set ``batch_enqueued_token_limit`` in key or team metadata: batch
 submissions reserve their estimated token count against a long-lived
 enqueued-token allowance instead of the per-minute rate-limit windows, and
 the reservation is refunded when the batch reaches a terminal state
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import BATCH_ENQUEUED_TOKEN_TTL_SECONDS
+from litellm.constants import BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY, BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 
 if TYPE_CHECKING:
@@ -27,8 +27,6 @@ if TYPE_CHECKING:
 
     Span = _Span
     InternalUsageCache = _InternalUsageCache
-
-BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
 
 BATCH_ENQUEUED_REFUND_STATUSES: Final[frozenset[str]] = frozenset(
     {"completed", "complete", "failed", "expired", "cancelled", "cancelling"}
