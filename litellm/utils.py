@@ -1921,11 +1921,11 @@ def client(original_function):
                     await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)
                 except Exception as e:
                     raise e
-                await async_post_call_failure_deployment_hook(
-                    request_data=kwargs,
-                    exception=e,
-                    call_type=call_type,
-                )
+            await async_post_call_failure_deployment_hook(
+                request_data=kwargs,
+                exception=e,
+                call_type=call_type,
+            )
 
             call_type = original_function.__name__
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)

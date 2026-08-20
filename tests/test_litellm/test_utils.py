@@ -9,6 +9,7 @@ from jsonschema import validate
 
 
 import litellm
+from litellm._internal_context import is_internal_call
 from litellm._logging import (
     CorrelationContextFilter,
     JsonFormatter,
@@ -5196,3 +5197,30 @@ async def test_router_multi_hop_fallback_chain_reports_depth_per_hop(monkeypatch
 
     assert len(recorder.calls) == 3
     assert [call[3] for call in recorder.calls] == [None, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_fires_post_call_failure_deployment_hook_on_internal_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a failed attempt made while is_internal_call is set (e.g. an emulated
+    file-search step) must still reach async_post_call_failure_deployment_hook, matching
+    async_pre_call_deployment_hook, which already fires unconditionally for such calls."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    token = is_internal_call.set(True)
+    try:
+        with pytest.raises(litellm.AuthenticationError):
+            await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response=litellm.AuthenticationError(
+                    message="bad key", llm_provider="openai", model="gpt-4o-mini"
+                ),
+            )
+    finally:
+        is_internal_call.reset(token)
+
+    assert len(recorder.calls) == 1
+    assert isinstance(recorder.calls[0][1], litellm.AuthenticationError)
