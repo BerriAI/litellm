@@ -12,7 +12,12 @@ from pydantic import PositiveInt, TypeAdapter, ValidationError
 import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS
+from litellm.constants import (
+    BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    EMPTY_MAPPING,
+    MINIMUM_CUSTOM_KEY_LENGTH,
+    STANDARD_CUSTOMER_ID_HEADERS,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -1165,6 +1170,46 @@ def enforce_output_token_estimates_are_admin_only(
             "error": f"Only proxy admins can set {ESTIMATED_OUTPUT_TOKENS_FIELD} or "
             f"{ESTIMATED_OUTPUT_TOKENS_PER_MODEL_FIELD} on a {entity}. They decide how many output tokens "
             "the rate limiter reserves for a request that omits max_tokens."
+        },
+    )
+
+
+class BatchEnqueuedTokenLimitRequest(Protocol):
+    """The shape of any management request that can carry a batch enqueued-token limit."""
+
+    @property
+    def metadata(self) -> Mapping[str, object] | None: ...
+
+    @property
+    def model_fields_set(self) -> Collection[str]: ...
+
+
+def enforce_batch_enqueued_token_limit_is_admin_only(
+    data: BatchEnqueuedTokenLimitRequest,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    entity: Literal["key", "team"],
+) -> None:
+    """Only a proxy admin may change a key or team's batch enqueued-token limit.
+
+    When set, ``batch_enqueued_token_limit`` replaces the standard RPM/TPM checks
+    for batch submissions, so a holder-writable copy would let a caller lift their
+    own batch quota. Gated on the resulting value rather than on presence, so a
+    form resending the stored value stays a no-op.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored: Final[Mapping[str, object]] = existing_metadata or EMPTY_MAPPING
+    requested: Final[Mapping[str, object]] = (
+        (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
+    )
+    if requested.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY) == stored.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={  # mutable-ok: HTTPException.detail has no immutable form
+            "error": f"Only proxy admins can set {BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} on a {entity}. "
+            "It replaces the standard rate limit checks for batch submissions."
         },
     )
 
