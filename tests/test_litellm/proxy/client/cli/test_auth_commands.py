@@ -626,6 +626,39 @@ class TestWhoamiCommand:
             assert "Authenticated" in result.output
             assert "Unknown" in result.output  # Should show "Unknown" for missing fields
 
+    def test_whoami_pkce_record_shows_the_team_and_when_the_key_renews(self):
+        token_data = {
+            "user_email": "unknown",
+            "user_id": "user-1",
+            "user_role": "cli",
+            "team_id": "team-alpha",
+            "timestamp": time.time() - 25 * 3600,
+            "expires_at": time.time() + 2 * 3600,
+            "refresh_token": "llm_srefresh_abc",
+        }
+
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+            result = self.runner.invoke(whoami)
+
+        assert result.exit_code == 0
+        assert "Team ID: team-alpha" in result.output
+        assert "Key expires in: 2.0 hours, renewed on next use" in result.output
+        assert "Warning" not in result.output
+
+    def test_whoami_expired_key_without_a_refresh_token_asks_for_a_new_login(self):
+        token_data = {
+            "user_id": "user-1",
+            "timestamp": time.time() - 3600,
+            "expires_at": time.time() - 60,
+        }
+
+        with patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=token_data):
+            result = self.runner.invoke(whoami)
+
+        assert result.exit_code == 0
+        assert "Team ID" not in result.output
+        assert "Key expired. Run 'lite login' again" in result.output
+
     def test_whoami_no_timestamp(self):
         """Test whoami with token missing timestamp"""
         token_data = {

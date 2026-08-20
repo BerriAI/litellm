@@ -5,6 +5,7 @@ import json
 import re
 import socket
 import threading
+import time
 import urllib.error
 import urllib.request
 from base64 import urlsafe_b64encode
@@ -13,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 import requests
 
+from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 from litellm.proxy.client.cli.commands.pkce_login import (
     CallbackCode,
     CallbackDenied,
@@ -553,6 +555,23 @@ def test_fresh_api_key_refreshes_near_expiry_and_saves_before_returning():
     assert saved[0]["base_url"] == BASE
     assert saved[0]["team_id"] == "team-b"
     assert http.calls[0][2]["refresh_token"] == "llm_srefresh_old"
+
+
+@pytest.mark.parametrize(("seconds_left", "refreshes"), [(200, True), (600, False)])
+def test_fresh_api_key_refreshes_exactly_when_is_cli_token_fresh_stops_calling_the_key_fresh(
+    seconds_left, refreshes
+):
+    """`lite up` and `lite auth print-token` ask `is_cli_token_fresh` and then `fresh_api_key`; a key
+    the first calls stale that the second would not renew left `lite up` refusing a renewable login."""
+    record = {**STORED, "expires_at": time.time() + seconds_left}
+    http = _FakeHttp({("POST", f"{BASE}/token"): _FakeResponse(200, TOKEN_JSON)})
+    saved = []
+
+    key = _fresh(record, saved.append, http)
+
+    assert is_cli_token_fresh(record) is (not refreshes)
+    assert key == ("sk-cli-new" if refreshes else "sk-cli-old")
+    assert len(saved) == (1 if refreshes else 0)
 
 
 def test_fresh_api_key_never_hands_out_a_rotated_key_it_could_not_save():

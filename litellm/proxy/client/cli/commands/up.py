@@ -17,7 +17,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import load_token, login
+from .auth import get_stored_api_key, load_token, login
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
@@ -103,22 +103,34 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
     return record
 
 
+def _usable_login(base_url: str) -> bool:
+    if get_stored_api_key(expected_base_url=base_url) is None:
+        return False
+    token_data: Final = load_token()
+    return token_data is not None and is_cli_token_fresh(token_data)
+
+
+def _stored_login_is_pkce() -> bool:
+    token_data: Final = load_token()
+    return token_data is not None and "refresh_token" in token_data
+
+
 def _ensure_fresh_login(ctx: click.Context) -> None:
     base_url: Final = ctx.obj["base_url"].rstrip("/")
-    token_data = load_token()
-    if token_data and token_data.get("base_url") == base_url and is_cli_token_fresh(token_data):
+    if _usable_login(base_url):
         return
 
+    pkce: Final = _stored_login_is_pkce()
+    login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
         raise UpError(
-            "No fresh LiteLLM login found for this proxy. Run `lite login` first (apiKeyHelper "
+            f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first (apiKeyHelper "
             "reads this token on every Claude Code request)."
         )
 
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
-    ctx.invoke(login)
-    token_data = load_token()
-    if not token_data or token_data.get("base_url") != base_url or not is_cli_token_fresh(token_data):
+    ctx.invoke(login, pkce=pkce)
+    if not _usable_login(base_url):
         raise UpError("Login did not produce a usable token; cannot start `lite up`.")
 
 

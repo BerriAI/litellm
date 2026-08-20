@@ -837,14 +837,27 @@ def whoami():
     click.echo(f"User Email: {token_data.get('user_email', 'Unknown')}")
     click.echo(f"User ID: {token_data.get('user_id', 'Unknown')}")
     click.echo(f"User Role: {token_data.get('user_role', 'Unknown')}")
+    team_id: Final = token_data.get("team_id")
+    if team_id:
+        click.echo(f"Team ID: {team_id}")
 
-    # Check if token is still valid (basic timestamp check)
     timestamp: Final = token_data.get("timestamp", 0)
     age_hours: Final = (time.time() - timestamp) / 3600
     click.echo(f"Token age: {age_hours:.1f} hours")
 
-    if age_hours > CLI_JWT_EXPIRATION_HOURS:
+    expires_at: Final = token_data.get("expires_at")
+    if isinstance(expires_at, (int, float)):
+        click.echo(_key_expiry_line(expires_at, renews="refresh_token" in token_data))
+    elif age_hours > CLI_JWT_EXPIRATION_HOURS:
         click.echo(f"Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
+
+
+def _key_expiry_line(expires_at: float, renews: bool) -> str:
+    remaining_hours: Final = (expires_at - time.time()) / 3600
+    status: Final = f"Key expires in: {remaining_hours:.1f} hours" if remaining_hours > 0 else "Key expired"
+    if renews:
+        return f"{status}, renewed on next use"
+    return status if remaining_hours > 0 else f"{status}. Run 'lite login' again"
 
 
 @click.group(name="auth")

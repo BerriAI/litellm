@@ -23,13 +23,14 @@ import requests
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.cli_token_utils import CLI_TOKEN_FRESHNESS_BUFFER_SECONDS
+
 if TYPE_CHECKING:
     from .auth import CliTokenData
 
 CLI_AUTH_DISCOVERY_PATH: Final = "/.well-known/litellm-cli-auth"
 CALLBACK_PATH: Final = "/callback"
 LOGIN_TIMEOUT_SECONDS: Final = 300
-REFRESH_LEEWAY_SECONDS: Final = 60
 _HTTP_TIMEOUT_SECONDS: Final = 15
 _CLIENT_NAME: Final = "litellm-cli"
 
@@ -460,7 +461,9 @@ def fresh_api_key(
     now: Callable[[], float] = time.time,
 ) -> str | None:
     """The stored key, refreshed first when it is about to expire and a refresh token is
-    on file. The rotated pair is saved before the new key is returned, so a crash after
+    on file. The refresh fires at the same moment ``is_cli_token_fresh`` stops calling the
+    key fresh, so a command that checks freshness and then asks for the key never disagrees
+    with itself. The rotated pair is saved before the new key is returned, so a crash after
     this point never strands the CLI with a burned refresh token. A refresh that fails
     reads the record again, because a sibling ``lite`` process may have rotated the pair
     first, in which case the key it saved for this same proxy is the live one. A record without
@@ -471,7 +474,7 @@ def fresh_api_key(
     expires_at: Final = token_data.get("expires_at")
     if not isinstance(expires_at, (int, float)):
         return key
-    if now() < expires_at - REFRESH_LEEWAY_SECONDS:
+    if now() < expires_at - CLI_TOKEN_FRESHNESS_BUFFER_SECONDS:
         return key
     still_valid: Final = key if now() < expires_at else None
     refresh_inputs: Final = _refresh_inputs(token_data)
