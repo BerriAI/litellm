@@ -145,3 +145,12 @@ crash.*.log
 
 ui/litellm-dashboard/out/
 litellm.log
+
+# mutation testing scratch (mutmut sandbox + diff-scope artifacts)
+mutants/
+mutation-report.md
+mutmut-results.txt
+mutmut-run.log
+mutmut-scope.json
+mutmut-scope-globs.txt
+mutmut-scope.log

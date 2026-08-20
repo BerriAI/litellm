@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -25,7 +27,11 @@ from pathlib import Path
 from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parent.parent
-MUTMUT_INVOCATION = ["uv", "run", "--no-sync", "--with", "mutmut==3.5.0", "mutmut"]
+# Overridable so the report can be regenerated outside CI, where the project venv
+# `uv run --no-sync` expects may not exist.
+MUTMUT_INVOCATION = shlex.split(
+    os.environ.get("MUTMUT_CMD", "uv run --no-sync --with mutmut==3.5.0 mutmut")
+)
 
 
 def load_mutmut_config() -> dict:
@@ -33,16 +39,42 @@ def load_mutmut_config() -> dict:
         return tomllib.load(f)["tool"]["mutmut"]
 
 
-def get_survivors() -> list[str]:
+def get_results() -> list[tuple[str, str]]:
+    """Parse `mutmut results` into (mutant name, status) pairs.
+
+    A diff-scoped run leaves every out-of-scope mutant at `not checked`, so
+    callers must drop that status before counting anything.
+    """
     proc = subprocess.run(
-        [*MUTMUT_INVOCATION, "results"], capture_output=True, text=True, check=False
+        [*MUTMUT_INVOCATION, "results", "--all=true"], capture_output=True, text=True, check=False
     )
-    survivors = []
+    results = []
     for line in proc.stdout.splitlines():
-        m = re.match(r"\s*(\S+):\s*survived\s*$", line)
+        m = re.match(r"\s*(\S+):\s*(killed|survived|no tests|timeout|suspicious|skipped|not checked)\s*$", line)
         if m:
-            survivors.append(m.group(1))
-    return survivors
+            results.append((m.group(1), m.group(2)))
+    return results
+
+
+def summarize(results: list[tuple[str, str]]) -> dict | None:
+    """Count only the mutants this run actually executed."""
+    checked = [status for _, status in results if status != "not checked"]
+    if not checked:
+        return None
+    return {
+        "total": len(checked),
+        **{
+            key: sum(1 for status in checked if status == label)
+            for key, label in (
+                ("killed", "killed"),
+                ("survived", "survived"),
+                ("no_tests", "no tests"),
+                ("skipped", "skipped"),
+                ("suspicious", "suspicious"),
+                ("timeout", "timeout"),
+            )
+        },
+    }
 
 
 def get_mutmut_show(mutant_name: str) -> str:
@@ -399,15 +431,18 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
 def main() -> int:
     config = load_mutmut_config()
 
-    stats_file = ROOT / "mutants" / "mutmut-cicd-stats.json"
-    stats: dict | None = None
-    if stats_file.exists():
-        try:
-            stats = json.loads(stats_file.read_text())
-        except json.JSONDecodeError as exc:
-            print(f"warning: could not parse {stats_file}: {exc}", file=sys.stderr)
+    results = get_results()
+    stats = summarize(results)
 
-    survivors = get_survivors()
+    if stats is None:
+        stats_file = ROOT / "mutants" / "mutmut-cicd-stats.json"
+        if stats_file.exists():
+            try:
+                stats = json.loads(stats_file.read_text())
+            except json.JSONDecodeError as exc:
+                print(f"warning: could not parse {stats_file}: {exc}", file=sys.stderr)
+
+    survivors = [name for name, status in results if status == "survived"]
     report = render(config, survivors, stats)
 
     out_path = ROOT / "mutation-report.md"
