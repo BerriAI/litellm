@@ -30,6 +30,7 @@ export function useBlockUnpricedConfig({ accessToken }: UseBlockUnpricedConfigPr
       setBlockUnpricedState(Boolean(data?.enabled));
     } catch (error) {
       console.error("Error fetching block-unpriced-models setting:", error);
+      toast.fromError(error);
     }
   }, [accessToken]);
 
@@ -47,6 +48,7 @@ export function useBlockUnpricedConfig({ accessToken }: UseBlockUnpricedConfigPr
         );
       } catch (error) {
         console.error("Error updating block-unpriced-models setting:", error);
+        toast.fromError(error);
       } finally {
         setIsUpdating(false);
       }
