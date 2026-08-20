@@ -2,6 +2,8 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -13,11 +15,20 @@ from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.management_endpoints.logging_exporter_access import (
+    destination_for_credential,
+    is_logging_credential,
+)
+from litellm.proxy.management_endpoints.logging_exporter_validation import (
+    validate_credential_access,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router: Final = APIRouter()
+
+_EMPTY_VERDICT: Final[Mapping[str, bool]] = MappingProxyType({})
 
 
 class CredentialHelperUtils:
@@ -54,6 +65,9 @@ async def create_credential(
     Reloads credentials in memory.
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
+
+    if is_logging_credential(credential.credential_info):
+        validate_credential_access(credential.credential_info)
 
     try:
         if prisma_client is None:
@@ -106,6 +120,14 @@ async def create_credential(
         raise handle_exception_on_proxy(e)
 
 
+def _destination_verdict(credential: CredentialItem) -> Mapping[str, bool]:
+    """Whether this logging credential actually builds, for the listing. Empty for a
+    provider credential, which has no destination to report on."""
+    if not is_logging_credential(credential.credential_info):
+        return _EMPTY_VERDICT
+    return {"resolves_to_destination": destination_for_credential(credential) is not None}  # mutable-ok: JSON body
+
+
 @router.get(
     "/credentials",
     dependencies=[Depends(user_api_key_auth)],
@@ -125,6 +147,7 @@ async def get_credentials(
                 "credential_name": credential.credential_name,
                 "credential_values": _get_masked_values(credential.credential_values),
                 "credential_info": credential.credential_info,
+                **_destination_verdict(credential),
             }
             for credential in litellm.credential_list
         ]
@@ -309,6 +332,8 @@ async def update_credential(
         db_credential: Final = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
+        if is_logging_credential(db_credential.credential_info) or is_logging_credential(credential.credential_info):
+            validate_credential_access(credential.credential_info)
         merged_credential: Final = update_db_credential(db_credential, credential)
         credential_object_jsonified: Final = jsonify_object(merged_credential.model_dump())
         await credentials_repository.update_by_name(
