@@ -2226,3 +2226,78 @@ def test_direct_vector_store_search_debug_log_omits_stored_credentials(caplog, i
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "sup3r-s3cret-valkey-pw" not in logged
     assert "sk-embedding-s3cret" not in logged
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_carries_deployment_vertex_location_for_pricing(monkeypatch):
+    """
+    The proxy pre-creates the logging object before the router picks a deployment, so the
+    native /v1/messages path must copy the deployment's vertex_location into the logging
+    params it updates; otherwise cost resolution falls back to the environment and every
+    call on this surface prices with the regional uplift (#34393).
+    """
+    import contextlib
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        _resolve_vertex_location_for_cost,
+    )
+
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    handler = BaseLLMHTTPHandler()
+
+    async def logging_obj_after_handler(generic_params):
+        logging_obj = Logging(
+            model="vertex_ai/claude-haiku-4-5@20251001",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id="vertex-messages-location",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="vertex_ai/claude-haiku-4-5@20251001",
+            user="",
+            optional_params={},
+            litellm_params={"api_base": ""},
+            custom_llm_provider="vertex_ai",
+        )
+        mock_config = Mock()
+        mock_config.validate_anthropic_messages_environment = Mock(
+            return_value=({"authorization": "Bearer t"}, "https://us-east5-aiplatform.googleapis.com")
+        )
+        mock_config.transform_anthropic_messages_request = Mock(
+            return_value={"model": "claude-haiku-4-5@20251001", "messages": []}
+        )
+        with contextlib.suppress(Exception):
+            await handler.async_anthropic_messages_handler(
+                model="claude-haiku-4-5@20251001",
+                messages=[{"role": "user", "content": "hi"}],
+                anthropic_messages_provider_config=mock_config,
+                anthropic_messages_optional_request_params={"max_tokens": 10},
+                custom_llm_provider="vertex_ai",
+                litellm_params=generic_params,
+                logging_obj=logging_obj,
+                client=AsyncMock(),
+                kwargs={},
+            )
+        return logging_obj
+
+    global_deployment = await logging_obj_after_handler(GenericLiteLLMParams(vertex_location="global"))
+    assert global_deployment.litellm_params["vertex_location"] == "global"
+    assert (
+        _resolve_vertex_location_for_cost(
+            custom_llm_provider="vertex_ai",
+            litellm_params=global_deployment.litellm_params,
+            optional_params=global_deployment.optional_params,
+            model="claude-haiku-4-5@20251001",
+        )
+        == "global"
+    )
+
+    unconfigured_deployment = await logging_obj_after_handler(GenericLiteLLMParams())
+    assert "vertex_location" not in unconfigured_deployment.litellm_params

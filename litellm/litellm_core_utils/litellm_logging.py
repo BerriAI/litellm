@@ -13,7 +13,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 from httpx import Response
@@ -370,6 +370,35 @@ def _published_pricing(deployment_model: str | None) -> ModelInfo | None:
         return litellm.get_model_info(model=deployment_model)
     except Exception:  # noqa: BLE001  # no published entry to layer the declared rates over
         return None
+
+
+def _resolve_vertex_location_for_cost(
+    custom_llm_provider: str | None,
+    litellm_params: Mapping[str, object] | None,
+    optional_params: Mapping[str, object] | None,
+    model: str,
+) -> str | None:
+    """
+    The Vertex AI location a request was served from, resolved the same way
+    dispatch resolves it, so regional deployments price with the
+    regional-endpoint uplift. None for non-Vertex providers.
+
+    Chat dispatch reads the location from request kwargs, which reach this
+    logging object through optional_params: on the proxy the logging object is
+    created before the router picks a deployment, so the deployment's location
+    never lands in litellm_params.
+    """
+    if custom_llm_provider is None or not custom_llm_provider.startswith("vertex_ai"):
+        return None
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    empty: Final[Mapping[str, object]] = MappingProxyType({})
+    configured_location: Final = (
+        VertexBase.explicit_vertex_ai_location(optional_params or empty)
+        or VertexBase.explicit_vertex_ai_location(litellm_params or empty)
+        or VertexBase.safe_get_vertex_ai_location(empty)
+    )
+    return VertexBase.get_vertex_region(configured_location, model)
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -1432,6 +1461,7 @@ class Logging(LiteLLMLoggingBaseClass):
         reasoning_cost: float | None = None,
         service_tier: str | None = None,
         data_residency: str | None = None,
+        vertex_location: str | None = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1450,6 +1480,7 @@ class Logging(LiteLLMLoggingBaseClass):
             margin_total_amount: Total margin added in USD
             service_tier: Tier the costs above were priced on, already resolved
             data_residency: Region uplift the costs above were priced on, already resolved
+            vertex_location: Vertex AI location the costs above were priced on, already resolved
         """
 
         self.cost_breakdown = CostBreakdown(
@@ -1459,6 +1490,7 @@ class Logging(LiteLLMLoggingBaseClass):
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
             service_tier=service_tier,
             data_residency=data_residency,
+            vertex_location=vertex_location,
         )
         if cache_read_cost is not None and cache_read_cost > 0:
             self.cost_breakdown["cache_read_cost"] = cache_read_cost
@@ -1573,6 +1605,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.litellm_params.get("data_residency")
                     if hasattr(self, "litellm_params") and self.litellm_params
                     else None
+                ),
+                "vertex_location": _resolve_vertex_location_for_cost(
+                    custom_llm_provider=self.model_call_details.get("custom_llm_provider", None),
+                    litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None),
+                    optional_params=self.optional_params,
+                    model=litellm_model_name or self.model,
                 ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
