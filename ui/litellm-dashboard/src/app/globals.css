@@ -233,7 +233,7 @@
   /* Same plugin's white fill, on the hand-rolled controls outside components/ui that the audit
      above did not cover. Tracks --background so light mode keeps the white it already painted.
      Delete along with the plugin. */
-  :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]) {
+  :is(input, textarea, select):not([type="checkbox"], [type="radio"], [data-slot="combobox-chip-input"]) {
     background-color: var(--color-background);
   }
 
