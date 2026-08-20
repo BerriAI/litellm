@@ -5,8 +5,12 @@ export type TierModelParams = Record<string, unknown>;
 
 export type TierModelParamsByTier = Record<string, Record<string, TierModelParams>>;
 
+/**
+ * Fallback offered only when a proxy does not report supported_reasoning_efforts per model group.
+ * max is deliberately absent: it is opt-in per model in the model map, so a capability-blind list
+ * must not offer it; a proxy that reports capabilities supplies max itself where supported.
+ */
 export const REASONING_EFFORT_OPTIONS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
-export type ReasoningEffort = (typeof REASONING_EFFORT_OPTIONS)[number];
 
 const asRecord = (raw: unknown): Record<string, unknown> | undefined =>
   typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
