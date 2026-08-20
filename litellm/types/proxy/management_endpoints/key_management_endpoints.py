@@ -132,6 +132,34 @@ BudgetComparison = Literal[">=", ">"]
 
 BudgetStatus = Literal["unlimited", "ok", "exceeded"]
 
+BudgetNoteCode = Literal[
+    "alert_only",
+    "custom_auth_may_override_end_user_cap",
+    "end_user_route_only",
+    "model_budget_fails_open",
+    "per_model_counters",
+    "project_spend_not_tracked",
+    "request_tags_add_budgets",
+    "reservation_blocks_at_limit",
+    "rolling_window",
+    "throttled_instead_of_blocked",
+    "user_budget_not_applied_to_team_key",
+]
+
+BudgetNoteSeverity = Literal["info", "warning"]
+
+BudgetSpendState = Literal["live", "no_counter", "unavailable"]
+
+
+class KeyBudgetNote(BaseModel):
+    """One caveat about a budget row. Branch on ``code``; ``text`` is free to be reworded."""
+
+    model_config = ConfigDict(frozen=True)
+
+    code: BudgetNoteCode
+    severity: BudgetNoteSeverity
+    text: str
+
 
 class KeyBudgetEntry(BaseModel):
     """One budget that can gate requests made with a key, with its live spend."""
@@ -143,6 +171,7 @@ class KeyBudgetEntry(BaseModel):
     enforcement: BudgetEnforcement
     max_budget: float | None = None
     spend: float | None = None
+    spend_state: BudgetSpendState
     remaining: float | None = None
     comparison: BudgetComparison
     budget_duration: str | None = None
@@ -150,7 +179,7 @@ class KeyBudgetEntry(BaseModel):
     window_start: datetime | None = None
     source: str
     status: BudgetStatus
-    note: str | None = None
+    notes: tuple[KeyBudgetNote, ...] = ()
 
 
 class KeyBudgetsResponse(BaseModel):

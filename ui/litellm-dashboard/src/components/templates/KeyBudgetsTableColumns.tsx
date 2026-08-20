@@ -94,6 +94,30 @@ function EnforcementCell({ entry }: { entry: KeyBudgetEntry }) {
   );
 }
 
+/**
+ * A null spend means the live counter could not be read, which `SpendBudgetCell` coerces to 0 and
+ * draws as an empty meter. That renders a failed read as confident full headroom, so branch before
+ * reaching it: an unknown number must not look like a healthy one.
+ */
+function SpendCell({ entry }: { entry: KeyBudgetEntry }) {
+  const rule = budgetThresholdRule(entry);
+  return (
+    <div className="flex flex-col gap-0.5">
+      {entry.spend == null ? (
+        <span className="whitespace-nowrap text-xs">
+          <span className="font-medium text-amber-600">Unknown</span>{" "}
+          <span className="text-muted-foreground">
+            {entry.max_budget == null ? "· Unlimited" : `of $${formatNumberWithCommas(entry.max_budget, 2)}`}
+          </span>
+        </span>
+      ) : (
+        <SpendBudgetCell spend={entry.spend} maxBudget={entry.max_budget} budgetDecimals={2} />
+      )}
+      {rule && <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{rule}</span>}
+    </div>
+  );
+}
+
 function RemainingCell({ entry }: { entry: KeyBudgetEntry }) {
   const unlimited = entry.max_budget == null;
   return (
@@ -129,15 +153,7 @@ export const getKeyBudgetsTableColumns = (): ColumnDef<KeyBudgetEntry>[] => [
     header: "Spend / Limit",
     size: 200,
     enableSorting: false,
-    cell: ({ row }) => {
-      const rule = budgetThresholdRule(row.original);
-      return (
-        <div className="flex flex-col gap-0.5">
-          <SpendBudgetCell spend={row.original.spend} maxBudget={row.original.max_budget} budgetDecimals={2} />
-          {rule && <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{rule}</span>}
-        </div>
-      );
-    },
+    cell: ({ row }) => <SpendCell entry={row.original} />,
   },
   {
     id: "remaining",

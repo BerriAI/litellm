@@ -281,6 +281,31 @@ describe("KeyInfoView Budgets tab", () => {
     );
   });
 
+  it("does not render a spend the server could not read as a healthy $0.00", async () => {
+    const unreadable: KeyBudgetEntry = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "tag",
+      entity_type: "tag",
+      entity_id: "prod",
+      entity_label: "prod",
+      max_budget: 1000,
+      spend: null,
+      remaining: null,
+      source: "budget_table:b-tag",
+      status: "ok",
+      note: "live spend could not be read",
+    };
+    mockBudgets([unreadable]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const row = rowFor(panel, "prod");
+    expect(row).toHaveTextContent("Unknown of $1,000.00");
+    expect(row).not.toHaveTextContent("$0.00");
+    // The meter is the part that lies loudest: drawn at 0% it reads as untouched headroom.
+    expect(within(row).queryByRole("meter")).not.toBeInTheDocument();
+    expect(row).toHaveTextContent("Blocks at ≥ $1,000.00");
+  });
+
   it("renders the longest note the endpoint can emit without dropping any of it", async () => {
     const endUser: KeyBudgetEntry = {
       ...UNCONFIGURED_BUDGET,
