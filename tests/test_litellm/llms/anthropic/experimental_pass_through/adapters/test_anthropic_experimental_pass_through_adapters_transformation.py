@@ -4,6 +4,8 @@ from typing import Any, cast
 
 import pytest
 
+import litellm
+
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
@@ -684,6 +686,15 @@ def test_translate_anthropic_to_openai_skips_prompt_cache_key_when_provider_lack
     model: str, custom_llm_provider: str
 ):
     openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, custom_llm_provider)
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_chained_litellm_proxy():
+    assert "prompt_cache_key" in litellm.get_supported_openai_params(
+        model="xai", custom_llm_provider="litellm_proxy"
+    )
+    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": "session-abc"}, "litellm_proxy")
     assert openai_request["user"] == "session-abc"
     assert "prompt_cache_key" not in openai_request
 
