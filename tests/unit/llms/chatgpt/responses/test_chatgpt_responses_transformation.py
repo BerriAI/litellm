@@ -240,6 +240,7 @@ class TestChatGPTResponsesAPITransformation:
                 "stream_options": {"include_usage": True},
                 # supported and should be preserved
                 "max_output_tokens": 123,
+                "prompt_cache_key": "session_123",
                 "truncation": "auto",
                 "previous_response_id": "resp_123",
                 "reasoning": {"effort": "medium"},
@@ -258,6 +259,7 @@ class TestChatGPTResponsesAPITransformation:
         assert "stream_options" not in request
 
         assert request["max_output_tokens"] == 123
+        assert request["prompt_cache_key"] == "session_123"
         assert request["truncation"] == "auto"
         assert request["previous_response_id"] == "resp_123"
         assert request["reasoning"] == {"effort": "medium"}
