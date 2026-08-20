@@ -45,14 +45,25 @@ from litellm.litellm_core_utils.private_json import (
 
 @dataclass(frozen=True, slots=True)
 class CredentialNotSaved:
-    """The credential was minted but no store would keep it, so this machine has none."""
+    """The credential was minted but no store would keep it, so this machine has none.
+
+    Nothing was touched on the way to this, so a login that already worked still does.
+    """
 
     detail: str
 
 
-SecretSave: TypeAlias = SecretWrite | CredentialNotSaved
+@dataclass(frozen=True, slots=True)
+class CredentialNotRecorded:
+    """The keychain took the credential, but the file that names it could not be replaced.
 
-_UNREPLACEABLE_FILE: Final = "the staged file could not replace the one already there"
+    The keychain holds one entry, so the secret that was there is already gone and no rollback
+    brings it back. Removing the new one as well would only turn a login this machine may still
+    be able to use into no login at all, so it stays, and the user is told what is where.
+    """
+
+
+SecretSave: TypeAlias = SecretWrite | CredentialNotSaved | CredentialNotRecorded
 
 
 class CliTokenRecord(BaseModel):
@@ -111,6 +122,10 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
     half that a read-only or full directory refuses, so it is staged before the keychain is handed
     anything. A save that cannot land then leaves both stores exactly as it found them, which
     matters most when the login it failed to replace is still perfectly good.
+
+    Staging can still succeed and the replacement fail afterwards. That is the one case where the
+    keychain has already taken the new secret, and it reports itself as such rather than claiming
+    the previous login survived.
     """
     staged: Final = _stage_token_file(_without_secret(record))
     if isinstance(staged, CredentialNotSaved):
@@ -121,7 +136,7 @@ def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRIN
         else vault.write(_encode_secret(record.base_url, record.key, record.jwt_token))
     )
     if isinstance(outcome, SecretStored):
-        return outcome if _commit_token_file(staged) else CredentialNotSaved(_UNREPLACEABLE_FILE)
+        return outcome if _commit_token_file(staged) else CredentialNotRecorded()
     discard_staged_json(staged)
     return _keep_the_secret_in_the_file(record, outcome)
 
