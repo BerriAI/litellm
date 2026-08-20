@@ -3889,6 +3889,9 @@ class TestComprehendMedicalProxyRoute:
         assert exc_info.value.status_code == 400
 
 
+LIVE_RESOURCE_PATH = "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+
+
 class TestVertexAILiveWebsocketPassthrough:
     def _websocket(self):
         from starlette.websockets import WebSocketState
@@ -3958,6 +3961,110 @@ class TestVertexAILiveWebsocketPassthrough:
             "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
         )
         websocket.close.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "setup_model, expected",
+        [
+            ("gemini-live-2.5-flash", LIVE_RESOURCE_PATH),
+            ("models/gemini-live-2.5-flash", LIVE_RESOURCE_PATH),
+            ("vertex_ai/gemini-live-2.5-flash", LIVE_RESOURCE_PATH),
+            ("gemini-live", LIVE_RESOURCE_PATH),
+            ("models/gemini-live", LIVE_RESOURCE_PATH),
+            (
+                "publishers/meta/models/llama-3.3-70b-instruct-maas",
+                "projects/proj-db/locations/global/publishers/meta/models/llama-3.3-70b-instruct-maas",
+            ),
+            (
+                "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+                "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+    )
+    def test_setup_model_rewriter_normalises_the_forms_clients_send(self, setup_model, expected):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                    },
+                }
+            ]
+        )
+
+        rewriter = passthrough_module._build_vertex_live_setup_model_rewriter(
+            vertex_project="proj-db",
+            vertex_location="global",
+            llm_router=llm_router,
+        )
+
+        assert rewriter is not None
+        assert rewriter(setup_model) == expected
+
+    @pytest.mark.asyncio
+    async def test_default_vertex_config_outranks_db_deployment(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+        from litellm.types.passthrough_endpoints.vertex_ai import (
+            VertexPassThroughCredentials,
+        )
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "db_account"}',
+                    },
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router,
+            "default_vertex_config",
+            VertexPassThroughCredentials(
+                vertex_project="proj-env",
+                vertex_location="global",
+                vertex_credentials='{"type": "env_account"}',
+            ),
+        )
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-env"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                model="gemini-live",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        ensure_token.assert_awaited_once_with(
+            credentials='{"type": "env_account"}',
+            project_id="proj-env",
+            custom_llm_provider="vertex_ai_beta",
+        )
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            "projects/proj-env/locations/global/publishers/google/models/gemini-live-2.5-flash"
+        )
 
     @pytest.mark.asyncio
     async def test_credential_failure_close_names_configuration_options(self, monkeypatch):
