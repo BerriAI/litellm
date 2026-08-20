@@ -664,6 +664,9 @@
         "supports_pdf_input": {
           "type": "boolean"
         },
+        "supports_prompt_cache_breakpoint": {
+          "type": "boolean"
+        },
         "supports_prompt_caching": {
           "type": "boolean"
         },

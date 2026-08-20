@@ -41,11 +41,24 @@ class ResponsesAPIRequestUtils:
     """Helper utils for constructing ResponseAPI requests"""
 
     @staticmethod
+    def shape_prompt_managed_messages_for_responses(messages: Iterable[object]) -> None:
+        for message in messages:
+            if not isinstance(message, dict) or message.get("role") == "assistant":
+                continue
+            content: object = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    part["type"] = "input_text"
+
+    @staticmethod
     def merge_prompt_management_input(
         original_input: str | ResponseInputParam,
         client_input: list[AllMessageValues],
         merged_input: list[AllMessageValues],
     ) -> list[object]:
+        ResponsesAPIRequestUtils.shape_prompt_managed_messages_for_responses(merged_input)
         if isinstance(original_input, str):
             return [*merged_input]
 

@@ -1325,17 +1325,14 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
     return False
 
 
-_MarkedT = TypeVar("_MarkedT")
-
-
-def _set_prompt_cache_breakpoint(target: object, marker: object) -> None:
-    if marker is not None and isinstance(target, dict):
-        target["prompt_cache_breakpoint"] = marker
+_MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
-    _set_prompt_cache_breakpoint(target, marker)
-    return target
+    if marker is None:
+        return target
+    marked: Final = {**target, "prompt_cache_breakpoint": marker}  # mutable-ok: API message payload
+    return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:

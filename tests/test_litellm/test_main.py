@@ -2672,3 +2672,49 @@ def test_openai_model_without_a_provider_still_routes_to_openai():
         )
 
     mock_create.assert_called()
+
+
+def _openai_chat_create_kwargs(client, **completion_kwargs):
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+        with contextlib.suppress(Exception):
+            litellm.completion(
+                messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+                client=client,
+                **completion_kwargs,
+            )
+
+        mock_client.assert_called_once()
+        return mock_client.call_args.kwargs
+
+
+@pytest.fixture
+def _no_openai_api_base_override(monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+
+@pytest.mark.usefixtures("_no_openai_api_base_override")
+def test_completion_custom_api_base_sends_no_prompt_cache_breakpoint_for_gpt_5_6():
+    from openai import OpenAI
+
+    client = OpenAI(api_key="fake-api-key", base_url="http://127.0.0.1:9/v1")
+    request_body = _openai_chat_create_kwargs(client, model="gpt-5.6", api_base="http://127.0.0.1:9/v1")
+
+    assert request_body["messages"][0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+    assert "prompt_cache_breakpoint" not in json.dumps(request_body["messages"])
+    assert "prompt_cache_options" not in json.dumps(request_body)
+
+
+@pytest.mark.usefixtures("_no_openai_api_base_override")
+def test_completion_default_api_base_sends_prompt_cache_breakpoint_for_gpt_5_6():
+    from openai import OpenAI
+
+    client = OpenAI(api_key="fake-api-key")
+    request_body = _openai_chat_create_kwargs(client, model="gpt-5.6")
+
+    assert request_body["messages"][0]["content"] == [
+        {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+    assert request_body["extra_body"]["prompt_cache_options"] == {"mode": "explicit"}
