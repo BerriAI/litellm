@@ -16,7 +16,6 @@ from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     KeyringDisabled,
-    KeyringDiscardsWrites,
     KeyringNotInstalled,
 )
 from litellm.litellm_core_utils.cli_token_utils import CliTokenRecord, save_cli_token
@@ -1068,7 +1067,7 @@ class TestKeychainBackedCommands:
     ):
         """A backend that accepts writes and stores nothing must not be reported as keychain
         storage, because the file is then told to drop the only remaining copy."""
-        result = self._login(secret_vault_factory(available=False, failure=KeyringDiscardsWrites()))
+        result = self._login(secret_vault_factory(discards=True))
 
         token_file = isolated_home / ".litellm" / "token.json"
         assert result.exit_code == 0

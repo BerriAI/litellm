@@ -23,6 +23,7 @@ from litellm import router as litellm_router_module
 from litellm import utils as litellm_utils_module
 from litellm._logging import ALL_LOGGERS
 from litellm.litellm_core_utils.cli_keyring import (
+    KeyringDiscardsWrites,
     KeyringUnreachable,
     KeyringUnusable,
     SecretErase,
@@ -132,7 +133,8 @@ class FakeSecretVault:
 
     `available=False` models a keychain that is locked or has no backend, `writable=False` one that
     refuses to store, `erasable=False` one that will not release what it already holds, and `failure`
-    picks which unusable state those report.
+    picks which unusable state those report. `discards=True` is keyring's null backend, which answers
+    reads and erases like any other yet keeps nothing it is given, so only writes report it.
     """
 
     def __init__(
@@ -142,12 +144,14 @@ class FakeSecretVault:
         available: bool = True,
         writable: bool = True,
         erasable: bool = True,
+        discards: bool = False,
         failure: KeyringUnusable = KeyringUnreachable(),
     ) -> None:
         self.blob: str | None = blob
         self.available: bool = available
         self.writable: bool = writable
         self.erasable: bool = erasable
+        self.discards: bool = discards
         self.failure: KeyringUnusable = failure
         self.reads: int = 0
         self.writes: list[str] = []
@@ -163,6 +167,8 @@ class FakeSecretVault:
         self.writes.append(blob)
         if not (self.available and self.writable):
             return self.failure
+        if self.discards:
+            return KeyringDiscardsWrites()
         self.blob = blob
         return SecretStored()
 
