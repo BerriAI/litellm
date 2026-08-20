@@ -10797,7 +10797,9 @@ class Router:
         # Protocol strict-mode filter (opt-in). In bridged mode this is a no-op.
         from litellm.protocol_routing import filter_deployments_by_protocol
 
-        _route_type = (request_kwargs or {}).get("_route_type")
+        _route_type = None
+        if request_kwargs is not None:
+            _route_type = request_kwargs.pop("_route_type", None)
         if _route_type is not None:
             healthy_deployments = filter_deployments_by_protocol(
                 healthy_deployments=cast(list[dict], healthy_deployments),
