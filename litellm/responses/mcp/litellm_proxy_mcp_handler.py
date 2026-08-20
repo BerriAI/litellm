@@ -72,7 +72,7 @@ class LiteLLM_Proxy_MCP_Handler:
     """
 
     @staticmethod
-    def _prepare_follow_up_call_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    def _prepare_chained_call_params(params: Mapping[str, Any]) -> dict[str, Any]:
         """Copy request params without state owned by the previous LLM call.
 
         MCP auto-execution keeps the trace identifier so chained rounds remain

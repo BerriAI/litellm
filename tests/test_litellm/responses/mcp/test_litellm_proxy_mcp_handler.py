@@ -444,7 +444,7 @@ async def test_execute_tool_calls_uses_unique_call_ids_and_preserves_parent_cont
     assert all(item["metadata"]["parent_litellm_call_id"] == "cid" for item in captured)
 
 
-def test_prepare_follow_up_call_params_resets_per_call_logging_state():
+def test_prepare_chained_call_params_resets_per_call_logging_state():
     original = {
         "model": "gpt-4",
         "litellm_call_id": "parent-call",
@@ -457,7 +457,7 @@ def test_prepare_follow_up_call_params_resets_per_call_logging_state():
         },
     }
 
-    follow_up = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(original)
+    follow_up = LiteLLM_Proxy_MCP_Handler._prepare_chained_call_params(original)
 
     assert "litellm_call_id" not in follow_up
     assert "litellm_logging_obj" not in follow_up
