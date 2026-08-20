@@ -17,29 +17,49 @@ class CerebrasConfig(OpenAIGPTConfig):
     Below are the parameters:
     """
 
+    max_completion_tokens: int | None = None
     max_tokens: int | None = None
     response_format: dict | None = None
     seed: int | None = None
     stream: bool | None = None
-    top_p: int | None = None
-    tool_choice: str | None = None
+    top_p: float | None = None
+    tool_choice: str | dict | None = None
     tools: list | None = None
     user: str | None = None
     reasoning_effort: str | None = None
+    parallel_tool_calls: bool | None = None
+    logprobs: bool | None = None
+    top_logprobs: int | None = None
+    frequency_penalty: float | None = None
+    presence_penalty: float | None = None
+    logit_bias: dict | None = None
+    service_tier: str | None = None
+    prompt_cache_key: str | None = None
+    prediction: dict | None = None
 
     def __init__(
         self,
+        max_completion_tokens: int | None = None,
         max_tokens: int | None = None,
         response_format: dict | None = None,
         seed: int | None = None,
-        stop: str | None = None,
+        stop: str | list[str] | None = None,
         stream: bool | None = None,
         temperature: float | None = None,
-        top_p: int | None = None,
-        tool_choice: str | None = None,
+        top_p: float | None = None,
+        tool_choice: str | dict | None = None,
         tools: list | None = None,
         user: str | None = None,
         reasoning_effort: str | None = None,
+        parallel_tool_calls: bool | None = None,
+        logprobs: bool | None = None,
+        top_logprobs: int | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
+        logit_bias: dict | None = None,
+        service_tier: str | None = None,
+        prompt_cache_key: str | None = None,
+        prediction: dict | None = None,
     ) -> None:
         locals_: Final = locals().copy()
         for key, value in locals_.items():
@@ -70,6 +90,15 @@ class CerebrasConfig(OpenAIGPTConfig):
             "user",
             "max_retries",
             "extra_headers",
+            "parallel_tool_calls",
+            "logprobs",
+            "top_logprobs",
+            "frequency_penalty",
+            "presence_penalty",
+            "logit_bias",
+            "service_tier",
+            "prompt_cache_key",
+            "prediction",
         ]
 
         # Only add reasoning_effort for models that support it
@@ -87,8 +116,6 @@ class CerebrasConfig(OpenAIGPTConfig):
     ) -> dict:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
-            if param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            elif param in supported_openai_params:
+            if param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
