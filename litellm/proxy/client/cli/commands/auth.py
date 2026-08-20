@@ -61,6 +61,8 @@ class CliTeam(TypedDict, total=False):
 class CliContextObj(TypedDict):
     base_url: str
     base_url_explicit: NotRequired[bool]
+    api_key: ReadOnly[NotRequired[str | None]]
+    api_key_from_token_file: ReadOnly[NotRequired[bool]]
 
 
 class CliPollData(TypedDict, total=False):
@@ -831,18 +833,21 @@ def print_token(ctx: click.Context):
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
     ctx_obj: Final[CliContextObj] = ctx.obj
-    if ctx_obj.get("base_url_explicit"):
-        base_url: Final = ctx_obj["base_url"]
-        if token_data.get("base_url") != base_url.rstrip("/"):
-            click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
-            sys.exit(1)
+    issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
+    if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
+        click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+        sys.exit(1)
 
     renews: Final = "refresh_token" in token_data
     if not is_cli_token_fresh(token_data) and not renews:
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
-    api_key: Final = fresh_api_key(token_data, save_token, requests.Session(), reload=load_token, warn=_warn)
+    api_key: Final = (
+        ctx_obj.get("api_key")
+        if issued_for_this_server and ctx_obj.get("api_key_from_token_file")
+        else fresh_api_key(token_data, save_token, requests.Session(), reload=load_token, warn=_warn)
+    )
     if not api_key:
         click.echo(f"Key expired. Run '{_login_command(renews)}' again.", err=True)
         sys.exit(1)
