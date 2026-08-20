@@ -2763,11 +2763,6 @@ def model_item():
 
 
 @pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
-def test_cost_calculator_with_base_model_with_router(base_model_arg, model_item):
-    from litellm import Router
-
-
-@pytest.mark.parametrize("base_model_arg", ["litellm_param", "model_info"])
 def test_cost_calculator_with_base_model_with_router(base_model_arg):
     from litellm import Router
 
