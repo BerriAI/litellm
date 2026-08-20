@@ -139,8 +139,8 @@ _TAG_NOTE: Final = KeyBudgetNote(
 )
 _END_USER_ROUTE_NOTE: Final = KeyBudgetNote(
     code="end_user_route_only",
-    severity="info",
-    text="only enforced on LLM routes that name this end user",
+    severity="warning",
+    text="applies only to requests that name this end user; nothing else on this row says so",
 )
 _CUSTOM_AUTH_END_USER_NOTE: Final = KeyBudgetNote(
     code="custom_auth_may_override_end_user_cap",

@@ -16472,10 +16472,13 @@ from litellm.proxy.management_endpoints.key_budget_resolver import (  # noqa: E4
     resolve_key_budgets,
 )
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (  # noqa: E402
+    BudgetNoteCode,
     KeyBudgetEntry,
+    KeyBudgetNote,
 )
 from litellm.types.utils import BudgetConfig as _BudgetsBudgetConfig  # noqa: E402
 from types import MappingProxyType  # noqa: E402
+from typing import get_args as _budgets_get_args  # noqa: E402
 
 BudgetConfig = _BudgetsBudgetConfig
 
@@ -17234,6 +17237,35 @@ async def test_key_budgets_call_an_unreadable_counter_unreadable_rather_than_rep
     assert project_entry.spend_state == "live", "the recorded-spend scopes do not go through the counter"
 
 
+def test_key_budgets_classify_every_note_code_and_leave_none_to_a_default():
+    """
+    Severity is the only thing a client has for a code its build predates, so every code is classified
+    here on one rule: `info` when the row already carries the fact in a field, `warning` when the note
+    is the only place it appears. A twelfth code fails this until someone decides which it is.
+    """
+    from litellm.proxy.management_endpoints import key_budget_resolver
+
+    notes = {
+        value.code: value for value in vars(key_budget_resolver).values() if isinstance(value, KeyBudgetNote)
+    }
+    assert set(notes) == set(_budgets_get_args(BudgetNoteCode)), "a code with no note, or a note with no code"
+    assert {code: note.severity for code, note in notes.items()} == {
+        # the row states it: `enforcement`, `comparison`, `window_start`, `max_budget`, `spend_state`
+        "alert_only": "info",
+        "reservation_blocks_at_limit": "info",
+        "rolling_window": "info",
+        "user_budget_not_applied_to_team_key": "info",
+        "model_budget_fails_open": "info",
+        # only the note states it
+        "custom_auth_may_override_end_user_cap": "warning",
+        "end_user_route_only": "warning",
+        "per_model_counters": "warning",
+        "project_spend_not_tracked": "warning",
+        "request_tags_add_budgets": "warning",
+        "throttled_instead_of_blocked": "warning",
+    }
+
+
 @pytest.mark.asyncio
 async def test_key_budgets_separate_caveats_that_rule_a_row_out_from_caveats_that_change_how_to_read_it():
     """Severity is what lets a reader skip a budget that cannot trip without skipping one that blocks early."""
@@ -17243,8 +17275,9 @@ async def test_key_budgets_separate_caveats_that_rule_a_row_out_from_caveats_tha
     assert severity_by_code["project_spend_not_tracked"] == "warning", "a budget that cannot trip is not a live row"
     assert severity_by_code["request_tags_add_budgets"] == "warning", "the list of tag budgets is incomplete"
     assert severity_by_code["reservation_blocks_at_limit"] == "info", "`comparison` already carries this"
-    assert severity_by_code["rolling_window"] == "info", "the numbers are right, the window just moves"
-    assert severity_by_code["alert_only"] == "info"
+    assert severity_by_code["rolling_window"] == "info", "`window_start` already carries this"
+    assert severity_by_code["alert_only"] == "info", "`enforcement` already carries this"
+    assert severity_by_code["end_user_route_only"] == "warning", "nothing else on the row scopes it"
 
 
 @pytest.mark.asyncio

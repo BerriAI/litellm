@@ -157,8 +157,10 @@ class KeyBudgetNote(BaseModel):
 
     ``code`` is the contract: map it to whatever treatment the caveat deserves. ``text`` is free to be
     reworded and must not be matched on. ``severity`` exists for the code a client has not been taught
-    yet, since this union grows: ``warning`` means the row's numbers may be incomplete or read as
-    something they are not, and ``info`` means they are accurate and the note is only context.
+    yet, since this union grows, and it turns on whether the row already carries the fact in a field:
+    ``info`` means the note only explains something the row states anyway, like ``enforcement``,
+    ``comparison`` or ``spend_state``, and ``warning`` means the note alone carries it, so the row
+    cannot be taken at face value without reading it.
     """
 
     model_config = ConfigDict(frozen=True)

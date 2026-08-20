@@ -3831,9 +3831,10 @@ async def key_budgets_fn(
         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
         - status: str - `unlimited`, `ok` or `exceeded`
         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
-          to branch on, a `severity` of `info` or `warning` for codes a client does not know yet,
-          and human-facing `text` that is free to be reworded. Ordered most to least specific to
-          this row's numbers, and empty rather than null when there is nothing to say
+          to branch on and human-facing `text` that is free to be reworded. `severity` is for a
+          `code` a client does not know yet: `info` only explains a field the row already carries,
+          `warning` carries the fact on its own. Ordered most to least specific to this row's
+          numbers, and empty rather than null when there is nothing to say
 
     Example Curl:
     ```
