@@ -225,7 +225,30 @@ const OVERLONG_NOTE_TEXT = `${"a caveat clause that keeps going ".repeat(16)}end
 
 const ALL_BUDGETS = [KEY_UNLIMITED, USER_WITHIN_BUDGET, TEAM_SOFT_OVER, TEAM_MEMBER_BLOCKING, ORG_UNCONFIGURED];
 
+// A fixture the resolver cannot produce is how a rendering bug hides: a cold per-model row built
+// with no notes and a computed `remaining` looked healthy while the real one rendered as dead.
+// Hold every fixture to the invariants _to_entry guarantees.
+const assertServerCouldEmit = (budgets: readonly KeyBudgetEntry[]): void => {
+  for (const budget of budgets) {
+    // Scoped to the states the resolver defines today; a fixture simulating a newer server is
+    // deliberately outside them and only has to satisfy the invariants that are not state-specific.
+    if (["live", "no_counter", "unavailable"].includes(budget.spend_state)) {
+      expect(budget.spend_state === "live").toBe(budget.spend !== null);
+    }
+    expect(budget.status === "unlimited").toBe(budget.max_budget === null);
+    if (budget.spend == null || budget.max_budget == null) {
+      expect(budget.remaining).toBeNull();
+    } else {
+      expect(budget.remaining).toBeCloseTo(budget.max_budget - budget.spend, 6);
+    }
+    if (budget.spend_state === "no_counter") {
+      expect(budget.notes.map((note) => note.code)).toContain("model_budget_fails_open");
+    }
+  }
+};
+
 const mockBudgets = (budgets: KeyBudgetEntry[]) => {
+  assertServerCouldEmit(budgets);
   const loaded = { data: { key: "test-token-123", budgets }, isLoading: false, isError: false, error: null };
   apiMocks.useQuery.mockReturnValue(loaded);
 };
@@ -329,26 +352,50 @@ describe("KeyInfoView Budgets tab", () => {
     expect(row).toHaveTextContent("Blocks at ≥ $1,000.00");
   });
 
+  // The resolver nulls `remaining` whenever spend is null and always attaches the cold note to a
+  // `no_counter` reading, so a fixture without both is one the server cannot produce.
+  const COLD_PER_MODEL: KeyBudgetEntry = {
+    ...UNCONFIGURED_BUDGET,
+    scope: "key_model",
+    entity_type: "key",
+    entity_id: "claude-opus-5",
+    entity_label: "claude-opus-5",
+    max_budget: 40,
+    spend: null,
+    spend_state: "no_counter",
+    remaining: null,
+    comparison: ">",
+    source: "key.model_max_budget[claude-opus-5]",
+    status: "ok",
+    notes: [
+      { code: "per_model_counters", severity: "warning", text: noteText("per_model_counters") },
+      { code: "model_budget_fails_open", severity: "info", text: noteText("model_budget_fails_open") },
+    ],
+  };
+
   it("shows a genuine no-counter-yet zero as $0.00 with its meter, not as unknown", async () => {
-    const cold: KeyBudgetEntry = {
-      ...UNCONFIGURED_BUDGET,
-      scope: "key_model",
-      entity_type: "key",
-      entity_label: "claude-opus-5",
-      max_budget: 40,
-      spend: null,
-      spend_state: "no_counter",
-      remaining: 40,
-      source: "key.model_max_budget",
-      status: "ok",
-    };
-    mockBudgets([cold]);
+    mockBudgets([COLD_PER_MODEL]);
     const panel = await renderAndOpenBudgetsTab();
 
     const row = rowFor(panel, "claude-opus-5");
     expect(row).toHaveTextContent("$0.00 of $40.00");
     expect(row).not.toHaveTextContent("Unknown");
     expect(within(row).getByRole("meter")).toBeInTheDocument();
+  });
+
+  it("keeps a cold per-model budget live, since one request warms the counter and it starts blocking", async () => {
+    mockBudgets([COLD_PER_MODEL, KEY_UNLIMITED]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const row = rowFor(panel, "claude-opus-5");
+    expect(within(row).getByText("Within budget")).toBeInTheDocument();
+    expect(within(row).queryByText("Cannot trip")).not.toBeInTheDocument();
+    expect(within(row).getByText("Blocks requests")).toBeInTheDocument();
+    expect(row).toHaveTextContent("Blocks at > $40.00");
+
+    // A live budget must outrank a scope with nothing configured, never sink below it.
+    const [, ...dataRows] = panel.getAllByRole("row");
+    expect(dataRows[0]).toHaveTextContent("claude-opus-5");
   });
 
   it("treats a spend state this build predates as unreadable rather than as a confident number", async () => {

@@ -55,6 +55,14 @@ const END_USER_ROUTE_NOTE = {
   text: noteText("end_user_route_only"),
 } as const;
 
+// Permanently inert for this key: the personal budget is not applied to team keys at all.
+const USER_ON_TEAM_KEY_NOTE = {
+  code: "user_budget_not_applied_to_team_key",
+  severity: "info",
+  text: noteText("user_budget_not_applied_to_team_key"),
+} as const;
+
+// Transient, not dead: the counter is merely cold and the cap blocks once one request warms it.
 const COLD_MODEL_NOTE = {
   code: "model_budget_fails_open",
   severity: "info",
@@ -169,7 +177,7 @@ describe("cannotTrip", () => {
   // Severity answers whether the row already carries the fact in a field, which is orthogonal to
   // whether the row is dead. All four corners occur, so severity can never stand in for deadness.
   it.each([
-    ["info", "dead", COLD_MODEL_NOTE, true],
+    ["info", "dead", USER_ON_TEAM_KEY_NOTE, true],
     ["info", "live", ROLLING_NOTE, false],
     ["warning", "dead", PROJECT_DEAD_NOTE, true],
     ["warning", "live", END_USER_ROUTE_NOTE, false],
@@ -191,6 +199,20 @@ describe("cannotTrip", () => {
       notes: [{ ...PROJECT_DEAD_NOTE, text: "totally different prose that never mentions tripping" }],
     };
     expect(cannotTrip(reworded)).toBe(true);
+  });
+});
+
+describe("cold per-model counters", () => {
+  it("stays live, because the cap blocks as soon as one request warms the counter", () => {
+    expect(COLD_MODEL_NOTE.severity).toBe("info");
+    expect(cannotTrip({ ...HEALTHY, scope: "key_model", notes: [COLD_MODEL_NOTE] })).toBe(false);
+  });
+
+  it("is not lumped in with a budget that is permanently inert", () => {
+    expect(cannotTrip({ ...HEALTHY, notes: [USER_ON_TEAM_KEY_NOTE] })).toBe(true);
+    expect(rowRank({ ...HEALTHY, scope: "key_model", notes: [COLD_MODEL_NOTE] })).toBeLessThan(
+      rowRank({ ...HEALTHY, notes: [USER_ON_TEAM_KEY_NOTE] }),
+    );
   });
 });
 
