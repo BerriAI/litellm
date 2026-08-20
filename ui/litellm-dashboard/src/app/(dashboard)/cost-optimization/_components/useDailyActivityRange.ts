@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import { userDailyActivityCall } from "@/components/networking";
+import { userDailyActivityAggregatedCall, userDailyActivityCall } from "@/components/networking";
 import { DailyData } from "@/components/UsagePage/types";
 import { all_admin_roles } from "@/utils/roles";
 import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
@@ -35,6 +35,7 @@ export const useDailyActivityRange = (
 
   const { data, loading, isFetchingMore } = usePaginatedDailyActivity({
     fetchFn: userDailyActivityCall,
+    aggregatedFetchFn: userDailyActivityAggregatedCall,
     args: [accessToken, startTime, endTime, effectiveUserId, true],
     enabled: !!accessToken && !!startTime && !!endTime,
   });
