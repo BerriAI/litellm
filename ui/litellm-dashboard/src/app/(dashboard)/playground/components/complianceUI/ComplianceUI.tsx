@@ -798,7 +798,7 @@ export default function ComplianceUI({
                         <button
                           type="button"
                           onClick={() => toggleGuardrail(id)}
-                          className="hover:text-indigo-900"
+                          className="hover:text-indigo-900 dark:hover:text-indigo-100"
                           aria-label="Remove"
                         >
                           <X className="w-2.5 h-2.5" />
