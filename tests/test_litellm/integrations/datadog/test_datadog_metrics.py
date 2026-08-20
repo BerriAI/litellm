@@ -64,6 +64,38 @@ async def test_extract_tags(clean_env):
 
 
 @pytest.mark.asyncio
+async def test_extract_tags_normalizes_team_alias(clean_env):
+    """Team aliases with uppercase or special characters match what Datadog stores."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+
+    payload = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4o",
+        metadata={"user_api_key_team_alias": "P&T CTO-B2B"},
+    )
+
+    tags = logger._extract_tags(log=payload, status_code="200")
+
+    assert "team:p_t_cto-b2b" in tags
+
+
+@pytest.mark.asyncio
+async def test_extract_tags_keeps_non_string_team_id(clean_env):
+    """A numeric team id still produces a team tag instead of aborting the metric."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+
+    payload = StandardLoggingPayload(
+        custom_llm_provider="openai",
+        model="gpt-4o",
+        metadata={"user_api_key_team_id": 67890},
+    )
+
+    tags = logger._extract_tags(log=payload, status_code="200")
+
+    assert "team:67890" in tags
+
+
+@pytest.mark.asyncio
 async def test_extract_tags_no_team(clean_env):
     """Test tag extraction when no team info is present."""
     logger = DatadogMetricsLogger(start_periodic_flush=False)
