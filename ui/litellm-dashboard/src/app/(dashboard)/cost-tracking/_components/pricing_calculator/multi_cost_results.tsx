@@ -78,7 +78,7 @@ const SingleModelBreakdown: React.FC<{
               {periodLabel} Total ({formatRequests(periodRequests)} req)
             </p>
             <p
-              className={`text-base font-semibold break-words ${timePeriod === "day" ? "text-success" : "text-purple-600"}`}
+              className={`text-base font-semibold break-words ${timePeriod === "day" ? "text-success" : "text-purple-600 dark:text-purple-300"}`}
             >
               {formatCost(periodCost)}
             </p>
@@ -212,7 +212,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       </div>
 
       {/* Combined Totals - Always show when there are results */}
-      <Card size="sm" className="px-4 bg-linear-to-r from-slate-50 to-blue-50">
+      <Card size="sm" className="px-4 bg-linear-to-r from-slate-50 to-blue-50 dark:from-slate-900 dark:to-blue-950">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
           <div className="min-w-0">
             <span className="text-xs text-muted-foreground">Total Per Request</span>
@@ -223,7 +223,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
           <div className="min-w-0">
             <span className="text-xs text-muted-foreground">Total {periodLabel}</span>
             <div
-              className={`text-lg font-mono break-words ${timePeriod === "day" ? "text-success" : "text-purple-600"}`}
+              className={`text-lg font-mono break-words ${timePeriod === "day" ? "text-success" : "text-purple-600 dark:text-purple-300"}`}
             >
               {formatCost(timePeriod === "day" ? multiResult.totals.daily_cost : multiResult.totals.monthly_cost)}
             </div>

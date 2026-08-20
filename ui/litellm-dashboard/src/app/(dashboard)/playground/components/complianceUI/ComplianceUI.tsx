@@ -792,13 +792,13 @@ export default function ComplianceUI({
                     return (
                       <span
                         key={id}
-                        className="inline-flex items-center gap-1 text-[11px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-sm font-medium"
+                        className="inline-flex items-center gap-1 text-[11px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-sm font-medium dark:bg-indigo-950 dark:text-indigo-300"
                       >
                         {g?.name}
                         <button
                           type="button"
                           onClick={() => toggleGuardrail(id)}
-                          className="hover:text-indigo-900"
+                          className="hover:text-indigo-900 dark:hover:text-indigo-100"
                           aria-label="Remove"
                         >
                           <X className="w-2.5 h-2.5" />
@@ -918,7 +918,7 @@ export default function ComplianceUI({
               </div>
 
               {showAddPrompt && (
-                <div className="mx-4 mb-2 border border-info/20 bg-blue-50/30 rounded-lg p-3">
+                <div className="mx-4 mb-2 border border-info/20 bg-info/5 rounded-lg p-3">
                   <textarea
                     value={newPromptText}
                     onChange={(e) => setNewPromptText(e.target.value)}
@@ -968,7 +968,7 @@ export default function ComplianceUI({
               )}
 
               {showCsvUpload && (
-                <div className="mx-4 mb-2 border border-info/20 bg-blue-50/30 rounded-lg p-3">
+                <div className="mx-4 mb-2 border border-info/20 bg-info/5 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[11px] font-semibold text-foreground">Upload CSV Dataset</span>
                     <button
@@ -1226,7 +1226,7 @@ export default function ComplianceUI({
                         return (
                           <span
                             key={id}
-                            className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-sm font-medium"
+                            className="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-sm font-medium dark:bg-indigo-950 dark:text-indigo-300"
                           >
                             {g?.name}
                           </span>
@@ -1452,7 +1452,7 @@ export default function ComplianceUI({
                         return (
                           <div
                             key={result.promptId}
-                            className={`border rounded-lg overflow-hidden ${result.status !== "complete" ? "border-border bg-gray-50/50" : result.isMatch ? "border-success/15" : "border-destructive/15"}`}
+                            className={`border rounded-lg overflow-hidden ${result.status !== "complete" ? "border-border bg-muted/50" : result.isMatch ? "border-success/15" : "border-destructive/15"}`}
                           >
                             <div className="p-2.5">
                               <div className="flex items-start gap-2">
