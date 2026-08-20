@@ -1303,6 +1303,9 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
 
     litellm.cache = Cache()
 
+    primingHandler = CompletionCustomHandler()
+    litellm.callbacks = [primingHandler]
+
     response = litellm.completion(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -1313,8 +1316,8 @@ def test_logging_async_cache_hit_sync_call(turn_off_message_logging):
         print(chunk)
 
     wait_until(
-        lambda: bool(litellm.cache.cache.cache_dict),
-        message="streaming response was never written to the cache",
+        lambda: "sync_success" in primingHandler.states,
+        message=f"priming call never finished logging, states={primingHandler.states}",
     )
     customHandler = CompletionCustomHandler()
     litellm.callbacks = [customHandler]
