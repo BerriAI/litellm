@@ -14,7 +14,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 import litellm
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    supports_openai_prompt_cache_breakpoint,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -1996,3 +1999,475 @@ class TestAnthropicPromptCachingEnvVars:
         """An unparseable TTL must fall back to Anthropic's 5m default, never reach the provider verbatim."""
         _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
         assert ttl is None
+
+
+def _contains_key(value, key) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(_contains_key(v, key) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_key(v, key) for v in value)
+    return False
+
+
+class TestOpenAIPromptCacheBreakpoint:
+    """OpenAI GPT-5.6+ targets get content-block `prompt_cache_breakpoint` markers and a
+    request-level `prompt_cache_options` instead of Anthropic `cache_control` (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+    SYSTEM_POINT = [{"location": "message", "role": "system"}]
+
+    @staticmethod
+    def _inject(messages, system, kwargs, model="openai/gpt-5.6", custom_llm_provider=None):
+        return AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages),
+            copy.deepcopy(system),
+            kwargs,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    @staticmethod
+    def _chat(messages, params, model="openai/gpt-5.6"):
+        return AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=copy.deepcopy(messages),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gpt-5.6", True),
+            ("openai/gpt-5.6", True),
+            ("gpt-5.6-sol", True),
+            ("gpt-5.6-luna", True),
+            ("gpt-5.7", True),
+            ("gpt-6", True),
+            ("GPT-5.6", True),
+            ("gpt-5.5", False),
+            ("gpt-5", False),
+            ("gpt-5-chat-latest", False),
+            ("gpt-4.1", False),
+            ("o3", False),
+            ("claude-sonnet-4-5", False),
+        ],
+    )
+    def test_model_support_truth_table(self, model, expected):
+        assert supports_openai_prompt_cache_breakpoint(model) is expected
+
+    @pytest.mark.parametrize(
+        "model,provider,expected",
+        [
+            ("openai/gpt-5.6", None, True),
+            ("gpt-5.6", None, True),
+            ("gpt-5.6", "openai", True),
+            ("gpt-5.6", "azure", False),
+            ("azure/gpt-5.6", None, False),
+            ("openai/gpt-4.1", None, False),
+            ("anthropic/claude-sonnet-4-5", None, False),
+            ("no-provider-can-route-this-model", None, False),
+            (None, "openai", False),
+        ],
+    )
+    def test_dialect_resolution(self, model, provider, expected):
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(model, provider) is expected
+
+    def test_count_covers_both_marker_kinds(self):
+        message = {
+            "role": "user",
+            "cache_control": {"type": "ephemeral"},
+            "content": [
+                {"type": "text", "text": "a", "prompt_cache_breakpoint": self.EXPLICIT},
+                {"type": "text", "text": "b", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "c"},
+            ],
+        }
+        assert AnthropicCacheControlHook._count_cache_control_blocks(message) == 3
+
+    def test_v1_messages_string_system_gets_block_breakpoint(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        messages, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
+        assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert not _contains_key(system, "cache_control")
+
+    def test_v1_messages_list_system_marks_last_block_only(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        system = [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]
+        _, result_system = self._inject([{"role": "user", "content": "hi"}], system, kwargs)
+        assert result_system == [
+            {"type": "text", "text": "a"},
+            {"type": "text", "text": "b", "prompt_cache_breakpoint": self.EXPLICIT},
+        ]
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_v1_messages_targets_by_role(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+            {"role": "user", "content": "last"},
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "role": "user"}]}
+        result, _ = self._inject(messages, None, kwargs)
+        assert result[0]["content"] == [
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second", "prompt_cache_breakpoint": self.EXPLICIT},
+        ]
+        assert result[1] == messages[1]
+        assert result[2]["content"] == [{"type": "text", "text": "last", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_v1_messages_targets_by_index(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "first"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+            {"role": "user", "content": [{"type": "text", "text": "last"}]},
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        result, _ = self._inject(messages, None, kwargs)
+        assert result[:2] == messages[:2]
+        assert result[2]["content"] == [{"type": "text", "text": "last", "prompt_cache_breakpoint": self.EXPLICIT}]
+
+    def test_v1_messages_control_field_is_ignored(self):
+        ttl_control = {"type": "ephemeral", "ttl": "1h"}
+        kwargs = {
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system", "control": ttl_control},
+                {"location": "message", "index": -1, "control": ttl_control},
+            ]
+        }
+        messages, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
+        assert system[0]["prompt_cache_breakpoint"] == self.EXPLICIT
+        assert messages[0]["content"][-1]["prompt_cache_breakpoint"] == self.EXPLICIT
+        assert not _contains_key(system, "cache_control")
+        assert not _contains_key(messages, "cache_control")
+
+    def test_v1_messages_keeps_caller_prompt_cache_options(self):
+        caller_options = {"mode": "explicit", "ttl": "30m"}
+        kwargs = {
+            "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
+            "prompt_cache_options": dict(caller_options),
+        }
+        _, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
+        assert system[0]["prompt_cache_breakpoint"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == caller_options
+
+    def test_v1_messages_no_prompt_cache_options_when_nothing_injected(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        messages, system = self._inject([{"role": "user", "content": "hi"}], None, kwargs)
+        assert system is None
+        assert "prompt_cache_options" not in kwargs
+        assert not _contains_key(messages, "prompt_cache_breakpoint")
+
+    def test_v1_messages_anthropic_target_unchanged(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        _, system = self._inject(
+            [{"role": "user", "content": "hi"}],
+            "sys",
+            kwargs,
+            model="anthropic/claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert system == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+        assert kwargs == {}
+
+    def test_v1_messages_older_openai_model_keeps_cache_control(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        _, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs, model="openai/gpt-4.1")
+        assert system == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+        assert kwargs == {}
+
+    def test_v1_messages_client_content_breakpoint_makes_configured_points_stand_down(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]}]
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        result, system = self._inject(messages, "sys", kwargs)
+        assert result == messages
+        assert system == "sys"
+        assert kwargs == {}
+
+    def test_v1_messages_client_system_breakpoint_makes_configured_points_stand_down(self):
+        system = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        result, result_system = self._inject(messages, system, kwargs)
+        assert result == messages
+        assert result_system == system
+        assert kwargs == {}
+
+    def test_chat_system_string_wrapped_with_block_breakpoint(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+        _, processed, returned = self._chat(messages, params)
+        assert processed[0] == {
+            "role": "system",
+            "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}],
+        }
+        assert processed[1] == {"role": "user", "content": "hi"}
+        assert returned is params
+        assert returned == {"prompt_cache_options": self.EXPLICIT}
+
+    def test_chat_list_content_marks_last_block(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                ],
+            }
+        ]
+        params = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        _, processed, _ = self._chat(messages, params)
+        assert processed[0]["content"] == [
+            {"type": "text", "text": "look"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/a.png"},
+                "prompt_cache_breakpoint": self.EXPLICIT,
+            },
+        ]
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    def test_chat_unprefixed_model_resolves_to_openai(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        _, processed, _ = self._chat([{"role": "system", "content": "sys"}], params, model="gpt-5.6")
+        assert processed[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    def test_chat_keeps_caller_prompt_cache_options(self):
+        params = {
+            "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
+            "prompt_cache_options": {"mode": "implicit"},
+        }
+        self._chat([{"role": "system", "content": "sys"}], params)
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
+
+    def test_chat_no_prompt_cache_options_when_nothing_injected(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        messages = [{"role": "user", "content": "hi"}]
+        _, processed, _ = self._chat(messages, params)
+        assert processed == messages
+        assert params == {}
+
+    @pytest.mark.parametrize("model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"])
+    def test_chat_other_targets_keep_message_level_cache_control(self, model):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        _, processed, _ = self._chat([{"role": "system", "content": "sys"}], params, model=model)
+        assert processed[0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+        assert params == {}
+
+    def test_chat_client_breakpoint_makes_seeded_points_stand_down(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=[
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]},
+            ],
+            model="openai/gpt-5.6",
+            custom_llm_provider="openai",
+        )
+        assert params == {}
+
+    def test_cap_counts_client_breakpoints_of_both_kinds(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "a", "prompt_cache_breakpoint": self.EXPLICIT}]},
+            {"role": "user", "content": [{"type": "text", "text": "b", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": [{"type": "text", "text": "c", "prompt_cache_breakpoint": self.EXPLICIT}]},
+            {"role": "user", "content": "d"},
+            {"role": "user", "content": "e"},
+        ]
+        result = AnthropicCacheControlHook._apply_message_injections(
+            points=[{"location": "message", "role": "user"}],
+            messages=copy.deepcopy(messages),
+            max_blocks=4,
+            openai_dialect=True,
+        )
+        assert result[:3] == messages[:3]
+        assert result[3]["content"] == [{"type": "text", "text": "d", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert result[4] == {"role": "user", "content": "e"}
+
+
+class TestOpenAIPromptCacheBreakpointPlacementRules:
+    """OpenAI dialect only marks blocks OpenAI (and the /v1/messages bridges) can carry (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def _chat(self, messages, points, model="openai/gpt-5.6"):
+        params = {"cache_control_injection_points": copy.deepcopy(points)}
+        _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=copy.deepcopy(messages),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return out, params
+
+    def test_assistant_message_is_never_marked_on_chat_path(self):
+        messages = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
+        out, params = self._chat(messages, [{"location": "message", "role": "assistant"}])
+        assert out == messages
+        assert "prompt_cache_options" not in params
+
+    def test_tool_message_text_is_marked_on_chat_path(self):
+        messages = [
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "w", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+        ]
+        out, params = self._chat(messages, [{"location": "message", "index": -1}])
+        assert out[2]["content"] == [{"type": "text", "text": "sunny", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    def test_tool_result_only_turn_is_skipped_on_v1_messages(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "q"}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "w", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "sunny"}]},
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        out, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages), None, kwargs, model="openai/gpt-5.6"
+        )
+        assert out == messages
+        assert system is None
+        assert "prompt_cache_options" not in kwargs
+
+    def test_assistant_turn_is_skipped_on_v1_messages(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "q"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "a"}]},
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "role": "assistant"}]}
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages), None, kwargs, model="openai/gpt-5.6"
+        )
+        assert out == messages
+        assert "prompt_cache_options" not in kwargs
+
+    def test_text_after_tool_result_is_marked(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "sunny"},
+                    {"type": "text", "text": "thanks"},
+                ],
+            }
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(messages, None, kwargs, model="openai/gpt-5.6")
+        assert out[0]["content"] == [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "sunny"},
+            {"type": "text", "text": "thanks", "prompt_cache_breakpoint": self.EXPLICIT},
+        ]
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_marker_walks_back_to_last_eligible_block(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "read this"},
+                    {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "doc"}},
+                ],
+            }
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(messages, None, kwargs, model="openai/gpt-5.6")
+        assert out[0]["content"][0] == {"type": "text", "text": "read this", "prompt_cache_breakpoint": self.EXPLICIT}
+        assert "prompt_cache_breakpoint" not in out[0]["content"][1]
+
+    def test_skipped_block_does_not_consume_a_slot(self):
+        messages = [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t0", "content": "r"}]}] + [
+            {"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(4)
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "role": "user"}]}
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(messages, None, kwargs, model="openai/gpt-5.6")
+        assert "prompt_cache_breakpoint" not in out[0]["content"][0]
+        assert all(msg["content"][0]["prompt_cache_breakpoint"] == self.EXPLICIT for msg in out[1:])
+
+
+class TestChatPathProviderStamp:
+    """The chat path learns the caller's custom_llm_provider through the seeded points (#37509)."""
+
+    POINTS = [{"location": "message", "role": "system"}]
+    MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+
+    def _seed_and_run(self, model, custom_llm_provider):
+        params = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+        _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return out, params
+
+    def test_openai_compatible_provider_keeps_anthropic_style_markers(self):
+        out, params = self._seed_and_run("gpt-5.6", "hosted_vllm")
+        assert out[0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+        assert "prompt_cache_options" not in params
+
+    def test_explicit_openai_provider_uses_openai_dialect(self):
+        out, params = self._seed_and_run("gpt-5.6", "openai")
+        assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    def test_bare_gpt_model_without_provider_resolves_to_openai(self):
+        out, params = self._seed_and_run("gpt-5.6", None)
+        assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    def test_points_keep_identity_for_models_below_gpt_5_6(self):
+        points = copy.deepcopy(self.POINTS)
+        params = {"cache_control_injection_points": points}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="anthropic/claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert params["cache_control_injection_points"] is points
+
+    def test_provider_lookup_skipped_for_models_below_gpt_5_6(self):
+        from unittest.mock import patch
+
+        with patch.object(AnthropicCacheControlHook, "_resolve_provider") as resolve:
+            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-4.1", None) is False
+            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("my-custom-model", None) is False
+        resolve.assert_not_called()
+
+
+class TestClientBreakpointsCountedOnce:
+    def test_client_message_breakpoints_are_not_double_counted(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "m0", "cache_control": {"type": "ephemeral"}}]}] + [
+            {"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(1, 4)
+        ]
+        out, system, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system="sys",
+            injection_points=[
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1},
+                {"location": "message", "index": -2},
+                {"location": "message", "index": -3},
+            ],
+        )
+        marked = [msg["content"][0].get("cache_control") is not None for msg in out]
+        assert marked == [True, False, True, True]
+        assert system[0]["cache_control"] == {"type": "ephemeral"}
