@@ -3355,59 +3355,6 @@ def _setup_batch_upload_endpoint(monkeypatch, llm_router: Router) -> list:
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.openai_files_endpoints import files_endpoints as fe
-def _batch_upload(client_, content: bytes, purpose: str = "batch"):
-    return client_.post(
-        "/v1/files",
-        files={"file": ("batch.jsonl", content, "application/jsonl")},
-        data={"purpose": purpose},
-        headers={"Authorization": "Bearer test-key"},
-    )
-
-
-@pytest.mark.parametrize(
-    "content, purpose, expected_status, expected_fragment",
-    [
-        (
-            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
-            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"hi"}]}}\n',
-            "batch",
-            200,
-            None,
-        ),
-        (
-            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
-            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"leak me"}]}}\n',
-            "batch",
-            400,
-            "A guardrail changed batch input line 1",
-        ),
-        (
-            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
-            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"leak me"}]}}\n',
-            "assistants",
-            200,
-            None,
-        ),
-        (b"{ not json\n", "batch", 400, "line 1"),
-    ],
-)
-def test_batch_upload_runs_guardrails_on_each_record(
-    monkeypatch, llm_router: Router, content, purpose, expected_status, expected_fragment
-):
-    """POST /v1/files with purpose=batch must reach the guardrail chain; other purposes must not."""
-    import litellm
-    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
-    import litellm.proxy.proxy_server as ps
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.utils import ProxyLogging
-
-    class _Redactor(CustomGuardrail):
-        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
-            for message in data.get("messages") or []:
-                if isinstance(message.get("content"), str) and "leak" in message["content"]:
-                    message["content"] = "***"
-            return data
 
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
@@ -3418,10 +3365,6 @@ def test_batch_upload_runs_guardrails_on_each_record(
 
     async def fake_route_create_file(**kwargs):
         forwarded_calls.append(kwargs)
-    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
-    ProxyLogging._callback_capabilities_cache.clear()
-
-    async def fake_route_create_file(**kwargs):
         return OpenAIFileObject(
             id="dummy-id",
             object="file",
@@ -3573,6 +3516,84 @@ def test_create_file_non_batch_purpose_skips_batch_validation(monkeypatch, llm_r
 
     assert response.status_code == 200, response.text
     assert len(forwarded_calls) == 1
+
+
+def _batch_upload(client_, content: bytes, purpose: str = "batch"):
+    return client_.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", content, "application/jsonl")},
+        data={"purpose": purpose},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+
+@pytest.mark.parametrize(
+    "content, purpose, expected_status, expected_fragment",
+    [
+        (
+            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"hi"}]}}\n',
+            "batch",
+            200,
+            None,
+        ),
+        (
+            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"leak me"}]}}\n',
+            "batch",
+            400,
+            "A guardrail changed batch input line 1",
+        ),
+        (
+            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"leak me"}]}}\n',
+            "assistants",
+            200,
+            None,
+        ),
+        (b"{ not json\n", "batch", 400, "line 1"),
+    ],
+)
+def test_batch_upload_runs_guardrails_on_each_record(
+    monkeypatch, llm_router: Router, content, purpose, expected_status, expected_fragment
+):
+    """POST /v1/files with purpose=batch must reach the guardrail chain; other purposes must not."""
+    import litellm
+    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            for message in data.get("messages") or []:
+                if isinstance(message.get("content"), str) and "leak" in message["content"]:
+                    message["content"] = "***"
+            return data
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    async def fake_route_create_file(**kwargs):
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
     try:
         resp = _batch_upload(client, content, purpose)
         assert resp.status_code == expected_status, resp.text

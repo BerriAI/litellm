@@ -1,4 +1,9 @@
-"""Run the configured pre-call guardrails over every record of a batch input file."""
+"""
+Run the configured pre-call guardrails over every record of a batch input file.
+
+Runs after ``batch_file_validation.check_batch_file_upload``, so every line here is already known
+to parse as a JSON object carrying ``custom_id``, ``method``, ``url`` and ``body``.
+"""
 
 from __future__ import annotations
 
@@ -99,8 +104,7 @@ def raise_public(failure: BatchScanFailure) -> NoReturn:
     match failure:
         case UnparseableRecord(line_number=line_number):
             raise _rejected(
-                f"Batch input line {line_number} is not a JSON object with a 'body' field, "
-                "so guardrails cannot be applied to it"
+                f"The 'body' of batch input line {line_number} is not an object, so guardrails cannot be applied to it"
             )
         case UnscannableRecord(line_number=line_number, custom_id=custom_id, url=url):
             raise _rejected(
@@ -121,26 +125,12 @@ def _describe(custom_id: str | None) -> str:
     return f" (custom_id {custom_id})" if custom_id else ""
 
 
-def _iter_records(source: BinaryIO) -> Iterator[_ParsedRecord | UnparseableRecord]:
-    """Yield one record per line. JSONL is one object per line, so a line that does not parse is bad."""
+def _iter_records(source: BinaryIO) -> Iterator[_ParsedRecord]:
+    """Yield one record per line, relying on the upload validation that already ran."""
     for line_number, raw_line in enumerate(source, start=1):
-        try:
-            text = raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
-        except UnicodeDecodeError:
-            yield UnparseableRecord(line_number=line_number)
-            return
-        if not text.strip():
-            continue
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            yield UnparseableRecord(line_number=line_number)
-            return
-        yield (
-            _ParsedRecord(line_number=line_number, payload=payload)
-            if isinstance(payload, dict)
-            else UnparseableRecord(line_number=line_number)
-        )
+        text: Final = raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
+        if text.strip():
+            yield _ParsedRecord(line_number=line_number, payload=json.loads(text))
 
 
 def _call_type_from_url(url: str) -> CallTypesLiteral | None:
@@ -285,10 +275,6 @@ async def scan_batch_input_file(
 
     try:
         for item in _iter_records(file_source):
-            if isinstance(item, UnparseableRecord):
-                await drain()
-                problems.append((item.line_number, item))
-                break
             window.append(item)
             if len(window) >= _SCAN_WINDOW:
                 await drain()

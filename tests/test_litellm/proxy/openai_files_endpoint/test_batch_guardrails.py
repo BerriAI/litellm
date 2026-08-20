@@ -203,11 +203,6 @@ async def test_guardrail_that_only_reorders_a_nested_dict_is_not_a_redaction():
 
 
 @pytest.mark.asyncio
-async def test_non_utf8_bytes_are_a_client_error_not_a_crash():
-    assert await _scan(io.BytesIO(b"\xff\xfe not utf8\n"), FakeProxyLogging()) == UnparseableRecord(line_number=1)
-
-
-@pytest.mark.asyncio
 async def test_record_without_a_url_falls_back_to_its_body_shape():
     logging_obj = FakeProxyLogging()
     record = _record("no-url")
@@ -261,13 +256,6 @@ async def test_handle_is_rewound_even_when_a_record_is_refused():
     await _scan(source, FakeProxyLogging(_redact_containing("secret")))
 
     assert source.tell() == 0
-
-
-@pytest.mark.asyncio
-async def test_unparseable_record_is_rejected():
-    source = io.BytesIO(b'{"custom_id": "ok", "url": "/v1/chat/completions", "body": {}}\n{ not json\n')
-
-    assert await _scan(source, FakeProxyLogging()) == UnparseableRecord(line_number=2)
 
 
 @pytest.mark.asyncio
@@ -436,13 +424,6 @@ async def test_scan_does_not_mutate_the_parsed_record():
     assert record.payload["body"]["messages"][0]["content"] == "my secret is here", (
         "the guardrail redacted the record itself instead of a copy"
     )
-
-
-@pytest.mark.asyncio
-async def test_non_object_json_line_is_rejected():
-    source = io.BytesIO(b"[1, 2, 3]\n")
-
-    assert await _scan(source, FakeProxyLogging()) == UnparseableRecord(line_number=1)
 
 
 @pytest.mark.asyncio
