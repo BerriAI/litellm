@@ -16,7 +16,6 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
-    ALIAS_MARKER_FORWARDED_PARAMS_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
@@ -268,7 +267,6 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "routing_decision",
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
-    ALIAS_MARKER_FORWARDED_PARAMS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
