@@ -489,9 +489,9 @@ async def test_image_generation_async_additional_params():
 
         mock_client.assert_awaited_once()
 
-        mock_client.call_args.kwargs["api_key"] == "my-api-key"
-        mock_client.call_args.kwargs["api_base"] == "my-api-base"
-        mock_client.call_args.kwargs["optional_params"] == {
+        assert mock_client.call_args.kwargs["api_key"] == "my-api-key"
+        assert mock_client.call_args.kwargs["api_base"] == "my-api-base"
+        assert mock_client.call_args.kwargs["optional_params"] == {
             "my_custom_param": "my-custom-param"
         }
 

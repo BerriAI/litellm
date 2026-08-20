@@ -974,7 +974,7 @@ def test_token_counter_with_image_url():
 
     try:
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
-        assert False, "Expected ValueError for invalid detail value"
+        pytest.fail("Expected ValueError for invalid detail value")
     except ValueError as e:
         assert "Invalid detail value" in str(
             e
