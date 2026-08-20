@@ -205,18 +205,19 @@ const ORG_UNCONFIGURED: KeyBudgetEntry = {
 
 // The widest row the endpoint can emit: an end_user budget the reservation layer tightened, on a
 // proxy with a custom auth callable. Three notes rather than one sentence, in the server's order.
+// Texts are snapshots of the resolver's constants; 382 characters across the row is the constraint.
 const WORST_CASE_NOTES = [
   {
     code: "reservation_blocks_at_limit",
     severity: "info",
     text:
-      "the reservation layer blocks this scope as soon as spend reaches the limit, " +
-      "before the read-time check would trip",
+      "the reservation layer usually blocks this scope as soon as spend reaches the limit, ahead of the " +
+      "read-time check; requests it cannot price up front are still gated by the read-time check alone",
   },
   {
     code: "end_user_route_only",
     severity: "warning",
-    text: "only enforced on LLM routes that name this end user",
+    text: "applies only to requests that name this end user; nothing else on this row says so",
   },
   {
     code: "custom_auth_may_override_end_user_cap",
@@ -225,13 +226,14 @@ const WORST_CASE_NOTES = [
   },
 ] as const;
 
-// Longest single note the endpoint can emit, and so the real width constraint on the scope column.
+// Longest single note the endpoint can emit at 192 characters, and so the real width constraint on
+// one line of the scope column. Snapshot of the resolver's constant.
 const LONGEST_SINGLE_NOTE = {
-  code: "per_model_counters",
-  severity: "warning",
+  code: "reservation_blocks_at_limit",
+  severity: "info",
   text:
-    "per-model spend is counted separately for every request model that maps onto this cap, " +
-    "and each counter is compared against it on its own, so the highest is reported",
+    "the reservation layer usually blocks this scope as soon as spend reaches the limit, ahead of the " +
+    "read-time check; requests it cannot price up front are still gated by the read-time check alone",
 } as const;
 
 const ALL_BUDGETS = [KEY_UNLIMITED, USER_WITHIN_BUDGET, TEAM_SOFT_OVER, TEAM_MEMBER_BLOCKING, ORG_UNCONFIGURED];
@@ -417,21 +419,22 @@ describe("KeyInfoView Budgets tab", () => {
   });
 
   it("renders the longest single note the endpoint can emit without dropping any of it", async () => {
-    const perModel: KeyBudgetEntry = {
+    const reserved: KeyBudgetEntry = {
       ...UNCONFIGURED_BUDGET,
-      scope: "key_model",
-      entity_type: "key",
-      entity_label: "claude-opus-5",
-      max_budget: 40,
-      spend: 12,
-      remaining: 28,
-      source: "key.model_max_budget",
+      scope: "team",
+      entity_type: "team",
+      entity_label: "Platform",
+      max_budget: 300,
+      spend: 120,
+      remaining: 180,
+      source: "team.max_budget",
       status: "ok",
       notes: [LONGEST_SINGLE_NOTE],
     };
-    mockBudgets([perModel]);
+    mockBudgets([reserved]);
     const panel = await renderAndOpenBudgetsTab();
 
+    expect(LONGEST_SINGLE_NOTE.text).toHaveLength(192);
     expect(panel.getByText(LONGEST_SINGLE_NOTE.text)).toBeInTheDocument();
   });
 

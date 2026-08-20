@@ -48,7 +48,7 @@ const THROTTLE_NOTE = {
 const END_USER_ROUTE_NOTE = {
   code: "end_user_route_only",
   severity: "warning",
-  text: "only enforced on LLM routes that name this end user",
+  text: "applies only to requests that name this end user; nothing else on this row says so",
 } as const;
 
 const COLD_MODEL_NOTE = {
