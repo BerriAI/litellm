@@ -3709,14 +3709,12 @@ async def _run_background_health_check():
         await asyncio.sleep(health_check_interval)
 
 
-async def _reconcile_background_health_check_task() -> (
-    None
-):  # pragma: no cover  # async lifecycle covered by integration tests
+async def _reconcile_background_health_check_task() -> None:
     global background_health_check_task, background_health_check_loop_active  # noqa: PLW0603  # reload reconciliation updates module task state
 
-    if use_background_health_checks:  # pragma: no cover
+    if use_background_health_checks:
         if background_health_check_task is None or background_health_check_task.done():
-            background_health_check_task = asyncio.create_task(_run_background_health_check())  # pragma: no cover
+            background_health_check_task = asyncio.create_task(_run_background_health_check())
         return
 
     if background_health_check_task is not None:
@@ -6324,7 +6322,7 @@ class ProxyConfig:
                 except ValueError:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
 
-    async def _update_general_settings(self, db_general_settings: Json | None):  # noqa: C901  # DB reload branches combine independent settings  # pragma: no cover
+    async def _update_general_settings(self, db_general_settings: Json | None):  # noqa: C901  # DB reload branches combine independent settings
         """
         Pull from DB, read general settings value
         """
@@ -6334,9 +6332,7 @@ class ProxyConfig:
         if db_general_settings is None:
             return
         _general_settings: Final = dict(db_general_settings)
-        health_check_settings: Final = frozenset(
-            "background_health_checks use_shared_health_check health_check_interval health_check_concurrency health_check_details enable_health_check_routing health_check_staleness_threshold health_check_ignore_transient_errors".split()  # pragma: no cover
-        )  # noqa: E501  # keep immutable DB setting key list compact
+        health_check_settings: Final = frozenset("background_health_checks use_shared_health_check health_check_interval health_check_concurrency health_check_details enable_health_check_routing health_check_staleness_threshold health_check_ignore_transient_errors".split())  # noqa: E501  # immutable DB setting key list  # fmt: skip
 
         def _db_setting_is_active(key: str) -> bool:
             return key in _general_settings and key not in self._yaml_general_settings_keys
