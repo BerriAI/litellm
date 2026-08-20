@@ -215,7 +215,10 @@ export const getUsersTableColumns = ({
           );
         }
         return (
-          <Badge variant="outline" className="whitespace-nowrap border-gray-200 bg-gray-50 font-normal text-gray-600">
+          <Badge
+            variant="outline"
+            className="whitespace-nowrap border-border bg-muted font-normal text-muted-foreground"
+          >
             No Keys
           </Badge>
         );

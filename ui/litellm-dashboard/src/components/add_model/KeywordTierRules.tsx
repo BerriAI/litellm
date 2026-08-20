@@ -51,7 +51,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
         <div className="flex items-center gap-2">
           <h4 className="m-0 text-xl font-semibold text-foreground">Keyword Tier Overrides</h4>
           <SimpleTooltip content="Match known terms and force the request straight to a chosen complexity tier, bypassing rule-based scoring.">
-            <Info className="size-4 text-gray-400" />
+            <Info className="size-4 text-muted-foreground/70" />
           </SimpleTooltip>
         </div>
         <Button variant="outline" onClick={addRule}>
@@ -65,7 +65,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
       </span>
 
       {rules.length === 0 ? (
-        <Card className="bg-gray-50">
+        <Card className="bg-muted">
           <CardContent>
             <div className="py-2 text-center">
               <Inbox className="mx-auto mb-2 size-6 text-muted-foreground" aria-hidden="true" />

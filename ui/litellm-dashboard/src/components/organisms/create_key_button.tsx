@@ -873,8 +873,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
               {/* Show message when team selection is required */}
               {isFormDisabled && (
-                <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
-                  <p className="text-blue-800 text-sm">
+                <div className="mb-8 p-4 bg-info/10 border border-info/20 rounded-md">
+                  <p className="text-info text-sm">
                     Please select a team to continue configuring your Virtual Key. If you do not see any teams, please
                     contact your Proxy Admin to either provide you with access to models or to add you to a team.
                   </p>
@@ -1712,7 +1712,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                     }
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-blue-400 hover:text-blue-300"
+                                    className="text-info hover:text-info"
                                   >
                                     documentation
                                   </a>

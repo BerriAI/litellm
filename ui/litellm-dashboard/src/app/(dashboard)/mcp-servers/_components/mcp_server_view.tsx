@@ -289,7 +289,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   <div className="col-span-2">
                     {mcpServer.allow_all_keys ? (
                       <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-success" />
                         Enabled
                       </Badge>
                     ) : (
@@ -302,12 +302,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   <div className="col-span-2">
                     {mcpServer.available_on_public_internet ? (
                       <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-success" />
                         Public
                       </Badge>
                     ) : (
                       <Badge variant="outline">
-                        <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-warning" />
                         Internal only
                       </Badge>
                     )}
@@ -319,7 +319,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <div className="col-span-2">
                       {mcpServer.delegate_auth_to_upstream ? (
                         <Badge variant="outline">
-                          <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-success" />
                           Enabled (PKCE passthrough)
                         </Badge>
                       ) : (
@@ -336,7 +336,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       <div className="col-span-2">
                         {mcpServer.oauth_passthrough ? (
                           <Badge variant="outline">
-                            <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                            <span className="h-1.5 w-1.5 rounded-full bg-success" />
                             Enabled
                           </Badge>
                         ) : (

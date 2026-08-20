@@ -167,7 +167,7 @@ export function RoutingDecisionCard({
       : null;
 
   return (
-    <div className={cn("mb-6 w-full max-w-full overflow-hidden rounded-lg bg-white shadow-sm", className)}>
+    <div className={cn("mb-6 w-full max-w-full overflow-hidden rounded-lg bg-card shadow-sm", className)}>
       <div className="border-b px-4 py-2.5 text-sm font-medium">Routing</div>
       <div className="px-4 py-3">
         {routerModelName && (

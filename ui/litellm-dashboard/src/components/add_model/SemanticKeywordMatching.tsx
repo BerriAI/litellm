@@ -43,10 +43,10 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
           <div className="flex items-center gap-2">
             <span className="font-medium">Semantic keyword matching</span>
             <SimpleTooltip content="Recognize related phrasing beyond exact keyword matches by comparing embeddings instead of plain text. Overrides direct keyword matching">
-              <Info className="size-4 text-gray-400" />
+              <Info className="size-4 text-muted-foreground/70" />
             </SimpleTooltip>
           </div>
-          <span className="text-gray-500 text-sm">
+          <span className="text-muted-foreground text-sm">
             Uses same keyword-tier pairs as above and overrides direct keyword matching. Adds latency based on embedding
             model network request.
           </span>
@@ -55,7 +55,7 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
       </div>
 
       {enabled && (
-        <div className="grid gap-4 md:grid-cols-2 mt-4 pt-4 border-t border-gray-200">
+        <div className="grid gap-4 md:grid-cols-2 mt-4 pt-4 border-t border-border">
           <div>
             <span className="mb-1 block text-sm font-medium">Embedding model</span>
             <SearchSelect
@@ -83,7 +83,9 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
               step={0.05}
               className="w-full"
             />
-            <span className="mt-1 block text-xs text-gray-500">Match only at or above this similarity score.</span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              Match only at or above this similarity score.
+            </span>
           </div>
         </div>
       )}

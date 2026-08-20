@@ -508,7 +508,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     {sortedPresetOptions.map(({ preset, availability: presetState }) => {
                       const disabledHint = presetDisabledHint(presetState);
                       const hintClass = isPresetHintAlarming(presetState)
-                        ? "text-red-500 dark:text-red-400"
+                        ? "text-destructive"
                         : "text-muted-foreground";
                       const matchedHint =
                         presetState.kind === "available" && presetState.viaDeployments
@@ -527,9 +527,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                             <div className="font-medium">{preset.label}</div>
                             <div className="text-xs text-muted-foreground">{preset.description}</div>
                             {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
-                            {matchedHint && (
-                              <div className="text-xs mt-1 text-green-600 dark:text-green-400">{matchedHint}</div>
-                            )}
+                            {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
                           </div>
                         </SelectItem>
                       );
@@ -543,7 +541,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   </SelectContent>
                 </Select>
                 {modelsUnverifiable && (
-                  <div className="text-xs mt-1 text-red-500 dark:text-red-400">
+                  <div className="text-xs mt-1 text-destructive">
                     Could not load available models.{" "}
                     <button type="button" className="underline" onClick={() => refetchModels()}>
                       Retry
