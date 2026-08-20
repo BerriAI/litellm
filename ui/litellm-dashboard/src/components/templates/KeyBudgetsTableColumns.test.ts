@@ -45,11 +45,16 @@ const THROTTLE_NOTE = {
   text: "this key opted into throttle_on_budget_exceeded, so exceeding it slows requests instead of blocking",
 } as const;
 
-// Tagged info by the server, but it scopes which requests the row applies to rather than killing it.
 const END_USER_ROUTE_NOTE = {
   code: "end_user_route_only",
-  severity: "info",
+  severity: "warning",
   text: "only enforced on LLM routes that name this end user",
+} as const;
+
+const COLD_MODEL_NOTE = {
+  code: "model_budget_fails_open",
+  severity: "info",
+  text: "no per-model counter exists yet; these budgets are cache-only and fail open until one does",
 } as const;
 
 const TEAM_MEMBER_AT_LIMIT: KeyBudgetEntry = {
@@ -157,17 +162,16 @@ describe("cannotTrip", () => {
     expect(cannotTrip(WARNED)).toBe(false);
   });
 
-  it("keeps an end_user row alive even though the server tags its route caveat as info", () => {
-    const endUser: KeyBudgetEntry = { ...HEALTHY, scope: "end_user", notes: [END_USER_ROUTE_NOTE] };
-    expect(END_USER_ROUTE_NOTE.severity).toBe("info");
-    expect(cannotTrip(endUser)).toBe(false);
-  });
-
-  it("ignores severity entirely, since dead codes ship under both values", () => {
-    expect(PROJECT_DEAD_NOTE.severity).toBe("warning");
-    expect(cannotTrip(INERT)).toBe(true);
-    expect(ROLLING_NOTE.severity).toBe("info");
-    expect(cannotTrip(WARNED)).toBe(false);
+  // Severity answers whether the row already carries the fact in a field, which is orthogonal to
+  // whether the row is dead. All four corners occur, so severity can never stand in for deadness.
+  it.each([
+    ["info", "dead", COLD_MODEL_NOTE, true],
+    ["info", "live", ROLLING_NOTE, false],
+    ["warning", "dead", PROJECT_DEAD_NOTE, true],
+    ["warning", "live", END_USER_ROUTE_NOTE, false],
+  ])("treats a %s note that is %s by code, not by severity", (severity, _kind, note, dead) => {
+    expect(note.severity).toBe(severity);
+    expect(cannotTrip({ ...HEALTHY, notes: [note] })).toBe(dead);
   });
 
   it("assumes a code this build predates is live, so an unknown caveat never hides a real blocker", () => {

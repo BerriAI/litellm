@@ -6847,9 +6847,10 @@ export interface paths {
          *         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
          *         - status: str - `unlimited`, `ok` or `exceeded`
          *         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
-         *           to branch on, a `severity` of `info` or `warning` for codes a client does not know yet,
-         *           and human-facing `text` that is free to be reworded. Ordered most to least specific to
-         *           this row's numbers, and empty rather than null when there is nothing to say
+         *           to branch on and human-facing `text` that is free to be reworded. `severity` is for a
+         *           `code` a client does not know yet: `info` only explains a field the row already carries,
+         *           `warning` carries the fact on its own. Ordered most to least specific to this row's
+         *           numbers, and empty rather than null when there is nothing to say
          *
          *     Example Curl:
          *     ```
@@ -7544,9 +7545,10 @@ export interface paths {
          *         - source: str - Where the limit is configured, e.g. `key.max_budget`, `budget_table:<id>`
          *         - status: str - `unlimited`, `ok` or `exceeded`
          *         - notes: list - Caveats worth knowing before trusting the row, each with a stable `code`
-         *           to branch on, a `severity` of `info` or `warning` for codes a client does not know yet,
-         *           and human-facing `text` that is free to be reworded. Ordered most to least specific to
-         *           this row's numbers, and empty rather than null when there is nothing to say
+         *           to branch on and human-facing `text` that is free to be reworded. `severity` is for a
+         *           `code` a client does not know yet: `info` only explains a field the row already carries,
+         *           `warning` carries the fact on its own. Ordered most to least specific to this row's
+         *           numbers, and empty rather than null when there is nothing to say
          *
          *     Example Curl:
          *     ```
@@ -26402,8 +26404,10 @@ export interface components {
          *
          *     ``code`` is the contract: map it to whatever treatment the caveat deserves. ``text`` is free to be
          *     reworded and must not be matched on. ``severity`` exists for the code a client has not been taught
-         *     yet, since this union grows: ``warning`` means the row's numbers may be incomplete or read as
-         *     something they are not, and ``info`` means they are accurate and the note is only context.
+         *     yet, since this union grows, and it turns on whether the row already carries the fact in a field:
+         *     ``info`` means the note only explains something the row states anyway, like ``enforcement``,
+         *     ``comparison`` or ``spend_state``, and ``warning`` means the note alone carries it, so the row
+         *     cannot be taken at face value without reading it.
          */
         KeyBudgetNote: {
             /**

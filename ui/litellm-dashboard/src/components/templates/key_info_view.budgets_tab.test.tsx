@@ -215,7 +215,7 @@ const WORST_CASE_NOTES = [
   },
   {
     code: "end_user_route_only",
-    severity: "info",
+    severity: "warning",
     text: "only enforced on LLM routes that name this end user",
   },
   {
@@ -467,6 +467,43 @@ describe("KeyInfoView Budgets tab", () => {
     const [, ...dataRows] = panel.getAllByRole("row");
     expect(dataRows).toHaveLength(2);
     expect(dataRows.filter((row) => row.textContent?.includes("bedrock/claude-opus-5"))).toHaveLength(1);
+  });
+
+  it("floats the one exceeded per-model row above its healthy siblings on the same cap", async () => {
+    const cap = {
+      ...UNCONFIGURED_BUDGET,
+      scope: "key_model",
+      entity_type: "key",
+      entity_label: "claude-opus-5",
+      max_budget: 40,
+      comparison: ">",
+      source: "key.model_max_budget[claude-opus-5]",
+    } as const;
+    const healthy: KeyBudgetEntry = { ...cap, entity_id: "claude-opus-5", spend: 1, remaining: 39, status: "ok" };
+    const alsoHealthy: KeyBudgetEntry = {
+      ...cap,
+      entity_id: "vertex_ai/claude-opus-5",
+      spend: 2,
+      remaining: 38,
+      status: "ok",
+    };
+    const over: KeyBudgetEntry = {
+      ...cap,
+      entity_id: "bedrock/claude-opus-5",
+      spend: 41,
+      remaining: -1,
+      status: "exceeded",
+    };
+    mockBudgets([healthy, alsoHealthy, over]);
+    const panel = await renderAndOpenBudgetsTab();
+
+    const [, ...dataRows] = panel.getAllByRole("row");
+    expect(dataRows[0]).toHaveTextContent("bedrock/claude-opus-5");
+    expect(within(dataRows[0]).getByTestId("key-budget-blocking")).toBeInTheDocument();
+    // Siblings keep the server's order behind it rather than being reshuffled among themselves.
+    expect(dataRows[1]).toHaveTextContent("claude-opus-5");
+    expect(dataRows[2]).toHaveTextContent("vertex_ai/claude-opus-5");
+    expect(panel.getAllByTestId("key-budget-blocking")).toHaveLength(1);
   });
 
   it("renders notes in the order the server sent them, most specific to these numbers first", async () => {
