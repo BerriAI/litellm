@@ -3817,7 +3817,11 @@ async def key_budgets_fn(
           `team_member`, `user`, `organization`, `project`, `tag`, `end_user` or `end_user_model`
         - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
           names, so a denial message maps back to a row here
-        - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
+        - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias.
+          On the per-model scopes this is one row per counter rather than per request model, so
+          `entity_id` is the model whose counter was read and `entity_label` is the configured cap
+          it is compared against; several request models can share one counter, and they are not
+          listed separately because their spend is not separate
         - enforcement: str - `hard` blocks the request, `soft` only raises an alert, `throttled`
           scales the key's rate limits down instead of denying anything. Only the key's own
           `max_budget` can be `throttled`; every other scope on the same key still blocks

@@ -16461,10 +16461,12 @@ from litellm.models.tag import LiteLLM_TagTable  # noqa: E402
 from litellm.models.team import LiteLLM_TeamTable  # noqa: E402
 from litellm.proxy._types import LiteLLM_ProjectTableCachedObj  # noqa: E402
 from litellm.proxy.auth.auth_checks import TeamMemberBudget  # noqa: E402
+from litellm.proxy.hooks.model_max_budget_limiter import ModelSpendHit  # noqa: E402
 from litellm.proxy.management_endpoints.key_budget_resolver import (  # noqa: E402
     _match_model_budget_key,
     _RecordedSpend as _BudgetsRecordedSpend,
-    _MODEL_BUDGET_COLD_NOTE,
+    _CUSTOM_AUTH_SKIPS_CHECKS_NOTE,
+    _MODEL_BUDGET_NOTE,
     _THROTTLE_NOTE,
     _read_end_user_model_spend,
     _read_key_model_spend,
@@ -16478,11 +16480,9 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import ( 
     KeyBudgetEntry,
     KeyBudgetNote,
 )
-from litellm.types.utils import BudgetConfig as _BudgetsBudgetConfig  # noqa: E402
+from litellm.types.utils import BudgetConfig  # noqa: E402
 from types import MappingProxyType  # noqa: E402
 from typing import get_args as _budgets_get_args  # noqa: E402
-
-BudgetConfig = _BudgetsBudgetConfig
 
 _BUDGETS_RESOLVER = "litellm.proxy.management_endpoints.key_budget_resolver"
 _BUDGETS_KEY_HASH = "hash-of-the-budgets-key"
@@ -16522,7 +16522,12 @@ class _RecordingSpendReader:
 
 
 class _RecordingModelSpendReader:
-    """Stands in for the per-model cache so a test can prove which request models were probed."""
+    """
+    Stands in for the per-model cache, falling back to the provider-stripped name the way it does.
+
+    A fake that only did `.get(model)` would report one counter under as many request models as route
+    to it, each claiming the full balance, which is exactly the bug this fallback causes.
+    """
 
     def __init__(self, spend_by_model=None):
         default = {"gpt-5": 6.0, "claude-sonnet-4-5": 2.0}
@@ -16531,16 +16536,27 @@ class _RecordingModelSpendReader:
 
     async def __call__(self, *, entity_id, model, budget_config):
         self.probed.append(model)
-        return self.spend_by_model.get(model)
+        for candidate in dict.fromkeys((model, model.split("/")[-1])):
+            spend = self.spend_by_model.get(candidate)
+            if spend is not None:
+                return ModelSpendHit(model=candidate, spend=spend)
+        return None
 
 
-def _budgets_deps(read_spend=None, model_spend=None, match_model_budget_key=None, general_settings=None):
+def _budgets_deps(
+    read_spend=None,
+    model_spend=None,
+    match_model_budget_key=None,
+    general_settings=None,
+    custom_auth_enabled=False,
+):
     model_reader = model_spend or _RecordingModelSpendReader()
     return KeyBudgetResolverDeps(
         prisma_client=MagicMock(),
         user_api_key_cache=MagicMock(),
         proxy_logging_obj=MagicMock(),
         general_settings=general_settings if general_settings is not None else {},
+        custom_auth_enabled=custom_auth_enabled,
         read_spend=read_spend or _RecordingSpendReader({}),
         read_key_model_spend=model_reader,
         read_end_user_model_spend=model_reader,
@@ -17099,8 +17115,140 @@ async def test_key_budgets_probe_every_request_model_that_maps_onto_a_per_model_
 
 
 @pytest.mark.asyncio
-async def test_key_budgets_say_a_per_model_counter_is_missing_rather_than_claiming_a_cold_cache():
-    """The stale note claimed the cache was cold even when it was warm under a different model key."""
+async def test_key_budgets_report_one_row_per_counter_when_several_request_models_share_one():
+    """
+    The reader retries without the provider prefix, so every `<provider>/gpt-5` lands on `gpt-5`'s
+    counter. A row each turned one $12 balance into four rows reading $12, a table that appears to
+    show $48 against a $12 cap while three of the four rows assert a counter that does not exist.
+    """
+    reader = _RecordingModelSpendReader({"gpt-5": 12.0})
+    token = _budgets_token(
+        models=["openai/gpt-5", "azure/gpt-5", "bedrock/gpt-5"],
+        model_max_budget={"gpt-5": {"max_budget": 12.0, "budget_duration": "1d"}},
+    )
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=token,
+            end_user_id=None,
+            deps=_budgets_deps(
+                model_spend=reader,
+                match_model_budget_key=lambda *, model, configured: "gpt-5" if model.endswith("gpt-5") else None,
+            ),
+        )
+
+    rows = [e for e in budgets if e.scope == "key_model"]
+    assert {"openai/gpt-5", "azure/gpt-5", "bedrock/gpt-5"} <= set(reader.probed), "every request model is probed"
+    assert [r.entity_id for r in rows] == ["gpt-5"], "one counter is one row, and the row names the counter"
+    assert rows[0].entity_label == "gpt-5", "the cap it is compared against stays on the row"
+    assert rows[0].spend == 12.0
+    assert sum(r.spend for r in rows) == 12.0, "a shared balance must not be added up once per request model"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_name_the_counter_a_row_was_read_from_not_the_model_that_found_it():
+    """
+    A provider-qualified cap falls back onto the bare counter, so the row that survives the collapse
+    is labelled by whichever request model probed first. Reporting that name would point a reader at a
+    counter that does not exist while showing a balance that came from a different one.
+    """
+    reader = _RecordingModelSpendReader({"gpt-5": 7.0})
+    token = _budgets_token(
+        models=["openai/gpt-5"],
+        model_max_budget={"openai/gpt-5": {"max_budget": 12.0, "budget_duration": "1d"}},
+    )
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=token,
+            end_user_id=None,
+            deps=_budgets_deps(
+                model_spend=reader,
+                match_model_budget_key=lambda *, model, configured: "openai/gpt-5" if "gpt-5" in model else None,
+            ),
+        )
+
+    rows = [e for e in budgets if e.scope == "key_model"]
+    assert [(r.entity_id, r.entity_label) for r in rows] == [("gpt-5", "openai/gpt-5")]
+    assert rows[0].spend == 7.0
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_keep_separate_rows_for_request_models_with_counters_of_their_own():
+    """Collapsing on the counter must not collapse two counters that really are separate balances."""
+    reader = _RecordingModelSpendReader({"gpt-5": 4.0, "azure/gpt-5": 9.0})
+    token = _budgets_token(
+        models=["azure/gpt-5", "openai/gpt-5"],
+        model_max_budget={"gpt-5": {"max_budget": 12.0, "budget_duration": "1d"}},
+    )
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=token,
+            end_user_id=None,
+            deps=_budgets_deps(
+                model_spend=reader,
+                match_model_budget_key=lambda *, model, configured: "gpt-5" if model.endswith("gpt-5") else None,
+            ),
+        )
+
+    spend_by_model = {e.entity_id: e.spend for e in budgets if e.scope == "key_model"}
+    assert spend_by_model == {"gpt-5": 4.0, "azure/gpt-5": 9.0}, "openai/gpt-5 shares gpt-5's counter, azure does not"
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_warn_on_every_row_when_custom_auth_skips_the_read_time_checks():
+    """
+    A custom auth callable that returns its own token returns before any of these checks run, and the
+    wrapper skips `common_checks` too unless `custom_auth_run_common_checks` is set. Saying that on the
+    end-user row alone understates it by a dozen scopes, and the proxy already warns about it at boot.
+    """
+    with _budgets_world(**_fully_populated_world()):
+        skipped = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps(custom_auth_enabled=True)
+        )
+        opted_in = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id=None,
+            deps=_budgets_deps(custom_auth_enabled=True, general_settings={"custom_auth_run_common_checks": True}),
+        )
+        no_custom_auth = await resolve_key_budgets(
+            valid_token=_budgets_token(), end_user_id=None, deps=_budgets_deps()
+        )
+
+    assert skipped, "the fixture must produce rows for this to assert anything"
+    assert all(_CUSTOM_AUTH_SKIPS_CHECKS_NOTE in e.notes for e in skipped), "every scope is unenforced, not one"
+    assert not any(_CUSTOM_AUTH_SKIPS_CHECKS_NOTE in e.notes for e in opted_in)
+    assert not any(_CUSTOM_AUTH_SKIPS_CHECKS_NOTE in e.notes for e in no_custom_auth)
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_never_pair_a_missing_spend_state_with_a_number():
+    """
+    `spend_state` is the only thing that stops a blank cell rendering as `$0.00` at 0% of the meter,
+    so a row that says the number is missing must not also carry one, or anything derived from one.
+    """
+    async def _explode(**kwargs):
+        raise RuntimeError("redis is down")
+
+    with _budgets_world(**_fully_populated_world()):
+        budgets = await resolve_key_budgets(
+            valid_token=_budgets_token(),
+            end_user_id="end-user-budgets",
+            deps=_budgets_deps(read_spend=_explode, model_spend=_RecordingModelSpendReader({})),
+        )
+
+    states = {e.spend_state for e in budgets}
+    assert states == {"live", "no_counter", "unavailable"}, f"all three states must occur here, saw {states}"
+    for entry in budgets:
+        assert (entry.spend is None) == (entry.spend_state != "live"), entry
+        assert entry.spend is not None or entry.remaining is None, entry
+
+
+@pytest.mark.asyncio
+async def test_key_budgets_tell_a_cold_per_model_counter_apart_from_a_budget_that_cannot_trip():
+    """
+    A counter nothing has written yet is a budget that will start working, so only `spend_state` may
+    say so. Saying it in a note instead put a live cap next to `project_spend_not_tracked`, which is
+    inert forever, under codes a client had no way to tell apart.
+    """
     warm = _RecordingModelSpendReader({"gpt-5": 6.0})
     with _budgets_world(**_fully_populated_world()):
         budgets = await resolve_key_budgets(
@@ -17110,7 +17258,6 @@ async def test_key_budgets_say_a_per_model_counter_is_missing_rather_than_claimi
     warm_entry = next(e for e in budgets if e.scope == "key_model" and e.entity_id == "gpt-5")
     assert warm_entry.spend == 6.0
     assert warm_entry.spend_state == "live"
-    assert _MODEL_BUDGET_COLD_NOTE not in warm_entry.notes
 
     cold = _RecordingModelSpendReader({})
     with _budgets_world(**_fully_populated_world()):
@@ -17121,7 +17268,11 @@ async def test_key_budgets_say_a_per_model_counter_is_missing_rather_than_claimi
     cold_entry = next(e for e in cold_budgets if e.scope == "key_model" and e.entity_id == "gpt-5")
     assert cold_entry.spend is None
     assert cold_entry.spend_state == "no_counter"
-    assert _MODEL_BUDGET_COLD_NOTE in cold_entry.notes
+    assert cold_entry.notes == warm_entry.notes, "a cold counter is the same budget, so it earns no extra caveat"
+    assert _MODEL_BUDGET_NOTE in cold_entry.notes
+    assert {note.code for note in cold_entry.notes}.isdisjoint(
+        {"project_spend_not_tracked"}
+    ), "a transient cold counter must not read like a budget that can never trip"
 
 
 @pytest.mark.asyncio
@@ -17355,10 +17506,10 @@ def test_key_budgets_classify_every_note_code_and_leave_none_to_a_default():
         "reservation_blocks_at_limit": "info",
         "rolling_window": "info",
         "user_budget_not_applied_to_team_key": "info",
-        "model_budget_fails_open": "info",
         "throttled_instead_of_blocked": "info",
         # only the note states it
         "custom_auth_may_override_end_user_cap": "warning",
+        "custom_auth_skips_read_time_checks": "warning",
         "end_user_route_only": "warning",
         "per_model_counters": "warning",
         "project_spend_not_tracked": "warning",
@@ -17402,6 +17553,7 @@ async def test_key_budgets_emit_each_caveat_as_its_own_note_instead_of_one_joine
         "reservation_blocks_at_limit",
         "end_user_route_only",
         "custom_auth_may_override_end_user_cap",
+        "custom_auth_skips_read_time_checks",
     ]
     assert all(
         other.text not in note.text for note in end_user.notes for other in end_user.notes if other is not note
@@ -17475,7 +17627,8 @@ async def test_key_budgets_probe_a_deployment_routed_at_directly():
     """Routing straight at a deployment keys the counter on its name, which is not a model group."""
     router = MagicMock()
     router.get_model_names.return_value = ["gpt-5"]
-    router.deployment_names = ["azure/gpt-5-prod"]
+    router.model_list = [{"model_name": "gpt-5", "litellm_params": {"model": "azure/gpt-5-prod"}}]
+    router.deployment_names = ["azure/gpt-5-prod", "azure/deleted-last-year"]
     with patch("litellm.proxy.proxy_server.llm_router", router):
         assert _request_models(()) == ("gpt-5", "azure/gpt-5-prod")
 
@@ -17484,27 +17637,45 @@ async def test_key_budgets_probe_a_deployment_routed_at_directly():
 
 
 @pytest.mark.asyncio
+async def test_key_budgets_stop_naming_a_deployment_after_it_is_deleted():
+    """`Router.deployment_names` is appended to and never pruned, so it still names deleted deployments."""
+    router = MagicMock()
+    router.get_model_names.return_value = ()
+    router.model_list = [{"model_name": "gpt-5", "litellm_params": {"model": "azure/still-here"}}]
+    router.deployment_names = ["azure/still-here", "azure/deleted-last-year"]
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        assert _request_models(()) == ("azure/still-here",)
+
+    router.model_list = [{"not": "a deployment"}, {"model_name": "gpt-5", "litellm_params": {"model": "azure/ok"}}]
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        assert _request_models(()) == ("azure/ok",), "one malformed entry must not drop the rest"
+
+
+@pytest.mark.asyncio
 async def test_key_budgets_read_each_per_model_counter_from_the_enforcing_limiter():
     """These readers exist to reuse enforcement's cache lookup; a fake in every other test hides a wrong call."""
     limiter = MagicMock()
-    limiter.get_virtual_key_spend_for_model = AsyncMock(return_value=4.0)
-    limiter.get_end_user_spend_for_model = AsyncMock(return_value=9.0)
+    limiter.resolve_model_spend = AsyncMock(return_value=ModelSpendHit(model="gpt-5", spend=4.0))
     config = BudgetConfig(max_budget=5.0, budget_duration="1d")
     with patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter):
-        key_spend = await _read_key_model_spend(entity_id="hash-1", model="openai/gpt-5", budget_config=config)
-        end_user_spend = await _read_end_user_model_spend(entity_id="cust-1", model="gpt-5", budget_config=config)
+        key_hit = await _read_key_model_spend(entity_id="hash-1", model="openai/gpt-5", budget_config=config)
+        key_kwargs = limiter.resolve_model_spend.await_args.kwargs
+        end_user_hit = await _read_end_user_model_spend(entity_id="cust-1", model="gpt-5", budget_config=config)
 
-    assert key_spend == 4.0
-    assert limiter.get_virtual_key_spend_for_model.await_args.kwargs == {
-        "user_api_key_hash": "hash-1",
+    assert key_hit == ModelSpendHit(model="gpt-5", spend=4.0)
+    assert key_kwargs == {
+        "scope": "virtual_key",
+        "entity_id": "hash-1",
         "model": "openai/gpt-5",
-        "key_budget_config": config,
+        "budget_config": config,
     }
-    assert end_user_spend == 9.0
-    assert limiter.get_end_user_spend_for_model.await_args.kwargs == {
-        "end_user_id": "cust-1",
+    assert end_user_hit == ModelSpendHit(model="gpt-5", spend=4.0)
+    assert limiter.resolve_model_spend.await_args.kwargs == {
+        "scope": "end_user",
+        "entity_id": "cust-1",
         "model": "gpt-5",
-        "key_budget_config": config,
+        "budget_config": config,
     }
 
 

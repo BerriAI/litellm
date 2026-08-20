@@ -48,6 +48,7 @@ from litellm.proxy.auth.auth_checks import (
     user_budget_applies_to_key,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.hooks.model_max_budget_limiter import ModelSpendHit
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_keys import (
     end_user_spend_counter,
@@ -92,6 +93,8 @@ _ENTITY_TYPE_BY_SCOPE: Final[Mapping[BudgetScope, Litellm_EntityType]] = Mapping
     }
 )
 
+_MODEL_SCOPES: Final[frozenset[BudgetScope]] = frozenset({"key_model", "end_user_model"})
+
 _RESERVATION_COVERED_SCOPES: Final[frozenset[BudgetScope]] = frozenset(
     {"key", "key_window", "team", "team_window", "team_member", "user", "organization", "tag", "end_user"}
 )
@@ -110,14 +113,10 @@ _MODEL_BUDGET_NOTE: Final = KeyBudgetNote(
     code="per_model_counters",
     severity="warning",
     text=(
-        "one row per request model that maps onto this cap, because each model's counter is compared "
-        "against it alone; a model this proxy cannot enumerate has a counter that is not reported here"
+        "one row per counter behind this cap, because each counter is compared against it alone; these "
+        "counters are cache-only and fail open while one is missing, and a model this proxy cannot "
+        "enumerate has a counter that is not reported here"
     ),
-)
-_MODEL_BUDGET_COLD_NOTE: Final = KeyBudgetNote(
-    code="model_budget_fails_open",
-    severity="info",
-    text="no per-model counter exists yet; these budgets are cache-only and fail open until one does",
 )
 _RESERVATION_NOTE: Final = KeyBudgetNote(
     code="reservation_blocks_at_limit",
@@ -146,6 +145,15 @@ _CUSTOM_AUTH_END_USER_NOTE: Final = KeyBudgetNote(
     code="custom_auth_may_override_end_user_cap",
     severity="warning",
     text="a custom auth callable can set a request-scoped end user cap that overrides this one and is not visible here",
+)
+_CUSTOM_AUTH_SKIPS_CHECKS_NOTE: Final = KeyBudgetNote(
+    code="custom_auth_skips_read_time_checks",
+    severity="warning",
+    text=(
+        "a custom auth callable authenticates requests on this proxy and "
+        "general_settings.custom_auth_run_common_checks is not set, so none of these budgets are checked "
+        "at request time for the requests it authenticates; only the reservation layer still applies"
+    ),
 )
 _USER_ON_TEAM_KEY_NOTE: Final = KeyBudgetNote(
     code="user_budget_not_applied_to_team_key",
@@ -180,7 +188,7 @@ class SpendReader(Protocol):
 
 
 class ModelSpendReader(Protocol):
-    async def __call__(self, *, entity_id: str, model: str, budget_config: BudgetConfig) -> float | None: ...
+    async def __call__(self, *, entity_id: str, model: str, budget_config: BudgetConfig) -> ModelSpendHit | None: ...
 
 
 class ModelBudgetKeyMatcher(Protocol):
@@ -210,19 +218,21 @@ async def _read_counter_spend(
     )
 
 
-async def _read_key_model_spend(*, entity_id: str, model: str, budget_config: BudgetConfig) -> float | None:
+async def _read_key_model_spend(*, entity_id: str, model: str, budget_config: BudgetConfig) -> ModelSpendHit | None:
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
-    return await model_max_budget_limiter.get_virtual_key_spend_for_model(
-        user_api_key_hash=entity_id, model=model, key_budget_config=budget_config
+    return await model_max_budget_limiter.resolve_model_spend(
+        scope="virtual_key", entity_id=entity_id, model=model, budget_config=budget_config
     )
 
 
-async def _read_end_user_model_spend(*, entity_id: str, model: str, budget_config: BudgetConfig) -> float | None:
+async def _read_end_user_model_spend(
+    *, entity_id: str, model: str, budget_config: BudgetConfig
+) -> ModelSpendHit | None:
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
-    return await model_max_budget_limiter.get_end_user_spend_for_model(
-        end_user_id=entity_id, model=model, key_budget_config=budget_config
+    return await model_max_budget_limiter.resolve_model_spend(
+        scope="end_user", entity_id=entity_id, model=model, budget_config=budget_config
     )
 
 
@@ -230,6 +240,15 @@ def _match_model_budget_key(*, model: str, configured: Mapping[str, BudgetConfig
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
     return model_max_budget_limiter.get_request_model_budget_key(model=model, internal_model_max_budget=configured)
+
+
+def _deployment_models(model_list: Sequence[object]) -> tuple[str, ...]:
+    """
+    ``Router.deployment_names`` is appended to and never pruned, so it names deployments that were
+    deleted. ``model_list`` is the live registry, so read the same names back out of it instead.
+    """
+    parsed: Final = (_validated(_DEPLOYMENT_ENTRY, entry, "model_list entry") for entry in model_list)
+    return tuple(entry.litellm_params.model for entry in parsed if entry is not None)
 
 
 def _request_models(allowed_models: tuple[str, ...]) -> tuple[str, ...]:
@@ -243,7 +262,7 @@ def _request_models(allowed_models: tuple[str, ...]) -> tuple[str, ...]:
 
     if llm_router is None:
         return allowed_models
-    routable: Final = (*llm_router.get_model_names(), *llm_router.deployment_names)
+    routable: Final = (*llm_router.get_model_names(), *_deployment_models(llm_router.model_list or ()))
     return tuple(dict.fromkeys((*allowed_models, *routable)))
 
 
@@ -298,6 +317,7 @@ class _SpendReading:
 
     value: float | None
     state: BudgetSpendState
+    counter_model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +334,9 @@ class _PlannedBudget:
     budget_reset_at: datetime | None = None
     window_start: datetime | None = None
     notes: tuple[KeyBudgetNote, ...] = ()
+
+
+_ReadPlan = tuple[_PlannedBudget, _SpendReading]
 
 
 class _MetadataTags(BaseModel):
@@ -348,11 +371,24 @@ class _ModelBudgetFields(BaseModel):
     model_max_budget: Mapping[str, object] = MappingProxyType({})
 
 
+class _DeploymentParamsFields(BaseModel):
+    model_config = ConfigDict(extra="ignore", protected_namespaces=())
+
+    model: str
+
+
+class _DeploymentEntryFields(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    litellm_params: _DeploymentParamsFields
+
+
 _T = TypeVar("_T")
 
 _METADATA_FIELDS: Final = TypeAdapter(_MetadataFields)
 _WINDOW_FIELDS: Final = TypeAdapter(_WindowFields)
 _MODEL_BUDGET_FIELDS: Final = TypeAdapter(_ModelBudgetFields)
+_DEPLOYMENT_ENTRY: Final = TypeAdapter(_DeploymentEntryFields)
 _BUDGET_LIMIT_ENTRY: Final = TypeAdapter(BudgetLimitEntry)
 _BUDGET_CONFIG: Final = TypeAdapter(BudgetConfig)
 _KEY_MODELS: Final = TypeAdapter(_KeyModelsFields)
@@ -440,6 +476,7 @@ class _KeyBudgetContext:
     token_inputs: _TokenBudgetInputs
     end_user_id: str | None
     custom_auth_enabled: bool
+    custom_auth_skips_checks: bool
     request_models: tuple[str, ...]
     match_model_budget_key: ModelBudgetKeyMatcher
     general_settings: Mapping[str, object]
@@ -465,15 +502,45 @@ async def resolve_key_budgets(
     plans: Final = _plan_budgets(context)
     readings: Final = await asyncio.gather(*(_read_spend(plan=plan, deps=deps) for plan in plans))
     reservation_enabled: Final = deps.general_settings.get("disable_budget_reservation") is not True
+    proxy_notes: Final = (_CUSTOM_AUTH_SKIPS_CHECKS_NOTE,) if context.custom_auth_skips_checks else ()
     return tuple(
-        _to_entry(plan=plan, reading=reading, reservation_enabled=reservation_enabled)
-        for plan, reading in zip(plans, readings, strict=True)
+        _to_entry(
+            plan=plan,
+            reading=reading,
+            reservation_enabled=reservation_enabled,
+            proxy_notes=proxy_notes,
+        )
+        for plan, reading in _collapse_shared_counters(tuple(zip(plans, readings, strict=True)))
     )
 
 
-def _model_reading(spend: float | None) -> _SpendReading:
+def _counter_identity(index: int, plan: _PlannedBudget, reading: _SpendReading) -> object:
+    """Two rows share an identity only when enforcement compares both against the same counter."""
+    if plan.scope not in _MODEL_SCOPES:
+        return index
+    return (plan.source, reading.counter_model)
+
+
+def _collapse_shared_counters(pairs: tuple[_ReadPlan, ...]) -> tuple[_ReadPlan, ...]:
+    """
+    One counter, one row.
+
+    A per-model cap is planned once per request model routed to it, but the reader falls back to the
+    provider-stripped name, so several of those models read one counter. Reporting each of them would
+    show a single balance several times over as though it were several balances.
+    """
+    identities: Final = tuple(
+        _counter_identity(index=index, plan=plan, reading=reading) for index, (plan, reading) in enumerate(pairs)
+    )
+    first_index: Final = {identity: index for index, identity in reversed(tuple(enumerate(identities)))}
+    return tuple(pair for index, pair in enumerate(pairs) if first_index[identities[index]] == index)
+
+
+def _model_reading(hit: ModelSpendHit | None) -> _SpendReading:
     """Per-model budgets are cache-only, so a missing counter means untouched rather than unreadable."""
-    return _SpendReading(value=spend, state="live" if spend is not None else "no_counter")
+    if hit is None:
+        return _SpendReading(value=None, state="no_counter")
+    return _SpendReading(value=hit.spend, state="live", counter_model=hit.model)
 
 
 async def _read_spend(plan: _PlannedBudget, deps: KeyBudgetResolverDeps) -> _SpendReading:
@@ -532,14 +599,18 @@ def _effective_comparison(plan: _PlannedBudget, reservation_enabled: bool) -> Bu
 
 
 def _entry_notes(
-    plan: _PlannedBudget, reading: _SpendReading, comparison: BudgetComparison
+    plan: _PlannedBudget, comparison: BudgetComparison, proxy_notes: tuple[KeyBudgetNote, ...]
 ) -> tuple[KeyBudgetNote, ...]:
     tightened: Final = () if comparison == plan.comparison else (_RESERVATION_NOTE,)
-    cold: Final = (_MODEL_BUDGET_COLD_NOTE,) if reading.state == "no_counter" else ()
-    return (*tightened, *plan.notes, *cold)
+    return (*tightened, *plan.notes, *proxy_notes)
 
 
-def _to_entry(plan: _PlannedBudget, reading: _SpendReading, reservation_enabled: bool) -> KeyBudgetEntry:
+def _to_entry(
+    plan: _PlannedBudget,
+    reading: _SpendReading,
+    reservation_enabled: bool,
+    proxy_notes: tuple[KeyBudgetNote, ...],
+) -> KeyBudgetEntry:
     comparison: Final = _effective_comparison(plan=plan, reservation_enabled=reservation_enabled)
     spend: Final = reading.value
     exceeded: Final = (
@@ -551,7 +622,7 @@ def _to_entry(plan: _PlannedBudget, reading: _SpendReading, reservation_enabled:
     return KeyBudgetEntry(
         scope=plan.scope,
         entity_type=_ENTITY_TYPE_BY_SCOPE[plan.scope],
-        entity_id=plan.entity_id,
+        entity_id=reading.counter_model or plan.entity_id,
         entity_label=plan.entity_label,
         enforcement=plan.enforcement,
         max_budget=plan.max_budget,
@@ -564,7 +635,7 @@ def _to_entry(plan: _PlannedBudget, reading: _SpendReading, reservation_enabled:
         window_start=plan.window_start,
         source=plan.source,
         status=status,
-        notes=_entry_notes(plan=plan, reading=reading, comparison=comparison),
+        notes=_entry_notes(plan=plan, comparison=comparison, proxy_notes=proxy_notes),
     )
 
 
@@ -600,6 +671,9 @@ async def _load_context(
         token_inputs=token_inputs,
         end_user_id=end_user_id,
         custom_auth_enabled=deps.custom_auth_enabled,
+        custom_auth_skips_checks=(
+            deps.custom_auth_enabled and deps.general_settings.get("custom_auth_run_common_checks") is not True
+        ),
         request_models=_request_models(token_inputs.models),
         match_model_budget_key=deps.match_model_budget_key,
         general_settings=deps.general_settings,

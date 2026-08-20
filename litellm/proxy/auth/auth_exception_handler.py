@@ -15,7 +15,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.auth.auth_utils import _get_request_ip_address, normalize_request_route
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -86,7 +86,7 @@ class UserAPIKeyAuthExceptionHandler:
                 token="failed-to-connect-to-db",
                 user_id=DB_UNAVAILABLE_FALLBACK_USER_ID,
                 user_role=LitellmUserRoles.INTERNAL_USER,
-                request_route=route,
+                request_route=normalize_request_route(route),
             )
         else:
             # raise the exception to the caller
@@ -108,7 +108,7 @@ class UserAPIKeyAuthExceptionHandler:
             # so the handler is side-effect-free for the caller's identity object.
             user_api_key_dict = resolved_identity.model_copy() if resolved_identity is not None else UserAPIKeyAuth()
             user_api_key_dict.parent_otel_span = parent_otel_span
-            user_api_key_dict.request_route = route
+            user_api_key_dict.request_route = normalize_request_route(route)
             user_api_key_dict.api_key = user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
 
             # Stamp identity onto the request's server span now, before the request

@@ -511,3 +511,66 @@ async def test_auth_failure_without_resolved_identity_still_logs():
     assert logged.api_key != "sk-unknown"
     assert logged.api_key == UserAPIKeyAuth(api_key="sk-unknown").api_key
     assert logged.request_route == "/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/key/sk-victim-1234567890/budgets",
+        "/key/" + "a" * 64 + "/budgets",
+        "/key/sk-victim-1234567890/regenerate",
+        "/key/sk-victim-1234567890/reset_spend",
+    ],
+)
+async def test_auth_failure_on_a_key_route_does_not_hand_the_key_to_the_failure_callbacks(route):
+    """
+    Auth runs as a dependency, so a wrong Authorization header rejects the request before the handler
+    that guards these routes ever runs. The route it fails on is stamped onto the server span and
+    handed to every failure callback, and on these routes the path param is a key. Normalizing it here
+    is what keeps that credential out of traces and third-party logging sinks.
+    """
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+        new_callable=AsyncMock,
+    ) as mock_post_call_failure_hook, patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_requests_on_db_unavailable": False},
+    ):
+        with pytest.raises(Exception):
+            await handler._handle_authentication_error(
+                HTTPException(status_code=401, detail="Invalid proxy server token passed"),
+                MagicMock(),
+                {},
+                route,
+                None,
+                "sk-wrong-key",
+            )
+
+    recorded = mock_post_call_failure_hook.call_args[1]["user_api_key_dict"].request_route
+    assert "sk-victim" not in recorded, f"the caller's key reached the failure callbacks as {recorded!r}"
+    assert "a" * 64 not in recorded, f"the key hash reached the failure callbacks as {recorded!r}"
+    assert recorded.startswith("/key/{key_id}/"), recorded
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_on_a_db_outage_fallback_also_redacts_the_key_route():
+    """The DB-unavailable branch builds its own token and stamps the same route onto it."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    ):
+        result = await handler._handle_authentication_error(
+            EngineConnectionError(),
+            MagicMock(),
+            {},
+            "/key/sk-victim-1234567890/budgets",
+            None,
+            "sk-wrong-key",
+        )
+
+    assert result.request_route == "/key/{key_id}/budgets"

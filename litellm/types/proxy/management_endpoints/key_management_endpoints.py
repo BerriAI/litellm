@@ -135,8 +135,8 @@ BudgetStatus = Literal["unlimited", "ok", "exceeded"]
 BudgetNoteCode = Literal[
     "alert_only",
     "custom_auth_may_override_end_user_cap",
+    "custom_auth_skips_read_time_checks",
     "end_user_route_only",
-    "model_budget_fails_open",
     "per_model_counters",
     "project_spend_not_tracked",
     "request_tags_add_budgets",
