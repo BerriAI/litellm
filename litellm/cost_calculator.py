@@ -604,12 +604,21 @@ def cost_per_token(
     elif custom_llm_provider == "bedrock":
         return bedrock_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(
-            model=model,
-            usage=usage_block,
-            service_tier=service_tier,
-            data_residency=data_residency,
-        )
+        try:
+            return openai_cost_per_token(
+                model=model,
+                usage=usage_block,
+                service_tier=service_tier,
+                data_residency=data_residency,
+            )
+        except Exception as e:  # noqa: BLE001
+            if "isn't mapped yet" not in str(e):
+                raise
+            verbose_logger.debug(
+                "cost_per_token: unknown model=%s, custom_llm_provider=openai. Returning 0.0, 0.0",
+                model,
+            )
+            return 0.0, 0.0
     elif custom_llm_provider == "databricks":
         return databricks_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "fireworks_ai":
