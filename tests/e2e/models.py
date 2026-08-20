@@ -216,10 +216,19 @@ class McpChatTool(BaseModel):
     allowed_tools: list[str] | None = None
 
 
+class StreamOptions(BaseModel):
+    """OpenAI `stream_options`: `include_usage` asks for a final usage-only SSE
+    frame, which is where the proxy's `include_cost_in_streaming_usage` setting
+    injects `usage.cost`."""
+
+    include_usage: bool = True
+
+
 class ChatBody(BaseModel):
     model: str
     messages: list[ChatMessage]
     stream: bool = False
+    stream_options: StreamOptions | None = None
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
     temperature: float | None = None
@@ -322,6 +331,9 @@ class CompletionTokensDetails(BaseModel):
 
 
 class Usage(BaseModel):
+    """`cost` exists only on streaming usage frames from a proxy running with
+    `include_cost_in_streaming_usage: true`; providers never send it."""
+
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
@@ -329,6 +341,7 @@ class Usage(BaseModel):
     cache_creation_input_tokens: int | None = None
     prompt_tokens_details: PromptTokensDetails | None = None
     completion_tokens_details: CompletionTokensDetails | None = None
+    cost: float | None = None
 
 
 class ChatResponse(BaseModel):
@@ -449,9 +462,11 @@ class AnthropicMessagesResponse(BaseModel):
     for triage."""
 
     model_config = ConfigDict(extra="allow")
+    id: str | None = None
     model: str | None = None
     content: list[AnthropicContentBlock] | None = None
     choices: list[ChatChoice] | None = None
+    usage: Usage | None = None
 
 
 class CountTokensResponse(BaseModel):
@@ -716,8 +731,10 @@ class FineTuningJobsResponse(BaseModel):
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
-    `input_cost_per_token`/`output_cost_per_token` register a per-deployment custom
-    pricing override; left None (and dropped from the body) the deployment keeps the
+    The `*_cost_per_token` / `*_token_cost` fields register a per-deployment custom
+    pricing override (the cache and `_priority` rates only apply when both base
+    rates are set, which is what makes the proxy register the deployment's full
+    pricing entry); left None (and dropped from the body) the deployment keeps the
     backend's canonical rate."""
 
     model: str
@@ -744,6 +761,10 @@ class LiteLLMParamsBody(BaseModel):
     aws_external_id: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    cache_read_input_token_cost: float | None = None
+    cache_creation_input_token_cost: float | None = None
+    input_cost_per_token_priority: float | None = None
+    output_cost_per_token_priority: float | None = None
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
