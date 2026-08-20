@@ -1,13 +1,24 @@
-import React from "react";
-import { Input as AntdInput, InputNumber, Select, Tooltip } from "antd";
 import { Info } from "lucide-react";
+import React from "react";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { OAUTH_FLOW } from "@/components/mcp_tools/types";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { antdRequired } from "@/components/common_components/antdFormRules";
 import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
-import { numberControl, parsesAsJson, selectControl, textControl } from "./mcpFieldRules";
+import {
+  numberControl,
+  parsesAsJson,
+  selectControl,
+  selectTriggerControl,
+  tagsControl,
+  textControl,
+} from "./mcpFieldRules";
 
 interface OAuthFlowStatus {
   startOAuthFlow: () => void;
@@ -27,6 +38,11 @@ interface OAuthFormFieldsProps {
 
 const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
 
+const OAUTH_FLOW_ITEMS = [
+  { value: OAUTH_FLOW.M2M, label: "Machine-to-Machine (M2M)" },
+  { value: OAUTH_FLOW.INTERACTIVE, label: "Interactive (PKCE)" },
+];
+
 const UPSTREAM_RESOURCE_TOOLTIP =
   "RFC 8707 resource indicator sent to the authorization server so it mints a token audienced for this MCP server. " +
   "Leave blank to send nothing, which is the default and what most providers expect. Use 'auto' to send this server's " +
@@ -37,9 +53,9 @@ const UPSTREAM_RESOURCE_TOOLTIP =
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
   <span className="text-sm font-medium text-gray-700 flex items-center">
     {label}
-    <Tooltip title={tooltip}>
+    <SimpleTooltip content={tooltip}>
       <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
-    </Tooltip>
+    </SimpleTooltip>
   </span>
 );
 
@@ -78,19 +94,24 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
         {...(initialFlowType ? { defaultValue: initialFlowType } : {})}
       >
         {(control) => (
-          <Select {...selectControl(control)} placeholder="Select OAuth flow" className="rounded-lg" size="large">
-            <Select.Option value={OAUTH_FLOW.M2M}>
-              <div>
-                <span className="font-medium">Machine-to-Machine (M2M)</span>
-                <span className="text-gray-400 text-xs ml-2">server-to-server, no user interaction</span>
-              </div>
-            </Select.Option>
-            <Select.Option value={OAUTH_FLOW.INTERACTIVE}>
-              <div>
-                <span className="font-medium">Interactive (PKCE)</span>
-                <span className="text-gray-400 text-xs ml-2">browser-based user authorization</span>
-              </div>
-            </Select.Option>
+          <Select {...selectControl<string>(control)} items={OAUTH_FLOW_ITEMS}>
+            <SelectTrigger {...selectTriggerControl(control)} className="w-full rounded-lg">
+              <SelectValue placeholder="Select OAuth flow" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={OAUTH_FLOW.M2M}>
+                <div>
+                  <span className="font-medium">Machine-to-Machine (M2M)</span>
+                  <span className="ml-2 text-xs text-muted-foreground">server-to-server, no user interaction</span>
+                </div>
+              </SelectItem>
+              <SelectItem value={OAUTH_FLOW.INTERACTIVE}>
+                <div>
+                  <span className="font-medium">Interactive (PKCE)</span>
+                  <span className="ml-2 text-xs text-muted-foreground">browser-based user authorization</span>
+                </div>
+              </SelectItem>
+            </SelectContent>
           </Select>
         )}
       </MountedFormField>
@@ -104,10 +125,10 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             rules={requiredWhenCreating("Client ID is required for M2M OAuth")}
           >
             {(control) => (
-              <AntdInput.Password
+              <PasswordInput
                 {...textControl(control)}
                 placeholder={`Enter OAuth client ID${placeholderSuffix}`}
-                className={fieldClassName}
+                groupClassName={fieldClassName}
               />
             )}
           </MountedFormField>
@@ -120,10 +141,10 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             rules={requiredWhenCreating("Client Secret is required for M2M OAuth")}
           >
             {(control) => (
-              <AntdInput.Password
+              <PasswordInput
                 {...textControl(control)}
                 placeholder={`Enter OAuth client secret${placeholderSuffix}`}
-                className={fieldClassName}
+                groupClassName={fieldClassName}
               />
             )}
           </MountedFormField>
@@ -151,16 +172,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name={["credentials", "scopes"]}
           >
-            {(control) => (
-              <Select
-                {...selectControl(control)}
-                mode="tags"
-                tokenSeparators={[","]}
-                placeholder="Add scopes"
-                className="rounded-lg"
-                size="large"
-              />
-            )}
+            {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
           </MountedFormField>
           <UpstreamResourceField />
         </>
@@ -189,10 +201,10 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name={["credentials", "client_id"]}
           >
             {(control) => (
-              <AntdInput.Password
+              <PasswordInput
                 {...textControl(control)}
                 placeholder={`Enter client ID${placeholderSuffix}`}
-                className={fieldClassName}
+                groupClassName={fieldClassName}
               />
             )}
           </MountedFormField>
@@ -206,10 +218,10 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name={["credentials", "client_secret"]}
           >
             {(control) => (
-              <AntdInput.Password
+              <PasswordInput
                 {...textControl(control)}
                 placeholder={`Enter client secret${placeholderSuffix}`}
-                className={fieldClassName}
+                groupClassName={fieldClassName}
               />
             )}
           </MountedFormField>
@@ -222,16 +234,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name={["credentials", "scopes"]}
           >
-            {(control) => (
-              <Select
-                {...selectControl(control)}
-                mode="tags"
-                tokenSeparators={[","]}
-                placeholder="Add scopes"
-                className="rounded-lg"
-                size="large"
-              />
-            )}
+            {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
           </MountedFormField>
           <UpstreamResourceField />
           <MountedFormField
@@ -305,7 +308,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             rules={{ validate: { json: parsesAsJson("Must be valid JSON") } }}
           >
             {(control) => (
-              <AntdInput.TextArea
+              <Textarea
                 {...textControl(control)}
                 placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
                 rows={4}
@@ -323,13 +326,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name="token_storage_ttl_seconds"
           >
             {(control) => (
-              <InputNumber
-                {...numberControl(control)}
-                min={1}
-                placeholder="e.g. 3600"
-                className="w-full rounded-lg"
-                style={{ width: "100%" }}
-              />
+              <Input {...numberControl(control)} min={1} placeholder="e.g. 3600" className="w-full rounded-lg" />
             )}
           </MountedFormField>
           {oauthFlow && (

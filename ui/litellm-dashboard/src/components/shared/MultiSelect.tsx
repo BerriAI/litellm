@@ -89,7 +89,7 @@ export function MultiSelect({
 
   const handleValueChange = (selected: MultiSelectOption[]) => {
     const next = allowCustomValues
-      ? selected.flatMap((option) => splitOnCommas(option.value))
+      ? selected.flatMap((option) => (value.includes(option.value) ? [option.value] : splitOnCommas(option.value)))
       : selected.map((option) => option.value);
     onValueChange(Array.from(new Set(next)));
     setQuery("");

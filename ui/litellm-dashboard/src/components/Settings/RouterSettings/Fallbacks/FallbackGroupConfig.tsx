@@ -6,7 +6,7 @@
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { AlertCircle, ArrowDown, X } from "lucide-react";
-import React from "react";
+import React, { useId } from "react";
 
 export interface FallbackGroup {
   id: string;
@@ -64,15 +64,17 @@ export function FallbackGroupConfig({
   };
 
   const canAddMoreFallbacks = group.fallbackModels.length < maxFallbacks;
+  const primaryModelInputId = useId();
 
   return (
     <div className="flex flex-col gap-8 py-4">
       {/* Primary Model Section */}
       <div className="relative">
-        <label className="block text-sm font-semibold text-gray-700 mb-2">
+        <label htmlFor={primaryModelInputId} className="block text-sm font-semibold text-gray-700 mb-2">
           Primary Model <span className="text-red-500">*</span>
         </label>
         <SearchSelect
+          inputId={primaryModelInputId}
           options={availableModels.map((m) => ({ label: m, value: m }))}
           value={group.primaryModel ?? ""}
           onValueChange={handlePrimaryChange}
@@ -135,9 +137,9 @@ export function FallbackGroupConfig({
                 <span className="text-xs mt-1">Add models from the dropdown above</span>
               </div>
             ) : (
-              group.fallbackModels.map((modelValue, index) => {
-                return (
-                  <div
+              <ol aria-label="Fallback chain" className="space-y-2">
+                {group.fallbackModels.map((modelValue, index) => (
+                  <li
                     key={`${modelValue}-${index}`}
                     className="group flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 hover:border-indigo-300 hover:shadow-xs transition-all"
                   >
@@ -152,15 +154,15 @@ export function FallbackGroupConfig({
 
                     <button
                       type="button"
-                      data-testid={`remove-fallback-${modelValue}`}
+                      aria-label={`Remove ${modelValue}`}
                       onClick={() => removeFallback(index)}
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1"
                     >
                       <X className="w-4 h-4" />
                     </button>
-                  </div>
-                );
-              })
+                  </li>
+                ))}
+              </ol>
             )}
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
@@ -140,7 +140,7 @@ describe("FallbackSelectionForm", () => {
     render(
       <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
     );
-    expect(screen.getByText("Select primary model")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /primary model/i })).toHaveValue("");
     expect(screen.getByText("Primary Model")).toBeInTheDocument();
   });
 
@@ -151,7 +151,8 @@ describe("FallbackSelectionForm", () => {
     );
     expect(screen.getByRole("tab", { name: "gpt-4" })).toBeInTheDocument();
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
-    expect(screen.getByText("gpt-3.5-turbo")).toBeInTheDocument();
+    const chain = screen.getByRole("list", { name: "Fallback chain" });
+    expect(within(chain).getByText("gpt-3.5-turbo")).toBeInTheDocument();
   });
 
   it("should not add group when add button clicked at maxGroups", () => {

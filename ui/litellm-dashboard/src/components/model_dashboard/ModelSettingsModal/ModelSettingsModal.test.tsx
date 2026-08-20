@@ -271,7 +271,7 @@ describe("ModelSettingsModal", () => {
     renderWithProviders(<ModelSettingsModal {...defaultProps} />);
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
+    expect(screen.getByRole("status", { name: "Loading model settings" })).toBeInTheDocument();
   });
 
   it("should not call onSuccess when it is not provided", async () => {
