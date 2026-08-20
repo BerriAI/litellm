@@ -6787,6 +6787,7 @@ async def test_update_general_settings_propagates_health_check_settings(monkeypa
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
+    monkeypatch.setattr(proxy_config, "_yaml_general_settings_keys", set())
     monkeypatch.setattr(ps, "general_settings", {})
     monkeypatch.setattr(ps, "use_background_health_checks", False)
     monkeypatch.setattr(ps, "use_shared_health_check", False)
@@ -6796,6 +6797,7 @@ async def test_update_general_settings_propagates_health_check_settings(monkeypa
     monkeypatch.setattr(ps, "llm_router", None)
     monkeypatch.setattr(ps, "_reconcile_background_health_check_task", AsyncMock())
 
+    await proxy_config._update_general_settings(None)
     await proxy_config._update_general_settings(
         db_general_settings={
             "background_health_checks": True,
@@ -6821,6 +6823,7 @@ async def test_update_general_settings_updates_health_state_cache_threshold(monk
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
+    monkeypatch.setattr(proxy_config, "_yaml_general_settings_keys", set())
     fake_router = types.SimpleNamespace(
         health_state_cache=types.SimpleNamespace(staleness_threshold=600.0),
         enable_health_check_routing=False,
@@ -6830,6 +6833,7 @@ async def test_update_general_settings_updates_health_state_cache_threshold(monk
     monkeypatch.setattr(ps, "llm_router", fake_router)
     monkeypatch.setattr(ps, "_reconcile_background_health_check_task", AsyncMock())
 
+    await proxy_config._update_general_settings(None)
     await proxy_config._update_general_settings(db_general_settings={"health_check_staleness_threshold": 900})
 
     assert fake_router.health_state_cache.staleness_threshold == 900.0
@@ -6841,6 +6845,7 @@ async def test_update_general_settings_updates_router_health_options(monkeypatch
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
+    monkeypatch.setattr(proxy_config, "_yaml_general_settings_keys", set())
     fake_router = types.SimpleNamespace(
         health_state_cache=types.SimpleNamespace(staleness_threshold=600.0),
         enable_health_check_routing=False,
@@ -6850,6 +6855,7 @@ async def test_update_general_settings_updates_router_health_options(monkeypatch
     monkeypatch.setattr(ps, "llm_router", fake_router)
     monkeypatch.setattr(ps, "_reconcile_background_health_check_task", AsyncMock())
 
+    await proxy_config._update_general_settings(None)
     await proxy_config._update_general_settings(
         db_general_settings={
             "enable_health_check_routing": True,
