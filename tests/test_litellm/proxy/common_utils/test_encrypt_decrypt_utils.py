@@ -13,6 +13,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _V2_GCM_PREFIX,
     decrypt_value_helper,
     encrypt_value_helper,
+    get_decryption_keys,
+    get_previous_salt_keys,
 )
 
 
@@ -185,3 +187,60 @@ def test_decrypt_failure_debug_log_omits_raw_value(monkeypatch):
         "the failing key should still be named in the breadcrumb"
     )
     assert result == secret
+
+
+# ---------------------------- salt key rotation ----------------------------
+
+
+def test_retired_salt_key_value_still_decrypts(monkeypatch):
+    """The rotation guarantee: old ciphertext is readable under the new key.
+
+    Values written before the rotation stay readable as long as the retired key
+    is listed in LITELLM_SALT_KEY_PREVIOUS, which is what makes rotating the salt
+    key safe without regenerating virtual keys.
+    """
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-salt")
+    old_ct = encrypt_value_helper("provider-api-key")
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-new-salt")
+    assert decrypt_value_helper(old_ct, key="t") is None
+
+    monkeypatch.setenv("LITELLM_SALT_KEY_PREVIOUS", "sk-old-salt")
+    assert decrypt_value_helper(old_ct, key="t") == "provider-api-key"
+
+
+def test_retired_salt_key_works_for_aes_values(monkeypatch):
+    """Fallback is format-agnostic: it also covers v2:gcm: ciphertext."""
+    _use_aes(monkeypatch)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-salt")
+    old_ct = encrypt_value_helper("aes-secret")
+    assert old_ct.startswith(_V2_GCM_PREFIX)
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-new-salt")
+    monkeypatch.setenv("LITELLM_SALT_KEY_PREVIOUS", "sk-unrelated,sk-old-salt")
+    assert decrypt_value_helper(old_ct, key="t") == "aes-secret"
+
+
+def test_new_writes_use_the_active_salt_key_only(monkeypatch):
+    """A retired key must never be used for writes, or rotation never converges."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-new-salt")
+    monkeypatch.setenv("LITELLM_SALT_KEY_PREVIOUS", "sk-old-salt")
+
+    ct = encrypt_value_helper("fresh-secret")
+
+    monkeypatch.delenv("LITELLM_SALT_KEY_PREVIOUS")
+    assert decrypt_value_helper(ct, key="t") == "fresh-secret"
+
+
+def test_decryption_keys_order_and_dedup(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-active")
+    monkeypatch.setenv(
+        "LITELLM_SALT_KEY_PREVIOUS", " sk-active , sk-a ,, sk-b , sk-a "
+    )
+
+    assert get_decryption_keys() == ("sk-active", "sk-a", "sk-b")
+
+
+def test_no_previous_salt_keys_configured(monkeypatch):
+    monkeypatch.delenv("LITELLM_SALT_KEY_PREVIOUS", raising=False)
+    assert get_previous_salt_keys() == ()

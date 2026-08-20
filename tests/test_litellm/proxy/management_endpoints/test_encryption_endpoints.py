@@ -98,3 +98,47 @@ async def test_migrate_endpoint_db_not_connected(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await migrate_encryption_endpoint(user_api_key_dict=ADMIN)
     assert exc.value.status_code == 500
+
+
+# ------------------------------ salt-key mode ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_salt_key_mode_selects_the_salt_key_policy(monkeypatch):
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    fake = AsyncMock(return_value=_sample_report())
+    monkeypatch.setattr(cm, "migrate_encryption", fake)
+
+    out = await migrate_encryption_endpoint(user_api_key_dict=ADMIN, mode="salt-key")
+
+    assert out["mode"] == "salt-key"
+    assert fake.await_args.kwargs["policy"] is cm.SALT_KEY_POLICY
+
+
+@pytest.mark.asyncio
+async def test_check_endpoint_salt_key_mode_selects_the_salt_key_policy(monkeypatch):
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    fake = AsyncMock(return_value=_sample_report())
+    monkeypatch.setattr(cm, "check_encryption", fake)
+
+    out = await check_encryption_endpoint(user_api_key_dict=ADMIN, mode="salt-key")
+
+    assert out["mode"] == "salt-key"
+    assert fake.await_args.kwargs["policy"] is cm.SALT_KEY_POLICY
+
+
+@pytest.mark.asyncio
+async def test_unmet_precondition_is_400_not_500(monkeypatch):
+    """A missing LITELLM_SALT_KEY_PREVIOUS is operator error, not a server fault."""
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(
+        cm,
+        "migrate_encryption",
+        AsyncMock(side_effect=RuntimeError("LITELLM_SALT_KEY_PREVIOUS")),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await migrate_encryption_endpoint(user_api_key_dict=ADMIN, mode="salt-key")
+
+    assert exc.value.status_code == 400
+    assert "LITELLM_SALT_KEY_PREVIOUS" in exc.value.detail["error"]

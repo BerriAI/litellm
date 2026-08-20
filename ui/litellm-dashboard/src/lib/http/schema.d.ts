@@ -2853,11 +2853,16 @@ export interface paths {
         put?: never;
         /**
          * Migrate Encryption Endpoint
-         * @description Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+         * @description Re-encrypt all at-rest credentials, either into the AES-256-GCM (``v2:gcm:``)
+         *     format (``mode=algorithm``, the default) or under the active salt key
+         *     (``mode=salt-key``).
          *
-         *     Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
-         *     Idempotent and resumable — re-running skips already-migrated values. Pass
-         *     ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+         *     Admin only. ``mode=algorithm`` requires
+         *     ``general_settings.encryption_algorithm: aes-256-gcm``; ``mode=salt-key``
+         *     requires the retired key(s) in ``LITELLM_SALT_KEY_PREVIOUS`` and the new one
+         *     in ``LITELLM_SALT_KEY``. Idempotent and resumable, so re-running skips values
+         *     that are already current. Pass ``dry_run=true`` for a non-mutating scan
+         *     (equivalent to ``--check``).
          */
         post: operations["migrate_encryption_endpoint_credentials_migrate_encryption_post"];
         delete?: never;
@@ -2875,9 +2880,14 @@ export interface paths {
         };
         /**
          * Check Encryption Endpoint
-         * @description Read-only residual scan for compliance attestation. Reports how many at-rest
-         *     values are still in the legacy format. ``residual_legacy == 0`` attests no
-         *     legacy ciphertext remains. Admin only; performs no writes.
+         * @description Read-only residual scan for compliance attestation. Admin only; performs no
+         *     writes. With ``mode=algorithm`` it reports how many at-rest values are still
+         *     in the legacy format; with ``mode=salt-key`` it reports how many still
+         *     decrypt only under a retired salt key. ``residual_legacy == 0`` with an empty
+         *     ``unreadable_locations`` is the attestation for the selected mode, and for
+         *     ``salt-key`` it means ``LITELLM_SALT_KEY_PREVIOUS`` can be dropped. A store
+         *     the scan could not read is named in ``unreadable_locations``, because zero
+         *     counts from a store nobody could open mean unknown rather than clean.
          */
         get: operations["check_encryption_endpoint_credentials_migrate_encryption_check_get"];
         put?: never;
@@ -41275,6 +41285,7 @@ export interface operations {
             query?: {
                 /** @description If true, scan and report without writing any changes. */
                 dry_run?: boolean;
+                mode?: "algorithm" | "salt-key";
             };
             header?: never;
             path?: never;
@@ -41304,7 +41315,9 @@ export interface operations {
     };
     check_encryption_endpoint_credentials_migrate_encryption_check_get: {
         parameters: {
-            query?: never;
+            query?: {
+                mode?: "algorithm" | "salt-key";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -41318,6 +41331,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

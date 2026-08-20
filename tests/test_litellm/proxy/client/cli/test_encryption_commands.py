@@ -51,14 +51,41 @@ def test_migrate_default_posts_without_dry_run(runner):
     assert result.exit_code == 0, result.output
     assert _FakeHTTPClient.last["method"] == "POST"
     assert _FakeHTTPClient.last["path"] == "/credentials/migrate-encryption"
-    assert _FakeHTTPClient.last["params"] is None
+    assert dict(_FakeHTTPClient.last["params"]) == {
+        "mode": "algorithm",
+        "dry_run": "false",
+    }
 
 
 def test_migrate_dry_run_sets_param(runner):
     result = runner.invoke(cli_main.cli, ["encryption", "migrate", "--dry-run"])
     assert result.exit_code == 0, result.output
     assert _FakeHTTPClient.last["method"] == "POST"
-    assert _FakeHTTPClient.last["params"] == {"dry_run": "true"}
+    assert dict(_FakeHTTPClient.last["params"]) == {
+        "mode": "algorithm",
+        "dry_run": "true",
+    }
+
+
+def test_migrate_salt_key_mode_is_forwarded(runner):
+    result = runner.invoke(
+        cli_main.cli, ["encryption", "migrate", "--mode", "salt-key"]
+    )
+    assert result.exit_code == 0, result.output
+    assert _FakeHTTPClient.last["method"] == "POST"
+    assert dict(_FakeHTTPClient.last["params"]) == {
+        "mode": "salt-key",
+        "dry_run": "false",
+    }
+
+
+def test_migrate_salt_key_check_is_forwarded(runner):
+    result = runner.invoke(
+        cli_main.cli, ["encryption", "migrate", "--mode", "salt-key", "--check"]
+    )
+    assert result.exit_code == 0, result.output
+    assert _FakeHTTPClient.last["method"] == "GET"
+    assert dict(_FakeHTTPClient.last["params"]) == {"mode": "salt-key"}
 
 
 def test_migrate_reports_residual_legacy(runner):
