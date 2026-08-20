@@ -1,13 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
-import { Input, Switch } from "antd";
+import React, { useId, useState } from "react";
 import { toast } from "@/lib/toast";
 import { fetchClient } from "@/lib/http/api";
 import { ApiError } from "@/lib/http/client";
 import { ArrowLeft, ArrowRight, Check, Key, Link2, Lock, X } from "lucide-react";
 import { MCPServer } from "./types";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Switch } from "@/components/ui/switch";
 
 const byokSaveErrorMessage = (e: unknown): string => {
   if (e instanceof ApiError) {
@@ -29,6 +30,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
   const [apiKey, setApiKey] = useState("");
   const [saveKey, setSaveKey] = useState(true);
   const [loading, setLoading] = useState(false);
+  const apiKeyInputId = useId();
 
   const serverDisplayName = server.alias || server.server_name || "Service";
   const firstLetter = serverDisplayName.charAt(0).toUpperCase();
@@ -169,13 +171,15 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
               <p className="text-gray-500 mb-6">Enter your {serverDisplayName} API key to authorize this connection.</p>
 
               <div className="mb-4">
-                <label className="block text-sm font-semibold text-gray-800 mb-2">{serverDisplayName} API Key</label>
-                <Input.Password
+                <label htmlFor={apiKeyInputId} className="block text-sm font-semibold text-gray-800 mb-2">
+                  {serverDisplayName} API Key
+                </label>
+                <PasswordInput
+                  id={apiKeyInputId}
                   placeholder="Enter your API key"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  size="large"
-                  className="rounded-lg"
+                  groupClassName="rounded-lg"
                 />
                 {server.byok_api_key_help_url && (
                   <a
@@ -200,7 +204,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({ server
                   </svg>
                   <span className="text-sm font-medium text-gray-800">Save key for future use</span>
                 </div>
-                <Switch checked={saveKey} onChange={setSaveKey} />
+                <Switch checked={saveKey} onCheckedChange={setSaveKey} aria-label="Save key for future use" />
               </div>
 
               {/* Security note */}
