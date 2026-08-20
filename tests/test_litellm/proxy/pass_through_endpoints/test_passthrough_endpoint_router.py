@@ -268,14 +268,29 @@ def test_vertex_model_hint_prefers_matching_deployment():
     assert by_upstream_id is not None and by_upstream_id.vertex_project == "proj-live"
 
 
-def test_vertex_unmatched_hint_falls_back_to_first_flagged_deployment():
+def test_vertex_without_usable_hint_refuses_to_guess_between_projects():
     passthrough_router = _passthrough_router(_two_vertex_deployments_router())
 
-    unmatched = passthrough_router.get_vertex_credentials_from_router_deployments(model="unknown-model")
-    no_hint = passthrough_router.get_vertex_credentials_from_router_deployments(model=None)
+    assert passthrough_router.get_vertex_credentials_from_router_deployments(model="unknown-model") is None
+    assert passthrough_router.get_vertex_credentials_from_router_deployments(model=None) is None
 
-    assert unmatched is not None and unmatched.vertex_project == "proj-first"
-    assert no_hint is not None and no_hint.vertex_project == "proj-first"
+
+def test_vertex_without_hint_falls_back_when_deployments_share_a_target():
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-flash", "vertex_ai/gemini-2.5-flash", vertex_project="proj-one", vertex_location="global"
+            ),
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", vertex_project="proj-one", vertex_location="global"
+            ),
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    resolved = passthrough_router.get_vertex_credentials_from_router_deployments(model=None)
+
+    assert resolved is not None and resolved.vertex_project == "proj-one"
 
 
 def test_no_flagged_vertex_deployment_returns_none():
