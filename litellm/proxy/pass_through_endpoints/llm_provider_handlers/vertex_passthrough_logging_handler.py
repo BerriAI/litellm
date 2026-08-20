@@ -62,6 +62,8 @@ class VertexPassthroughLoggingHandler:
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
         vertex_location: Final = get_vertex_location_from_url(url_route)
+        if vertex_location is not None:
+            logging_obj.optional_params["vertex_location"] = vertex_location
         if "predictLongRunning" in url_route:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
@@ -421,6 +423,9 @@ class VertexPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
         kwargs: dict[str, Any] = {}
+        vertex_location: Final = get_vertex_location_from_url(url_route)
+        if vertex_location is not None:
+            litellm_logging_obj.optional_params["vertex_location"] = vertex_location
         model = model or VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
         complete_streaming_response: Final = VertexPassthroughLoggingHandler._build_complete_streaming_response(
             all_chunks=all_chunks,
@@ -446,7 +451,7 @@ class VertexPassthroughLoggingHandler:
             end_time=end_time,
             logging_obj=litellm_logging_obj,
             custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
-            vertex_location=get_vertex_location_from_url(url_route),
+            vertex_location=vertex_location,
         )
 
         return {
