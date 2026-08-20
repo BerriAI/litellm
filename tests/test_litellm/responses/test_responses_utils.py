@@ -638,3 +638,65 @@ def test_responses_maps_reasoning_effort_from_litellm_params_to_reasoning():
             "effort": "high",
             "summary": "detailed",
         }
+
+
+class TestMergePromptManagementInputReshape:
+    """Chat-shaped text parts produced by prompt management hooks become input_text parts (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def _run_cache_hook(self, client_input, points, model="openai/gpt-5.6"):
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+        _, merged, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=client_input,
+            non_default_params={"cache_control_injection_points": points},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return merged
+
+    def test_string_system_item_becomes_input_text_with_marker(self):
+        original_input = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "hi"}]
+        merged = self._run_cache_hook(list(original_input), [{"location": "message", "role": "system"}])
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input=original_input, client_input=list(original_input), merged_input=merged
+        )
+
+        assert result[0]["content"] == [
+            {"type": "input_text", "text": "You are terse.", "prompt_cache_breakpoint": self.EXPLICIT}
+        ]
+        assert result[1] == {"role": "user", "content": "hi"}
+
+    def test_assistant_text_parts_are_left_alone(self):
+        merged = [
+            {"role": "assistant", "content": [{"type": "text", "text": "earlier answer"}]},
+            {"role": "user", "content": [{"type": "text", "text": "follow-up"}]},
+        ]
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input="ignored", client_input=[], merged_input=merged
+        )
+
+        assert result[0]["content"] == [{"type": "text", "text": "earlier answer"}]
+        assert result[1]["content"] == [{"type": "input_text", "text": "follow-up"}]
+
+    def test_parts_already_in_responses_shape_are_unchanged(self):
+        merged = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "a", "prompt_cache_breakpoint": self.EXPLICIT},
+                    {"type": "input_image", "image_url": "https://example.com/a.png"},
+                ],
+            }
+        ]
+
+        result = ResponsesAPIRequestUtils.merge_prompt_management_input(
+            original_input="ignored", client_input=[], merged_input=merged
+        )
+
+        assert result == merged

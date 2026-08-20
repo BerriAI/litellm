@@ -10,9 +10,11 @@ Supported for both `v1/chat/completions` (via the prompt-management hook) and
 """
 
 import copy
+import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -49,15 +51,42 @@ MAX_CACHE_CONTROL_BLOCKS: Final = 4
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
 _GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
-OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset({"text", "image", "image_url", "file", "input_audio"})
+OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
+    {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
+)
+OPENAI_API_HOST: Final = "api.openai.com"
+OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 
 
 def supports_openai_prompt_cache_breakpoint(model: str) -> bool:
+    if _has_model_map_entry(model):
+        from litellm.utils import supports_prompt_cache_breakpoint
+
+        return supports_prompt_cache_breakpoint(model)
     version_match: Final = _GPT_VERSION_PATTERN.match(model.rsplit("/", 1)[-1].lower())
     if version_match is None:
         return False
     version: Final = (int(version_match.group(1)), int(version_match.group(2) or 0))
     return version >= OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION
+
+
+def _has_model_map_entry(model: str) -> bool:
+    import litellm
+
+    return model in litellm.model_cost or model.rsplit("/", 1)[-1] in litellm.model_cost
+
+
+def targets_openai_api(api_base: object) -> bool:
+    import litellm
+
+    resolved: Final = next(
+        (value for value in (api_base, litellm.api_base, *map(os.getenv, OPENAI_API_BASE_ENV_VARS)) if value),
+        None,
+    )
+    if not isinstance(resolved, str):
+        return True
+    host: Final = urlparse(resolved).hostname
+    return host is not None and (host == OPENAI_API_HOST or host.endswith(f".{OPENAI_API_HOST}"))
 
 
 def _carries_cache_breakpoint(block: object) -> bool:
@@ -114,10 +143,19 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # provider transform, where each tool_config point appends at most one
         # cachePoint to the tools. That block also counts toward Anthropic's
         # limit, so reserve a slot for it here to leave room.
-        reserved_blocks: Final = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
-
-        openai_dialect: Final = AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
-            model, injection_points[0].get("_litellm_provider")
+        stamped_dialect: Final = injection_points[0].get("_litellm_openai_dialect")
+        openai_dialect: Final = (
+            stamped_dialect
+            if isinstance(stamped_dialect, bool)
+            else AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+                model,
+                non_default_params.get("custom_llm_provider"),
+                non_default_params.get("api_base"),
+                non_default_params.get("prompt_cache_options"),
+            )
+        )
+        reserved_blocks: Final = (
+            1 if not openai_dialect and any(p.get("location") == "tool_config" for p in remaining_points) else 0
         )
         breakpoints_before: Final = AnthropicCacheControlHook._count_request_cache_breakpoints(processed_messages)
         processed_messages = self._apply_message_injections(
@@ -141,10 +179,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return model, processed_messages, non_default_params
 
     @staticmethod
-    def _targets_openai_prompt_cache_breakpoint(model: str | None, custom_llm_provider: str | None) -> bool:
+    def _targets_openai_prompt_cache_breakpoint(
+        model: str | None,
+        custom_llm_provider: str | None,
+        api_base: object = None,
+        prompt_cache_options: object = None,
+    ) -> bool:
         if model is None or not supports_openai_prompt_cache_breakpoint(model):
             return False
-        return (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) == "openai"
+        if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
+            return False
+        return prompt_cache_options is not None or targets_openai_api(api_base)
 
     @staticmethod
     def _resolve_provider(model: str) -> str | None:
@@ -315,10 +360,18 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             ]
             return marked
         if isinstance(message_content, list):
-            with_prompt_cache_breakpoint(
-                next((block for block in reversed(message_content) if _accepts_prompt_cache_breakpoint(block)), None),
-                PromptCacheBreakpoint(mode="explicit"),
+            target_index: Final = next(
+                (
+                    index
+                    for index in range(len(message_content) - 1, -1, -1)
+                    if _accepts_prompt_cache_breakpoint(message_content[index])
+                ),
+                None,
             )
+            if target_index is not None:
+                message_content[target_index] = with_prompt_cache_breakpoint(
+                    message_content[target_index], PromptCacheBreakpoint(mode="explicit")
+                )
         return message
 
     @staticmethod
@@ -363,7 +416,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             else:
                 remaining_points.append(point)
 
-        reserved_blocks: Final = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
+        reserved_blocks: Final = (
+            1 if not openai_dialect and any(p.get("location") == "tool_config" for p in remaining_points) else 0
+        )
         max_blocks: Final = MAX_CACHE_CONTROL_BLOCKS - reserved_blocks
 
         message_blocks: Final = AnthropicCacheControlHook._count_request_cache_breakpoints(processed_messages)
@@ -432,18 +487,32 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         tools: list[object] | None,
         model: str,
         custom_llm_provider: str | None,
+        api_base: object,
+        prompt_cache_options: object,
     ) -> Sequence[Mapping[str, object]] | None:
         if AnthropicCacheControlHook._should_stand_down(points, messages, None, tools):
             return None
-        return AnthropicCacheControlHook._stamped_with_provider(points, model, custom_llm_provider)
+        return AnthropicCacheControlHook._stamped_with_dialect(
+            points, model, custom_llm_provider, api_base, prompt_cache_options
+        )
 
     @staticmethod
-    def _stamped_with_provider(
-        points: Sequence[CacheControlInjectionPoint], model: str, custom_llm_provider: str | None
+    def _stamped_with_dialect(
+        points: Sequence[CacheControlInjectionPoint],
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: object,
+        prompt_cache_options: object,
     ) -> Sequence[Mapping[str, object]]:
-        if custom_llm_provider is None or not supports_openai_prompt_cache_breakpoint(model):
+        if not supports_openai_prompt_cache_breakpoint(model):
             return points
-        return AnthropicCacheControlHook._stamped(points, "_litellm_provider", custom_llm_provider)
+        return AnthropicCacheControlHook._stamped(
+            points,
+            "_litellm_openai_dialect",
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+                model, custom_llm_provider, api_base, prompt_cache_options
+            ),
+        )
 
     @staticmethod
     def _stamped(
@@ -563,6 +632,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         custom_llm_provider: str | None,
         tools: list | None = None,
         enable_prompt_caching: bool | None = None,
+        api_base: object = None,
     ) -> None:
         """For /chat/completions: resolve the injection points the request should carry.
 
@@ -578,7 +648,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         if non_default_params.get("cache_control_injection_points"):
             judged: Final = AnthropicCacheControlHook._judged_configured_points(
-                non_default_params["cache_control_injection_points"], messages, tools, model, custom_llm_provider
+                non_default_params["cache_control_injection_points"],
+                messages,
+                tools,
+                model,
+                custom_llm_provider,
+                api_base,
+                non_default_params.get("prompt_cache_options"),
             )
             if judged is None:
                 non_default_params.pop("cache_control_injection_points")
@@ -604,6 +680,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         model: str | None = None,
         custom_llm_provider: str | None = None,
         tools: list[dict] | None = None,
+        api_base: str | None = None,
     ) -> tuple[list[dict], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
@@ -642,7 +719,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return messages, system
 
         openai_dialect: Final = AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
-            model, custom_llm_provider
+            model, custom_llm_provider, api_base, kwargs.get("prompt_cache_options")
         )
         breakpoints_before: Final = AnthropicCacheControlHook._count_request_cache_breakpoints(messages, system)
         messages, system, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(

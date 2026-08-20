@@ -23,6 +23,13 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
+@pytest.fixture(autouse=True)
+def _no_openai_api_base_override(monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+
 def _rendered_log_message(call):
     message = str(call.args[0])
     values = call.args[1:]
@@ -2395,19 +2402,28 @@ class TestOpenAIPromptCacheBreakpointPlacementRules:
 
 
 class TestChatPathProviderStamp:
-    """The chat path learns the caller's custom_llm_provider through the seeded points (#37509)."""
+    """The chat path learns the dialect decision (provider, api_base, opt-in) through the seeded points (#37509)."""
 
     POINTS = [{"location": "message", "role": "system"}]
     MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    ANTHROPIC_STYLE = {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+    OPENAI_STYLE = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+    CUSTOM_API_BASE = "http://127.0.0.1:9/v1"
 
-    def _seed_and_run(self, model, custom_llm_provider):
+    def _seed_and_run(self, model, custom_llm_provider, api_base=None, prompt_cache_options=None):
         params = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        if prompt_cache_options is not None:
+            params["prompt_cache_options"] = prompt_cache_options
         AnthropicCacheControlHook.maybe_seed_default_injection_points(
             non_default_params=params,
             messages=copy.deepcopy(self.MESSAGES),
             model=model,
             custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
         )
+        return self._run(params, model)
+
+    def _run(self, params, model):
         _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
             model=model,
             messages=copy.deepcopy(self.MESSAGES),
@@ -2452,6 +2468,84 @@ class TestChatPathProviderStamp:
             assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("my-custom-model", None) is False
         resolve.assert_not_called()
 
+    def test_litellm_proxy_target_keeps_anthropic_style_markers(self):
+        out, params = self._seed_and_run("litellm_proxy/gpt-5.6", None)
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_custom_api_base_keeps_anthropic_style_markers(self):
+        out, params = self._seed_and_run("gpt-5.6", None, api_base=self.CUSTOM_API_BASE)
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_custom_api_base_opts_in_through_prompt_cache_options(self):
+        out, params = self._seed_and_run(
+            "gpt-5.6", None, api_base=self.CUSTOM_API_BASE, prompt_cache_options={"mode": "explicit"}
+        )
+        assert out[0]["content"] == self.OPENAI_STYLE
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    def test_regional_openai_api_base_uses_openai_dialect(self):
+        out, params = self._seed_and_run("gpt-5.6", None, api_base="https://eu.api.openai.com/v1")
+        assert out[0]["content"] == self.OPENAI_STYLE
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    @pytest.mark.parametrize("env_var", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
+    def test_env_api_base_override_keeps_anthropic_style_markers(self, monkeypatch, env_var):
+        monkeypatch.setenv(env_var, self.CUSTOM_API_BASE)
+        out, params = self._seed_and_run("gpt-5.6", None)
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_global_litellm_api_base_keeps_anthropic_style_markers(self, monkeypatch):
+        monkeypatch.setattr(litellm, "api_base", self.CUSTOM_API_BASE)
+        out, params = self._seed_and_run("gpt-5.6", None)
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_request_api_base_wins_over_env_override(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_BASE_URL", self.CUSTOM_API_BASE)
+        out, params = self._seed_and_run("gpt-5.6", None, api_base="https://api.openai.com/v1")
+        assert out[0]["content"] == self.OPENAI_STYLE
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    @pytest.mark.parametrize(
+        "api_base,expected",
+        [(None, True), ("http://127.0.0.1:9/v1", False), ("https://eu.api.openai.com/v1", True)],
+    )
+    def test_seed_stamps_the_dialect_decision(self, api_base, expected):
+        params = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="gpt-5.6",
+            custom_llm_provider=None,
+            api_base=api_base,
+        )
+        assert params["cache_control_injection_points"][0]["_litellm_openai_dialect"] is expected
+
+    def test_stamp_is_authoritative_over_request_params(self):
+        points = [{**self.POINTS[0], "_litellm_openai_dialect": False}]
+        out, params = self._run({"cache_control_injection_points": points, "custom_llm_provider": "openai"}, "gpt-5.6")
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_unstamped_points_read_api_base_from_request_params(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.POINTS), "api_base": self.CUSTOM_API_BASE}
+        out, params = self._run(params, "gpt-5.6")
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_unstamped_points_read_prompt_cache_options_from_request_params(self):
+        params = {
+            "cache_control_injection_points": copy.deepcopy(self.POINTS),
+            "api_base": self.CUSTOM_API_BASE,
+            "prompt_cache_options": {"mode": "explicit"},
+        }
+        out, params = self._run(params, "gpt-5.6")
+        assert out[0]["content"] == self.OPENAI_STYLE
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
 
 class TestClientBreakpointsCountedOnce:
     def test_client_message_breakpoints_are_not_double_counted(self):
@@ -2471,3 +2565,175 @@ class TestClientBreakpointsCountedOnce:
         marked = [msg["content"][0].get("cache_control") is not None for msg in out]
         assert marked == [True, False, True, True]
         assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+
+class TestResponsesInputPartsEligible:
+    """Responses API input parts can carry prompt_cache_breakpoint on GPT-5.6+ (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def _chat(self, messages, points, model="openai/gpt-5.6"):
+        params = {"cache_control_injection_points": copy.deepcopy(points)}
+        _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=copy.deepcopy(messages),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return out, params
+
+    def test_marker_lands_on_last_input_text_part(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "first"}, {"type": "input_text", "text": "second"}],
+            }
+        ]
+        out, params = self._chat(messages, [{"location": "message", "index": -1}])
+        assert out[0]["content"][0] == {"type": "input_text", "text": "first"}
+        assert out[0]["content"][1] == {
+            "type": "input_text",
+            "text": "second",
+            "prompt_cache_breakpoint": self.EXPLICIT,
+        }
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            {"type": "input_image", "image_url": "https://example.com/a.png"},
+            {"type": "input_file", "file_id": "file_1"},
+        ],
+    )
+    def test_input_image_and_input_file_parts_are_eligible(self, part):
+        out, params = self._chat([{"role": "user", "content": [part]}], [{"location": "message", "index": -1}])
+        assert out[0]["content"][0] == {**part, "prompt_cache_breakpoint": self.EXPLICIT}
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+
+class TestMessagesPathApiBaseGate:
+    """/v1/messages only speaks the OpenAI dialect when the request really targets api.openai.com (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+    USER_POINT = [{"location": "message", "role": "user"}]
+    MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    CUSTOM_API_BASE = "http://127.0.0.1:9/v1"
+    CACHE_CONTROL_BLOCK = {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}
+    BREAKPOINT_BLOCK = {"type": "text", "text": "hi", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    def _inject(self, model, api_base=None, prompt_cache_options=None, custom_llm_provider=None):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.USER_POINT)}
+        if prompt_cache_options is not None:
+            kwargs["prompt_cache_options"] = prompt_cache_options
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(self.MESSAGES),
+            None,
+            kwargs,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+        )
+        return out[0]["content"][0], kwargs
+
+    def test_litellm_proxy_target_keeps_cache_control(self):
+        block, kwargs = self._inject("gpt-5.6", api_base=self.CUSTOM_API_BASE, custom_llm_provider="litellm_proxy")
+        assert block == self.CACHE_CONTROL_BLOCK
+        assert "prompt_cache_options" not in kwargs
+
+    def test_custom_api_base_keeps_cache_control(self):
+        block, kwargs = self._inject("gpt-5.6", api_base=self.CUSTOM_API_BASE)
+        assert block == self.CACHE_CONTROL_BLOCK
+        assert "prompt_cache_options" not in kwargs
+
+    def test_custom_api_base_opts_in_through_prompt_cache_options(self):
+        block, kwargs = self._inject("gpt-5.6", api_base=self.CUSTOM_API_BASE, prompt_cache_options=self.EXPLICIT)
+        assert block == self.BREAKPOINT_BLOCK
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_regional_openai_api_base_uses_openai_dialect(self):
+        block, kwargs = self._inject("gpt-5.6", api_base="https://eu.api.openai.com/v1")
+        assert block == self.BREAKPOINT_BLOCK
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_default_api_base_uses_openai_dialect(self):
+        block, kwargs = self._inject("openai/gpt-5.6")
+        assert block == self.BREAKPOINT_BLOCK
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+
+class TestToolConfigSlotInOpenAIDialect:
+    """OpenAI has no tool_config cache block, so the dialect does not hold a slot for one (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+    MESSAGES = [{"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(4)]
+    POINTS = [{"location": "message", "index": i} for i in range(4)] + [{"location": "tool_config"}]
+
+    def test_chat_path_marks_all_four_messages(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert [msg["content"][0].get("prompt_cache_breakpoint") for msg in out] == [self.EXPLICIT] * 4
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    def test_messages_path_marks_all_four_messages(self):
+        out, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            copy.deepcopy(self.MESSAGES), None, copy.deepcopy(self.POINTS), openai_dialect=True
+        )
+        assert [msg["content"][0].get("prompt_cache_breakpoint") for msg in out] == [self.EXPLICIT] * 4
+
+    def test_anthropic_dialect_still_reserves_the_tool_config_slot(self):
+        out, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            copy.deepcopy(self.MESSAGES), None, copy.deepcopy(self.POINTS)
+        )
+        assert sum(msg["content"][0].get("cache_control") is not None for msg in out) == 3
+
+
+class TestPromptCacheBreakpointCapability:
+    """Eligibility comes from the model map's supports_prompt_cache_breakpoint flag, with the GPT version
+    rule only for models the map does not know (#37509)."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_model_info_cache(self):
+        litellm.utils._cached_get_model_info_helper.cache_clear()
+        yield
+        litellm.utils._cached_get_model_info_helper.cache_clear()
+
+    def test_public_helper_reads_the_model_map(self):
+        from litellm.utils import supports_prompt_cache_breakpoint
+
+        assert supports_prompt_cache_breakpoint("gpt-5.6") is True
+        assert supports_prompt_cache_breakpoint("openai/gpt-5.6-sol") is True
+        assert supports_prompt_cache_breakpoint("gpt-5.6", custom_llm_provider="openai") is True
+        assert supports_prompt_cache_breakpoint("gpt-4.1") is False
+
+    @pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+    def test_model_map_flags_every_openai_gpt_5_6_entry(self, model):
+        assert litellm.model_cost[model]["litellm_provider"] == "openai"
+        assert litellm.model_cost[model]["supports_prompt_cache_breakpoint"] is True
+
+    def test_listed_model_uses_the_model_map_flag(self, monkeypatch):
+        flagged = {**litellm.model_cost["gpt-4.1"], "supports_prompt_cache_breakpoint": True}
+        monkeypatch.setitem(litellm.model_cost, "gpt-4.1", flagged)
+        assert supports_openai_prompt_cache_breakpoint("gpt-4.1") is True
+
+    def test_listed_gpt_5_6_without_the_flag_is_not_eligible(self, monkeypatch):
+        unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}
+        monkeypatch.setitem(litellm.model_cost, "gpt-5.6", unflagged)
+        assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is False
+
+    def test_listed_gpt_model_without_the_flag_is_false(self):
+        assert "supports_prompt_cache_breakpoint" not in litellm.model_cost["gpt-4.1"]
+        assert supports_openai_prompt_cache_breakpoint("gpt-4.1") is False
+
+    @pytest.mark.parametrize("model,expected", [("gpt-5.6-2026-01-01", True), ("gpt-5.5-preview-unlisted", False)])
+    def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):
+        assert model not in litellm.model_cost
+        assert supports_openai_prompt_cache_breakpoint(model) is expected
