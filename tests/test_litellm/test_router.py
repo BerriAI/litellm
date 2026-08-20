@@ -493,6 +493,54 @@ async def test_async_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
+async def test_async_router_acreate_file_does_not_fall_back_across_model_groups():
+    """A file created for batches only exists under the credentials of the model group
+    the caller named. A cross-group fallback silently stores it with the wrong provider
+    and the later batch create against the named group permanently fails."""
+    from unittest.mock import MagicMock, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-gpt",
+                "litellm_params": {
+                    "model": "azure/my-azure-deployment",
+                    "api_base": "http://127.0.0.1:9",
+                    "api_key": "dummy-key",
+                    "api_version": "2024-06-01",
+                },
+            },
+            {
+                "model_name": "openai-gpt",
+                "litellm_params": {"model": "gpt-4o-mini"},
+            },
+        ],
+        fallbacks=[{"azure-gpt": ["openai-gpt"]}],
+    )
+
+    def fail_azure(*args: object, **kwargs: object) -> MagicMock:
+        if kwargs.get("model") == "azure/my-azure-deployment":
+            raise litellm.APIConnectionError(
+                message="Connection error.",
+                llm_provider="azure",
+                model="azure/my-azure-deployment",
+            )
+        return MagicMock()
+
+    with patch("litellm.acreate_file", side_effect=fail_azure) as mock_acreate_file:
+        with pytest.raises(litellm.APIConnectionError):
+            await router.acreate_file(
+                model="azure-gpt",
+                purpose="batch",
+                file=MagicMock(),
+            )
+
+        called_models = [call.kwargs.get("model") for call in mock_acreate_file.call_args_list]
+        assert "azure/my-azure-deployment" in called_models
+        assert "gpt-4o-mini" not in called_models
+
+
+@pytest.mark.asyncio
 async def test_async_router_acreate_file_uses_deployment_custom_llm_provider():
     """
     Ensure file routing preserves deployment custom_llm_provider instead of
@@ -522,6 +570,126 @@ async def test_async_router_acreate_file_uses_deployment_custom_llm_provider():
 
         assert mock_acreate_file.call_count == 1
         assert mock_acreate_file.call_args.kwargs["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_async_router_acreate_file_forwards_target_model_names_to_litellm_proxy():
+    import json
+    from io import BytesIO
+    from unittest.mock import MagicMock, patch
+
+    jsonl_file = BytesIO(
+        json.dumps({"body": {"model": "chained-batch", "messages": [{"role": "user", "content": "hi"}]}}).encode(
+            "utf-8"
+        )
+    )
+    jsonl_file.name = "test.jsonl"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chained-batch",
+                "litellm_params": {
+                    "model": "litellm_proxy/gpt-4.1-batch",
+                    "api_base": "http://localhost:4001/v1",
+                    "api_key": "sk-proxy-b",
+                },
+            },
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(
+            model="chained-batch",
+            purpose="batch",
+            file=jsonl_file,
+        )
+
+        assert mock_acreate_file.call_count == 1
+        call_kwargs = mock_acreate_file.call_args.kwargs
+        assert call_kwargs["custom_llm_provider"] == "litellm_proxy"
+        assert call_kwargs["extra_body"] == {"target_model_names": "gpt-4.1-batch"}
+        uploaded_line = json.loads(call_kwargs["file"].read().decode("utf-8").split("\n")[0])
+        assert uploaded_line["body"]["model"] == "gpt-4.1-batch"
+
+
+@pytest.mark.asyncio
+async def test_async_router_acreate_file_does_not_inject_target_model_names_for_other_providers():
+    from unittest.mock import MagicMock, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-batch",
+                "litellm_params": {"model": "gpt-4.1"},
+            },
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(
+            model="gpt-4.1-batch",
+            purpose="batch",
+            file=MagicMock(),
+        )
+
+        assert mock_acreate_file.call_count == 1
+        assert mock_acreate_file.call_args.kwargs.get("extra_body") is None
+
+
+@pytest.mark.asyncio
+async def test_async_router_acreate_file_litellm_proxy_sends_target_model_names_in_multipart_form():
+    import json
+    from io import BytesIO
+
+    import httpx
+    import respx
+
+    jsonl_file = BytesIO(
+        json.dumps({"body": {"model": "chained-batch", "messages": [{"role": "user", "content": "hi"}]}}).encode(
+            "utf-8"
+        )
+    )
+    jsonl_file.name = "test.jsonl"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chained-batch",
+                "litellm_params": {
+                    "model": "litellm_proxy/gpt-4.1-batch",
+                    "api_base": "http://localhost:4001/v1",
+                    "api_key": "sk-proxy-b",
+                },
+            },
+        ],
+    )
+
+    file_object_json = {
+        "id": "file-abc123",
+        "object": "file",
+        "bytes": 100,
+        "created_at": 1700000000,
+        "filename": "test.jsonl",
+        "purpose": "batch",
+        "status": "processed",
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        create_route = respx_mock.post("http://localhost:4001/v1/files").mock(
+            return_value=httpx.Response(200, json=file_object_json)
+        )
+        response = await router.acreate_file(
+            model="chained-batch",
+            purpose="batch",
+            file=jsonl_file,
+        )
+
+    assert response.id == "file-abc123"
+    request_body = create_route.calls.last.request.content
+    assert b'name="target_model_names"' in request_body
+    assert b"gpt-4.1-batch" in request_body
+    assert b'name="purpose"' in request_body
 
 
 @pytest.mark.asyncio
@@ -7617,6 +7785,119 @@ class TestAutoRouterMaxInputCharsWiring:
         assert self._registered_auto_router(router).max_input_chars == DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 
 
+class TestTaggedAutoRouterOnSharedModelName:
+    """A tagged auto-router marker sharing its model_name with a plain deployment must not
+    capture requests whose tags don't match it when tag filtering is enabled (#36620)."""
+
+    class _FixedRouteLayer:
+        def __call__(self, text: str):
+            from semantic_router.schema import RouteChoice
+
+            return RouteChoice(name="gemini-flash")
+
+    @classmethod
+    def _router(cls, marker_tags, include_plain_sibling: bool, enable_tag_filtering: bool) -> "litellm.Router":
+        pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+        marker = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "auto_router/gpt4o-router",
+                "auto_router_config": json.dumps(
+                    {"routes": [{"name": "gemini-flash", "utterances": ["capital city questions"]}]}
+                ),
+                "auto_router_default_model": "gemini-flash",
+                "auto_router_embedding_model": "text-embedding-3-small",
+                **({"tags": marker_tags} if marker_tags else {}),
+            },
+        }
+        plain = {"model_name": "gpt4o", "litellm_params": {"model": "openai/gpt-4o"}}
+        tier = {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}}
+        router = litellm.Router(
+            model_list=[plain, marker, tier] if include_plain_sibling else [marker, tier],
+            enable_tag_filtering=enable_tag_filtering,
+        )
+        router.auto_routers["gpt4o"][0].strategy.routelayer = cls._FixedRouteLayer()
+        return router
+
+    @staticmethod
+    async def _hook_response(router: "litellm.Router", request_kwargs: dict):
+        return await router.async_pre_routing_hook(
+            model="gpt4o",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_untagged_request_bypasses_the_tagged_marker_when_a_plain_deployment_shares_the_name(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        assert await self._hook_response(router, {}) is None
+
+    @pytest.mark.asyncio
+    async def test_request_tagged_for_the_marker_is_still_semantically_routed(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {"metadata": {"tags": ["route"]}})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_request_level_tag_filtering_from_key_settings_bypasses_the_marker(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=False)
+
+        assert await self._hook_response(router, {"enable_tag_filtering": True}) is None
+
+    @pytest.mark.asyncio
+    async def test_globally_disabled_filtering_still_lets_the_marker_capture_untagged_requests(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=False)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_marker_only_alias_still_captures_untagged_requests(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_untagged_marker_sharing_the_name_still_captures_untagged_requests(self):
+        router = self._router(marker_tags=None, include_plain_sibling=True, enable_tag_filtering=True)
+
+        response = await self._hook_response(router, {})
+
+        assert response is not None
+        assert response.model == "gemini-flash"
+
+    @pytest.mark.asyncio
+    async def test_untagged_selection_never_lands_on_the_marker_deployment(self):
+        router = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+
+        for _ in range(20):
+            deployment = await router.async_get_available_deployment(
+                model="gpt4o",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
+            )
+            assert deployment["litellm_params"]["model"] == "openai/gpt-4o"
+
+    def test_deployment_without_litellm_params_mapping_is_not_a_marker(self):
+        assert litellm.Router._is_strategy_marker_deployment({"model_name": "gpt4o"}) is False
+
+    def test_model_name_has_plain_deployments_reflects_the_pool(self):
+        mixed = self._router(marker_tags=["route"], include_plain_sibling=True, enable_tag_filtering=True)
+        marker_only = self._router(marker_tags=["route"], include_plain_sibling=False, enable_tag_filtering=True)
+
+        assert mixed._model_name_has_plain_deployments("gpt4o") is True
+        assert marker_only._model_name_has_plain_deployments("gpt4o") is False
+
+
 class TestGetAllowedFailsFromPolicy:
     def _make_router(self, **policy_kwargs) -> litellm.Router:
         from litellm.types.router import AllowedFailsPolicy
@@ -7856,3 +8137,45 @@ def test_ensure_deployment_affinity_callback_is_idempotent():
     finally:
         for cb in router.optional_callbacks or []:
             litellm.logging_callback_manager.remove_callback_from_all_lists(cb)
+
+
+def test_get_router_model_info_does_not_wipe_cached_pricing():
+    """A Deployment's model_info declares the mirrored pricing fields with None defaults;
+    merging it must not write those Nones into the lru_cache'd dict get_model_info() owns,
+    or /model/info loses built-in prices for every model a worker serves."""
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    expected = copy.deepcopy(litellm.get_model_info(model="anthropic/claude-sonnet-4-5"))
+
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1"),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5") == expected
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        assert merged[field] == expected[field]
+
+
+def test_get_router_model_info_keeps_explicit_pricing_overrides():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    litellm.get_model_info.cache_clear()
+    router = litellm.Router(model_list=[])
+    merged = router.get_router_model_info(
+        deployment=Deployment(
+            model_name="sonnet",
+            litellm_params=LiteLLM_Params(model="claude-sonnet-4-5", custom_llm_provider="anthropic"),
+            model_info=ModelInfo(id="sonnet-1", input_cost_per_token=1e-08),
+        ),
+        received_model_name="sonnet",
+    )
+
+    assert merged["input_cost_per_token"] == 1e-08
+    assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08

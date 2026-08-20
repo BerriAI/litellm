@@ -2,10 +2,16 @@ import React, { useState } from "react";
 import { CodeIcon, CopyIcon } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const LANGUAGE_ITEMS = [
+  { value: "curl", label: "cURL" },
+  { value: "python", label: "Python (OpenAI SDK)" },
+  { value: "javascript", label: "JavaScript (OpenAI SDK)" },
+] as const;
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface PromptCodeSnippetsProps {
@@ -252,6 +258,7 @@ main();`;
                 Language
               </label>
               <Select
+                items={LANGUAGE_ITEMS}
                 value={selectedLanguage}
                 onValueChange={(value) => setSelectedLanguage(value as "curl" | "python" | "javascript")}
               >
@@ -259,9 +266,11 @@ main();`;
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="curl">cURL</SelectItem>
-                  <SelectItem value="python">Python (OpenAI SDK)</SelectItem>
-                  <SelectItem value="javascript">JavaScript (OpenAI SDK)</SelectItem>
+                  {LANGUAGE_ITEMS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -269,7 +278,7 @@ main();`;
               variant="outline"
               onClick={() => {
                 navigator.clipboard.writeText(generatedCode);
-                NotificationsManager.success("Copied to clipboard!");
+                toast.success("Copied to clipboard!");
               }}
             >
               <CopyIcon />

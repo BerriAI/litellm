@@ -1841,8 +1841,8 @@ def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, mode
         router.init_auto_router_deployment(deployment)
 
 
-def test_generate_model_id_with_deployment_model_name(model_list):
-    """Test that _generate_model_id works correctly with deployment model_name and handles None values properly"""
+def testgenerate_model_id_with_deployment_model_name(model_list):
+    """Test that generate_model_id works correctly with deployment model_name and handles None values properly"""
     router = Router(model_list=model_list)
 
     # Test case 1: Normal case with valid model_group and litellm_params
@@ -1854,7 +1854,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
     }
 
     try:
-        result = router._generate_model_id(
+        result = router.generate_model_id(
             model_group=model_group, litellm_params=litellm_params
         )
         assert isinstance(result, str)
@@ -1865,7 +1865,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
 
     # Test case 2: Edge case with None model_group (this should fail as expected - our fix prevents this from happening)
     try:
-        result = router._generate_model_id(
+        result = router.generate_model_id(
             model_group=None, litellm_params=litellm_params
         )
         pytest.fail(
@@ -1888,7 +1888,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
     }
 
     try:
-        result = router._generate_model_id(
+        result = router.generate_model_id(
             model_group=model_group, litellm_params=litellm_params_with_none_key
         )
         assert isinstance(result, str)
@@ -1899,7 +1899,7 @@ def test_generate_model_id_with_deployment_model_name(model_list):
 
     # Test case 4: Edge case with empty litellm_params
     try:
-        result = router._generate_model_id(model_group=model_group, litellm_params={})
+        result = router.generate_model_id(model_group=model_group, litellm_params={})
         assert isinstance(result, str)
         assert len(result) > 0
         print(f"✓ Success with empty litellm_params: {result}")
@@ -1907,15 +1907,15 @@ def test_generate_model_id_with_deployment_model_name(model_list):
         pytest.fail(f"Failed with empty litellm_params: {e}")
 
     # Test case 5: Verify that the same inputs produce the same result (deterministic)
-    result1 = router._generate_model_id(
+    result1 = router.generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
-    result2 = router._generate_model_id(
+    result2 = router.generate_model_id(
         model_group=model_group, litellm_params=litellm_params
     )
     assert result1 == result2, "Model ID generation should be deterministic"
 
-    print("✓ All _generate_model_id tests passed!")
+    print("✓ All generate_model_id tests passed!")
 
 
 def test_handle_clientside_credential_with_deployment_model_name(model_list):
@@ -1945,13 +1945,13 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
 
     # Test that the method doesn't fail when metadata is empty
     try:
-        # This would normally call _generate_model_id internally
+        # This would normally call generate_model_id internally
         # We're testing that the fix prevents the TypeError
         model_group = deployment["model_name"]  # This is what our fix does
         assert model_group == "gpt-4.1"
 
-        # Verify that _generate_model_id works with this model_group
-        result = router._generate_model_id(
+        # Verify that generate_model_id works with this model_group
+        result = router.generate_model_id(
             model_group=model_group, litellm_params=dynamic_litellm_params
         )
         assert isinstance(result, str)

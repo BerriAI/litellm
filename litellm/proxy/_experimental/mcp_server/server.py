@@ -58,9 +58,11 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
     MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
+    build_synthetic_mcp_request,
     extract_mcp_tool_result_error_message,
     get_server_prefix,
     iter_known_server_prefixes,
+    logging_safe_mcp_headers,
     match_known_tool_name,
 )
 from litellm.proxy._types import (
@@ -860,11 +862,11 @@ if MCP_AVAILABLE:
         name: str,
         arguments: dict[str, object],
         user_api_key_auth: UserAPIKeyAuth,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> LiteLLMLoggingObj | None:
         """Run the pre-call pipeline (guardrails + logging setup) for a virtual
         mcp_tool_call so the SSE path spend-logs like the REST path."""
-        from fastapi import Request
-
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
         )
@@ -874,13 +876,10 @@ if MCP_AVAILABLE:
             proxy_logging_obj,
         )
 
-        request: Final = Request(
-            scope={
-                "type": "http",
-                "method": "POST",
-                "path": "/mcp/tools/call",
-                "headers": [(b"content-type", b"application/json")],
-            }
+        request: Final = build_synthetic_mcp_request(
+            path="/mcp/tools/call",
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
         _, virtual_logging_obj = await ProxyBaseLLMRequestProcessing(
             data={"name": name, "arguments": arguments}
@@ -952,7 +951,11 @@ if MCP_AVAILABLE:
 
         assert user_api_key_auth is not None  # guaranteed by the flag check above
         virtual_logging_obj: Final = await _build_virtual_call_logging_obj(
-            name=name, arguments=args, user_api_key_auth=user_api_key_auth
+            name=name,
+            arguments=args,
+            user_api_key_auth=user_api_key_auth,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
         return await handle_mcp_tool_call(
             tool_name=args.get("tool_name", ""),
@@ -979,7 +982,6 @@ if MCP_AVAILABLE:
         Raises:
             HTTPException: If tool not found or arguments missing
         """
-        from fastapi import Request
         from mcp.server.lowlevel.server import request_ctx
         from mcp.types import CallToolResult
 
@@ -1041,13 +1043,10 @@ if MCP_AVAILABLE:
                     body_data["litellm_trace_id"] = chain_id
                     body_data["litellm_session_id"] = chain_id
 
-                request: Final = Request(
-                    scope={
-                        "type": "http",
-                        "method": "POST",
-                        "path": "/mcp/tools/call",
-                        "headers": [(b"content-type", b"application/json")],
-                    }
+                request: Final = build_synthetic_mcp_request(
+                    path="/mcp/tools/call",
+                    raw_headers=raw_headers,
+                    client_ip=_client_ip,
                 )
                 if user_api_key_auth is not None:
                     data = await add_litellm_data_to_request(
@@ -1705,7 +1704,7 @@ if MCP_AVAILABLE:
             )
 
         extra_headers: dict[str, str] | None = None
-        is_client_forwarded_mode: Final = server.is_true_passthrough or server.is_oauth_delegate
+        is_client_forwarded_mode: Final = server.is_client_forwarded_token
         # In a multi-server listing scope the request-wide Authorization can only carry one token,
         # so it is withheld from a client-forwarded server when another server in scope also consumes
         # it (RFC 9700 cross-resource replay); such scopes must bind per-server via
@@ -1905,6 +1904,7 @@ if MCP_AVAILABLE:
                 "litellm_trace_id": effective_litellm_trace_id,
                 "metadata": {
                     "spend_logs_metadata": spend_logs_metadata,
+                    "headers": logging_safe_mcp_headers(raw_headers),
                     **({"tags": request_tags} if request_tags else {}),
                 },
                 # Provide a small input payload for standard logging
@@ -2012,6 +2012,9 @@ if MCP_AVAILABLE:
                         user_api_key_auth,
                         prefetched_creds=_prefetched_oauth_creds,
                     )
+
+                if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None:
+                    server_auth_header = await _get_byok_credential(server, user_api_key_auth)
 
                 try:
                     tools: Final = await global_mcp_server_manager._get_tools_from_server(
@@ -2824,6 +2827,7 @@ if MCP_AVAILABLE:
                 proxy_logging_obj=proxy_logging_obj,
                 server=mcp_server,
                 raw_headers=raw_headers,
+                litellm_logging_obj=litellm_logging_obj,
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -2962,6 +2966,7 @@ if MCP_AVAILABLE:
                     proxy_logging_obj=proxy_logging_obj,
                     server=prefix_server,
                     raw_headers=raw_headers,
+                    litellm_logging_obj=litellm_logging_obj,
                 )
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
@@ -3149,6 +3154,20 @@ if MCP_AVAILABLE:
             traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
             from litellm.proxy.proxy_server import proxy_logging_obj
 
+            # Ordering is load-bearing. ``_ProxyDBLogger.async_post_call_failure_hook``,
+            # reached below, writes the failure spend-log row from this logger's
+            # ``standard_logging_object``, which only exists once the failure handlers
+            # have run. Flush them first or the row lands with
+            # ``guardrail_information=None`` and a guardrail block is never counted.
+            #
+            # Not double-logged: both handlers gate on ``should_run_logging`` and then
+            # mark it, so the ``@client`` wrapper's own post-raise logging no-ops on this
+            # logger, same as ``_fire_mcp_tool_call_logging`` does for ``isError=True``.
+            if litellm_logging_obj is not None:
+                end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match `start_time`, which it is subtracted from
+                litellm_logging_obj.failure_handler(e, traceback_str, start_time, end_time)
+                await litellm_logging_obj.async_failure_handler(e, traceback_str, start_time, end_time)
+
             if proxy_logging_obj and user_api_key_auth:
                 await proxy_logging_obj.post_call_failure_hook(
                     request_data=kwargs,
@@ -3326,6 +3345,7 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
+            litellm_logging_obj=litellm_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
@@ -3737,6 +3757,14 @@ if MCP_AVAILABLE:
                 # preemptive challenge and let downstream authorization
                 # return 403.
                 continue
+            if server is not None and server.auth_type == MCPAuth.oauth2 and server.oauth2_flow == "client_credentials":
+                # Stamped M2M: the challenge decision below never reads discovered
+                # metadata, so deferred-discovery failures must not 503 this loop.
+                # Unstamped rows stay on the discover-first path because filling
+                # authorization_url/token_url can change their inferred flow.
+                continue
+            if server is not None:
+                server = await global_mcp_server_manager.ensure_oauth_metadata_discovered(server)
             if server and server.auth_type == MCPAuth.oauth2:
                 # The challenge decision is per oauth2 sub-mode, not per header:
                 # gateway-managed modes (M2M and interactive authorization_code)

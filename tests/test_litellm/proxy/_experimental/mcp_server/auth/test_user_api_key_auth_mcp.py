@@ -2646,7 +2646,7 @@ class TestMCPDelegateAuthToUpstream:
 
     def test_extract_target_server_names_matches_routing_parser(self):
         """
-        Regression: _extract_target_server_names_from_path must match the
+        Regression: extract_target_server_names_from_path must match the
         downstream regex parser in server.py::_get_mcp_servers_in_path.
 
         Previously, a request to ``/mcp/<delegated>/garbage`` was parsed as
@@ -2682,7 +2682,7 @@ class TestMCPDelegateAuthToUpstream:
             ("/", []),
         ]
         for path_input, expected in cases:
-            assert MCPRequestHandler._extract_target_server_names_from_path(path_input) == expected, (
+            assert MCPRequestHandler.extract_target_server_names_from_path(path_input) == expected, (
                 f"path={path_input!r} → expected {expected!r}"
             )
             assert (_get_mcp_servers_in_path(path_input) or []) == expected, (
@@ -2874,7 +2874,7 @@ class TestMCPCustomHeaderName:
                 mock_general_settings.get.return_value = general_setting
 
                 # Call the method
-                result = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+                result = MCPRequestHandler.get_mcp_client_side_auth_header_name()
 
                 # Assert the result
                 assert result == expected_header_name
@@ -2938,7 +2938,7 @@ class TestMCPCustomHeaderName:
         # Mock the header name method
         with patch.object(
             MCPRequestHandler,
-            "_get_mcp_client_side_auth_header_name",
+            "get_mcp_client_side_auth_header_name",
             return_value=custom_header_name,
         ):
             # Create headers from the test data
@@ -2963,7 +2963,7 @@ class TestMCPCustomHeaderName:
         # Mock the custom header name
         with patch.object(
             MCPRequestHandler,
-            "_get_mcp_client_side_auth_header_name",
+            "get_mcp_client_side_auth_header_name",
             return_value="custom-auth-header",
         ):
             # Create ASGI scope with custom header
@@ -8365,3 +8365,64 @@ class TestEntitlementFaultSemantics:
             ):
                 allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
         assert set(allowed) == {"srv1"}
+
+
+@pytest.mark.asyncio
+class TestScopedSessionAdmission:
+    """LIT-4917: a session bearer sealed to one server (RFC 8707 resource at authorize)
+    carries that scope onto the admitted auth object, where the grant resolution intersects
+    it fail closed; an unscoped bearer carries None and is byte-identical to before."""
+
+    _MASTER_KEY = "sk-scoped-session-admission-master-key"
+
+    def _bearer(self, resource_server_id):
+        from datetime import datetime, timezone
+
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            session_keys_from_master_key,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+            SessionPrincipal,
+            mint_session_token,
+        )
+
+        keys = session_keys_from_master_key(self._MASTER_KEY)
+        principal = SessionPrincipal(
+            user_id="scoped-user", client_id="llm_dcrc_abc", resource_server_id=resource_server_id
+        )
+        return mint_session_token(principal, keys, datetime(2030, 1, 1, tzinfo=timezone.utc)).token.get_secret_value()
+
+    @pytest.mark.parametrize("scope", ["github-server-id", None])
+    async def test_admission_carries_sealed_resource_scope(self, scope):
+        token = self._bearer(scope)
+        scope_dict = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/github",
+            "headers": [(b"host", b"testserver"), (b"authorization", f"Bearer {token}".encode())],
+        }
+        get_user_object = AsyncMock(
+            return_value=MagicMock(
+                user_id="scoped-user",
+                organization_id=None,
+                metadata={"scim_active": True},
+                user_role=None,
+                object_permission=None,
+                object_permission_id=None,
+                tpm_limit=None,
+                rpm_limit=None,
+            )
+        )
+        with (
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ):
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope_dict)
+        assert auth_result.mcp_admitted_user_subject is True
+        assert auth_result.mcp_session_resource_server_id == scope
+
+    def test_scope_field_cannot_be_forged_through_construction(self):
+        forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_id="any-server")
+        assert forged.mcp_session_resource_server_id is None

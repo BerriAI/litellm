@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "@/components/view_user_spend";
 import { ProxySettings } from "@/components/user_dashboard";
-import UsageDatePicker from "@/components/shared/usage_date_picker";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -15,6 +15,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -91,6 +92,7 @@ const TeamSpendBarList: React.FC<{ data: TeamSpendTotal[] }> = ({ data }) => {
 };
 
 const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, userID, keys, premiumUser }) => {
+  const anchor = useComboboxAnchor();
   const canViewGlobalSpend = hasCapability(userRole, "viewGlobalSpend");
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
@@ -794,7 +796,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </p>
           <div className="grid grid-cols-2">
             <div>
-              <UsageDatePicker
+              <AdvancedDatePicker
+                align="left"
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
@@ -860,7 +863,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
         <TabsContent value="tag-based-usage">
           <div className="grid grid-cols-2">
             <div className="col-span-1">
-              <UsageDatePicker
+              <AdvancedDatePicker
+                align="left"
                 className="mb-4"
                 value={dateValue}
                 onValueChange={(value) => {
@@ -879,7 +883,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                 isItemEqualToValue={(a: TagOption, b: TagOption) => a.value === b.value}
                 itemToStringLabel={(option: TagOption) => option.label}
               >
-                <ComboboxChips>
+                <ComboboxChips render={<div ref={anchor} />}>
                   <ComboboxValue>
                     {(options: TagOption[]) =>
                       options.map((option) => (
@@ -889,9 +893,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select tags" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select tags" />
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor}>
                   <ComboboxEmpty>No tags found</ComboboxEmpty>
                   <ComboboxList>
                     {(option: TagOption) => (

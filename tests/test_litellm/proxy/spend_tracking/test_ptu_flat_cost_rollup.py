@@ -658,6 +658,87 @@ async def test_scheduled_rollup_stays_quiet_when_every_charge_landed():
 
 
 @pytest.mark.asyncio
+async def test_scheduled_rollup_alerts_once_a_ptu_window_has_closed():
+    """Reserved capacity is billed until the deployment is deleted, so a closed window stops
+    the attribution without stopping the charge. Nobody notices unless it is escalated."""
+    ptu = {
+        "ptu_count": 5,
+        "cost_per_ptu_per_hour": 2.0,
+        "team_id": "t",
+        "ptu_effective_from": "2020-01-01T00:00:00Z",
+        "ptu_effective_to": "2020-02-01T00:00:00Z",
+    }
+    prisma, _ = _prisma_with_models([_model_row(model_id="dep-lapsed", model_info=ptu)])
+    alert = AsyncMock()
+
+    result = await run_scheduled_ptu_rollup(prisma, target_date=DAY, alert=alert)
+
+    assert result.lapsed == ("gpt-4o-mini-ptu",)
+    alert.assert_awaited_once()
+    message = alert.await_args.args[0]
+    assert "window has closed" in message
+    assert "gpt-4o-mini-ptu" in message
+
+
+@pytest.mark.asyncio
+async def test_a_model_name_cannot_smuggle_slack_markup_into_the_alert():
+    """The alert lands in an operator channel and a model name is operator-supplied, so an
+    unescaped name could post a channel-wide mention."""
+    ptu = {
+        "ptu_count": 5,
+        "cost_per_ptu_per_hour": 2.0,
+        "team_id": "t",
+        "ptu_effective_from": "2020-01-01T00:00:00Z",
+        "ptu_effective_to": "2020-02-01T00:00:00Z",
+    }
+    row = _model_row(model_id="dep-x", model_name="<!channel> & <https://evil.example|click>", model_info=ptu)
+    prisma, _ = _prisma_with_models([row])
+    alert = AsyncMock()
+
+    await run_scheduled_ptu_rollup(prisma, target_date=DAY, alert=alert)
+
+    message = alert.await_args.args[0]
+    assert "<!channel>" not in message
+    assert "&lt;!channel&gt;" in message
+
+
+@pytest.mark.asyncio
+async def test_an_open_ptu_window_raises_no_lapsed_alert():
+    ptu = {
+        "ptu_count": 5,
+        "cost_per_ptu_per_hour": 2.0,
+        "team_id": "t",
+        "ptu_effective_from": "2020-01-01T00:00:00Z",
+        "ptu_effective_to": "2999-01-01T00:00:00Z",
+    }
+    prisma, _ = _prisma_with_models([_model_row(model_id="dep-open", model_info=ptu)])
+    alert = AsyncMock()
+
+    result = await run_scheduled_ptu_rollup(prisma, target_date=DAY, alert=alert)
+
+    assert result.lapsed == ()
+    alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_open_ended_ptu_window_raises_no_lapsed_alert():
+    """No end bound means the operator never asked the attribution to stop."""
+    ptu = {
+        "ptu_count": 5,
+        "cost_per_ptu_per_hour": 2.0,
+        "team_id": "t",
+        "ptu_effective_from": "2020-01-01T00:00:00Z",
+    }
+    prisma, _ = _prisma_with_models([_model_row(model_id="dep-forever", model_info=ptu)])
+    alert = AsyncMock()
+
+    result = await run_scheduled_ptu_rollup(prisma, target_date=DAY, alert=alert)
+
+    assert result.lapsed == ()
+    alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_a_broken_alert_channel_does_not_fail_the_rollup():
     rows = [_model_row(model_info={"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"})]
     prisma, table = _prisma_with_models(rows)

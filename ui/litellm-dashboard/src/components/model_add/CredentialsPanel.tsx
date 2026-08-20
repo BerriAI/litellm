@@ -16,7 +16,7 @@ import { stripMaskedSecrets } from "@/utils/maskedSecretUtils";
 import { isProxyAdminRole } from "@/utils/roles";
 
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import CredentialModal from "./CredentialModal";
 import CredentialsTable from "./CredentialsTable";
 
@@ -58,11 +58,11 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     try {
       const newCredential = buildCredential(values, stripMaskedSecrets(withoutRestrictedFields(values)));
       await credentialUpdateCall(accessToken, values.credential_name as string, newCredential);
-      NotificationsManager.success("Credential updated successfully");
+      toast.success("Credential updated successfully");
       setIsUpdateModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to update credential");
+      toast.error("Failed to update credential");
     }
   };
 
@@ -73,11 +73,11 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     try {
       const newCredential = buildCredential(values, withoutRestrictedFields(values));
       await credentialCreateCall(accessToken, newCredential);
-      NotificationsManager.success("Credential added successfully");
+      toast.success("Credential added successfully");
       setIsAddModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to add credential");
+      toast.error("Failed to add credential");
     }
   };
 
@@ -88,10 +88,10 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     setIsCredentialDeleting(true);
     try {
       await credentialDeleteCall(accessToken, credentialToDelete.credential_name);
-      NotificationsManager.success("Credential deleted successfully");
+      toast.success("Credential deleted successfully");
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to delete credential");
+      toast.error("Failed to delete credential");
     } finally {
       setCredentialToDelete(null);
       setIsDeleteModalOpen(false);

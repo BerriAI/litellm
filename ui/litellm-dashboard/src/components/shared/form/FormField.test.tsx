@@ -101,7 +101,7 @@ describe("FormField", () => {
 
     const control = await screen.findByLabelText("Team Name");
     await waitFor(() => expect(control).toHaveAttribute("aria-invalid", "true"));
-    expect(control.getAttribute("aria-describedby")).toBe(screen.getByRole("alert").id);
+    expect(control).toHaveAttribute("aria-describedby", screen.getByRole("alert").id);
   });
 
   it("leaves a valid control free of aria-invalid", () => {
