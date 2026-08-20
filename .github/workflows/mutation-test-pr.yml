@@ -46,9 +46,11 @@ jobs:
 
       - name: Scope the run to the diff
         id: scope
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           python scripts/mutation_diff_scope.py \
-            --base "origin/${{ github.event.pull_request.base.ref }}" \
+            --base "origin/$BASE_REF" \
             --write-pyproject | tee mutmut-scope.log
 
       - name: Set up uv
