@@ -4,10 +4,6 @@ import userEvent from "@testing-library/user-event";
 import GuardrailCard from "./guardrail_garden_card";
 import type { GuardrailCardInfo } from "./guardrail_garden_data";
 
-vi.mock("@ant-design/icons", () => ({
-  CheckCircleFilled: ({ style, ...props }: any) => <span data-testid="check-icon" {...props} />,
-}));
-
 const baseCard: GuardrailCardInfo = {
   id: "test-guard",
   name: "Test Guardrail",

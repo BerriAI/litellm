@@ -1,6 +1,6 @@
 import React from "react";
 import { Input as AntdInput, InputNumber, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { OAUTH_FLOW } from "@/components/mcp_tools/types";
@@ -38,7 +38,7 @@ const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, toolt
   <span className="text-sm font-medium text-gray-700 flex items-center">
     {label}
     <Tooltip title={tooltip}>
-      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+      <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
     </Tooltip>
   </span>
 );

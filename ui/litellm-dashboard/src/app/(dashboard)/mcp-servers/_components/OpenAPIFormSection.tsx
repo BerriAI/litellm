@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Input, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { AUTH_TYPE, OAUTH_FLOW } from "@/components/mcp_tools/types";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { antdRequired } from "@/components/common_components/antdFormRules";
@@ -69,7 +69,7 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
           <span className="text-sm font-medium text-gray-700 flex items-center">
             OpenAPI Spec URL
             <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-              <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+              <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
             </Tooltip>
           </span>
         }

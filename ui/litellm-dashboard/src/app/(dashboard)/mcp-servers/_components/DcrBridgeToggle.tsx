@@ -1,6 +1,6 @@
 import React from "react";
 import { Switch, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { isClientForwardedTokenMode } from "@/components/mcp_tools/types";
@@ -29,7 +29,7 @@ export default function DcrBridgeToggle({
         <span className="text-sm font-medium text-gray-700 flex items-center">
           Gateway-hosted sign-in (DCR bridge)
           <Tooltip title="Lets OAuth-only clients like Claude Desktop register and sign in through the gateway. Turn off to relay the upstream server's own OAuth metadata instead (for clients pre-registered with the upstream IdP).">
-            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
           </Tooltip>
         </span>
       }

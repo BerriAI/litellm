@@ -1,11 +1,10 @@
 import React from "react";
 import { Switch, Select, Tooltip, DatePicker } from "antd";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Info } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Row, Col, Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
 import { antdRules } from "../common_components/antdFormRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
@@ -115,7 +114,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                      <Info className="ml-1 inline size-3.5 align-text-bottom" />
                     </a>
                   </Tooltip>
                 </span>
@@ -145,7 +144,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
                     >
-                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                      <Info className="ml-1 inline size-3.5 align-text-bottom" />
                     </a>
                   </Tooltip>
                 </span>

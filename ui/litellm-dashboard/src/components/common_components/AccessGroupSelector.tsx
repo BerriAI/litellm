@@ -1,6 +1,6 @@
 import React from "react";
 import { Select, Skeleton } from "antd";
-import { TeamOutlined } from "@ant-design/icons";
+import { Users } from "lucide-react";
 import { useAccessGroups, AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
 export interface AccessGroupSelectorProps {
@@ -42,7 +42,7 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
       <div>
         {showLabel && (
           <p className="mb-2 flex items-center text-sm font-medium text-foreground">
-            <TeamOutlined className="mr-2" /> {labelText}
+            <Users className="mr-2 size-4" /> {labelText}
           </p>
         )}
         <Skeleton.Input active block style={{ height: 32, ...style }} />
@@ -68,7 +68,7 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
     <div>
       {showLabel && (
         <p className="mb-2 flex items-center text-sm font-medium text-foreground">
-          <TeamOutlined className="mr-2" /> {labelText}
+          <Users className="mr-2 size-4" /> {labelText}
         </p>
       )}
       <Select

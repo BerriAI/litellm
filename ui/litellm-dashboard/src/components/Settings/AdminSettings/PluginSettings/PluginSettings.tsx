@@ -3,8 +3,7 @@
 import { useState, useEffect } from "react";
 import { Card, Space, Table, Typography } from "antd";
 import { Button } from "@/components/ui/button";
-import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { FieldGroup } from "@/components/shared/form/field";
@@ -113,13 +112,18 @@ export default function PluginSettings() {
     {
       title: "Actions",
       key: "actions",
-      render: (_: unknown, __: Plugin, idx: number) => (
+      render: (_: unknown, plugin: Plugin, idx: number) => (
         <Space>
-          <Button variant="outline" size="icon-sm" onClick={() => openEdit(idx)}>
-            <EditOutlined />
+          <Button variant="outline" size="icon-sm" aria-label={`Edit ${plugin.name}`} onClick={() => openEdit(idx)}>
+            <Pencil />
           </Button>
-          <Button variant="destructive" size="icon-sm" onClick={() => handleDelete(idx)}>
-            <DeleteOutlined />
+          <Button
+            variant="destructive"
+            size="icon-sm"
+            aria-label={`Delete ${plugin.name}`}
+            onClick={() => handleDelete(idx)}
+          >
+            <Trash2 />
           </Button>
         </Space>
       ),
@@ -138,7 +142,7 @@ export default function PluginSettings() {
       </Paragraph>
 
       <Button className="mb-4" onClick={openAdd}>
-        <PlusOutlined />
+        <Plus />
         Add Plugin
       </Button>
 

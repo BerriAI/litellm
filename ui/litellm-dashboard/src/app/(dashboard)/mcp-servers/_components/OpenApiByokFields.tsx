@@ -1,6 +1,6 @@
 import React from "react";
 import { Input, Select, Switch, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { useWatch } from "react-hook-form";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
@@ -26,7 +26,7 @@ const OpenApiByokFields: React.FC = () => {
           <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
             BYOK (Bring Your Own Key)
             <Tooltip title="When enabled, each user provides their own API key for this service. Keys are stored per-user and never shared.">
-              <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
+              <Info className="size-4 text-blue-400 hover:text-blue-600 cursor-help" />
             </Tooltip>
           </span>
         }
@@ -39,7 +39,7 @@ const OpenApiByokFields: React.FC = () => {
         <>
           {hasAuthType && (
             <div className="mb-4 p-3 bg-blue-50 rounded-lg text-sm text-blue-700 flex items-start gap-2">
-              <InfoCircleOutlined className="mt-0.5 shrink-0" />
+              <Info className="mt-0.5 size-4 shrink-0" />
               <span>
                 User keys will be sent as:{" "}
                 <code className="font-mono bg-blue-100 px-1 rounded-sm">
@@ -50,7 +50,7 @@ const OpenApiByokFields: React.FC = () => {
           )}
           {!authType && (
             <div className="mb-4 p-3 bg-yellow-50 rounded-lg text-sm text-yellow-700 flex items-start gap-2">
-              <InfoCircleOutlined className="mt-0.5 shrink-0" />
+              <Info className="mt-0.5 size-4 shrink-0" />
               <span>
                 Set the <strong>Authentication Type</strong> below to specify how user keys are sent (e.g., Bearer
                 Token, API Key header).
@@ -62,7 +62,7 @@ const OpenApiByokFields: React.FC = () => {
               <span className="text-sm font-medium text-gray-700">
                 Access Description
                 <Tooltip title="List of permissions shown to users in the connection modal (e.g. 'Create and manage Jira issues')">
-                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
             }
@@ -84,7 +84,7 @@ const OpenApiByokFields: React.FC = () => {
               <span className="text-sm font-medium text-gray-700">
                 API Key Help URL
                 <Tooltip title="Optional link shown to users to help them find their API key">
-                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
             }

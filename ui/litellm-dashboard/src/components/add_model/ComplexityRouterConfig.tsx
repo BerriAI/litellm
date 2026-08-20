@@ -1,4 +1,4 @@
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Select as AntdSelect, Card, Collapse, Divider, Input, Space, Switch, Typography } from "antd";
 import React from "react";
@@ -256,7 +256,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           Complexity Tier Configuration
         </Typography.Title>
         <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-          <InfoCircleOutlined className="text-gray-400" />
+          <Info className="size-4 text-gray-400" />
         </SimpleTooltip>
       </Space>
 
@@ -286,7 +286,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     {label} Tier
                   </Text>
                   <SimpleTooltip content={tierInfo.description}>
-                    <InfoCircleOutlined className="text-gray-400" />
+                    <Info className="size-4 text-gray-400" />
                   </SimpleTooltip>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
@@ -336,7 +336,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               Default Model
             </Text>
             <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
-              <InfoCircleOutlined className="text-gray-400" />
+              <Info className="size-4 text-gray-400" />
             </SimpleTooltip>
           </div>
           <AntdSelect
