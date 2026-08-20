@@ -6823,6 +6823,19 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="config_overrides"):
             await self._init_hashicorp_vault_config_override(prisma_client=prisma_client)
+            await self._apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
+
+    async def _apply_safe_litellm_settings_overrides_from_db(self, prisma_client: PrismaClient) -> None:
+        config_record: Final = await get_config_param(prisma_client, "litellm_settings")
+        if config_record is None or config_record.param_value is None:
+            return
+        raw_settings: Final = config_record.param_value
+        litellm_settings: Final = json.loads(raw_settings) if isinstance(raw_settings, str) else raw_settings
+        if not isinstance(litellm_settings, dict):
+            return
+        for key, value in litellm_settings.items():
+            if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
+                setattr(litellm, key, value)
 
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
