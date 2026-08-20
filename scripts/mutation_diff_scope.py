@@ -98,7 +98,13 @@ def is_unit_test_path(root: Path, path: str) -> bool:
 
 
 def parse_unified_diff(root: Path, diff: str) -> tuple[ChangedFile, ...]:
-    """Map each changed production file to the post-image line numbers the diff touched."""
+    """Map each changed production file to the post-image line numbers the diff touched.
+
+    Deleted lines have no post-image line of their own, so they are attributed to
+    the line they now follow: under ``-U0`` that is the hunk header's ``+`` start,
+    which is the surviving line directly above the deletion. Without this, removing
+    a guard clause would leave its function out of scope entirely.
+    """
 
     def touched_lines() -> Iterator[tuple[str, int]]:
         current = ""
@@ -108,9 +114,13 @@ def parse_unified_diff(root: Path, diff: str) -> tuple[ChangedFile, ...]:
                 current = line[len("+++ b/") :]
             elif (header := HUNK_HEADER.match(line)) is not None:
                 cursor = int(header.group(1))
-            elif line.startswith("+") and not line.startswith("+++") and current:
+            elif not current:
+                continue
+            elif line.startswith("+") and not line.startswith("+++"):
                 yield current, cursor
                 cursor += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                yield current, max(cursor, 1)
 
     touched: Final = tuple(touched_lines())
     return tuple(

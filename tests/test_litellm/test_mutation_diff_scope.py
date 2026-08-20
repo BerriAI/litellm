@@ -19,6 +19,7 @@ out like this one, so a regression shows up as the wrong mutmut invocation.
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 import tomllib
@@ -26,16 +27,20 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
-
-from mutation_diff_scope import (  # noqa: E402
-    Scope,
-    build_scope,
-    render_config,
-    rewrite_pyproject,
-    trampoline_units,
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_spec = importlib.util.spec_from_file_location(
+    "mutation_diff_scope", _REPO_ROOT / "scripts" / "mutation_diff_scope.py"
 )
+scope_module = importlib.util.module_from_spec(_spec)
+# dataclasses resolves a frozen class's module through sys.modules at decoration time.
+sys.modules[_spec.name] = scope_module
+_spec.loader.exec_module(scope_module)
+
+Scope = scope_module.Scope
+build_scope = scope_module.build_scope
+render_config = scope_module.render_config
+rewrite_pyproject = scope_module.rewrite_pyproject
+trampoline_units = scope_module.trampoline_units
 
 PYPROJECT = """\
 [project]
@@ -152,6 +157,23 @@ def test_touching_a_decorator_still_selects_the_decorated_function(repo: Path) -
     _commit(repo)
 
     assert scope_of(repo).globs == ("litellm.router.xǁRouterǁget_model_list__mutmut_*",)
+
+
+def test_deletion_only_change_still_selects_the_function(repo: Path) -> None:
+    """Removing a guard clause changes behavior, so its function has to stay in scope."""
+    guarded = AUTH_CHECKS.replace(
+        "    return model in allowed\n",
+        "    if not model:\n        return False\n    return model in allowed\n",
+    )
+    _write(repo, "litellm/proxy/auth/auth_checks.py", guarded)
+    _commit(repo, "add the guard")
+    _run(repo, "checkout", "-q", "-b", "removal")
+    _write(repo, "litellm/proxy/auth/auth_checks.py", AUTH_CHECKS)
+    _commit(repo, "remove the guard")
+
+    scope = build_scope(repo, "feature", 40)
+
+    assert scope.globs == ("litellm.proxy.auth.auth_checks.x_can_call_model__mutmut_*",)
 
 
 def test_module_level_change_selects_no_function(repo: Path) -> None:

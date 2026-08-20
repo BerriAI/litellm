@@ -122,6 +122,7 @@ jobs:
           uv run --no-sync --with mutmut==3.5.0 mutmut export-cicd-stats > /dev/null 2>&1
           uv run --no-sync --with mutmut==3.5.0 mutmut results --all=true > mutmut-results.txt 2>&1
           uv run --no-sync python scripts/mutation_report.py
+          report_status=$?
           {
             echo "## Mutation testing on this diff"
             echo ""
@@ -131,6 +132,9 @@ jobs:
             echo ""
             head -c 900000 mutation-report.md
           } >> "$GITHUB_STEP_SUMMARY"
+          # Surviving mutants stay advisory. A run that checked nothing is a broken job,
+          # and reporting that as a clean sweep is the one failure mode worth going red for.
+          exit $report_status
 
       - name: Report that nothing was in scope
         if: steps.scope.outputs.has_scope != 'true'

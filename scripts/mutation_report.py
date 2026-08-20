@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tomllib
 from collections import defaultdict
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from textwrap import dedent
@@ -32,6 +33,35 @@ ROOT = Path(__file__).resolve().parent.parent
 MUTMUT_INVOCATION = shlex.split(
     os.environ.get("MUTMUT_CMD", "uv run --no-sync --with mutmut==3.5.0 mutmut")
 )
+# mutmut mangles a class method as `xǁ<Class>ǁ<method>` and a module-level
+# function as `x_<function>`.
+CLASS_NAME_SEPARATOR = "ǁ"
+RESULT_LINE = re.compile(
+    r"\s*(\S+):\s*(killed|survived|no tests|timeout|suspicious|skipped|not checked)\s*$"
+)
+MUTANT_NAME = re.compile(r"^(?P<module>.+)\.(?P<mangled>[^.]+)__mutmut_(?P<number>\d+)$")
+COUNT_KEYS = ("killed", "survived", "no_tests", "skipped", "suspicious", "timeout", "segfault")
+
+
+@dataclass(frozen=True)
+class MutantName:
+    """A parsed mutmut mutant identifier."""
+
+    module: str
+    class_name: str | None
+    function: str
+    number: str
+
+    @property
+    def mangled(self) -> str:
+        """The name mutmut gives the mutated function inside the trampoline file."""
+        if self.class_name is None:
+            return f"x_{self.function}"
+        return f"x{CLASS_NAME_SEPARATOR}{self.class_name}{CLASS_NAME_SEPARATOR}{self.function}"
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.class_name}.{self.function}" if self.class_name else self.function
 
 
 def load_mutmut_config() -> dict:
@@ -39,7 +69,7 @@ def load_mutmut_config() -> dict:
         return tomllib.load(f)["tool"]["mutmut"]
 
 
-def get_results() -> list[tuple[str, str]]:
+def get_results() -> tuple[tuple[str, str], ...]:
     """Parse `mutmut results` into (mutant name, status) pairs.
 
     A diff-scoped run leaves every out-of-scope mutant at `not checked`, so
@@ -48,17 +78,13 @@ def get_results() -> list[tuple[str, str]]:
     proc = subprocess.run(
         [*MUTMUT_INVOCATION, "results", "--all=true"], capture_output=True, text=True, check=False
     )
-    results = []
-    for line in proc.stdout.splitlines():
-        m = re.match(r"\s*(\S+):\s*(killed|survived|no tests|timeout|suspicious|skipped|not checked)\s*$", line)
-        if m:
-            results.append((m.group(1), m.group(2)))
-    return results
+    matches = (RESULT_LINE.match(line) for line in proc.stdout.splitlines())
+    return tuple((m.group(1), m.group(2)) for m in matches if m is not None)
 
 
-def summarize(results: list[tuple[str, str]]) -> dict | None:
+def summarize(results: tuple[tuple[str, str], ...]) -> dict | None:
     """Count only the mutants this run actually executed."""
-    checked = [status for _, status in results if status != "not checked"]
+    checked = tuple(status for _, status in results if status != "not checked")
     if not checked:
         return None
     return {
@@ -87,19 +113,38 @@ def get_mutmut_show(mutant_name: str) -> str:
     return proc.stdout.strip() or "(mutmut show produced no output)"
 
 
-def parse_mutant_name(name: str) -> tuple[str, str, str]:
-    """Parse `<dotted.module>.x_<function>__mutmut_<N>` -> (module, function, N).
+def parse_mutant_name(name: str) -> MutantName:
+    """Parse a mutmut mutant identifier into its module, class, function and number.
 
-    mutmut prefixes mutated functions with `x_` (single underscore). For a
-    function named `foo`, mutants are `x_foo__mutmut_N`. For a function named
-    `_foo` (leading underscore), the mutant becomes `x__foo__mutmut_N` — so
-    the regex matches a single underscore after `x` and captures everything
-    (including any leading underscores) up to `__mutmut_<N>`.
+    Module-level functions are `<dotted.module>.x_<function>__mutmut_<N>`; a
+    function named `_foo` becomes `x__foo__mutmut_N`, so everything after the
+    single `x_` prefix (leading underscores included) is the function name.
+    Class methods are `<dotted.module>.xǁ<Class>ǁ<method>__mutmut_<N>`.
+
+    An unrecognised name is returned verbatim as the function, so the report
+    still shows something addressable instead of dropping the mutant.
     """
-    m = re.match(r"^(.+)\.x_(.+)__mutmut_(\d+)$", name)
+    m = MUTANT_NAME.match(name)
     if not m:
-        return name, name, "?"
-    return m.group(1), m.group(2), m.group(3)
+        return MutantName(module=name, class_name=None, function=name, number="?")
+    mangled = m.group("mangled")
+    if mangled.startswith(f"x{CLASS_NAME_SEPARATOR}"):
+        parts = mangled.split(CLASS_NAME_SEPARATOR)
+        if len(parts) == 3:
+            return MutantName(
+                module=m.group("module"),
+                class_name=parts[1],
+                function=parts[2],
+                number=m.group("number"),
+            )
+    if mangled.startswith("x_"):
+        return MutantName(
+            module=m.group("module"),
+            class_name=None,
+            function=mangled[len("x_") :],
+            number=m.group("number"),
+        )
+    return MutantName(module=name, class_name=None, function=name, number="?")
 
 
 def function_anchor(module_path: str, function_name: str) -> str:
@@ -114,23 +159,32 @@ def module_to_file(module_path: str) -> Path | None:
 
 
 def find_function_in_file(
-    file_path: Path, function_name: str
+    file_path: Path, function_name: str, class_name: str | None = None
 ) -> tuple[int, int, str, list[int]] | None:
-    """Find a top-level or nested function by name; returns the first match.
+    """Find a function by name; returns the first match.
 
     Returns ``(start_line, end_line, source, all_match_lines)`` or ``None``.
-    ``all_match_lines`` is the start line of every function (any nesting
-    level) in the file with this name. When ``len(all_match_lines) > 1`` the
-    file defines the same name in multiple places (e.g., a module-level
-    helper and a class method) — mutmut's mutant identifier does not carry
-    class context, so we can't determine which definition was mutated.
-    Callers surface a disambiguation note in that case.
+    ``all_match_lines`` is the start line of every candidate definition. When
+    ``len(all_match_lines) > 1`` the file defines the same name in several
+    places and callers surface a disambiguation note. A mutant carrying class
+    context is matched against that class's own methods, which is normally
+    unambiguous.
     """
     src = file_path.read_text()
     tree = ast.parse(src)
+    scopes = (
+        [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        ]
+        if class_name is not None
+        else [tree]
+    )
     matches = [
         node
-        for node in ast.walk(tree)
+        for scope in scopes
+        for node in ast.walk(scope)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == function_name
     ]
@@ -161,13 +215,11 @@ def _indent_of(line: str) -> str:
     return line[: len(line) - len(line.lstrip())]
 
 
-def render_meta_style_mutant(
-    module_path: str, function_name: str, mutant_num: str
-) -> str | None:
+def render_meta_style_mutant(mutant: MutantName) -> str | None:
     """Render the mutated function with `# MUTANT START`/`# MUTANT END` delimiters.
 
     Reads `mutants/<module>.py` (the trampoline file mutmut emits), finds
-    `x_<func>__mutmut_orig` and `x_<func>__mutmut_<N>`, and renders the
+    `<mangled>__mutmut_orig` and `<mangled>__mutmut_<N>`, and renders the
     mutated version with the lines that differ from `__mutmut_orig` wrapped
     in `# MUTANT START`/`# MUTANT END` comments — the format from Meta's
     ACH paper (arXiv 2501.12862, Table 1).
@@ -179,7 +231,7 @@ def render_meta_style_mutant(
     Returns None if the trampoline file or either function cannot be found
     (the caller falls back to the unified diff).
     """
-    trampoline = ROOT / "mutants" / Path(*module_path.split(".")).with_suffix(".py")
+    trampoline = ROOT / "mutants" / Path(*mutant.module.split(".")).with_suffix(".py")
     if not trampoline.exists():
         return None
 
@@ -190,8 +242,8 @@ def render_meta_style_mutant(
         return None
     file_lines = src.splitlines()
 
-    orig_def = f"x_{function_name}__mutmut_orig"
-    mutant_def = f"x_{function_name}__mutmut_{mutant_num}"
+    orig_def = f"{mutant.mangled}__mutmut_orig"
+    mutant_def = f"{mutant.mangled}__mutmut_{mutant.number}"
 
     orig_node = mutated_node = None
     for node in ast.walk(tree):
@@ -211,8 +263,8 @@ def render_meta_style_mutant(
 
     # Rewrite the def line to use the original (non-trampolined) function name
     # so the agent sees the function as it appears in the source file.
-    orig_lines[0] = orig_lines[0].replace(orig_def, function_name, 1)
-    mutated_lines[0] = mutated_lines[0].replace(mutant_def, function_name, 1)
+    orig_lines[0] = orig_lines[0].replace(orig_def, mutant.function, 1)
+    mutated_lines[0] = mutated_lines[0].replace(mutant_def, mutant.function, 1)
 
     matcher = SequenceMatcher(a=orig_lines, b=mutated_lines)
     out: list[str] = []
@@ -254,11 +306,11 @@ def render_meta_style_mutant(
     return "\n".join(out)
 
 
-def render(config: dict, survivors: list[str], stats: dict | None) -> str:
-    by_function: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
+def render(config: dict, survivors: tuple[str, ...], stats: dict | None) -> str:
+    by_function: dict[tuple[str, str | None, str], list[tuple[str, MutantName]]] = defaultdict(list)
     for survivor in survivors:
-        module_path, function_name, mutant_num = parse_mutant_name(survivor)
-        by_function[(module_path, function_name)].append((survivor, mutant_num))
+        mutant = parse_mutant_name(survivor)
+        by_function[(mutant.module, mutant.class_name, mutant.function)].append((survivor, mutant))
 
     out: list[str] = []
     out.append("# Mutation Test Report")
@@ -267,18 +319,7 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
     out.append("## Summary")
     out.append("")
     if stats:
-        total = stats.get("total", 0) or sum(
-            stats.get(k, 0)
-            for k in (
-                "killed",
-                "survived",
-                "no_tests",
-                "skipped",
-                "suspicious",
-                "timeout",
-                "segfault",
-            )
-        )
+        total = stats.get("total", 0) or sum(stats.get(k, 0) for k in COUNT_KEYS)
         killed = stats.get("killed", 0)
         survived = stats.get("survived", 0)
         score = (killed / total * 100) if total else 0.0
@@ -292,28 +333,35 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
                 out.append(f"- {k.replace('_', ' ').title()}: {v}")
     else:
         out.append(f"- Survivors found: **{len(survivors)}**")
-        out.append("- (mutmut-cicd-stats.json not available — full counts unavailable)")
+        out.append("- (no mutant results and no mutmut-cicd-stats.json)")
     out.append("")
 
     if not survivors:
-        out.append("**No surviving mutants — the test suite caught every mutation.**")
+        out.append(
+            "**No surviving mutants — the test suite caught every mutation.**"
+            if stats
+            else "**The mutation run produced no results at all. Treat this as a failed "
+            "run, not as a passing one: nothing was executed to survive.**"
+        )
         out.append("")
         return "\n".join(out)
 
     out.append("## Surviving mutants by function")
     out.append("")
-    for (module_path, function_name), items in by_function.items():
-        anchor = function_anchor(module_path, function_name)
+    for (module_path, class_name, function_name), items in by_function.items():
+        qualified = items[0][1].qualified
+        anchor = function_anchor(module_path, qualified)
         out.append(
-            f"- [`{function_name}`](#{anchor}) — {len(items)} mutant"
+            f"- [`{qualified}`](#{anchor}) — {len(items)} mutant"
             f"{'s' if len(items) != 1 else ''} ({module_path})"
         )
     out.append("")
 
-    for (module_path, function_name), items in by_function.items():
-        anchor = function_anchor(module_path, function_name)
+    for (module_path, class_name, function_name), items in by_function.items():
+        qualified = items[0][1].qualified
+        anchor = function_anchor(module_path, qualified)
         out.append(f'<a id="{anchor}"></a>')
-        out.append(f"## `{module_path}.{function_name}`")
+        out.append(f"## `{module_path}.{qualified}`")
         out.append("")
         out.append(f"**Module:** `{module_path}`")
 
@@ -326,7 +374,7 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
             rel = file_path.relative_to(ROOT)
             out.append(f"**File:** `{rel}`")
             out.append("")
-            found = find_function_in_file(file_path, function_name)
+            found = find_function_in_file(file_path, function_name, class_name)
             if found:
                 start, end, fn_src, all_lines = found
                 out.append(f"### Original function (lines {start}-{end})")
@@ -336,11 +384,8 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
                     out.append(
                         f"> **Note:** {len(all_lines)} functions named "
                         f"`{function_name}` are defined in this file at lines "
-                        f"{line_list}. Showing the first match. mutmut's "
-                        f"mutant identifier does not carry class context, so "
-                        f"the body below may not correspond to the function "
-                        f"that was actually mutated — verify manually before "
-                        f"writing the killing test."
+                        f"{line_list}. Showing the first match; verify it is the "
+                        f"one that was mutated before writing the killing test."
                     )
                     out.append("")
                 out.append("```python")
@@ -353,12 +398,10 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
 
         out.append(f"### Surviving mutations ({len(items)})")
         out.append("")
-        for i, (mutant_name, mutant_num) in enumerate(items, 1):
+        for i, (mutant_name, mutant) in enumerate(items, 1):
             out.append(f"#### Mutation {i} of {len(items)} — `{mutant_name}`")
             out.append("")
-            meta_style = render_meta_style_mutant(
-                module_path, function_name, mutant_num
-            )
+            meta_style = render_meta_style_mutant(mutant)
             if meta_style is not None:
                 out.append(
                     "Mutated function (the bug is delimited by "
@@ -428,21 +471,25 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
     return "\n".join(out)
 
 
+def fallback_stats() -> dict | None:
+    """mutmut's own export, used when `mutmut results` could not be parsed."""
+    stats_file = ROOT / "mutants" / "mutmut-cicd-stats.json"
+    if not stats_file.exists():
+        return None
+    try:
+        exported = json.loads(stats_file.read_text())
+    except json.JSONDecodeError as exc:
+        print(f"warning: could not parse {stats_file}: {exc}", file=sys.stderr)
+        return None
+    return exported if any(exported.get(key, 0) for key in COUNT_KEYS) else None
+
+
 def main() -> int:
     config = load_mutmut_config()
 
     results = get_results()
-    stats = summarize(results)
-
-    if stats is None:
-        stats_file = ROOT / "mutants" / "mutmut-cicd-stats.json"
-        if stats_file.exists():
-            try:
-                stats = json.loads(stats_file.read_text())
-            except json.JSONDecodeError as exc:
-                print(f"warning: could not parse {stats_file}: {exc}", file=sys.stderr)
-
-    survivors = [name for name, status in results if status == "survived"]
+    stats = summarize(results) or fallback_stats()
+    survivors = tuple(name for name, status in results if status == "survived")
     report = render(config, survivors, stats)
 
     out_path = ROOT / "mutation-report.md"
@@ -451,6 +498,14 @@ def main() -> int:
         f"Wrote {out_path} ({len(survivors)} survivor"
         f"{'s' if len(survivors) != 1 else ''}, {len(report)} chars)"
     )
+    if stats is None:
+        # Survivors are advisory, but a run that checked nothing is a broken run:
+        # reporting it as a clean sweep is how a crashed mutmut turns into a green PR.
+        print(
+            "error: mutmut reported no checked mutants; the run did not complete",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
