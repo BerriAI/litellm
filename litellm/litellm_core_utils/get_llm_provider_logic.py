@@ -470,6 +470,8 @@ def get_llm_provider(
             custom_llm_provider = "amazon_nova"
         elif model.startswith("sap/"):
             custom_llm_provider = "sap"
+        elif model.startswith("melious/"):
+            custom_llm_provider = "melious"  # rebind-ok: this if/elif chain resolves the provider in place
 
         # Last resort for an otherwise-unknown model: a declarative
         # fallback-generalization routing rule (e.g. routes future claude-* to anthropic).
@@ -655,6 +657,11 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("TENCENT_API_BASE") or "https://tokenhub-intl.tencentcloudmaas.com/v1"
 
         dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
+    elif custom_llm_provider == "melious":
+        melious_api_base, melious_api_key = litellm.MeliousChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+        return model, custom_llm_provider, melious_api_key, melious_api_base
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (

@@ -310,6 +310,7 @@ lemonade_key: Optional[str] = None
 sap_service_key: Optional[str] = None
 amazon_nova_api_key: Optional[str] = None
 inception_key: Optional[str] = None
+melious_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -612,6 +613,7 @@ xai_models: Set = set()
 zai_models: Set = set()
 deepseek_models: Set = set()
 tencent_models: Set = set()
+melious_models: Set = set()  # mutable-ok: add_known_models() populates this from the cost map
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
 jina_ai_models: Set = set()
@@ -828,6 +830,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             deepseek_models.add(key)
         elif value.get("litellm_provider") == "tencent":
             tencent_models.add(key)
+        elif value.get("litellm_provider") == "melious":
+            melious_models.add(key)
         elif value.get("litellm_provider") == "runwayml":
             runwayml_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
@@ -1081,6 +1085,7 @@ model_list = list(
     | docker_model_runner_models
     | reducto_models
     | bedrock_mantle_models
+    | melious_models
     | set(clarifai_models)
 )
 
@@ -1131,6 +1136,7 @@ def _build_models_by_provider() -> dict:
         "fal_ai": fal_ai_models,
         "deepseek": deepseek_models,
         "tencent": tencent_models,
+        "melious": melious_models,
         "runwayml": runwayml_models,
         "mistral": mistral_chat_models,
         "azure_ai": azure_ai_models,
@@ -1848,6 +1854,9 @@ if TYPE_CHECKING:
     from .llms.tencent.chat.transformation import (
         TencentChatConfig as _TencentChatConfig,
     )
+    from .llms.melious.chat.transformation import (
+        MeliousChatConfig as _MeliousChatConfig,
+    )
     from .llms.sap.chat.transformation import (
         GenAIHubOrchestrationConfig as _GenAIHubOrchestrationConfig,
     )
@@ -1891,6 +1900,7 @@ if TYPE_CHECKING:
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
     TencentChatConfig: Type[_TencentChatConfig]
+    MeliousChatConfig: Type[_MeliousChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]

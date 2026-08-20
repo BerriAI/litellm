@@ -287,6 +287,7 @@ LLM_CONFIG_NAMES: Final = (
     "VLLMConfig",
     "DeepSeekChatConfig",
     "TencentChatConfig",
+    "MeliousChatConfig",
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
@@ -1100,6 +1101,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
     "TencentChatConfig": (".llms.tencent.chat.transformation", "TencentChatConfig"),
+    "MeliousChatConfig": (".llms.melious.chat.transformation", "MeliousChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",

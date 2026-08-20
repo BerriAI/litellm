@@ -592,6 +592,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "melious",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
@@ -773,6 +774,7 @@ openai_compatible_providers: Final[list] = [
     "codestral",
     "deepseek",
     "tencent",
+    "melious",
     "deepinfra",
     "perplexity",
     "xinference",
