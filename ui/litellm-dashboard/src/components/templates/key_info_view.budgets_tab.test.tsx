@@ -574,10 +574,11 @@ describe("KeyInfoView Budgets tab", () => {
       remaining: -40,
       source: "key.max_budget",
       status: "exceeded",
+      enforcement: "throttled",
       notes: [
         {
           code: "throttled_instead_of_blocked",
-          severity: "warning",
+          severity: "info",
           text: noteText("throttled_instead_of_blocked"),
         },
       ],

@@ -6,6 +6,7 @@ export type KeyBudgetsResponse = components["schemas"]["KeyBudgetsResponse"];
 export type KeyBudgetEntry = KeyBudgetsResponse["budgets"][number];
 export type KeyBudgetNote = KeyBudgetEntry["notes"][number];
 export type KeyBudgetNoteCode = KeyBudgetNote["code"];
+export type KeyBudgetEnforcement = KeyBudgetEntry["enforcement"];
 
 export const useKeyBudgets = (keyId: string | undefined) => {
   const { accessToken } = useAuthorized();

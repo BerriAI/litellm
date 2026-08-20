@@ -43,9 +43,10 @@ const ROLLING_NOTE = {
   text: noteText("rolling_window"),
 } as const;
 
+// `enforcement` carries the fact now, so the note only explains the mechanism and drops to info.
 const THROTTLE_NOTE = {
   code: "throttled_instead_of_blocked",
-  severity: "warning",
+  severity: "info",
   text: noteText("throttled_instead_of_blocked"),
 } as const;
 
@@ -220,7 +221,7 @@ describe("isThrottled", () => {
   it("never blames a throttled budget for a denial, because going over slows rather than rejects", () => {
     const throttledOver: KeyBudgetEntry = {
       ...UNCONFIGURED_BUDGET,
-      enforcement: "hard",
+      enforcement: "throttled",
       max_budget: 100,
       spend: 140,
       remaining: -40,
@@ -230,6 +231,13 @@ describe("isThrottled", () => {
     expect(isThrottled(throttledOver)).toBe(true);
     expect(isBlockingRow(throttledOver)).toBe(false);
     expect(budgetThresholdRule(throttledOver)).toBe("Throttles at ≥ $100.00");
+  });
+
+  it("reads the mode off enforcement rather than the note, which only explains the mechanism", () => {
+    const noNote: KeyBudgetEntry = { ...UNCONFIGURED_BUDGET, enforcement: "throttled", max_budget: 100, notes: [] };
+    expect(isThrottled(noNote)).toBe(true);
+    const noteOnly: KeyBudgetEntry = { ...UNCONFIGURED_BUDGET, enforcement: "hard", notes: [THROTTLE_NOTE] };
+    expect(isThrottled(noteOnly)).toBe(false);
   });
 
   it("still says a plain hard budget blocks", () => {

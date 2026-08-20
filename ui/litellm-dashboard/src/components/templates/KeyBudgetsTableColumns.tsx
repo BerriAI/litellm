@@ -2,7 +2,12 @@
 
 import type { ColumnDef } from "@tanstack/react-table";
 
-import type { KeyBudgetEntry, KeyBudgetNote, KeyBudgetNoteCode } from "@/app/(dashboard)/hooks/keys/useKeyBudgets";
+import type {
+  KeyBudgetEnforcement,
+  KeyBudgetEntry,
+  KeyBudgetNote,
+  KeyBudgetNoteCode,
+} from "@/app/(dashboard)/hooks/keys/useKeyBudgets";
 import {
   CellTooltip,
   DateCell,
@@ -65,8 +70,7 @@ const noteKillsRow = (note: KeyBudgetNote): boolean => {
 export const cannotTrip = (entry: KeyBudgetEntry): boolean => entry.notes.some(noteKillsRow);
 
 /** Exceeding a throttled budget slows requests rather than rejecting them, so it never denies one. */
-export const isThrottled = (entry: KeyBudgetEntry): boolean =>
-  entry.notes.some((note) => note.code === "throttled_instead_of_blocked");
+export const isThrottled = (entry: KeyBudgetEntry): boolean => entry.enforcement === "throttled";
 
 /** Whether going over this budget rejects a request, as opposed to alerting, throttling or nothing. */
 const canDeny = (entry: KeyBudgetEntry): boolean => !isAlertOnly(entry) && !cannotTrip(entry) && !isThrottled(entry);
@@ -159,28 +163,25 @@ function ScopeCell({ entry }: { entry: KeyBudgetEntry }) {
   );
 }
 
+/** Exhaustive, so a fourth enforcement mode fails this build rather than defaulting to a claim. */
+const ENFORCEMENT_BADGE: Readonly<Record<KeyBudgetEnforcement, { tone: StatusTone; label: string; tooltip: string }>> =
+  {
+    soft: {
+      tone: "neutral",
+      label: "Alert only",
+      tooltip: "Soft budget. Going over raises an alert and never rejects a request.",
+    },
+    throttled: {
+      tone: "warning",
+      label: "Throttles requests",
+      tooltip: "This key opted into throttle_on_budget_exceeded, so going over reduces its rate limits.",
+    },
+    hard: { tone: "info", label: "Blocks requests", tooltip: "Going over this budget rejects requests on this key." },
+  };
+
 function EnforcementCell({ entry }: { entry: KeyBudgetEntry }) {
-  if (isAlertOnly(entry)) {
-    return (
-      <StatusBadge
-        tone="neutral"
-        label="Alert only"
-        tooltip="Soft budget. Going over raises an alert and never rejects a request."
-      />
-    );
-  }
-  if (isThrottled(entry)) {
-    return (
-      <StatusBadge
-        tone="warning"
-        label="Throttles requests"
-        tooltip="This key opted into throttle_on_budget_exceeded, so going over slows requests instead of rejecting them."
-      />
-    );
-  }
-  return (
-    <StatusBadge tone="info" label="Blocks requests" tooltip="Going over this budget rejects requests on this key." />
-  );
+  const { tone, label, tooltip } = ENFORCEMENT_BADGE[entry.enforcement];
+  return <StatusBadge tone={tone} label={label} tooltip={tooltip} />;
 }
 
 function SpendCell({ entry }: { entry: KeyBudgetEntry }) {

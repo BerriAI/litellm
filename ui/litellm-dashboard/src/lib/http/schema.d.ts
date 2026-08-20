@@ -6834,7 +6834,9 @@ export interface paths {
          *         - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
          *           names, so a denial message maps back to a row here
          *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
-         *         - enforcement: str - `hard` blocks the request, `soft` only raises an alert
+         *         - enforcement: str - `hard` blocks the request, `soft` only raises an alert, `throttled`
+         *           scales the key's rate limits down instead of denying anything. Only the key's own
+         *           `max_budget` can be `throttled`; every other scope on the same key still blocks
          *         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
          *           but places no limit on it
          *         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
@@ -7532,7 +7534,9 @@ export interface paths {
          *         - entity_type: Litellm_EntityType - The entity a `BudgetExceededError` from this scope
          *           names, so a denial message maps back to a row here
          *         - entity_id / entity_label: str | None - Which entity is limited, and its human-facing alias
-         *         - enforcement: str - `hard` blocks the request, `soft` only raises an alert
+         *         - enforcement: str - `hard` blocks the request, `soft` only raises an alert, `throttled`
+         *           scales the key's rate limits down instead of denying anything. Only the key's own
+         *           `max_budget` can be `throttled`; every other scope on the same key still blocks
          *         - max_budget: float | None - The limit in effect. `null` means this scope applies to the key
          *           but places no limit on it
          *         - spend: float | None - Spend as the enforcing check reads it, from the same cross-pod
@@ -26361,7 +26365,7 @@ export interface components {
              * Enforcement
              * @enum {string}
              */
-            enforcement: "hard" | "soft";
+            enforcement: "hard" | "soft" | "throttled";
             /** Entity Id */
             entity_id?: string | null;
             /** Entity Label */
