@@ -1288,7 +1288,7 @@ def batch_cost_poller_is_active() -> bool:
         return False
 
 
-def _completed_batch_safe_to_retire(response) -> bool:
+def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
     """Whether a "completed" batch may be retired from cost recovery.
 
     ``batch_processed=True`` is the sole re-pickup gate for CheckBatchCost's

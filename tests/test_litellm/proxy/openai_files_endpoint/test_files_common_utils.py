@@ -438,7 +438,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 
 
-def _completed_batch(output_file_id, completed=None) -> LiteLLMBatch:
+def _completed_batch_for_retire(
+    output_file_id: str | None, completed: int | None = None
+) -> LiteLLMBatch:
     kwargs = dict(
         id="batch-1",
         completion_window="24h",
@@ -460,16 +462,16 @@ class TestCompletedBatchSafeToRetire:
     file has arrived or the provider proves no successful lines (#37713)."""
 
     def test_output_file_present_is_safe(self):
-        assert _completed_batch_safe_to_retire(_completed_batch("file-out")) is True
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire("file-out")) is True
 
     def test_no_output_and_no_successful_lines_is_safe(self):
         # Every request line errored -> nothing left to recover.
-        assert _completed_batch_safe_to_retire(_completed_batch(None, completed=0)) is True
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, completed=0)) is True
 
     def test_no_output_but_successful_lines_is_not_safe(self):
         # The bug: output_file_id is lagging; retiring here loses the spend record.
-        assert _completed_batch_safe_to_retire(_completed_batch(None, completed=5)) is False
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, completed=5)) is False
 
     def test_no_output_and_unknown_counts_is_not_safe(self):
         # Counts unknown -> stay eligible so the next poller pass revisits it.
-        assert _completed_batch_safe_to_retire(_completed_batch(None)) is False
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None)) is False
