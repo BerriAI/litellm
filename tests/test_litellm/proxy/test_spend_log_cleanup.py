@@ -793,6 +793,7 @@ async def test_spend_logs_retention_alone_does_not_touch_the_session_rollup():
     tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
     assert any('"LiteLLM_SpendLogs"' in sql for sql in tables)
     assert not any('"LiteLLM_AutoRouterSession"' in sql for sql in tables)
+    assert not any('"LiteLLM_HealthCheckTable"' in sql for sql in tables)
 
 
 @pytest.mark.asyncio
@@ -807,25 +808,47 @@ async def test_session_retention_alone_cleans_only_the_session_rollup():
 
 
 @pytest.mark.asyncio
-async def test_each_retention_key_cuts_off_at_its_own_horizon():
-    from datetime import datetime, timezone
+async def test_health_check_retention_alone_cleans_only_the_health_check_table():
+    client = _mock_prisma_for_retention([0])
+    cleaner = SpendLogCleanup(general_settings={"maximum_health_check_retention_period": "30d"})
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(client)
+    tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
+    assert len(tables) == 1
+    assert '"LiteLLM_HealthCheckTable"' in tables[0]
+    assert '"health_check_id"' in tables[0]
+    assert '"checked_at"' in tables[0]
+    cutoff_date = client.db.execute_raw.call_args[0][1]
+    expected_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    assert abs((cutoff_date - expected_cutoff).total_seconds()) < 1
 
-    client = _mock_prisma_for_retention([0, 0, 0])
+
+@pytest.mark.asyncio
+async def test_each_retention_key_cuts_off_at_its_own_horizon():
+    client = _mock_prisma_for_retention([0, 0, 0, 0])
     cleaner = SpendLogCleanup(
         general_settings={
             "maximum_spend_logs_retention_period": "7d",
             "maximum_autorouter_session_retention_period": "365d",
+            "maximum_health_check_retention_period": "30d",
         }
     )
     cleaner.pod_lock_manager = None
     await cleaner.cleanup_old_spend_logs(client)
     cutoffs = {
-        ("LiteLLM_AutoRouterSession" if '"LiteLLM_AutoRouterSession"' in call[0][0] else "logs"): call[0][1]
+        (
+            "LiteLLM_AutoRouterSession"
+            if '"LiteLLM_AutoRouterSession"' in call[0][0]
+            else "LiteLLM_HealthCheckTable"
+            if '"LiteLLM_HealthCheckTable"' in call[0][0]
+            else "logs"
+        ): call[0][1]
         for call in client.db.execute_raw.call_args_list
     }
     now = datetime.now(timezone.utc)
     assert (now - cutoffs["logs"]).days == 7
     assert (now - cutoffs["LiteLLM_AutoRouterSession"]).days == 365
+    assert (now - cutoffs["LiteLLM_HealthCheckTable"]).days == 30
 
 
 @pytest.mark.asyncio
@@ -835,6 +858,7 @@ async def test_no_retention_keys_means_no_cleanup_at_all():
     cleaner.pod_lock_manager = None
     await cleaner.cleanup_old_spend_logs(client)
     assert client.db.execute_raw.await_count == 0
+    assert not any('"LiteLLM_HealthCheckTable"' in call[0][0] for call in client.db.execute_raw.call_args_list)
 
 
 @pytest.mark.asyncio
