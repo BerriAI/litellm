@@ -3,13 +3,17 @@ import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
-import { Segmented, Tooltip } from "antd";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
 import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
 import { TagUsage } from "../../types";
+
+const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
 
 interface TopKeyViewProps {
   topKeys: any[];
@@ -113,9 +117,9 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         <div className="overflow-hidden">
           <div className="flex flex-wrap items-center gap-1">
             {displayTags.map((tag, index) => (
-              <Tooltip
+              <SimpleTooltip
                 key={index}
-                title={
+                content={
                   <div>
                     <div>
                       <span className="text-gray-300">Tag Name:</span> {tag.tag}
@@ -128,7 +132,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
                 }
               >
                 <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">{tag.tag.slice(0, 7)}...</span>
-              </Tooltip>
+              </SimpleTooltip>
             ))}
             {hasMoreTags && (
               <button
@@ -166,16 +170,22 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   return (
     <>
       <div className="mb-4 flex justify-between items-center">
-        <Segmented
-          options={[
-            { label: "5", value: 5 },
-            { label: "10", value: 10 },
-            { label: "25", value: 25 },
-            { label: "50", value: 50 },
-          ]}
-          value={topKeysLimit}
-          onChange={(value) => setTopKeysLimit(value as number)}
-        />
+        <RadioGroup
+          aria-label="Number of top keys to show"
+          value={String(topKeysLimit)}
+          onValueChange={(limit: unknown) => setTopKeysLimit(Number(limit))}
+          className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-[3px]"
+        >
+          {TOP_KEYS_LIMITS.map((limit) => (
+            <Label
+              key={limit}
+              className="cursor-pointer rounded-md px-3 py-1 font-medium text-foreground/60 transition-colors has-data-checked:bg-background has-data-checked:text-foreground has-data-checked:shadow-sm"
+            >
+              <RadioGroupItem value={String(limit)} className="sr-only" />
+              {limit}
+            </Label>
+          ))}
+        </RadioGroup>
         <div className="flex space-x-2">
           <button
             onClick={() => setViewMode("table")}

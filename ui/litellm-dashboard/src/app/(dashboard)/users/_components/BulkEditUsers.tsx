@@ -1,10 +1,10 @@
 import React, { useState } from "react";
-import { Modal, Typography, Divider, Table, Select, InputNumber, Card, Space, Checkbox } from "antd";
+import { Typography, Divider, Table, Select, InputNumber, Card, Space, Checkbox } from "antd";
 import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "@/components/networking";
 import { UserEditView } from "./user_edit_view";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { MoneyCell } from "@/components/shared/table_cells";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const { Text, Title } = Typography;
 
@@ -71,7 +71,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
 
   const handleSubmit = async (formValues: any) => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("Access token not found");
+      toast.fromError("Access token not found");
       return;
     }
 
@@ -107,7 +107,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       const hasTeamAdditions = addToTeams && selectedTeams.length > 0;
 
       if (!hasUserUpdates && !hasTeamAdditions) {
-        NotificationsManager.fromBackend("Please modify at least one field or select teams to add users to");
+        toast.fromError("Please modify at least one field or select teams to add users to");
         return;
       }
 
@@ -176,12 +176,12 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         }
 
         if (failedTeams.length > 0) {
-          MessageManager.warning(`Failed to add users to ${failedTeams.length} team(s)`);
+          toast.warning(`Failed to add users to ${failedTeams.length} team(s)`);
         }
       }
 
       if (successMessages.length > 0) {
-        NotificationsManager.success(successMessages.join(". "));
+        toast.success(successMessages.join(". "));
       }
 
       // Reset team management state
@@ -194,170 +194,171 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       onCancel();
     } catch (error) {
       console.error("Bulk operation failed:", error);
-      NotificationsManager.fromBackend("Failed to perform bulk operations");
+      toast.fromError("Failed to perform bulk operations");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Modal
-      open={open}
-      onCancel={handleCancel}
-      footer={null}
-      title={updateAllUsers ? "Bulk Edit All Users" : `Bulk Edit ${selectedUsers.length} User(s)`}
-      width={800}
-    >
-      {allowAllUsers && (
-        <div className="mb-4">
-          <Checkbox checked={updateAllUsers} onChange={(e) => setUpdateAllUsers(e.target.checked)}>
-            <Text strong>Update ALL users in the system</Text>
-          </Checkbox>
-          {updateAllUsers && (
-            <div style={{ marginTop: 8 }}>
-              <Text type="warning" style={{ fontSize: "12px" }}>
-                ⚠️ This will apply changes to ALL users in the system, not just the selected ones.
-              </Text>
-            </div>
-          )}
-        </div>
-      )}
-
-      {!updateAllUsers && (
-        <div className="mb-4">
-          <Title level={5}>Selected Users ({selectedUsers.length}):</Title>
-          <Table
-            size="small"
-            bordered
-            dataSource={selectedUsers}
-            pagination={false}
-            scroll={{ y: 200 }}
-            rowKey="user_id"
-            columns={[
-              {
-                title: "User ID",
-                dataIndex: "user_id",
-                key: "user_id",
-                width: "30%",
-                render: (text: string) => (
-                  <Text strong style={{ fontSize: "12px" }}>
-                    {text.length > 20 ? `${text.slice(0, 20)}...` : text}
-                  </Text>
-                ),
-              },
-              {
-                title: "Email",
-                dataIndex: "user_email",
-                key: "user_email",
-                width: "25%",
-                render: (text: string) => (
-                  <Text type="secondary" style={{ fontSize: "12px" }}>
-                    {text || "No email"}
-                  </Text>
-                ),
-              },
-              {
-                title: "Current Role",
-                dataIndex: "user_role",
-                key: "user_role",
-                width: "25%",
-                render: (role: string) => (
-                  <Text style={{ fontSize: "12px" }}>{possibleUIRoles?.[role]?.ui_label || role}</Text>
-                ),
-              },
-              {
-                title: "Budget",
-                dataIndex: "max_budget",
-                key: "max_budget",
-                width: "20%",
-                render: (budget: number | null) => (
-                  <MoneyCell value={budget} decimals={2} emptyText="Unlimited" showZero />
-                ),
-              },
-            ]}
-          />
-        </div>
-      )}
-
-      <Divider />
-
-      <div className="mb-4">
-        <Text>
-          <strong>Instructions:</strong> Fill in the fields below with the values you want to apply to all selected
-          users. You can bulk edit: role, budget, models, and metadata. You can also add users to teams.
-        </Text>
-      </div>
-
-      {/* Team Management Section */}
-      <Card title="Team Management" size="small" className="mb-4" style={{ backgroundColor: "#fafafa" }}>
-        <Space direction="vertical" style={{ width: "100%" }}>
-          <Checkbox checked={addToTeams} onChange={(e) => setAddToTeams(e.target.checked)}>
-            Add selected users to teams
-          </Checkbox>
-
-          {addToTeams && (
-            <>
-              <div>
-                <Text strong>Select Teams:</Text>
-                <Select
-                  mode="multiple"
-                  placeholder="Select teams to add users to"
-                  value={selectedTeams}
-                  onChange={setSelectedTeams}
-                  style={{ width: "100%", marginTop: 8 }}
-                  options={
-                    teams?.map((team) => ({
-                      label: team.team_alias || team.team_id,
-                      value: team.team_id,
-                    })) || []
-                  }
-                />
-              </div>
-
-              <div>
-                <Text strong>Team Budget (Optional):</Text>
-                <InputNumber
-                  placeholder="Max budget per user in team"
-                  value={teamBudget}
-                  onChange={(value) => setTeamBudget(value)}
-                  style={{ width: "100%", marginTop: 8 }}
-                  min={0}
-                  step={0.01}
-                  precision={2}
-                />
-                <Text type="secondary" style={{ fontSize: "12px" }}>
-                  Leave empty for unlimited budget within team limits
+    <Dialog open={open} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>
+            {updateAllUsers ? "Bulk Edit All Users" : `Bulk Edit ${selectedUsers.length} User(s)`}
+          </DialogTitle>
+        </DialogHeader>
+        {allowAllUsers && (
+          <div className="mb-4">
+            <Checkbox checked={updateAllUsers} onChange={(e) => setUpdateAllUsers(e.target.checked)}>
+              <Text strong>Update ALL users in the system</Text>
+            </Checkbox>
+            {updateAllUsers && (
+              <div style={{ marginTop: 8 }}>
+                <Text type="warning" style={{ fontSize: "12px" }}>
+                  ⚠️ This will apply changes to ALL users in the system, not just the selected ones.
                 </Text>
               </div>
+            )}
+          </div>
+        )}
 
-              <Text type="secondary" style={{ fontSize: "12px" }}>
-                Users will be added with &quot;user&quot; role by default. All users will be added to each selected
-                team.
-              </Text>
-            </>
-          )}
-        </Space>
-      </Card>
+        {!updateAllUsers && (
+          <div className="mb-4">
+            <Title level={5}>Selected Users ({selectedUsers.length}):</Title>
+            <Table
+              size="small"
+              bordered
+              dataSource={selectedUsers}
+              pagination={false}
+              scroll={{ y: 200 }}
+              rowKey="user_id"
+              columns={[
+                {
+                  title: "User ID",
+                  dataIndex: "user_id",
+                  key: "user_id",
+                  width: "30%",
+                  render: (text: string) => (
+                    <Text strong style={{ fontSize: "12px" }}>
+                      {text.length > 20 ? `${text.slice(0, 20)}...` : text}
+                    </Text>
+                  ),
+                },
+                {
+                  title: "Email",
+                  dataIndex: "user_email",
+                  key: "user_email",
+                  width: "25%",
+                  render: (text: string) => (
+                    <Text type="secondary" style={{ fontSize: "12px" }}>
+                      {text || "No email"}
+                    </Text>
+                  ),
+                },
+                {
+                  title: "Current Role",
+                  dataIndex: "user_role",
+                  key: "user_role",
+                  width: "25%",
+                  render: (role: string) => (
+                    <Text style={{ fontSize: "12px" }}>{possibleUIRoles?.[role]?.ui_label || role}</Text>
+                  ),
+                },
+                {
+                  title: "Budget",
+                  dataIndex: "max_budget",
+                  key: "max_budget",
+                  width: "20%",
+                  render: (budget: number | null) => (
+                    <MoneyCell value={budget} decimals={2} emptyText="Unlimited" showZero />
+                  ),
+                },
+              ]}
+            />
+          </div>
+        )}
 
-      <UserEditView
-        userData={mockUserData}
-        onCancel={handleCancel}
-        onSubmit={handleSubmit}
-        teams={teams}
-        accessToken={accessToken}
-        userID="bulk_edit"
-        userRole={userRole}
-        userModels={userModels}
-        possibleUIRoles={possibleUIRoles}
-        isBulkEdit={true}
-      />
+        <Divider />
 
-      {loading && (
-        <div style={{ textAlign: "center", marginTop: "10px" }}>
-          <Text>Updating {updateAllUsers ? "all users" : selectedUsers.length} user(s)...</Text>
+        <div className="mb-4">
+          <Text>
+            <strong>Instructions:</strong> Fill in the fields below with the values you want to apply to all selected
+            users. You can bulk edit: role, budget, models, and metadata. You can also add users to teams.
+          </Text>
         </div>
-      )}
-    </Modal>
+
+        {/* Team Management Section */}
+        <Card title="Team Management" size="small" className="mb-4" style={{ backgroundColor: "#fafafa" }}>
+          <Space direction="vertical" style={{ width: "100%" }}>
+            <Checkbox checked={addToTeams} onChange={(e) => setAddToTeams(e.target.checked)}>
+              Add selected users to teams
+            </Checkbox>
+
+            {addToTeams && (
+              <>
+                <div>
+                  <Text strong>Select Teams:</Text>
+                  <Select
+                    mode="multiple"
+                    placeholder="Select teams to add users to"
+                    value={selectedTeams}
+                    onChange={setSelectedTeams}
+                    style={{ width: "100%", marginTop: 8 }}
+                    options={
+                      teams?.map((team) => ({
+                        label: team.team_alias || team.team_id,
+                        value: team.team_id,
+                      })) || []
+                    }
+                  />
+                </div>
+
+                <div>
+                  <Text strong>Team Budget (Optional):</Text>
+                  <InputNumber
+                    placeholder="Max budget per user in team"
+                    value={teamBudget}
+                    onChange={(value) => setTeamBudget(value)}
+                    style={{ width: "100%", marginTop: 8 }}
+                    min={0}
+                    step={0.01}
+                    precision={2}
+                  />
+                  <Text type="secondary" style={{ fontSize: "12px" }}>
+                    Leave empty for unlimited budget within team limits
+                  </Text>
+                </div>
+
+                <Text type="secondary" style={{ fontSize: "12px" }}>
+                  Users will be added with &quot;user&quot; role by default. All users will be added to each selected
+                  team.
+                </Text>
+              </>
+            )}
+          </Space>
+        </Card>
+
+        <UserEditView
+          userData={mockUserData}
+          onCancel={handleCancel}
+          onSubmit={handleSubmit}
+          teams={teams}
+          accessToken={accessToken}
+          userID="bulk_edit"
+          userRole={userRole}
+          userModels={userModels}
+          possibleUIRoles={possibleUIRoles}
+          isBulkEdit={true}
+        />
+
+        {loading && (
+          <div style={{ textAlign: "center", marginTop: "10px" }}>
+            <Text>Updating {updateAllUsers ? "all users" : selectedUsers.length} user(s)...</Text>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 };
 

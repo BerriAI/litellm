@@ -1,5 +1,7 @@
-import { CalendarOutlined, ClockCircleOutlined } from "@ant-design/icons";
-import { Button, DateRangePickerValue, Text } from "@tremor/react";
+import { Calendar, Clock } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
+import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
@@ -9,6 +11,7 @@ interface AdvancedDatePickerProps {
   label?: string;
   className?: string;
   showTimeRange?: boolean;
+  align?: "left" | "right";
 }
 
 interface RelativeTimeOption {
@@ -67,7 +70,9 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   value,
   onValueChange,
   label = "Select Time Range",
+  className,
   showTimeRange = true,
+  align = "right",
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
@@ -273,19 +278,22 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   };
 
   return (
-    <div className="flex items-center gap-3">
-      {label && <Text className="text-sm font-medium text-gray-700 whitespace-nowrap">{label}</Text>}
+    <div className={cn("flex items-center gap-3", className)}>
+      {label && <p className="text-sm font-medium text-gray-700 whitespace-nowrap">{label}</p>}
       <div className="relative" ref={dropdownRef}>
         {/* Main input display */}
-        <div
-          className="w-[300px] px-3 py-2 text-sm border border-gray-300 rounded-md bg-white cursor-pointer hover:border-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+        <button
+          type="button"
+          data-slot="advanced-date-picker-trigger"
+          aria-expanded={isOpen}
+          className="w-[300px] px-3 py-2 text-sm text-left border border-gray-300 rounded-md bg-white cursor-pointer hover:border-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           onClick={() => setIsOpen(!isOpen)}
         >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ClockCircleOutlined className="text-gray-600" />
+          <span className="flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <Clock className="size-4 text-gray-600" />
               <span className="text-gray-900">{formatDisplayRange(value.from, value.to)}</span>
-            </div>
+            </span>
             <svg
               className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
               fill="none"
@@ -294,12 +302,19 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
             >
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
-          </div>
-        </div>
+          </span>
+        </button>
 
         {/* Dropdown panel */}
         {isOpen && (
-          <div className="absolute top-full right-0 z-9999 min-w-[600px] mt-1 bg-white border border-gray-200 rounded-lg shadow-xl">
+          <div
+            data-slot="advanced-date-picker-panel"
+            data-align={align}
+            className={cn(
+              "absolute top-full z-9999 min-w-[600px] mt-1 bg-white border border-gray-200 rounded-lg shadow-xl",
+              align === "left" ? "left-0" : "right-0",
+            )}
+          >
             <div className="flex">
               {/* Left side - Relative time options */}
               <div className="w-1/2 border-r border-gray-200">
@@ -310,9 +325,12 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   {relativeTimeOptions.map((option) => {
                     const isSelected = selectedOption === option.shortLabel;
                     return (
-                      <div
+                      <button
                         key={option.label}
-                        className={`flex items-center justify-between px-5 py-4 cursor-pointer border-b border-gray-100 transition-colors ${
+                        type="button"
+                        data-slot="advanced-date-picker-preset"
+                        aria-pressed={isSelected}
+                        className={`flex w-full items-center justify-between px-5 py-4 text-left cursor-pointer border-b border-gray-100 transition-colors ${
                           isSelected ? "bg-blue-50 hover:bg-blue-100 border-blue-200" : "hover:bg-gray-50"
                         }`}
                         onClick={() => handleRelativeTimeSelect(option)}
@@ -327,7 +345,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                         >
                           {option.shortLabel}
                         </span>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -337,7 +355,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               <div className="w-1/2 relative">
                 <div className="p-3.5 border-b border-gray-200">
                   <div className="flex items-center gap-2">
-                    <CalendarOutlined className="text-gray-600" />
+                    <Calendar className="size-4 text-gray-600" />
                     <span className="text-sm font-semibold text-gray-900">Start and end dates</span>
                   </div>
                 </div>

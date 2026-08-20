@@ -1,6 +1,7 @@
 name: UI Unit Tests
 permissions:
   contents: read
+  pull-requests: read
 
 on:
   pull_request:
@@ -32,7 +33,14 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-changes
+        with:
+          category: ui
+
       - name: Setup Node.js
+        if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: ui/litellm-dashboard/.nvmrc
@@ -40,14 +48,17 @@ jobs:
           cache-dependency-path: ui/litellm-dashboard/package-lock.json
 
       - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
         run: npm ci
 
       - name: Run UI type tests (Vitest)
+        if: steps.changes.outputs.decision != 'skip'
         env:
           CI: "true"
         run: npm run test:types
 
       - name: Run UI unit tests (Vitest)
+        if: steps.changes.outputs.decision != 'skip'
         env:
           CI: "true"
           GH_TOKEN: ${{ github.token }}

@@ -16,8 +16,8 @@ describe("CostOptimizationFeedbackBanner", () => {
   });
 
   it("hides itself and persists the dismissal when the dismiss button is clicked", () => {
-    const { queryByText, getByLabelText } = render(<CostOptimizationFeedbackBanner />);
-    expect(queryByText("Help shape cost optimization")).toBeInTheDocument();
+    const { getByText, queryByText, getByLabelText } = render(<CostOptimizationFeedbackBanner />);
+    expect(getByText("Help shape cost optimization")).toBeInTheDocument();
 
     fireEvent.click(getByLabelText("Dismiss banner"));
 

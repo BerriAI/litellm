@@ -3,6 +3,8 @@ import tseslint from "typescript-eslint";
 import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 import prettier from "eslint-config-prettier/flat";
 import unusedImports from "eslint-plugin-unused-imports";
+import testingLibrary from "eslint-plugin-testing-library";
+import jestDom from "eslint-plugin-jest-dom";
 import local from "./scripts/eslint-rules/index.mjs";
 
 const eslintConfig = [
@@ -60,6 +62,10 @@ const eslintConfig = [
               message:
                 "antd is being phased out; build new UI with shadcn/ui primitives instead of adding antd imports.",
             },
+            {
+              group: ["@ant-design/icons", "@ant-design/icons/*"],
+              message: "@ant-design/icons is gone from the dashboard; use lucide-react instead.",
+            },
           ],
         },
       ],
@@ -82,6 +88,27 @@ const eslintConfig = [
     files: ["src/lib/http/**"],
     rules: {
       "no-restricted-syntax": "off",
+    },
+  },
+  {
+    files: ["src/**/*.test.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+    plugins: { "testing-library": testingLibrary, "jest-dom": jestDom },
+    rules: {
+      "local/no-antd-class-selectors": "error",
+      "testing-library/await-async-queries": "error",
+      "testing-library/no-wait-for-multiple-assertions": "error",
+      "testing-library/no-wait-for-side-effects": "error",
+      "testing-library/prefer-find-by": "error",
+      "testing-library/prefer-presence-queries": "error",
+      "jest-dom/prefer-checked": "error",
+      "jest-dom/prefer-empty": "error",
+      "jest-dom/prefer-enabled-disabled": "error",
+      "jest-dom/prefer-focus": "error",
+      "jest-dom/prefer-in-document": "error",
+      "jest-dom/prefer-to-have-attribute": "error",
+      "jest-dom/prefer-to-have-class": "error",
+      "jest-dom/prefer-to-have-style": "error",
+      "jest-dom/prefer-to-have-text-content": "error",
     },
   },
 ];

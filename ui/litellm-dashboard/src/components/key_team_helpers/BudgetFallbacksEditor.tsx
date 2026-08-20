@@ -1,4 +1,6 @@
-import { Button, Select, Tooltip } from "antd";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Button } from "@/components/ui/button";
 import { ArrowDown, Plus, X } from "lucide-react";
 import React, { useState } from "react";
 
@@ -61,7 +63,8 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
         <div className="text-xs text-gray-500 mb-2">
           When a model exceeds its per-model budget, requests automatically reroute to fallback models
         </div>
-        <Button size="small" onClick={addEntry} icon={<Plus className="w-3 h-3" />}>
+        <Button variant="outline" size="sm" onClick={addEntry}>
+          <Plus className="w-3 h-3" />
           Add Budget Fallback
         </Button>
       </div>
@@ -91,18 +94,15 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
 
             <div className="mb-3">
               <label className="block text-xs font-medium text-gray-600 mb-1">Primary Model</label>
-              <Select
-                className="w-full"
-                placeholder="Select model"
-                value={entry.primaryModel}
-                onChange={(v) => {
-                  const newFallbacks = entry.fallbackModels.filter((m) => m !== v);
-                  updateEntry(entry.id, { primaryModel: v, fallbackModels: newFallbacks });
-                }}
-                showSearch
-                filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+              <SearchSelect
                 options={availablePrimaryOptions.map((m) => ({ label: m, value: m }))}
-                getPopupContainer={(trigger) => trigger.parentElement || document.body}
+                value={entry.primaryModel ?? ""}
+                onValueChange={(v) => {
+                  const newFallbacks = entry.fallbackModels.filter((m) => m !== v);
+                  updateEntry(entry.id, { primaryModel: v === "" ? null : v, fallbackModels: newFallbacks });
+                }}
+                placeholder="Select model"
+                emptyText="No models found"
               />
             </div>
 
@@ -115,26 +115,14 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
 
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Fallback Models</label>
-              <Select
-                mode="multiple"
-                className="w-full"
-                placeholder={entry.primaryModel ? "Select fallback models" : "Select a primary model first"}
-                value={entry.fallbackModels}
-                onChange={(values) => updateEntry(entry.id, { fallbackModels: values })}
-                disabled={!entry.primaryModel}
-                showSearch
-                filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+              <MultiSelect
                 options={availableFallbackOptions.map((m) => ({ label: m, value: m }))}
-                getPopupContainer={(trigger) => trigger.parentElement || document.body}
-                maxTagCount="responsive"
-                maxTagPlaceholder={(omittedValues) => (
-                  <Tooltip
-                    styles={{ root: { pointerEvents: "none" } }}
-                    title={omittedValues.map(({ value: v }) => v).join(", ")}
-                  >
-                    <span>+{omittedValues.length} more</span>
-                  </Tooltip>
-                )}
+                value={entry.fallbackModels}
+                onValueChange={(values) => updateEntry(entry.id, { fallbackModels: values })}
+                placeholder={entry.primaryModel ? "Select fallback models" : "Select a primary model first"}
+                emptyText="No models found"
+                disabled={!entry.primaryModel}
+                className="w-full"
               />
               {entry.fallbackModels.length > 1 && (
                 <div className="text-[10px] text-gray-400 mt-1 ml-1">
@@ -145,7 +133,8 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
           </div>
         );
       })}
-      <Button size="small" onClick={addEntry} icon={<Plus className="w-3 h-3" />}>
+      <Button variant="outline" size="sm" onClick={addEntry}>
+        <Plus className="w-3 h-3" />
         Add Budget Fallback
       </Button>
     </div>

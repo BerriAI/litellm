@@ -8,8 +8,12 @@ import {
   ClassifierType,
   ComplexityTierLabels,
   ComplexityTiers,
+  DimensionWeights,
   TIER_DESCRIPTIONS,
+  TierBoundaries,
+  TokenThresholds,
   effectiveTierLabel,
+  heuristicScoringRoleFor,
 } from "./ComplexityRouterConfig";
 
 /**
@@ -36,8 +40,41 @@ export const normalizeClassifierLlmConfig = ({
     ? { model, timeout_ms, system_prompt }
     : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
 
+interface ScorerKnobInputs {
+  classifierType: ClassifierType;
+  classifierFallback: ClassifierFallback | undefined;
+  tierBoundaries: TierBoundaries | undefined;
+  tokenThresholds: TokenThresholds | undefined;
+  dimensionWeights: DimensionWeights | undefined;
+  reasoningOverrideMinScore: number | undefined;
+}
+
+/**
+ * The scorer knobs to persist, which is none of them on a router that never scores: an LLM classifier
+ * falling back to the default model would otherwise carry settings that can only mislead the next reader.
+ * Each is omitted while untouched, so the router keeps tracking the backend defaults.
+ */
+const scorerKnobPayload = ({
+  classifierType,
+  classifierFallback,
+  tierBoundaries,
+  tokenThresholds,
+  dimensionWeights,
+  reasoningOverrideMinScore,
+}: ScorerKnobInputs) =>
+  heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
+    ? {}
+    : {
+        ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
+        ...(tokenThresholds && { token_thresholds: tokenThresholds }),
+        ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
+      };
+
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  defaultModel: string | undefined;
+  planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
@@ -58,10 +95,16 @@ export interface BuildComplexityRouterConfigParams {
   tierDistancePenalty: number;
   adaptiveEligible: AdaptiveEligible;
   returnRawModelName: boolean;
+  tierBoundaries?: TierBoundaries;
+  tokenThresholds?: TokenThresholds;
+  dimensionWeights?: DimensionWeights;
+  reasoningOverrideMinScore?: number;
 }
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
+  default_model?: string;
+  plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -82,6 +125,10 @@ export interface ComplexityRouterConfigPayload {
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  tier_boundaries?: TierBoundaries;
+  token_thresholds?: TokenThresholds;
+  dimension_weights?: DimensionWeights;
+  reasoning_override_min_score?: number;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -120,10 +167,26 @@ export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined)
   return null;
 };
 
+// Requires all 4 tiers non-empty, so the create form can never reach the
+// resolveComplexityDefaultModel(tiers, ...) === undefined case — MEDIUM (or SIMPLE) is always
+// populated. The edit modal has no equivalent of this check (it allows saving with only some
+// tiers filled), which is why it needs its own explicit `!defaultModel` guard after deriving —
+// see edit_auto_router_modal.tsx's save handler. A future contributor copying this form's submit
+// handler elsewhere should not assume the same guarantee holds without this check.
 export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
   const missing = TIER_KEYS.filter((tier) => tiers[tier].length === 0);
   if (missing.length === 0) return null;
   return `Select a model for the following tier(s): ${missing.join(", ")}`;
+};
+
+// The backend rejects a plan-mode floor naming a tier with no models. The create form's
+// getMissingTiersError makes this unreachable there; the edit modal allows partially filled
+// tiers, so both gates call this to keep the two forms symmetric.
+export const getPlanModeTierError = (planModeMinTier: string | undefined, tiers: ComplexityTiers): string | null => {
+  if (!planModeMinTier) return null;
+  const models = tiers[planModeMinTier as keyof ComplexityTiers] ?? [];
+  if (models.length > 0) return null;
+  return `The plan-mode minimum tier (${planModeMinTier}) has no models. Add one or turn the override off.`;
 };
 
 export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
@@ -147,6 +210,8 @@ export const getSemanticConfigError = ({
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  defaultModel,
+  planModeMinTier,
   tierLabels,
   classifierType,
   classifierLlmConfig,
@@ -167,13 +232,28 @@ export const buildComplexityRouterConfig = ({
   tierDistancePenalty,
   adaptiveEligible,
   returnRawModelName,
+  tierBoundaries,
+  tokenThresholds,
+  dimensionWeights,
+  reasoningOverrideMinScore,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
+  const scorerInputs = {
+    classifierType,
+    classifierFallback,
+    tierBoundaries,
+    tokenThresholds,
+    dimensionWeights,
+    reasoningOverrideMinScore,
+  };
+  const scorerKnobs = scorerKnobPayload(scorerInputs);
 
   return {
     tiers,
+    ...(defaultModel?.trim() && { default_model: defaultModel }),
+    ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...(classifierType === "llm" &&
@@ -208,5 +288,6 @@ export const buildComplexityRouterConfig = ({
       adaptive_eligible: adaptiveEligible,
     }),
     ...(returnRawModelName && { return_raw_model_name: true }),
+    ...scorerKnobs,
   };
 };

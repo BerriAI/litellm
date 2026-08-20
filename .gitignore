@@ -1,9 +1,11 @@
 .python-version
 .venv
+tests/e2e/.fixtures/
 .venv-typecheck
 .venv_policy_test
 .env
 .claude
+CLAUDE.local.md
 .newenv
 newenv/*
 litellm/proxy/myenv/*

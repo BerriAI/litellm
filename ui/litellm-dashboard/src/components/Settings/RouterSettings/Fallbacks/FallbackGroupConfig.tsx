@@ -3,9 +3,10 @@
  * Handles primary model selection and fallback chain configuration
  */
 
-import { Select, Tooltip } from "antd";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { SearchSelect } from "@/components/shared/SearchSelect";
 import { AlertCircle, ArrowDown, X } from "lucide-react";
-import React from "react";
+import React, { useId } from "react";
 
 export interface FallbackGroup {
   id: string;
@@ -63,25 +64,24 @@ export function FallbackGroupConfig({
   };
 
   const canAddMoreFallbacks = group.fallbackModels.length < maxFallbacks;
+  const primaryModelInputId = useId();
 
   return (
     <div className="flex flex-col gap-8 py-4">
       {/* Primary Model Section */}
       <div className="relative">
-        <label className="block text-sm font-semibold text-gray-700 mb-2">
+        <label htmlFor={primaryModelInputId} className="block text-sm font-semibold text-gray-700 mb-2">
           Primary Model <span className="text-red-500">*</span>
         </label>
-        <Select
-          className="w-full h-12"
-          size="large"
-          placeholder="Select primary model"
-          value={group.primaryModel}
-          onChange={handlePrimaryChange}
-          disabled={disablePrimaryModel}
-          showSearch
-          getPopupContainer={(trigger) => trigger.parentElement || document.body}
-          filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+        <SearchSelect
+          inputId={primaryModelInputId}
           options={availableModels.map((m) => ({ label: m, value: m }))}
+          value={group.primaryModel ?? ""}
+          onValueChange={handlePrimaryChange}
+          placeholder="Select primary model"
+          emptyText="No models found"
+          disabled={disablePrimaryModel}
+          className="h-12"
         />
         {!disablePrimaryModel && !group.primaryModel && (
           <div className="mt-2 flex items-center gap-2 text-amber-600 text-xs bg-amber-50 p-2 rounded-sm">
@@ -111,46 +111,16 @@ export function FallbackGroupConfig({
         <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
           {/* Add Fallback Input */}
           <div className="mb-4">
-            <Select
-              mode="multiple"
-              className="w-full"
-              size="large"
+            <MultiSelect
+              options={availableFallbackOptions.map((m) => ({ label: m, value: m }))}
+              value={group.fallbackModels}
+              onValueChange={handleFallbackSelect}
               placeholder={
                 canAddMoreFallbacks ? "Select fallback models to add..." : `Maximum ${maxFallbacks} fallbacks reached`
               }
-              value={group.fallbackModels}
-              onChange={handleFallbackSelect}
+              emptyText="No models found"
               disabled={!group.primaryModel}
-              getPopupContainer={(trigger) => trigger.parentElement || document.body}
-              options={availableFallbackOptions.map((m) => ({
-                label: m,
-                value: m,
-              }))}
-              optionRender={(option, info) => {
-                const isSelected = group.fallbackModels.includes(option.value as string);
-                const orderIndex = isSelected ? group.fallbackModels.indexOf(option.value as string) + 1 : null;
-                return (
-                  <div className="flex items-center gap-2">
-                    {isSelected && orderIndex !== null && (
-                      <span className="flex items-center justify-center w-5 h-5 rounded-sm bg-indigo-100 text-indigo-600 text-xs font-bold">
-                        {orderIndex}
-                      </span>
-                    )}
-                    <span>{option.label}</span>
-                  </div>
-                );
-              }}
-              maxTagCount="responsive"
-              maxTagPlaceholder={(omittedValues) => (
-                <Tooltip
-                  styles={{ root: { pointerEvents: "none" } }}
-                  title={omittedValues.map(({ value }) => value).join(", ")}
-                >
-                  <span>+{omittedValues.length} more</span>
-                </Tooltip>
-              )}
-              showSearch
-              filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+              className="w-full"
             />
             <p className="text-xs text-gray-500 mt-1 ml-1">
               {canAddMoreFallbacks
@@ -167,9 +137,9 @@ export function FallbackGroupConfig({
                 <span className="text-xs mt-1">Add models from the dropdown above</span>
               </div>
             ) : (
-              group.fallbackModels.map((modelValue, index) => {
-                return (
-                  <div
+              <ol aria-label="Fallback chain" className="space-y-2">
+                {group.fallbackModels.map((modelValue, index) => (
+                  <li
                     key={`${modelValue}-${index}`}
                     className="group flex items-center justify-between p-3 bg-white rounded-lg border border-gray-200 hover:border-indigo-300 hover:shadow-xs transition-all"
                   >
@@ -184,15 +154,15 @@ export function FallbackGroupConfig({
 
                     <button
                       type="button"
-                      data-testid={`remove-fallback-${modelValue}`}
+                      aria-label={`Remove ${modelValue}`}
                       onClick={() => removeFallback(index)}
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1"
                     >
                       <X className="w-4 h-4" />
                     </button>
-                  </div>
-                );
-              })
+                  </li>
+                ))}
+              </ol>
             )}
           </div>
         </div>

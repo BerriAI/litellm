@@ -1,12 +1,11 @@
-import {
-  CheckCircleOutlined,
-  CodeOutlined,
-  PlayCircleOutlined,
-  RollbackOutlined,
-  SaveOutlined,
-} from "@ant-design/icons";
-import { Button, Input, Select, Switch } from "antd";
-import React, { useState } from "react";
+import { CircleCheck, CirclePlay, Code, Save, Undo2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import React, { useId, useState } from "react";
 
 interface GuardrailConfigProps {
   guardrailName: string;
@@ -26,6 +25,28 @@ const versions = [
   { id: "v1", label: "v1", date: "2026-01-28", author: "admin@company.com", changes: "Initial configuration" },
 ];
 
+const ACTION_ITEMS = [
+  { value: "block", label: "Block Request" },
+  { value: "flag", label: "Flag for Review" },
+  { value: "log", label: "Log Only" },
+  { value: "fallback", label: "Use Fallback Response" },
+];
+
+const PROVIDER_ITEMS = [
+  { value: "bedrock", label: "AWS Bedrock Guardrails" },
+  { value: "google", label: "Google Cloud AI Safety" },
+  { value: "litellm", label: "LiteLLM Built-in" },
+  { value: "custom", label: "Custom Code" },
+];
+
+const GUARDRAIL_TYPE_ITEMS = [
+  { value: "Content Safety", label: "Content Safety" },
+  { value: "PII", label: "PII Detection" },
+  { value: "Topic", label: "Topic Restriction" },
+  { value: "prompt_injection", label: "Prompt Injection" },
+  { value: "custom", label: "Custom" },
+];
+
 export function GuardrailConfig({ guardrailName, guardrailType, provider }: GuardrailConfigProps) {
   const [action, setAction] = useState("block");
   const [enabled, setEnabled] = useState(true);
@@ -34,6 +55,7 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
   const [rerunStatus, setRerunStatus] = useState<"idle" | "running" | "success" | "error">("idle");
   const [version, setVersion] = useState("v3");
   const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const enabledToggleId = useId();
 
   const handleRerun = () => {
     setRerunStatus("running");
@@ -51,18 +73,32 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
           <div className="flex items-center gap-3">
             <span className="text-sm font-medium text-gray-700">Version:</span>
             <Select
+              items={versions.map((v) => ({ value: v.id, label: v.label }))}
               value={version}
-              onChange={setVersion}
-              options={versions.map((v) => ({ value: v.id, label: v.label }))}
-              style={{ width: 140 }}
-            />
-            <Button type="link" size="small" onClick={() => setShowVersionHistory(!showVersionHistory)}>
+              onValueChange={(value: string | null) => value && setVersion(value)}
+            >
+              <SelectTrigger className="w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {versions.map((v) => (
+                  <SelectItem key={v.id} value={v.id}>
+                    {v.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant="link" size="sm" onClick={() => setShowVersionHistory(!showVersionHistory)}>
               {showVersionHistory ? "Hide history" : "View history"}
             </Button>
           </div>
           <div className="flex items-center gap-2">
-            <Button icon={<RollbackOutlined />}>Revert</Button>
-            <Button type="primary" icon={<SaveOutlined />}>
+            <Button variant="outline">
+              <Undo2 />
+              Revert
+            </Button>
+            <Button>
+              <Save />
               Save as v{parseInt(version.replace("v", ""), 10) + 1}
             </Button>
           </div>
@@ -104,45 +140,53 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Action on Failure</label>
             <Select
+              items={ACTION_ITEMS}
               value={action}
-              onChange={setAction}
-              style={{ width: "100%" }}
-              options={[
-                { value: "block", label: "Block Request" },
-                { value: "flag", label: "Flag for Review" },
-                { value: "log", label: "Log Only" },
-                { value: "fallback", label: "Use Fallback Response" },
-              ]}
-            />
+              onValueChange={(value: string | null) => value && setAction(value)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ACTION_ITEMS.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Provider</label>
-            <Select
-              style={{ width: "100%" }}
-              defaultValue={provider}
-              options={[
-                { value: "bedrock", label: "AWS Bedrock Guardrails" },
-                { value: "google", label: "Google Cloud AI Safety" },
-                { value: "litellm", label: "LiteLLM Built-in" },
-                { value: "custom", label: "Custom Code" },
-              ]}
-            />
+            <Select items={PROVIDER_ITEMS} defaultValue={provider}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PROVIDER_ITEMS.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Guardrail Type</label>
-            <Select
-              style={{ width: "100%" }}
-              defaultValue={guardrailType}
-              options={[
-                { value: "Content Safety", label: "Content Safety" },
-                { value: "PII", label: "PII Detection" },
-                { value: "Topic", label: "Topic Restriction" },
-                { value: "prompt_injection", label: "Prompt Injection" },
-                { value: "custom", label: "Custom" },
-              ]}
-            />
+            <Select items={GUARDRAIL_TYPE_ITEMS} defaultValue={guardrailType}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {GUARDRAIL_TYPE_ITEMS.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="md:col-span-2">
@@ -151,8 +195,10 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
           </div>
 
           <div className="md:col-span-2 flex items-center gap-3">
-            <Switch checked={enabled} onChange={setEnabled} />
-            <span className="text-sm text-gray-700">Guardrail enabled in production</span>
+            <Switch id={enabledToggleId} checked={enabled} onCheckedChange={setEnabled} />
+            <Label htmlFor={enabledToggleId} className="font-normal text-gray-700">
+              Guardrail enabled in production
+            </Label>
           </div>
         </div>
       </div>
@@ -162,16 +208,16 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-              <CodeOutlined className="text-gray-500" />
+              <Code className="size-4 text-gray-500" />
               Custom Code Override
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">Replace the built-in guardrail with custom evaluation code</p>
           </div>
-          <Switch checked={useCustomCode} onChange={setUseCustomCode} />
+          <Switch aria-label="Custom Code Override" checked={useCustomCode} onCheckedChange={setUseCustomCode} />
         </div>
 
         {useCustomCode && (
-          <Input.TextArea
+          <Textarea
             value={customCode}
             onChange={(e) => setCustomCode(e.target.value)}
             placeholder={`async def evaluate(input_text: str, context: dict) -> dict:
@@ -194,18 +240,14 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
         </p>
 
         <div className="flex items-center gap-3">
-          <Button
-            type="primary"
-            icon={rerunStatus === "running" ? undefined : <PlayCircleOutlined />}
-            loading={rerunStatus === "running"}
-            onClick={handleRerun}
-          >
+          <Button disabled={rerunStatus === "running"} aria-busy={rerunStatus === "running"} onClick={handleRerun}>
+            {rerunStatus === "running" ? null : <CirclePlay />}
             {rerunStatus === "running" ? "Running on 10 samples..." : "Re-run on failing logs"}
           </Button>
 
           {rerunStatus === "success" && (
             <span className="text-sm text-green-600 flex items-center gap-2">
-              <CheckCircleOutlined /> 7/10 would now pass with new config
+              <CircleCheck className="size-4" /> 7/10 would now pass with new config
             </span>
           )}
 

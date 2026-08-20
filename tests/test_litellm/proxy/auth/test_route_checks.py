@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(
@@ -9,7 +10,14 @@ sys.path.insert(
 import pytest
 from fastapi import HTTPException, Request
 
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_OrganizationMembershipTable,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
 
 
@@ -3297,4 +3305,77 @@ def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
     assert not RouteChecks.check_route_access(
         route="/user/daily/activity/aggregated",
         allowed_routes=["/user/daily/activity"],
+    )
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_organization_daily_activity_reachable_by_non_admin_roles(user_role):
+    """The Organization Usage dashboard calls /organization/daily/activity, whose
+    handler restricts results to organizations the caller is ORG_ADMIN of (and
+    403s on any other org). That scoping is unreachable unless the route layer
+    lets a non-proxy-admin through first: the route belongs to no info /
+    management / org_admin_only list, so self_managed_routes is the only entry
+    granting it, and dropping it 401s every org admin's Organization Usage view
+    before the handler ever runs.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route="/organization/daily/activity",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_organization_daily_activity_not_granted_by_org_admin_request_data_branch():
+    """The org-admin branch of the route gate cannot grant this route, so the
+    self_managed_routes entry is load-bearing rather than redundant.
+
+    Query params do reach request_data, so the reason is not body-vs-query: it
+    is the key name. _user_is_org_admin reads ``organization_id`` (singular) and
+    ``organizations``, while this endpoint's filter is ``organization_ids``
+    (plural), and the dashboard's first page load sends no organization filter
+    at all. Both shapes are pinned below because renaming the query param would
+    otherwise silently change which gate is doing the work.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=[
+            LiteLLM_OrganizationMembershipTable(
+                user_id="test_user",
+                organization_id="org-a",
+                user_role=LitellmUserRoles.ORG_ADMIN.value,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        ],
+    )
+
+    # The dashboard's default page load: no organization filter at all.
+    assert not _user_is_org_admin(request_data={}, user_object=user_obj)
+    # The filtered load, naming an org this user really does administer.
+    assert not _user_is_org_admin(request_data={"organization_ids": "org-a"}, user_object=user_obj)
+    # The key name the helper would have had to see to grant it.
+    assert _user_is_org_admin(request_data={"organization_id": "org-a"}, user_object=user_obj)
+    assert not RouteChecks.check_route_access(
+        route="/organization/daily/activity",
+        allowed_routes=LiteLLMRoutes.org_admin_only_routes.value,
     )

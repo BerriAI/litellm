@@ -1,7 +1,9 @@
 import asyncio
 import json
+import logging
 import os
 import sys
+import time
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -9,6 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
@@ -2071,3 +2074,230 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     retry_authorization = posts[1]["headers"]["Authorization"]
     assert retry_authorization.startswith("AWS4-HMAC-SHA256")
     assert retry_authorization != first_attempt_headers["Authorization"]
+
+
+def _make_stub_direct_vector_store_config(response):
+    from litellm.llms.base_llm.vector_store.transformation import (
+        BaseDirectVectorStoreConfig,
+    )
+
+    class StubDirectVectorStoreConfig(BaseDirectVectorStoreConfig):
+        def __init__(self):
+            super().__init__()
+            self.sync_calls = []
+            self.async_calls = []
+
+        def execute_search_vector_store_request(self, **kwargs):
+            self.sync_calls.append(kwargs)
+            return response
+
+        async def aexecute_search_vector_store_request(self, **kwargs):
+            self.async_calls.append(kwargs)
+            return response
+
+    return StubDirectVectorStoreConfig()
+
+
+def test_vector_store_search_handler_direct_config_sync_skips_http():
+    handler = BaseLLMHTTPHandler()
+    stub_response = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+    config = _make_stub_direct_vector_store_config(stub_response)
+    logging_obj = Mock()
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client") as mock_get_client:
+        result = handler.vector_store_search_handler(
+            vector_store_id="vs_direct",
+            query="q",
+            vector_store_search_optional_params={"max_num_results": 4},
+            vector_store_provider_config=config,
+            custom_llm_provider="valkey",
+            litellm_params=GenericLiteLLMParams(valkey_host="localhost"),
+            logging_obj=logging_obj,
+            timeout=12.5,
+            _is_async=False,
+        )
+
+    assert result is stub_response
+    mock_get_client.assert_not_called()
+    assert len(config.sync_calls) == 1
+    call = config.sync_calls[0]
+    assert call["vector_store_id"] == "vs_direct"
+    assert call["query"] == "q"
+    assert call["timeout"] == 12.5
+    assert call["vector_store_search_optional_params"] == {"max_num_results": 4}
+    assert isinstance(call["litellm_params"], dict)
+    assert call["litellm_params"]["valkey_host"] == "localhost"
+    pre_call_args = logging_obj.pre_call.call_args.kwargs["additional_args"]
+    assert pre_call_args["query"] == "q"
+    assert pre_call_args["vector_store_id"] == "vs_direct"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_search_handler_direct_config_async_skips_http():
+    handler = BaseLLMHTTPHandler()
+    stub_response = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+    config = _make_stub_direct_vector_store_config(stub_response)
+    logging_obj = Mock()
+
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client") as mock_get_client:
+        result = await handler.vector_store_search_handler(
+            vector_store_id="vs_direct",
+            query=["q1", "q2"],
+            vector_store_search_optional_params={},
+            vector_store_provider_config=config,
+            custom_llm_provider="valkey",
+            litellm_params=GenericLiteLLMParams(valkey_host="localhost"),
+            logging_obj=logging_obj,
+            timeout=7.0,
+            _is_async=True,
+        )
+
+    assert result is stub_response
+    mock_get_client.assert_not_called()
+    assert len(config.async_calls) == 1
+    assert config.async_calls[0]["query"] == ["q1", "q2"]
+    assert config.async_calls[0]["litellm_params"]["valkey_host"] == "localhost"
+    assert config.async_calls[0]["timeout"] == 7.0
+    pre_call_args = logging_obj.pre_call.call_args.kwargs["additional_args"]
+    assert pre_call_args["query"] == ["q1", "q2"]
+    assert pre_call_args["vector_store_id"] == "vs_direct"
+
+
+def _direct_vector_store_debug_logging_obj():
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+
+    logging_obj = LitellmLogging(
+        model="valkey",
+        messages=[{"role": "user", "content": "q"}],
+        stream=False,
+        call_type="vector_store_search",
+        start_time=time.time(),
+        litellm_call_id="vs-debug-call-id",
+        function_id="vs-debug-function-id",
+        log_raw_request_response=True,
+    )
+    logging_obj.update_environment_variables(
+        model="valkey",
+        optional_params={"vector_store_id": "vs_direct", "query": "q"},
+        litellm_params={
+            "litellm_call_id": "vs-debug-call-id",
+            "vector_store_id": "vs_direct",
+            "litellm_request_debug": True,
+            "metadata": {"user_api_key_alias": "vs-test-key"},
+            "valkey_host": "valkey.internal",
+            "valkey_password": "sup3r-s3cret-valkey-pw",
+            "litellm_embedding_config": {"api_key": "sk-embedding-s3cret"},
+        },
+    )
+    return logging_obj
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+def test_direct_vector_store_search_debug_log_omits_stored_credentials(caplog, is_async):
+    """Regression: an empty api_base made pre_call dump the whole model_call_details, so every
+    search shipped the stored valkey_password / embedding api_key into the raw_request metadata."""
+    handler = BaseLLMHTTPHandler()
+    stub_response = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+    config = _make_stub_direct_vector_store_config(stub_response)
+    logging_obj = _direct_vector_store_debug_logging_obj()
+
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        result = handler.vector_store_search_handler(
+            vector_store_id="vs_direct",
+            query="q",
+            vector_store_search_optional_params={"max_num_results": 4},
+            vector_store_provider_config=config,
+            custom_llm_provider="valkey",
+            litellm_params=GenericLiteLLMParams(
+                valkey_host="valkey.internal",
+                valkey_password="sup3r-s3cret-valkey-pw",
+            ),
+            logging_obj=logging_obj,
+            _is_async=is_async,
+        )
+        if is_async:
+            result = asyncio.run(result)
+
+    assert result is stub_response
+    raw_request = logging_obj.model_call_details["litellm_params"]["metadata"]["raw_request"]
+    assert "sup3r-s3cret-valkey-pw" not in raw_request
+    assert "sk-embedding-s3cret" not in raw_request
+    assert "valkey://vs_direct" in raw_request
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "sup3r-s3cret-valkey-pw" not in logged
+    assert "sk-embedding-s3cret" not in logged
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_carries_deployment_vertex_location_for_pricing(monkeypatch):
+    """
+    The proxy pre-creates the logging object before the router picks a deployment, so the
+    native /v1/messages path must copy the deployment's vertex_location into the logging
+    params it updates; otherwise cost resolution falls back to the environment and every
+    call on this surface prices with the regional uplift (#34393).
+    """
+    import contextlib
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        _resolve_vertex_location_for_cost,
+    )
+
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    handler = BaseLLMHTTPHandler()
+
+    async def logging_obj_after_handler(generic_params):
+        logging_obj = Logging(
+            model="vertex_ai/claude-haiku-4-5@20251001",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id="vertex-messages-location",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="vertex_ai/claude-haiku-4-5@20251001",
+            user="",
+            optional_params={},
+            litellm_params={"api_base": ""},
+            custom_llm_provider="vertex_ai",
+        )
+        mock_config = Mock()
+        mock_config.validate_anthropic_messages_environment = Mock(
+            return_value=({"authorization": "Bearer t"}, "https://us-east5-aiplatform.googleapis.com")
+        )
+        mock_config.transform_anthropic_messages_request = Mock(
+            return_value={"model": "claude-haiku-4-5@20251001", "messages": []}
+        )
+        with contextlib.suppress(Exception):
+            await handler.async_anthropic_messages_handler(
+                model="claude-haiku-4-5@20251001",
+                messages=[{"role": "user", "content": "hi"}],
+                anthropic_messages_provider_config=mock_config,
+                anthropic_messages_optional_request_params={"max_tokens": 10},
+                custom_llm_provider="vertex_ai",
+                litellm_params=generic_params,
+                logging_obj=logging_obj,
+                client=AsyncMock(),
+                kwargs={},
+            )
+        return logging_obj
+
+    global_deployment = await logging_obj_after_handler(GenericLiteLLMParams(vertex_location="global"))
+    assert global_deployment.litellm_params["vertex_location"] == "global"
+    assert (
+        _resolve_vertex_location_for_cost(
+            custom_llm_provider="vertex_ai",
+            litellm_params=global_deployment.litellm_params,
+            optional_params=global_deployment.optional_params,
+            model="claude-haiku-4-5@20251001",
+        )
+        == "global"
+    )
+
+    unconfigured_deployment = await logging_obj_after_handler(GenericLiteLLMParams())
+    assert "vertex_location" not in unconfigured_deployment.litellm_params

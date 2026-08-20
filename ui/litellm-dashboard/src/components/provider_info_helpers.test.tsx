@@ -94,6 +94,16 @@ describe("provider_info_helpers", () => {
       expect(result.displayName).toBe(Providers.ZAI);
     });
 
+    it("should give hosted_vllm and vllm distinct display names", () => {
+      const hosted = getProviderLogoAndName("hosted_vllm");
+      const local = getProviderLogoAndName("vllm");
+      expect(hosted.displayName).toBe("Hosted vLLM");
+      expect(local.displayName).toBe("Local vLLM");
+      expect(hosted.displayName.toLowerCase()).not.toBe(local.displayName.toLowerCase());
+      expect(hosted.logo).toBe(providerLogoMap[Providers.Hosted_Vllm]);
+      expect(local.logo).toBe(providerLogoMap[Providers.VLLM]);
+    });
+
     it("should resolve the nvidia_riva provider value to the Nvidia Riva display name and logo", () => {
       const result = getProviderLogoAndName("nvidia_riva");
       expect(result.displayName).toBe(Providers.NVIDIA_RIVA);

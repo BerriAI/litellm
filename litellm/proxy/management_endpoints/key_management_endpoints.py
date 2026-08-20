@@ -194,6 +194,13 @@ class _PrismaTableActions(Protocol[_PrismaRowT]):
         data: Mapping[str, object],
     ) -> _PrismaRowT | None: ...
 
+    async def upsert(
+        self,
+        *,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> _PrismaRowT: ...
+
 
 class _UserRowLike(Protocol):
     user_id: str | None
@@ -209,24 +216,43 @@ class _TxTables(Protocol):
     litellm_proxymodeltable: _PrismaTableActions[object]
 
 
+class _TableSource(Protocol[_PrismaRowT]):
+    """Repository view that exposes its untyped Prisma ``table`` with a concrete row type."""
+
+    @property
+    def table(self) -> _PrismaTableActions[_PrismaRowT]: ...
+
+
+def _table_of(source: _TableSource[_PrismaRowT]) -> _PrismaTableActions[_PrismaRowT]:
+    return source.table
+
+
 def _prisma_table(
     repository: BaseRepository[_RepositoryModelT],
 ) -> _PrismaTableActions[_RepositoryModelT]:
-    return repository.table
+    return _table_of(repository)
 
 
 def _deleted_verification_token_table(
     prisma_client: PrismaClient,
 ) -> _PrismaTableActions[LiteLLM_DeletedVerificationToken]:
-    return DeletedVerificationTokenRepository(prisma_client).table
+    return _table_of(DeletedVerificationTokenRepository(prisma_client))
+
+
+def _deprecated_verification_token_table(prisma_client: PrismaClient) -> _PrismaTableActions[object]:
+    return _table_of(DeprecatedVerificationTokenRepository(prisma_client))
+
+
+def _user_table(prisma_client: PrismaClient) -> _PrismaTableActions[_UserRowLike]:
+    return _table_of(UserRepository(prisma_client))
 
 
 def _credentials_table(prisma_client: PrismaClient) -> _PrismaTableActions[CredentialItem]:
-    return CredentialsRepository(prisma_client).table
+    return _table_of(CredentialsRepository(prisma_client))
 
 
 def _config_table(prisma_client: PrismaClient) -> _PrismaTableActions[ConfigParam]:
-    return ConfigRepository(prisma_client).table
+    return _table_of(ConfigRepository(prisma_client))
 
 
 async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
@@ -998,7 +1024,7 @@ async def _common_key_generation_helper(
         )
         new_budget: Final = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
 
-        _budget: Final = await BudgetRepository(prisma_client).table.create(
+        _budget: Final[LiteLLM_BudgetTable] = await BudgetRepository(prisma_client).table.create(
             data={
                 **new_budget,
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -1390,6 +1416,11 @@ async def _check_team_key_limits(
     )
 
 
+_INHERITED_MODEL_SENTINELS: Final = frozenset(
+    {SpecialModelNames.all_team_models.value, SpecialModelNames.all_proxy_models.value}
+)
+
+
 async def _check_project_key_limits(
     project_id: str,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -1399,7 +1430,8 @@ async def _check_project_key_limits(
     """
     Validate that key's models and budget respect its project's limits.
 
-    - Key models must be a subset of project models
+    - Key models must be a subset of project models, except the all-team-models / all-proxy-models
+      sentinels, which inherit a parent scope and are narrowed by the project at request time
     - Key max_budget must be <= project max_budget
     """
     project_obj: Final = await get_project_object(
@@ -1417,7 +1449,7 @@ async def _check_project_key_limits(
     # Validate key models are a subset of project models
     if data.models and len(project_obj.models) > 0:
         for m in data.models:
-            if m not in project_obj.models:
+            if m not in project_obj.models and m not in _INHERITED_MODEL_SENTINELS:
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -4656,7 +4688,7 @@ async def _insert_deprecated_key(
 
     try:
         revoke_at: Final = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
-        await DeprecatedVerificationTokenRepository(prisma_client).table.upsert(
+        await _deprecated_verification_token_table(prisma_client).upsert(
             where={"token": old_token_hash},
             data={
                 "create": {
@@ -4755,7 +4787,9 @@ async def _execute_virtual_key_regeneration(
         grace_period=data.grace_period if data else None,
     )
 
-    updated_token: Final[Mapping[str, object] | None] = await VerificationTokenRepository(prisma_client).table.update(
+    updated_token: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
+        VerificationTokenRepository(prisma_client)
+    ).update(
         where={"token": hashed_api_key},
         data=with_settings_updated_at(jsonified_update_data),
     )
@@ -5307,7 +5341,9 @@ async def validate_key_list_check(
 
     if key_hash:
         try:
-            key_info: Final = await VerificationTokenRepository(prisma_client).table.find_unique(
+            key_info: Final[LiteLLM_VerificationToken] = await VerificationTokenRepository(
+                prisma_client
+            ).table.find_unique(
                 where={"token": key_hash},
             )
         except Exception:
@@ -6055,13 +6091,13 @@ async def _list_key_helper(
     total_pages: Final = -(-total_count // size)  # Ceiling division
 
     # Fetch user information if expand includes "user"
-    user_map = {}
+    user_map = dict[str | None, _UserRowLike]()
     if expand and "user" in expand:
         user_ids: Final = [key.user_id for key in keys if key.user_id]
         created_by_ids: Final = [key.created_by for key in keys if key.created_by]
         all_ids: Final = list(set(user_ids + created_by_ids))  # Remove duplicates
         if all_ids:
-            users: Final[Sequence[_UserRowLike]] = await UserRepository(prisma_client).table.find_many(
+            users: Final[Sequence[_UserRowLike]] = await _user_table(prisma_client).find_many(
                 where={"user_id": {"in": all_ids}}
             )
             user_map = {user.user_id: user for user in users}

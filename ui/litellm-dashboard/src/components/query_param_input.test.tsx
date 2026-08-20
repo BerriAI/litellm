@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,8 +18,8 @@ describe("QueryParamInput", () => {
     render(<QueryParamInput onChange={onChange} />);
 
     await user.click(screen.getByRole("button", { name: /Add Query Parameter$/ }));
-    await user.type(screen.getByPlaceholderText("Parameter Name (e.g., version)"), "region");
-    await user.type(screen.getByPlaceholderText("Parameter Value (e.g., v1)"), "us-west");
+    fireEvent.change(screen.getByPlaceholderText("Parameter Name (e.g., version)"), { target: { value: "region" } });
+    fireEvent.change(screen.getByPlaceholderText("Parameter Value (e.g., v1)"), { target: { value: "us-west" } });
 
     expect(onChange).toHaveBeenLastCalledWith({ region: "us-west" });
   });

@@ -115,6 +115,45 @@ class TestCheckBatchCost:
         assert "created_at" in where
 
     @pytest.mark.asyncio
+    async def test_startup_probe_confirms_batch_processed_support(
+        self, check_batch_cost_instance, mock_prisma_client
+    ):
+        mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+
+        await check_batch_cost_instance.confirm_batch_processed_support()
+
+        probe_where = mock_prisma_client.db.litellm_managedobjecttable.find_first.call_args[1]["where"]
+        assert probe_where["batch_processed"] is False
+        assert check_batch_cost_instance.batch_processed_support_confirmed is True
+        assert check_batch_cost_instance._has_batch_processed_column is True
+
+    @pytest.mark.asyncio
+    async def test_startup_probe_marks_column_absent(
+        self, check_batch_cost_instance, mock_prisma_client
+    ):
+        mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+            side_effect=Exception("column batch_processed does not exist")
+        )
+
+        await check_batch_cost_instance.confirm_batch_processed_support()
+
+        assert check_batch_cost_instance.batch_processed_support_confirmed is False
+        assert check_batch_cost_instance._has_batch_processed_column is False
+
+    @pytest.mark.asyncio
+    async def test_startup_probe_transient_error_defers_to_poll_cycle(
+        self, check_batch_cost_instance, mock_prisma_client
+    ):
+        mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+            side_effect=Exception("connection reset by peer")
+        )
+
+        await check_batch_cost_instance.confirm_batch_processed_support()
+
+        assert check_batch_cost_instance.batch_processed_support_confirmed is False
+        assert check_batch_cost_instance._has_batch_processed_column is True
+
+    @pytest.mark.asyncio
     async def test_find_many_uses_pagination_and_excludes_stale(
         self, check_batch_cost_instance, mock_prisma_client
     ):
@@ -143,6 +182,7 @@ class TestCheckBatchCost:
         assert "complete" not in not_in
         assert "completed" not in not_in
         assert find_call[1]["where"]["batch_processed"] is False
+        assert check_batch_cost_instance.batch_processed_support_confirmed is True
 
     @pytest.mark.asyncio
     async def test_fallback_query_used_when_batch_processed_missing(
@@ -171,6 +211,7 @@ class TestCheckBatchCost:
         assert calls[1][1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
         # Column absence is now cached — next call should go straight to fallback
         assert check_batch_cost_instance._has_batch_processed_column is False
+        assert check_batch_cost_instance.batch_processed_support_confirmed is False
 
     @pytest.mark.asyncio
     async def test_column_absence_cached_across_cycles(
@@ -311,6 +352,204 @@ class TestCheckBatchCost:
             "batch_processed" not in update_data
         ), "update() must NOT include batch_processed when column is absent"
         assert update_data["status"] == "complete"
+
+    @pytest.mark.asyncio
+    async def test_output_fetch_passes_deployment_credentials_as_trusted_snapshot(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """Bedrock resolves the output bucket ONLY from the immutable snapshot kwarg.
+
+        Spreading the credentials as plain kwargs is not enough: get_litellm_params drops
+        s3_bucket_name, so without _litellm_internal_model_credentials the cost poller
+        cannot read the output file and every completed Bedrock batch stays unbilled.
+        """
+        from types import MappingProxyType
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        mock_job = MagicMock()
+        mock_job.id = "job-bedrock-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "file-output-123"
+        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={
+                "custom_llm_provider": "bedrock",
+                "s3_bucket_name": "configured-batch-bucket",
+                "aws_region_name": "us-east-1",
+            }
+        )
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "bedrock"
+        mock_deployment.litellm_params.model = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = b'{"recordId":"req-1"}'
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=[decoded_id, None],
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                return_value=mock_file_content,
+            ) as mock_afile_content,
+            patch(
+                "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                return_value=[{"recordId": "req-1"}],
+            ),
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+                return_value=(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["claude-haiku-4-5"]),
+            ),
+            patch(
+                "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                return_value=("anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock", None, None),
+            ),
+            patch("litellm.litellm_core_utils.litellm_logging.Logging") as mock_logging_cls,
+        ):
+            mock_logging_obj = MagicMock()
+            mock_logging_obj.async_success_handler = AsyncMock()
+            mock_logging_cls.return_value = mock_logging_obj
+
+            await check_batch_cost_instance.check_batch_cost()
+
+        mock_afile_content.assert_awaited()
+        passed_kwargs = mock_afile_content.await_args[1]
+        snapshot = passed_kwargs.get("_litellm_internal_model_credentials")
+        assert snapshot is not None, "cost poller must pass the trusted credential snapshot"
+        assert isinstance(
+            snapshot, MappingProxyType
+        ), "snapshot must be a MappingProxyType; a plain dict is rejected by get_configured_s3_bucket_name"
+        assert snapshot["s3_bucket_name"] == "configured-batch-bucket"
+
+    @pytest.mark.asyncio
+    async def test_poller_prices_with_deployment_registered_batch_rates(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """The cost poller must price with the rates the router registered for the deployment.
+
+        The deployment's raw model_info dict carries no litellm_params pricing, so passing
+        its model_dump() made the poller bill custom-rate batches at the public cost-map
+        price while the inline retrieve path billed the declared rate.
+        """
+        from unittest.mock import patch
+
+        import litellm
+
+        deployment_id = "deploy-poller-registered-rates-1"
+        litellm.model_cost[deployment_id] = {
+            "id": deployment_id,
+            "input_cost_per_token_batches": 2e-06,
+            "output_cost_per_token_batches": 4e-06,
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+        }
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        mock_job = MagicMock()
+        mock_job.id = "job-poller-rates-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "file-output-123"
+        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"custom_llm_provider": "bedrock", "aws_region_name": "us-east-1"}
+        )
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "bedrock"
+        mock_deployment.litellm_params.model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = b'{"recordId":"req-1"}'
+
+        decoded_id = f"llm_model_id,{deployment_id};llm_batch_id,batch-456;"
+
+        try:
+            with (
+                patch(
+                    "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                    side_effect=[decoded_id, None],
+                ),
+                patch(
+                    "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                    return_value=deployment_id,
+                ),
+                patch(
+                    "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                    return_value="batch-456",
+                ),
+                patch(
+                    "litellm.files.main.afile_content",
+                    new_callable=AsyncMock,
+                    return_value=mock_file_content,
+                ),
+                patch(
+                    "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                    return_value=[{"recordId": "req-1"}],
+                ),
+                patch(
+                    "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                    new_callable=AsyncMock,
+                    return_value=(0.0052, {"prompt_tokens": 1400, "completion_tokens": 600}, ["claude-haiku-4-5"]),
+                ) as mock_calculate,
+                patch(
+                    "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                    return_value=("us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock", None, None),
+                ),
+                patch("litellm.litellm_core_utils.litellm_logging.Logging") as mock_logging_cls,
+            ):
+                mock_logging_obj = MagicMock()
+                mock_logging_obj.async_success_handler = AsyncMock()
+                mock_logging_cls.return_value = mock_logging_obj
+
+                await check_batch_cost_instance.check_batch_cost()
+        finally:
+            litellm.model_cost.pop(deployment_id, None)
+
+        mock_calculate.assert_awaited_once()
+        passed_model_info = mock_calculate.await_args.kwargs["model_info"]
+        assert passed_model_info is not None, "poller must pass the deployment's registered pricing"
+        assert passed_model_info["input_cost_per_token_batches"] == 2e-06
+        assert passed_model_info["output_cost_per_token_batches"] == 4e-06
 
     @pytest.mark.asyncio
     async def test_primary_path_completion_update_includes_batch_processed(
@@ -623,9 +862,9 @@ class TestCheckBatchCost:
         mock_llm_router,
         terminal_status,
     ):
-        """When the provider reports a terminal status (failed/expired/cancelled), the row
-        must be written back with that status and batch_processed=True so it stops being
-        polled forever.
+        """When the provider reports a terminal status with nothing to bill
+        (failed/cancelled, or expired with no output file), the row must be written back
+        with that status and batch_processed=True so it stops being polled forever.
         """
         import base64
 
@@ -651,6 +890,7 @@ class TestCheckBatchCost:
 
         mock_response = MagicMock()
         mock_response.status = terminal_status
+        mock_response.output_file_id = None
         mock_response.model_dump_json.return_value = (
             f'{{"id":"batch-1","status":"{terminal_status}"}}'
         )
@@ -671,7 +911,7 @@ class TestCheckBatchCost:
         ), "terminal-status update() must set batch_processed=True so polling stops"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("terminal_status", ["failed", "expired", "cancelled"])
+    @pytest.mark.parametrize("terminal_status", ["failed", "cancelled"])
     async def test_terminal_status_persists_managed_output_file_ids(
         self,
         check_batch_cost_instance,
@@ -679,10 +919,12 @@ class TestCheckBatchCost:
         mock_llm_router,
         terminal_status,
     ):
-        """A cancelled/failed/expired batch with provider output files must be persisted
-        with unified managed file IDs, never raw provider IDs. Raw IDs written here leak
-        to every later GET /batches/{id} and GET /batches because the terminal row is
-        final (batch_processed=True) and read paths only resolve, never mint.
+        """A cancelled/failed batch with a provider error file (and no output file) must
+        be persisted with unified managed file IDs, never raw provider IDs. Raw IDs
+        written here leak to every later GET /batches/{id} and GET /batches because the
+        terminal row is final (batch_processed=True) and read paths only resolve, never
+        mint. (Any terminal status with an output file is billed through the completed
+        path instead, covered by test_terminal_status_with_output_file_is_billed.)
         """
         import base64
         import json
@@ -692,14 +934,10 @@ class TestCheckBatchCost:
         unified_batch_uid = base64.urlsafe_b64encode(
             b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
         ).decode()
-        raw_output_file_id = "file-terminal-out-abc"
         raw_error_file_id = "file-terminal-err-xyz"
         raw_input_file_id = "file-terminal-in-123"
         unified_input_file_id = base64.urlsafe_b64encode(
             b"litellm_proxy:application/octet-stream;unified_id,in-1;target_model_names,gpt-5-batch"
-        ).decode()
-        unified_output_file_id = base64.urlsafe_b64encode(
-            f"litellm_proxy:application/octet-stream;unified_id,u-1;llm_output_file_id,{raw_output_file_id}".encode()
         ).decode()
         unified_error_file_id = base64.urlsafe_b64encode(
             f"litellm_proxy:application/octet-stream;unified_id,u-2;llm_output_file_id,{raw_error_file_id}".encode()
@@ -744,16 +982,13 @@ class TestCheckBatchCost:
             input_file_id=raw_input_file_id,
             object="batch",
             status=terminal_status,
-            output_file_id=raw_output_file_id,
+            output_file_id=None,
             error_file_id=raw_error_file_id,
         )
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=response)
 
         mock_hook = MagicMock()
-        mock_hook.get_unified_output_file_id.side_effect = [
-            unified_output_file_id,
-            unified_error_file_id,
-        ]
+        mock_hook.get_unified_output_file_id.side_effect = [unified_error_file_id]
         mock_hook.store_unified_file_id = AsyncMock()
         check_batch_cost_instance.proxy_logging_obj.get_proxy_hook.return_value = (
             mock_hook
@@ -761,12 +996,7 @@ class TestCheckBatchCost:
 
         await check_batch_cost_instance.check_batch_cost()
 
-        mock_hook.get_unified_output_file_id.assert_any_call(
-            output_file_id=raw_output_file_id,
-            model_id="model-123",
-            model_name="gpt-5-batch",
-        )
-        mock_hook.get_unified_output_file_id.assert_any_call(
+        mock_hook.get_unified_output_file_id.assert_called_once_with(
             output_file_id=raw_error_file_id,
             model_id="model-123",
             model_name="gpt-5-batch",
@@ -775,10 +1005,7 @@ class TestCheckBatchCost:
             next(iter(c.kwargs["model_mappings"].values())): c.kwargs["file_id"]
             for c in mock_hook.store_unified_file_id.call_args_list
         }
-        assert stored == {
-            raw_output_file_id: unified_output_file_id,
-            raw_error_file_id: unified_error_file_id,
-        }
+        assert stored == {raw_error_file_id: unified_error_file_id}
         for store_call in mock_hook.store_unified_file_id.call_args_list:
             assert store_call.kwargs["user_api_key_dict"].user_id == "user-1"
             assert store_call.kwargs["user_api_key_dict"].team_id == "team-1"
@@ -792,10 +1019,331 @@ class TestCheckBatchCost:
         persisted = json.loads(update_data["file_object"])
         assert persisted["id"] == unified_batch_uid
         assert persisted["input_file_id"] == unified_input_file_id
-        assert persisted["output_file_id"] == unified_output_file_id
+        assert persisted["output_file_id"] is None
         assert persisted["error_file_id"] == unified_error_file_id
-        assert raw_output_file_id not in update_data["file_object"]
         assert raw_error_file_id not in update_data["file_object"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("completed_status", ["completed", "complete"])
+    async def test_completed_without_output_file_marked_processed_without_billing(
+        self,
+        check_batch_cost_instance,
+        mock_prisma_client,
+        mock_llm_router,
+        completed_status,
+    ):
+        """#35354 regression: a terminal completed batch whose request lines all failed
+        reaches `completed` with output_file_id=None (only an error_file_id).
+
+        Pre-fix it matched neither the completed-with-output branch nor the
+        failed/expired/cancelled branch, so batch_processed stayed False and the row
+        was re-selected on every poll cycle forever. It must now be marked terminal
+        exactly once, without being billed (no output means nothing to bill).
+        """
+        import base64
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-completed-no-output-1"
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
+        mock_job.created_by = "user-1"
+
+        assert check_batch_cost_instance._has_batch_processed_column is True
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = completed_status
+        mock_response.output_file_id = None
+        mock_response.error_file_id = "file-error-123"
+        mock_response.model_dump_json.return_value = (
+            f'{{"id":"batch-1","status":"{completed_status}"}}'
+        )
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        # Billing reads credentials off the router; if it is touched we billed a batch
+        # that has no output, which is the behaviour this test guards against.
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"api_key": "sk-test"}
+        )
+
+        with patch(
+            "litellm.files.main.afile_content",
+            new_callable=AsyncMock,
+        ) as mock_afile_content:
+            await check_batch_cost_instance.check_batch_cost()
+
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        ), "a completed batch with no output file must be marked processed exactly once"
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert update_data["status"] == completed_status
+        assert (
+            update_data["batch_processed"] is True
+        ), "completed-without-output update() must set batch_processed=True so polling stops"
+        assert (
+            mock_afile_content.await_count == 0
+        ), "a batch with no output file must not be billed"
+        assert (
+            mock_llm_router.get_deployment_credentials_with_provider.call_count == 0
+        ), "a batch with no output file must not enter the cost-tracking path"
+
+    @pytest.mark.asyncio
+    async def test_non_terminal_status_left_unprocessed(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A batch still validating/in_progress must NOT be treated as terminal: no DB
+        write, so it keeps being polled until it actually reaches a terminal status.
+        """
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+
+        mock_job = MagicMock()
+        mock_job.id = "job-in-progress-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "in_progress"
+        mock_response.output_file_id = None
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=[decoded_id, None],
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+        ):
+            await check_batch_cost_instance.check_batch_cost()
+
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 0
+        ), "a non-terminal batch must not be written back (would stop polling prematurely)"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminal_status", ["expired", "cancelled", "failed"])
+    async def test_terminal_status_with_output_file_is_billed(
+        self,
+        check_batch_cost_instance,
+        mock_prisma_client,
+        mock_llm_router,
+        terminal_status,
+    ):
+        """A terminal (expired/cancelled/failed) batch that still produced an output file
+        served real request lines, so it must be billed (cost tracked) and then marked
+        processed, not silently marked terminal without billing.
+        """
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-terminal-with-output-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+
+        assert check_batch_cost_instance._has_batch_processed_column is True
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = terminal_status
+        mock_response.output_file_id = "file-output-123"
+        mock_response.model_dump_json.return_value = (
+            f'{{"id":"batch-1","status":"{terminal_status}"}}'
+        )
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"api_key": "sk-test"}
+        )
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "openai"
+        mock_deployment.litellm_params.model = "gpt-4"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = b'{"id":"req-1"}'
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=[decoded_id, None],
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                return_value=mock_file_content,
+            ) as mock_afile_content,
+            patch(
+                "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                return_value=[{"id": "req-1"}],
+            ),
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+                return_value=(
+                    0.01,
+                    {"prompt_tokens": 10, "completion_tokens": 5},
+                    ["gpt-4"],
+                ),
+            ),
+            patch(
+                "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+                return_value=("gpt-4", "openai", None, None),
+            ),
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.Logging"
+            ) as mock_logging_cls,
+        ):
+            mock_logging_obj = MagicMock()
+            mock_logging_obj.async_success_handler = AsyncMock()
+            mock_logging_cls.return_value = mock_logging_obj
+
+            await check_batch_cost_instance.check_batch_cost()
+
+        assert (
+            mock_afile_content.await_count == 1
+        ), f"{terminal_status} batch with an output file must fetch results and be billed"
+        mock_logging_obj.async_success_handler.assert_awaited_once()
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        )
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert update_data["batch_processed"] is True
+        assert (
+            update_data["status"] == terminal_status
+        ), f"billed {terminal_status} batch must keep its real terminal status in the DB"
+
+    @pytest.mark.asyncio
+    async def test_terminal_batch_with_missing_output_file_is_retired_unbilled(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A terminal batch whose advertised output file 404s at the provider has
+        nothing to fetch on this or any later poll (Vertex AI advertises an output
+        path for every batch, even ones that never wrote it), so the job must be
+        retired as terminal on the first cycle instead of retrying until the
+        staleness sweep gives up on it.
+        """
+        import base64
+        from unittest.mock import patch
+
+        from litellm.exceptions import NotFoundError
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-output-gone-1"
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
+        mock_job.created_by = "user-1"
+
+        assert check_batch_cost_instance._has_batch_processed_column is True
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        missing_output_file_id = "gs://batch-out/job-1/predictions.jsonl"
+        mock_response = MagicMock()
+        mock_response.status = "failed"
+        mock_response.output_file_id = missing_output_file_id
+        mock_response.error_file_id = None
+        mock_response.model_dump_json.return_value = (
+            '{"id":"batch-1","status":"failed"}'
+        )
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
+            return_value={"api_key": "sk-test"}
+        )
+
+        with (
+            patch(
+                "litellm.files.main.afile_content",
+                new_callable=AsyncMock,
+                side_effect=NotFoundError(
+                    message=f"404: output file {missing_output_file_id} does not exist",
+                    model="gemini-2.5-pro",
+                    llm_provider="vertex_ai",
+                ),
+            ) as mock_afile_content,
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+            ) as mock_calculate,
+        ):
+            await check_batch_cost_instance.check_batch_cost()
+
+        assert mock_afile_content.await_count == 1
+        mock_calculate.assert_not_awaited()
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        ), "a terminal batch with a 404ing output file must be retired, not retried forever"
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert update_data["status"] == "failed"
+        assert update_data["batch_processed"] is True
 
     @pytest.mark.asyncio
     async def test_raw_output_file_id_converted_to_managed_id(

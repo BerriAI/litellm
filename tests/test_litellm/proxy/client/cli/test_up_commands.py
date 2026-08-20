@@ -10,6 +10,7 @@ from click.testing import CliRunner
 
 from litellm.proxy.client.cli.commands import up as up_module
 from litellm.proxy.client.cli.commands.agents import AgentRunError
+from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
 from litellm.proxy.client.cli.commands.up import (
     BackupRecord,
     UpError,
@@ -25,6 +26,7 @@ from litellm.proxy.client.cli.commands.up import (
 )
 
 UP_MODULE = "litellm.proxy.client.cli.commands.up"
+AUTH_MODULE = "litellm.proxy.client.cli.commands.auth"
 
 
 def _patch_paths(monkeypatch, tmp_path):
@@ -92,13 +94,13 @@ class TestLoadJsonOrEmpty:
     def test_raises_clean_error_on_invalid_json(self, tmp_path):
         path = tmp_path / "settings.json"
         path.write_text("not json at all {{{")
-        with pytest.raises(UpError, match="invalid JSON"):
+        with pytest.raises(ClaudeSettingsError, match="invalid JSON"):
             load_json_or_empty(path)
 
     def test_raises_clean_error_on_non_object_root(self, tmp_path):
         path = tmp_path / "settings.json"
         path.write_text(json.dumps([1, 2, 3]))
-        with pytest.raises(UpError, match="invalid JSON"):
+        with pytest.raises(ClaudeSettingsError, match="invalid JSON"):
             load_json_or_empty(path)
 
 
@@ -201,16 +203,16 @@ class TestResolveApiKeyHelper:
     def test_returns_helper_command_bound_to_the_selected_proxy(self, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/lite")
         helper = resolve_api_key_helper("http://localhost:4000")
-        assert helper == "/usr/local/bin/lite auth print-token --base-url http://localhost:4000"
+        assert helper == "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"
 
     def test_quotes_a_base_url_containing_shell_metacharacters(self, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/lite")
         helper = resolve_api_key_helper("http://example.com/path; rm -rf /")
-        assert helper == "/usr/local/bin/lite auth print-token --base-url 'http://example.com/path; rm -rf /'"
+        assert helper == "/usr/local/bin/lite --base-url 'http://example.com/path; rm -rf /' auth print-token"
 
     def test_raises_when_lite_not_on_path(self, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda name: None)
-        with pytest.raises(UpError, match="Could not find `lite`"):
+        with pytest.raises(ClaudeSettingsError, match="Could not find `lite`"):
             resolve_api_key_helper("http://localhost:4000")
 
 
@@ -396,3 +398,50 @@ class TestDownCommand:
         assert result.exit_code != 0
         assert result.exception is None or isinstance(result.exception, SystemExit)
         assert "invalid or unexpected JSON" in result.output
+
+
+class TestUpCanInvokeTheRealLoginCommand:
+    """`lite up` calls ctx.invoke(login) on the real command object.
+
+    Every other test in this file monkeypatches `up_module.login` with a fake, so
+    none of them would notice a login parameter that ctx.invoke cannot supply.
+    """
+
+    def test_ctx_invoke_supplies_every_login_parameter(self):
+        from litellm.proxy.client.cli.commands.auth import login as real_login
+
+        reached = []
+
+        @click.command()
+        @click.pass_context
+        def driver(ctx):
+            ctx.obj = {"base_url": "http://127.0.0.1:9"}
+            ctx.invoke(real_login)
+
+        with patch(
+            f"{AUTH_MODULE}._start_cli_sso_flow",
+            side_effect=lambda base_url: reached.append(base_url) or RuntimeError("stop"),
+        ):
+            result = CliRunner().invoke(driver, [], standalone_mode=False)
+
+        assert not isinstance(result.exception, TypeError), result.exception
+        assert reached == ["http://127.0.0.1:9"]
+
+    def test_ctx_invoke_leaves_claude_settings_alone(self, tmp_path):
+        from litellm.proxy.client.cli.commands.auth import login as real_login
+
+        settings_path = tmp_path / "settings.json"
+
+        @click.command()
+        @click.pass_context
+        def driver(ctx):
+            ctx.obj = {"base_url": "http://127.0.0.1:9"}
+            ctx.invoke(real_login)
+
+        with (
+            patch(f"{AUTH_MODULE}.CLAUDE_SETTINGS_PATH", settings_path),
+            patch(f"{AUTH_MODULE}._start_cli_sso_flow", side_effect=RuntimeError("stop")),
+        ):
+            CliRunner().invoke(driver, [], standalone_mode=False)
+
+        assert not settings_path.exists()
