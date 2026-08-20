@@ -70,6 +70,11 @@ class PkceFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class RevocationUnavailable:
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class PkceCredential:
     access_token: str
     refresh_token: str
@@ -396,7 +401,9 @@ def _token_request(
     )
 
 
-def revoke_credential(revocation_endpoint: str, client_id: str, refresh_token: str, http: Http) -> PkceFailure | None:
+def revoke_credential(
+    revocation_endpoint: str, client_id: str, refresh_token: str, http: Http
+) -> PkceFailure | RevocationUnavailable | None:
     try:
         response: Final = http.post(
             revocation_endpoint,
@@ -409,6 +416,8 @@ def revoke_credential(revocation_endpoint: str, client_id: str, refresh_token: s
     redirected: Final = _refused_redirect("revocation request", response)
     if redirected is not None:
         return redirected
+    if response.status_code == 503:
+        return RevocationUnavailable(f"revocation failed with 503: {_error_detail(response)}")
     if response.status_code != 200:
         return PkceFailure(f"revocation failed with {response.status_code}: {_error_detail(response)}")
     return None
@@ -554,7 +563,9 @@ def _refresh_inputs(token_data: Mapping[str, object]) -> tuple[str, str, str, st
     return str(token_endpoint), str(revocation_endpoint), str(resource), str(client_id), str(refresh_token)
 
 
-def revoke_stored_credential(token_data: Mapping[str, object], http: Http) -> PkceFailure | None:
+def revoke_stored_credential(
+    token_data: Mapping[str, object], http: Http
+) -> PkceFailure | RevocationUnavailable | None:
     refresh_inputs: Final = _refresh_inputs(token_data)
     if refresh_inputs is None:
         return None

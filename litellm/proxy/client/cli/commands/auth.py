@@ -11,7 +11,7 @@ import click
 import requests
 from rich.console import Console
 from rich.table import Table
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
@@ -25,6 +25,7 @@ from .claude_settings import (
 from .pkce_login import (
     Http,
     PkceFailure,
+    RevocationUnavailable,
     fresh_api_key,
     pkce_token_record,
     revoke_stored_credential,
@@ -805,9 +806,18 @@ def logout():
     """Logout and clear stored authentication"""
     token_data: Final = load_token()
     revocation: Final = revoke_stored_credential(token_data, requests.Session()) if token_data is not None else None
-    clear_token()
-    if revocation is not None:
-        click.echo(f"Could not revoke the refresh token on the proxy ({revocation.reason}); it expires on its own.")
+    match revocation:
+        case RevocationUnavailable(reason=reason):
+            raise click.ClickException(
+                f"The proxy could not record the revocation ({reason}). Nothing was cleared; run `lite logout` again shortly."
+            )
+        case PkceFailure(reason=reason):
+            clear_token()
+            click.echo(f"Could not revoke the refresh token on the proxy ({reason}); it expires on its own.")
+        case None:
+            clear_token()
+        case _:
+            assert_never(revocation)
     click.echo("Logged out successfully. Authentication token cleared.")
 
 
