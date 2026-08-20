@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import Any, Final, TypedDict, cast
 
 from typing_extensions import ReadOnly
@@ -47,7 +47,7 @@ class _GenAIPart(TypedDict, total=False):
 class _GenAIFunctionDeclaration(TypedDict, total=False):
     name: ReadOnly[str]
     description: ReadOnly[str]
-    parameters: ReadOnly[dict[str, object]]
+    parameters: ReadOnly[Mapping[str, object]]
     parametersJsonSchema: ReadOnly[dict[str, object]]
 
 
