@@ -2230,9 +2230,7 @@ async def fetch_cli_sso_team_details(
     except Exception as e:
         verbose_proxy_logger.error("Error fetching team details for CLI SSO session: %s", e)
         return None
-    details: Final = (
-        _cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams
-    )
+    details: Final = (_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
     return tuple(sorted(details, key=_cli_sso_team_sort_key))
 
 
