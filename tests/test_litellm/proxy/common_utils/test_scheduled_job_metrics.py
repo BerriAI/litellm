@@ -306,3 +306,34 @@ def test_one_submission_of_several_run_times_pairs_each_completion():
     ]
 
     assert all(d is not None for d in durations), f"every run time must pair, got {durations}"
+
+def test_a_trigger_that_fired_without_running_is_recorded_as_missed():
+    """MISSED is one of the four outcomes the metric advertises. It arrives with
+    no submission of its own, so it must publish a run without a duration rather
+    than be dropped."""
+    from apscheduler.events import EVENT_JOB_MISSED, JobExecutionEvent
+
+    listener = ScheduledJobMetricsListener()
+
+    run = listener._to_run(JobExecutionEvent(EVENT_JOB_MISSED, "update_spend_job", "default", None))
+
+    assert run is not None
+    assert run.result is JobResult.MISSED
+    assert run.job_name == "update_spend_job"
+    assert run.duration_seconds is None
+    assert run.items_processed is None
+
+
+def test_handle_swallows_a_failure_so_the_scheduler_keeps_running():
+    """APScheduler swallows listener exceptions itself, so a throwing listener
+    leaves the scheduler running with no telemetry and nothing to explain it.
+    Driven directly rather than through the scheduler, because a listener that
+    runs on the scheduler's own thread is invisible to coverage."""
+    from apscheduler.events import EVENT_JOB_EXECUTED, JobExecutionEvent
+
+    listener = ScheduledJobMetricsListener()
+    event = JobExecutionEvent(EVENT_JOB_EXECUTED, "job", "default", None, retval=None)
+
+    with patch.object(ScheduledJobMetricsListener, "_publish", side_effect=RuntimeError("metrics down")):
+        listener.handle(event)  # must not raise
+
