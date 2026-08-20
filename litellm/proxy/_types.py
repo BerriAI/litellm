@@ -515,15 +515,28 @@ class LiteLLMRoutes(enum.Enum):
     # allowed_routes=["mcp_routes"], which should cover both halves.
     mcp_routes = mcp_inference_routes + mcp_management_routes
 
-    agent_routes = [
-        "/v1/agents",
-        "/v1/agents/{agent_id}",
+    # A2A agent invocation / discovery routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.
+    agent_inference_routes = (
         "/agents",
         "/a2a/{agent_id}",
         "/a2a/{agent_id}/message/send",
         "/a2a/{agent_id}/message/stream",
         "/a2a/{agent_id}/.well-known/agent-card.json",
-    ]
+    )
+
+    # Agent registry CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
+    # The handlers in agent_endpoints/endpoints.py enforce proxy-admin on writes and
+    # scope reads by role, so these also appear in self_managed_routes.
+    agent_management_routes = (
+        "/v1/agents",
+        "/v1/agents/{agent_id}",
+        "/v1/agents/make_public",
+        "/v1/agents/{agent_id}/make_public",
+    )
+
+    # Backwards-compat union — virtual keys may be configured with
+    # allowed_routes=["agent_routes"], which should cover both halves.
+    agent_routes = agent_inference_routes + agent_management_routes
 
     google_routes = [
         "/v1beta/models/{model_name:path}:countTokens",
@@ -563,7 +576,7 @@ class LiteLLMRoutes(enum.Enum):
         + apply_guardrail_routes
         + mcp_inference_routes
         + litellm_native_routes
-        + agent_routes
+        + list(agent_inference_routes)
         + model_info_routes
     )
     info_routes = [
@@ -664,6 +677,7 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + key_management_routes
         + mcp_management_routes
+        + list(agent_management_routes)
     )
 
     spend_tracking_routes = [
@@ -836,6 +850,9 @@ class LiteLLMRoutes(enum.Enum):
         # proxy admin, or team admin naming their own team via team_id
         "/auto_router/test_routing",
         "/auto_router/validate_complexity_router_config",
+        # Agent registry - reads are role-scoped and writes are proxy-admin-gated
+        # inside agent_endpoints/endpoints.py
+        *agent_management_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -2551,6 +2568,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.",
     )
+    maximum_health_check_retention_period: str | None = Field(
+        None,
+        description=(
+            "Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this "
+            "are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. "
+            "Set this well above health_check_interval because /health and the UI read the latest row per model."
+        ),
+    )
     use_spend_logs_partitioning: bool | None = Field(
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
@@ -3731,6 +3756,11 @@ class ProxyErrorTypes(str, enum.Enum):
     General authentication error
     """
 
+    auth_provider_unavailable = "auth_provider_unavailable"
+    """
+    The identity provider needed to authenticate the request (e.g. its JWKS endpoint) is unreachable
+    """
+
     internal_server_error = "internal_server_error"
     """
     Internal server error
@@ -3821,6 +3851,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
 DB_CONNECTION_ERROR_TYPES: Final = (
     httpx.ConnectError,
+    httpx.ConnectTimeout,
     httpx.ReadError,
     httpx.ReadTimeout,
 )
@@ -4499,6 +4530,9 @@ class JWTIssuerConfig(BaseModel):
         return self
 
 
+DEFAULT_JWKS_STALE_TTL: Final = 3600
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4514,6 +4548,8 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     - user_allowed_email_subdomain: If specified, only emails from specified subdomain will be allowed to access proxy.
     - end_user_id_jwt_field: The field in the JWT token that stores the end-user ID (maps to `LiteLLMEndUserTable`). Turn this off by setting to `None`. Enables end-user cost tracking. Use this for external customers.
     - public_key_ttl: Default - 600s. TTL for caching public JWT keys.
+    - public_key_stale_ttl: Default - 3600s. Extra time past `public_key_ttl` that the last-known-good JWKS response
+        stays usable while the identity provider is unreachable. Set to 0 to fail closed instead.
     - public_allowed_routes: list of allowed routes for authenticated but unknown litellm role jwt tokens.
     - enforce_rbac: If true, enforce RBAC for all routes.
     - custom_validate: A custom function to validates the JWT token.
@@ -4564,6 +4600,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
     public_key_ttl: float = 600
+    public_key_stale_ttl: float = Field(
+        default=DEFAULT_JWKS_STALE_TTL,
+        ge=0,
+        description=(
+            "Seconds beyond `public_key_ttl` that the last-known-good JWKS response stays usable while the identity "
+            "provider is unreachable. Bounds how long a signing key the provider has since removed can still be "
+            "trusted. Set to 0 to fail closed and reject requests as soon as the cached keys expire."
+        ),
+    )
     public_allowed_routes: list[str] = ["public_routes"]
     enforce_rbac: bool = False
     roles_jwt_field: str | None = None  # v2 on role mappings
