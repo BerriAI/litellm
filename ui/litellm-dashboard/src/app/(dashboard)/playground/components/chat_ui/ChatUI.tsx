@@ -1956,7 +1956,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
                   {endpointType === EndpointType.RESPONSES && codeInterpreter.enabled && (
                     <div className="mb-2 space-y-2">
-                      <div className="flex items-center justify-between rounded-lg border border-info/20 bg-linear-to-r from-blue-50 to-purple-50 px-3 py-2">
+                      <div className="flex items-center justify-between rounded-lg border border-info/20 bg-linear-to-r from-blue-50 to-purple-50 px-3 py-2 dark:from-blue-950 dark:to-purple-950">
                         <div className="flex items-center gap-2">
                           {isLoading ? (
                             <>
@@ -2174,7 +2174,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 <li>The tool call is routed to the correct underlying MCP server automatically.</li>
               </ol>
             </div>
-            <div className="rounded-sm border border-purple-200 bg-purple-50 p-3">
+            <div className="rounded-sm border border-purple-200 bg-purple-50 p-3 dark:border-purple-800 dark:bg-purple-950">
               <p className="text-sm text-purple-800">
                 <strong>Example:</strong> A &quot;GitHub Read-only&quot; toolset might include only{" "}
                 <code>list_repos</code> and <code>get_file</code> from a GitHub MCP server, preventing agents from

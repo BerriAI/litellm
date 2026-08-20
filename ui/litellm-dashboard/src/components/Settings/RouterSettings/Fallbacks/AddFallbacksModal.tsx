@@ -20,7 +20,7 @@ export function AddFallbacksModal({ open, onCancel, children }: AddFallbacksModa
         <DialogHeader>
           <div className="pb-4 border-b border-border">
             <div className="flex items-center gap-2 text-foreground">
-              <div className="p-2 bg-indigo-50 rounded-lg">
+              <div className="p-2 bg-indigo-50 rounded-lg dark:bg-indigo-950">
                 <ArrowRight className="w-5 h-5 text-indigo-600" />
               </div>
               <div>

@@ -212,7 +212,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       </div>
 
       {/* Combined Totals - Always show when there are results */}
-      <Card size="sm" className="px-4 bg-linear-to-r from-slate-50 to-blue-50">
+      <Card size="sm" className="px-4 bg-linear-to-r from-slate-50 to-blue-50 dark:from-slate-900 dark:to-blue-950">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
           <div className="min-w-0">
             <span className="text-xs text-muted-foreground">Total Per Request</span>
