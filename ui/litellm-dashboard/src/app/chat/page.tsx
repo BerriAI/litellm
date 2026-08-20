@@ -512,13 +512,13 @@ export default function ChatConversationPage() {
   return (
     <>
       {storageUnavailable && !storageBannerDismissed && (
-        <div className="bg-amber-50 border-b border-amber-200 px-5 py-1.5 text-[13px] text-amber-800 flex justify-between items-center">
+        <div className="bg-warning/10 border-b border-warning/20 px-5 py-1.5 text-[13px] text-warning flex justify-between items-center">
           <span>Chat history won&apos;t be saved in this browser session</span>
           <Button
             variant="ghost"
             size="icon-xs"
             onClick={() => setStorageBannerDismissed(true)}
-            className="text-amber-800 hover:bg-amber-100 hover:text-amber-800"
+            className="text-warning hover:bg-warning/15 hover:text-warning"
           >
             <X className="size-3.5" />
           </Button>

@@ -155,7 +155,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
           <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[1000px]">
             <DialogHeader>
               <div className="flex items-center space-x-3 border-b border-border pb-4">
-                <Plug className="size-5 text-blue-500" />
+                <Plug className="size-5 text-info" />
                 <DialogTitle className="text-xl font-semibold text-foreground">Add Pass-Through Endpoint</DialogTitle>
               </div>
             </DialogHeader>

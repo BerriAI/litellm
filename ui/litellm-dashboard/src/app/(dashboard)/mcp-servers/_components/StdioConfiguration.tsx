@@ -35,10 +35,10 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
   return (
     <MountedFormField
       label={
-        <span className="text-sm font-medium text-gray-700 flex items-center">
+        <span className="text-sm font-medium text-foreground flex items-center">
           Stdio Configuration (JSON)
           <SimpleTooltip content="Paste your stdio MCP server configuration in JSON format. You can use the full mcpServers structure from config.yaml or just the inner server configuration.">
-            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
           </SimpleTooltip>
         </span>
       }
@@ -56,7 +56,7 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
           {...textControl(control)}
           placeholder={PLACEHOLDER}
           rows={12}
-          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
+          className="rounded-lg border-border focus:border-info focus:ring-ring font-mono text-sm"
         />
       )}
     </MountedFormField>

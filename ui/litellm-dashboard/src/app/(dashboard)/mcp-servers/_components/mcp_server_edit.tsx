@@ -779,7 +779,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   {(control) => (
                     <Input
                       {...textControl(control)}
-                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                      className="rounded-lg border-border focus:border-info focus:ring-ring"
                     />
                   )}
                 </MountedFormField>
@@ -795,7 +795,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         control.onChange(event);
                         setAliasManuallyEdited(true);
                       }}
-                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                      className="rounded-lg border-border focus:border-info focus:ring-ring"
                     />
                   )}
                 </MountedFormField>
@@ -803,7 +803,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   {(control) => (
                     <Input
                       {...textControl(control)}
-                      className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                      className="rounded-lg border-border focus:border-info focus:ring-ring"
                     />
                   )}
                 </MountedFormField>
@@ -851,7 +851,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       <Input
                         {...textControl(control)}
                         placeholder="https://your-mcp-server.com"
-                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        className="rounded-lg border-border focus:border-info focus:ring-ring"
                       />
                     )}
                   </MountedFormField>
@@ -861,10 +861,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 {isOpenAPITransport && (
                   <MountedFormField
                     label={
-                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                      <span className="text-sm font-medium text-foreground flex items-center">
                         OpenAPI Spec URL
                         <SimpleTooltip content="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-                          <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -876,7 +876,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       <Input
                         {...textControl(control)}
                         placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
-                        className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        className="rounded-lg border-border focus:border-info focus:ring-ring"
                       />
                     )}
                   </MountedFormField>
@@ -884,10 +884,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
                 <MountedFormField
                   label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                    <span className="text-sm font-medium text-foreground flex items-center">
                       Max Concurrent Requests (optional)
                       <SimpleTooltip content="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
-                        <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                        <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                       </SimpleTooltip>
                     </span>
                   }
@@ -947,8 +947,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 )}
 
                 {isStdioTransport && (
-                  <div className="rounded-lg border border-gray-200 p-4 space-y-4">
-                    <p className="text-sm text-gray-600">
+                  <div className="rounded-lg border border-border p-4 space-y-4">
+                    <p className="text-sm text-muted-foreground">
                       Configure the stdio transport used to launch the MCP server process. You can either fill in the
                       fields below or paste a JSON configuration.
                     </p>
@@ -963,7 +963,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <Input
                           {...textControl(control)}
                           placeholder="e.g., npx"
-                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
                         />
                       )}
                     </MountedFormField>
@@ -991,7 +991,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <Textarea
                           {...textControl(control)}
                           rows={6}
-                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring font-mono text-sm"
                           placeholder={`{\n  \"KEY\": \"value\"\n}`}
                         />
                       )}
@@ -1005,10 +1005,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 {!isStdioTransport && shouldShowAuthValueField && (
                   <MountedFormField
                     label={
-                      <span className="text-sm font-medium text-gray-700 flex items-center">
+                      <span className="text-sm font-medium text-foreground flex items-center">
                         Authentication Value
                         <SimpleTooltip content="Token, password, or header value to send with each request for the selected auth type.">
-                          <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                         </SimpleTooltip>
                       </span>
                     }
@@ -1019,7 +1019,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       <PasswordInput
                         {...textControl(control)}
                         placeholder="Enter token or secret (leave blank to keep existing)"
-                        groupClassName="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                        groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
                       />
                     )}
                   </MountedFormField>
@@ -1057,23 +1057,23 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
                 {!isStdioTransport && isAwsSigV4AuthType && (
                   <>
-                    <p className="text-sm text-gray-500 mb-2">
+                    <p className="text-sm text-muted-foreground mb-2">
                       For MCP servers hosted on AWS Bedrock AgentCore.{" "}
                       <a
                         href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-blue-500 hover:text-blue-700"
+                        className="text-info hover:text-info"
                       >
                         View docs &rarr;
                       </a>
                     </p>
                     <MountedFormField
                       label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                        <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Region
                           <SimpleTooltip content="AWS region for SigV4 signing (e.g., us-east-1)">
-                            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1083,16 +1083,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <Input
                           {...textControl(control)}
                           placeholder="us-east-1 (leave blank to keep existing)"
-                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
                         />
                       )}
                     </MountedFormField>
                     <MountedFormField
                       label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                        <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Service Name
                           <SimpleTooltip content="AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'.">
-                            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1102,16 +1102,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <Input
                           {...textControl(control)}
                           placeholder="bedrock-agentcore (leave blank to keep existing)"
-                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
                         />
                       )}
                     </MountedFormField>
                     <MountedFormField
                       label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                        <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Access Key ID
                           <SimpleTooltip content="Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.).">
-                            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1121,16 +1121,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <PasswordInput
                           {...textControl(control)}
                           placeholder="Leave blank to keep existing"
-                          groupClassName="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
                         />
                       )}
                     </MountedFormField>
                     <MountedFormField
                       label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                        <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Secret Access Key
                           <SimpleTooltip content="Optional. Required if AWS Access Key ID is provided.">
-                            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1140,16 +1140,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <PasswordInput
                           {...textControl(control)}
                           placeholder="Leave blank to keep existing"
-                          groupClassName="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
                         />
                       )}
                     </MountedFormField>
                     <MountedFormField
                       label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                        <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Session Token
                           <SimpleTooltip content="Optional. Only needed for temporary STS credentials.">
-                            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1159,16 +1159,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <PasswordInput
                           {...textControl(control)}
                           placeholder="Leave blank to keep existing"
-                          groupClassName="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
                         />
                       )}
                     </MountedFormField>
                     <MountedFormField
                       label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                        <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Role ARN
                           <SimpleTooltip content="Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials.">
-                            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1178,16 +1178,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <Input
                           {...textControl(control)}
                           placeholder="Leave blank to keep existing"
-                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
                         />
                       )}
                     </MountedFormField>
                     <MountedFormField
                       label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
+                        <span className="text-sm font-medium text-foreground flex items-center">
                           AWS Session Name
                           <SimpleTooltip content="Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted.">
-                            <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+                            <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
                           </SimpleTooltip>
                         </span>
                       }
@@ -1197,7 +1197,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <Input
                           {...textControl(control)}
                           placeholder="Leave blank to keep existing"
-                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
                         />
                       )}
                     </MountedFormField>

@@ -121,7 +121,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
       )}
 
       {/* Request Details */}
-      <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+      <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
         <Card size="sm" style={{ marginBottom: 0 }}>
           <CardHeader>
             <CardTitle>Request Details</CardTitle>
@@ -180,7 +180,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
 
       {/* Request/Response JSON */}
       {isLoadingDetails ? (
-        <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
+        <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
           <UiLoadingSpinner className="inline-block size-5" />
           <div style={{ marginTop: 8, color: "#999" }}>Loading request &amp; response data...</div>
         </div>
@@ -298,7 +298,7 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
 
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden p-4 mb-6">
       <span className="font-semibold" style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
         Tags
       </span>
@@ -388,7 +388,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
     logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Card size="sm" style={{ marginBottom: 0 }}>
         <CardHeader>
           <CardTitle>Metrics</CardTitle>
@@ -429,7 +429,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                   />
                 }
               >
-                <Badge variant="secondary" className={isResponseCacheHit ? "bg-green-100 text-green-700" : undefined}>
+                <Badge variant="secondary" className={isResponseCacheHit ? "bg-success/15 text-success" : undefined}>
                   {isResponseCacheHit ? "Hit" : "Miss"}
                 </Badge>
               </DescriptionItem>
@@ -477,7 +477,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                       : ""}
                   </>
                 ) : (
-                  <Badge variant="secondary" className="bg-green-100 text-green-700">
+                  <Badge variant="secondary" className="bg-success/15 text-success">
                     None
                   </Badge>
                 )
@@ -541,17 +541,17 @@ function RequestResponseSection({
       : 0;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapsible open={open} onOpenChange={setOpen}>
         <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "pretty" | "json")}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
             <CollapsibleTrigger className="flex flex-1 items-center gap-3 px-4 py-3 text-left">
               {open ? (
-                <ChevronDown className="size-3.5 shrink-0 text-gray-500" />
+                <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
               ) : (
-                <ChevronRight className="size-3.5 shrink-0 text-gray-500" />
+                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
               )}
-              <h3 className="text-lg font-medium text-gray-900" style={{ margin: 0 }}>
+              <h3 className="text-lg font-medium text-foreground" style={{ margin: 0 }}>
                 Request & Response
               </h3>
             </CollapsibleTrigger>
@@ -657,15 +657,15 @@ function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
   const [open, setOpen] = useState(true);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-3 text-left">
           {open ? (
-            <ChevronDown className="size-3.5 shrink-0 text-gray-500" />
+            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
           ) : (
-            <ChevronRight className="size-3.5 shrink-0 text-gray-500" />
+            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
           )}
-          <h3 className="text-lg font-medium text-gray-900">Metadata</h3>
+          <h3 className="text-lg font-medium text-foreground">Metadata</h3>
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div>

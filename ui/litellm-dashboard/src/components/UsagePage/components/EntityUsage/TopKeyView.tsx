@@ -122,28 +122,28 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
                 content={
                   <div>
                     <div>
-                      <span className="text-gray-300">Tag Name:</span> {tag.tag}
+                      <span className="text-muted-foreground/70">Tag Name:</span> {tag.tag}
                     </div>
                     <div>
-                      <span className="text-gray-300">Spend:</span>{" "}
+                      <span className="text-muted-foreground/70">Spend:</span>{" "}
                       {tag.usage > 0 && tag.usage < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(tag.usage, 2)}`}
                     </div>
                   </div>
                 }
               >
-                <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">{tag.tag.slice(0, 7)}...</span>
+                <span className="px-2 py-1 bg-muted rounded-full text-xs">{tag.tag.slice(0, 7)}...</span>
               </SimpleTooltip>
             ))}
             {hasMoreTags && (
               <button
                 onClick={() => toggleTagsExpansion(apiKey)}
-                className="ml-1 p-1 hover:bg-gray-200 rounded-full transition-colors"
+                className="ml-1 p-1 hover:bg-accent rounded-full transition-colors"
                 title={isExpanded ? "Show fewer tags" : "Show all tags"}
               >
                 {isExpanded ? (
-                  <ChevronUpIcon className="h-3 w-3 text-gray-500" />
+                  <ChevronUpIcon className="h-3 w-3 text-muted-foreground" />
                 ) : (
-                  <ChevronDownIcon className="h-3 w-3 text-gray-500" />
+                  <ChevronDownIcon className="h-3 w-3 text-muted-foreground" />
                 )}
               </button>
             )}
@@ -189,13 +189,13 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         <div className="flex space-x-2">
           <button
             onClick={() => setViewMode("table")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+            className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             Table View
           </button>
           <button
             onClick={() => setViewMode("chart")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+            className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             Chart View
           </button>
@@ -224,15 +224,15 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
                 <div className="relative z-50 p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
                   <div className="space-y-1.5">
                     <div className="text-sm">
-                      <span className="text-gray-300">Key Alias: </span>
+                      <span className="text-muted-foreground/70">Key Alias: </span>
                       <span className="font-mono text-gray-100 break-all">{item?.key_alias}</span>
                     </div>
                     <div className="text-sm">
-                      <span className="text-gray-300">Key ID: </span>
+                      <span className="text-muted-foreground/70">Key ID: </span>
                       <span className="font-mono text-gray-100 break-all">{item?.api_key}</span>
                     </div>
                     <div className="text-sm">
-                      <span className="text-gray-300">Spend: </span>
+                      <span className="text-muted-foreground/70">Spend: </span>
                       <span className="text-white font-medium">${formatNumberWithCommas(item?.spend, 2)}</span>
                     </div>
                   </div>
@@ -247,11 +247,11 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
 
       {isModalOpen && selectedKey && keyData && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleOutsideClick}>
-          <div className="bg-white rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
+          <div className="bg-card rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
             {/* Close button */}
             <button
               onClick={handleClose}
-              className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 focus:outline-hidden"
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground focus:outline-hidden"
               aria-label="Close"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

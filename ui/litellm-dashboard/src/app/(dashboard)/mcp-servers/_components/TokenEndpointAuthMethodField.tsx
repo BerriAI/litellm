@@ -18,10 +18,10 @@ interface TokenEndpointAuthMethodFieldProps {
 const TokenEndpointAuthMethodField: React.FC<TokenEndpointAuthMethodFieldProps> = ({ isEditing = false }) => (
   <MountedFormField
     label={
-      <span className="text-sm font-medium text-gray-700 flex items-center">
+      <span className="text-sm font-medium text-foreground flex items-center">
         Token Endpoint Auth Method (optional)
         <SimpleTooltip content="How the proxy authenticates to the upstream OAuth token endpoint. Client Secret Basic sends the client credentials in an HTTP Basic Authorization header; leave blank to use the default, Client Secret Post, which sends them in the request body.">
-          <Info className="ml-2 size-4 text-blue-400 hover:text-blue-600 cursor-help" />
+          <Info className="ml-2 size-4 text-info hover:text-info cursor-help" />
         </SimpleTooltip>
       </span>
     }

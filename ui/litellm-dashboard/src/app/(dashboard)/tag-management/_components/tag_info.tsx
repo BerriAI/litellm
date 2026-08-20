@@ -122,7 +122,7 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
                 href="https://github.com/BerriAI/litellm/issues/new"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                className="text-info underline hover:text-info"
               >
                 create a GitHub issue
               </a>
@@ -235,7 +235,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               onClick={() => copyToClipboard(tagDetails.name, "tag-name")}
               className={`transition-all duration-200 ${
                 copiedStates["tag-name"]
-                  ? "text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950 dark:border-green-800"
+                  ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
             >

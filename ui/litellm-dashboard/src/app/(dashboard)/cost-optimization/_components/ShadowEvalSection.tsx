@@ -85,8 +85,8 @@ const endsIn = (endsAt: string | null | undefined): string | null => {
 };
 
 const STATUS_STYLES: Record<string, string> = {
-  running: "bg-blue-50 text-blue-700",
-  completed: "bg-emerald-50 text-emerald-700",
+  running: "bg-info/10 text-info",
+  completed: "bg-success/10 text-success",
   stopped: "bg-secondary text-muted-foreground",
 };
 
@@ -146,8 +146,8 @@ const VerdictBar: React.FC<{ direction: ShadowEvalDirection; results: NonNullabl
       ? Math.max(0, 100 - results.overall_shadow_win_rate_pct - ties)
       : results.overall_shadow_win_rate_pct;
   const segments = [
-    { label: "Router won", value: routerWins, fill: "bg-emerald-500" },
-    { label: "Tie", value: ties, fill: "bg-emerald-200" },
+    { label: "Router won", value: routerWins, fill: "bg-success" },
+    { label: "Tie", value: ties, fill: "bg-success/20" },
     {
       label: `${otherArmLabel(direction)} won`,
       value: Math.max(0, 100 - routerWins - ties),
@@ -244,7 +244,7 @@ const JobResults: React.FC<{
         )}
       </div>
       {(job.error_count ?? 0) > 0 && job.last_error != null && (
-        <p className="border-b bg-red-50 px-6 py-2 text-xs text-destructive">
+        <p className="border-b bg-destructive/10 px-6 py-2 text-xs text-destructive">
           Last failure: <span className="font-mono">{job.last_error}</span>
         </p>
       )}

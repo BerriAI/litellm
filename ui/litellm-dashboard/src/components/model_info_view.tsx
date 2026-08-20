@@ -606,7 +606,7 @@ export default function ModelInfoView({
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
               className={`left-2 z-10 transition-all duration-200 ${
                 copiedStates["model-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
+                  ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
             >

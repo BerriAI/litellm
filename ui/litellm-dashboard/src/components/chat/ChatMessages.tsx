@@ -282,7 +282,7 @@ function CopyButton({ text }: { text: string }) {
                 variant="ghost"
                 size="icon-xs"
                 onClick={handleCopy}
-                className={copied ? "text-emerald-600" : "text-muted-foreground hover:text-foreground"}
+                className={copied ? "text-success" : "text-muted-foreground hover:text-foreground"}
               >
                 {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
               </Button>

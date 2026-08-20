@@ -107,7 +107,7 @@ const CoordinationRedisSettings: React.FC = () => {
               manager. It is configured independently of the response cache.
             </p>
             <p className="text-xs text-muted-foreground">{badge.tooltip}</p>
-            <p className="text-xs text-amber-600 dark:text-amber-400">Saved changes take effect on proxy restart.</p>
+            <p className="text-xs text-warning">Saved changes take effect on proxy restart.</p>
           </div>
 
           <CoordinationRedisTypeSelector redisType={redisType} onTypeChange={setSelectedRedisType} />

@@ -155,7 +155,7 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
                       href="https://github.com/BerriAI/litellm/issues/new"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-blue-600 underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                      className="text-info underline hover:text-info"
                     >
                       create a GitHub issue
                     </a>

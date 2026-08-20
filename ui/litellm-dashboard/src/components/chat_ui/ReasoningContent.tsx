@@ -20,7 +20,12 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
       <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
         <CollapsibleTrigger
           render={
-            <Button type="button" variant="ghost" size="sm" className="text-xs text-gray-500 hover:text-gray-700" />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-xs text-muted-foreground hover:text-foreground"
+            />
           }
         >
           <Lightbulb className="size-3.5" />
@@ -30,7 +35,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
 
         <CollapsibleContent>
           <div
-            className="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700"
+            className="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted p-3 text-sm text-foreground"
             style={{ wordBreak: "break-word", overflowWrap: "break-word" }}
           >
             <ReactMarkdown
@@ -60,7 +65,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
                     </SyntaxHighlighter>
                   ) : (
                     <code
-                      className={`${className ?? ""} rounded-sm bg-gray-100 px-1.5 py-0.5 font-mono text-sm`}
+                      className={`${className ?? ""} rounded-sm bg-muted px-1.5 py-0.5 font-mono text-sm`}
                       style={{ wordBreak: "break-word" }}
                       {...props}
                     >

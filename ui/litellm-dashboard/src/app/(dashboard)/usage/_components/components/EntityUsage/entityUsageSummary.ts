@@ -43,9 +43,9 @@ export const buildSummaryTiles = (metadata: SpendSummaryMetadata, showFlatCost: 
     {
       title: "Successful Requests",
       value: metadata.total_successful_requests.toLocaleString(),
-      className: "text-green-600",
+      className: "text-success",
     },
-    { title: "Failed Requests", value: metadata.total_failed_requests.toLocaleString(), className: "text-red-600" },
+    { title: "Failed Requests", value: metadata.total_failed_requests.toLocaleString(), className: "text-destructive" },
     { title: "Total Tokens", value: metadata.total_tokens.toLocaleString() },
   ];
 };
@@ -54,7 +54,7 @@ export const buildCostBreakdownTiles = (metadata: SpendSummaryMetadata): Summary
   {
     title: "Request Cost",
     value: `$${formatNumberWithCommas(metadata.total_spend, 2)}`,
-    className: "text-cyan-600",
+    className: "text-info",
     tooltip: REQUEST_COST_TOOLTIP,
   },
   {

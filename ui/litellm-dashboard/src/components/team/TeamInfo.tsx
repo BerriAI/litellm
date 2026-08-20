@@ -958,10 +958,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <div className="mt-2">
               <h3 className="text-lg font-medium">${formatNumberWithCommas(info.spend, 2)}</h3>
               <p>of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}</p>
-              {info.budget_duration && <p className="text-gray-500">Reset: {info.budget_duration}</p>}
+              {info.budget_duration && <p className="text-muted-foreground">Reset: {info.budget_duration}</p>}
               <br />
               {info.team_member_budget_table && (
-                <p className="text-gray-500">
+                <p className="text-muted-foreground">
                   Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
                 </p>
               )}
@@ -981,7 +981,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 if (models.length === 0) return null;
                 return (
                   <div className="mt-3">
-                    <p className="text-gray-500">Per-model limits:</p>
+                    <p className="text-muted-foreground">Per-model limits:</p>
                     {models.map((m) => (
                       <p key={m} className="text-xs">
                         {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
@@ -1016,11 +1016,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           </Card>
 
           <Card className="block p-6">
-            <p className="font-semibold text-gray-900">Virtual Keys</p>
+            <p className="font-semibold text-foreground">Virtual Keys</p>
             <div className="mt-2">
               <p>User Keys: {teamData.keys.filter((key) => key.user_id).length}</p>
               <p>Service Account Keys: {teamData.keys.filter((key) => !key.user_id).length}</p>
-              <p className="text-gray-500">Total: {teamData.keys.length}</p>
+              <p className="text-muted-foreground">Total: {teamData.keys.length}</p>
             </div>
           </Card>
 
@@ -1041,18 +1041,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           </Card>
 
           <Card className="block p-6">
-            <p className="font-semibold text-gray-900 mb-3">Policies</p>
+            <p className="font-semibold text-foreground mb-3">Policies</p>
             {info.policies && info.policies.length > 0 ? (
               <div className="space-y-4">
                 {info.policies.map((policy: string, index: number) => (
                   <div key={index} className="space-y-2">
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary">{policy}</Badge>
-                      {loadingPolicies && <p className="text-xs text-gray-400">Loading guardrails...</p>}
+                      {loadingPolicies && <p className="text-xs text-muted-foreground/70">Loading guardrails...</p>}
                     </div>
                     {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
-                      <div className="ml-4 pl-3 border-l-2 border-gray-200">
-                        <p className="text-xs text-gray-500 mb-1">Resolved Guardrails:</p>
+                      <div className="ml-4 pl-3 border-l-2 border-border">
+                        <p className="text-xs text-muted-foreground mb-1">Resolved Guardrails:</p>
                         <div className="flex flex-wrap gap-1">
                           {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
                             <Badge key={gIndex} variant="secondary">
@@ -1066,7 +1066,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 ))}
               </div>
             ) : (
-              <p className="text-gray-500">No policies configured</p>
+              <p className="text-muted-foreground">No policies configured</p>
             )}
           </Card>
 
@@ -1211,10 +1211,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>Team Member Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
-                      <p className="mb-4 text-xs text-gray-500">
+                      <p className="mb-4 text-xs text-muted-foreground">
                         Optional defaults applied when members join this team. All fields can be overridden per member.
                       </p>
                       <FieldGroup>
@@ -1621,7 +1621,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   >
                     <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
                       <b>Search Tool Settings</b>
-                      <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent className="px-4 pb-3">
                       <FormField
@@ -1689,7 +1689,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </FormField>
                 </FieldGroup>
 
-                <div className="sticky z-10 -inset-x-6 -bottom-6 border-t border-gray-200 bg-white p-4 pr-0">
+                <div className="sticky z-10 -inset-x-6 -bottom-6 border-t border-border bg-card p-4 pr-0">
                   <div className="flex items-center justify-end gap-2">
                     <Button type="button" variant="outline" onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
                       Cancel
@@ -1743,14 +1743,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 {(() => {
                   const aliasEntries = Object.entries(info.litellm_model_table?.model_aliases ?? {});
                   if (aliasEntries.length === 0) {
-                    return <div className="text-gray-400">No model aliases configured</div>;
+                    return <div className="text-muted-foreground/70">No model aliases configured</div>;
                   }
                   return (
                     <div className="mt-1 space-y-1">
                       {aliasEntries.map(([alias, target]) => (
                         <div key={alias} className="text-sm">
                           <span className="font-mono">{alias}</span>
-                          <span className="text-gray-400">{" -> "}</span>
+                          <span className="text-muted-foreground/70">{" -> "}</span>
                           <span className="font-mono">{target}</span>
                         </div>
                       ))}
@@ -1769,7 +1769,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   if (models.length === 0) return null;
                   return (
                     <div className="mt-2">
-                      <p className="text-gray-500">Per-model limits:</p>
+                      <p className="text-muted-foreground">Per-model limits:</p>
                       {models.map((m) => (
                         <div key={m} className="text-xs ml-2">
                           {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
@@ -1850,7 +1850,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     {info.router_settings.enable_tag_filtering && <div>Tag Filtering: Enabled</div>}
                   </div>
                 ) : (
-                  <div className="text-gray-400">No router settings configured</div>
+                  <div className="text-muted-foreground/70">No router settings configured</div>
                 )}
               </div>
               <div>
@@ -1867,7 +1867,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
                 variant="inline"
-                className="pt-4 border-t border-gray-200"
+                className="pt-4 border-t border-border"
                 accessToken={accessToken}
               />
 
@@ -1881,20 +1881,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 }
                 killSwitchOn={initialKillSwitchOn}
                 variant="inline"
-                className="pt-4 border-t border-gray-200"
+                className="pt-4 border-t border-border"
               />
 
               <LoggingSettingsView
                 loggingConfigs={info.metadata?.logging || []}
                 disabledCallbacks={[]}
                 variant="inline"
-                className="pt-4 border-t border-gray-200"
+                className="pt-4 border-t border-border"
               />
 
               {info.metadata?.secret_manager_settings && (
-                <div className="pt-4 border-t border-gray-200">
+                <div className="pt-4 border-t border-border">
                   <p className="font-medium">Secret Manager Settings</p>
-                  <pre className="mt-2 bg-gray-50 p-3 rounded-sm text-xs overflow-x-auto">
+                  <pre className="mt-2 bg-muted p-3 rounded-sm text-xs overflow-x-auto">
                     {JSON.stringify(info.metadata.secret_manager_settings, null, 2)}
                   </pre>
                 </div>
@@ -1916,15 +1916,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           </Button>
           <h1 className="text-2xl font-semibold">{info.team_alias}</h1>
           <div className="flex items-center">
-            <p className="text-sm text-gray-500 font-mono">{info.team_id}</p>
+            <p className="text-sm text-muted-foreground font-mono">{info.team_id}</p>
             <Button
               variant="ghost"
               size="icon-xs"
               onClick={() => copyToClipboard(info.team_id, "team-id")}
               className={`left-2 z-10 transition-all duration-200 ${
                 copiedStates["team-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                  ? "text-success bg-success/10 border-success/20"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
               }`}
             >
               {copiedStates["team-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}

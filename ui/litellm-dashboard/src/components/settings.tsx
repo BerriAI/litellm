@@ -66,7 +66,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
   }
 
   return (
-    <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
+    <div className="space-y-4 mt-6 p-4 bg-muted rounded-lg border">
       {params.map((param) => {
         const callbackConfig = callbackConfigs.find((config) => config.id === selectedCallback);
         const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
@@ -82,7 +82,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
         return (
           <Field key={param} className="mb-4">
             <FieldLabel htmlFor={fieldId}>
-              <span className="text-sm font-medium text-gray-700">{fieldLabel} </span>
+              <span className="text-sm font-medium text-foreground">{fieldLabel} </span>
             </FieldLabel>
             {paramType === "password" ? (
               <Input
@@ -179,7 +179,7 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
                           className="w-6 h-6 rounded-sm object-contain"
                         />
                       </div>
-                      <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
+                      <span className="font-medium text-foreground">{callbackConfig.displayName}</span>
                     </div>
                   </ComboboxItem>
                 )}
@@ -639,7 +639,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 selectedCallback={selectedCallback}
               />
 
-              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-border">
                 <Button type="button" variant="outline" onClick={cancelAddCallback} disabled={isAddingCallback}>
                   Cancel
                 </Button>
@@ -680,7 +680,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 </>
               )}
 
-              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-border">
                 <Button type="button" variant="outline" onClick={closeEditCallbackModal} disabled={isUpdatingCallback}>
                   Cancel
                 </Button>

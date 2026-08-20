@@ -126,7 +126,7 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
       {/* <div className="ml-auto">
           <Accordion>
             <AccordionHeader><Text>Team Models</Text></AccordionHeader>
-            <AccordionBody className="absolute right-0 z-10 bg-white p-2 shadow-lg max-w-xs">
+            <AccordionBody className="absolute right-0 z-10 bg-card p-2 shadow-lg max-w-xs">
               <List>
                 {modelsToDisplay.map((model: string) => (
                   <ListItem key={model}>
