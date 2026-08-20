@@ -264,3 +264,87 @@ class TestCallbackManagementEndpoints:
         assert galileo_config["displayName"] == "Galileo"
         assert "GALILEO_API_KEY" in galileo_config["dynamic_params"]
         assert "GALILEO_PROJECT_ID" in galileo_config["dynamic_params"]
+
+
+class TestNewRelicCallbackConfig:
+    def test_newrelic_entry_supports_team_logging_with_dynamic_params(self):
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-1234"})
+        assert response.status_code == 200
+        newrelic = next(
+            (config for config in response.json() if config.get("id") == "newrelic"),
+            None,
+        )
+        assert newrelic is not None
+        assert newrelic["supports_key_team_logging"] is True
+        params = newrelic["dynamic_params"]
+        assert params["newrelic_api_key"]["type"] == "password"
+        assert "newrelic_region" in params
+        # The operator-only agent env flag must not appear as a team-configurable
+        # field: it is not a StandardCallbackDynamicParams key and would be rejected.
+        assert "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED" not in params
+
+
+class TestNewRelicTeamCallbackValidation:
+    def _data(self, callback_vars):
+        from litellm.proxy._types import AddTeamCallback
+
+        return AddTeamCallback(callback_name="newrelic", callback_type="success", callback_vars=callback_vars)
+
+    def test_rejects_when_otel_v2_off(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_newrelic_callback
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_newrelic_callback(self._data({"newrelic_api_key": "k"}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_rejects_unknown_region_and_region_without_key(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_newrelic_callback
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_newrelic_callback(self._data({"newrelic_api_key": "k", "newrelic_region": "mars"}))
+            assert "Unknown newrelic_region" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                _validate_newrelic_callback(self._data({"newrelic_region": "eu"}))
+            assert "requires newrelic_api_key" in str(exc.value.detail)
+            _validate_newrelic_callback(self._data({"newrelic_api_key": "k", "newrelic_region": "EU"}))
+            # A JSON-null key is str()-coerced to "None" upstream; it must not
+            # slip past the region-requires-key guard.
+            with pytest.raises(HTTPException) as exc:
+                _validate_newrelic_callback(self._data({"newrelic_api_key": None, "newrelic_region": "eu"}))
+            assert "requires newrelic_api_key" in str(exc.value.detail)
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_ignores_other_callbacks_and_bare_newrelic(self, monkeypatch):
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy._types import AddTeamCallback
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_newrelic_callback
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            _validate_newrelic_callback(self._data({}))
+            _validate_newrelic_callback(
+                AddTeamCallback(
+                    callback_name="langfuse",
+                    callback_type="success",
+                    callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+                )
+            )
+        finally:
+            is_otel_v2_enabled.cache_clear()

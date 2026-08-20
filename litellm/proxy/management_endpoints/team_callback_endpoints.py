@@ -51,6 +51,42 @@ router: Final = APIRouter()
 _CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
 
 
+def _callback_config_error(message: str) -> HTTPException:
+    return HTTPException(status_code=400, detail={"error": message})  # mutable-ok: FastAPI detail contract
+
+
+def _validate_newrelic_callback(data: "AddTeamCallback") -> None:
+    """Reject New Relic team-callback configs the runtime cannot honor.
+
+    Per-team New Relic routing runs on the OTel v2 path only; accepting the
+    config with the flag off would silently ship the team's traffic through the
+    operator's env-configured agent instead of the team's account. A region
+    outside the fixed table, or a region without a key, would likewise be
+    accepted and then silently ignored or misrouted at request time.
+    """
+    if data.callback_name != "newrelic" or not data.callback_vars:
+        return
+    callback_vars: Final = data.callback_vars
+    if not any(key.startswith("newrelic_") for key in callback_vars):
+        return
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.presets.newrelic import NEWRELIC_OTLP_ENDPOINT_BY_REGION
+
+    if not is_otel_v2_enabled():
+        raise _callback_config_error("Per-team New Relic routing requires the proxy to run with LITELLM_OTEL_V2=true.")
+    region: Final = callback_vars.get("newrelic_region")
+    if region is not None and region.lower() not in NEWRELIC_OTLP_ENDPOINT_BY_REGION:
+        raise _callback_config_error(
+            f"Unknown newrelic_region {region!r}. "
+            f"Supported regions: {', '.join(sorted(NEWRELIC_OTLP_ENDPOINT_BY_REGION))}."
+        )
+    # ``callback_vars`` values are str()-coerced upstream, so a JSON ``null`` key
+    # arrives as the literal ``"None"``; treat that and the empty string as absent.
+    api_key: Final = callback_vars.get("newrelic_api_key")
+    if region is not None and (not api_key or api_key == "None"):
+        raise _callback_config_error("newrelic_region requires newrelic_api_key; the region rides the team's own key.")
+
+
 def _redact_callback_secrets(metadata: Any) -> Any:
     """Strip secret values out of a team-metadata snapshot before audit logging.
 
@@ -303,6 +339,8 @@ async def add_team_callbacks(
             team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
             user_api_key_dict=user_api_key_dict,
         )
+
+        _validate_newrelic_callback(data)
 
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata
