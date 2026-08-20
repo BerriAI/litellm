@@ -1009,8 +1009,22 @@ class _PROXY_TagRateLimiter(  # pyright: ignore[reportUnusedClass]  # only refer
         await self._release_stale_hop_reservations(resolved_request_kwargs)
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(resolved_request_kwargs)
         team_id: Final = _extract_team_id(resolved_request_kwargs, metadata_variable_name)
-        candidate_model_names: Final = tuple(
-            name for d in healthy_deployments if isinstance(name := d.get("model_name"), str)
+        # Built from the full routing-group membership, not `healthy_deployments`
+        # (Router's own cooldown-filtered list for this hop): a member that's
+        # merely cooled down right now is still a real member of the group for
+        # the purpose of deciding resolved_group, and success accounting has no
+        # way to know which members were healthy at admission time -- it can
+        # only reconstruct the full, static membership (see its own comment
+        # below). Deriving both sides from the same full-membership source is
+        # the only way they're guaranteed to dedup to the identical bucket
+        # regardless of cooldown state at either point in time.
+        routing_group_deployments: Final = self.llm_router._get_routing_group_deployments(  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching resolve_any's own reliance on this method
+            model=model, team_id=team_id
+        )
+        candidate_model_names: Final = (
+            tuple(dep["model_name"] for dep in routing_group_deployments)
+            if routing_group_deployments is not None
+            else tuple(name for d in healthy_deployments if isinstance(name := d.get("model_name"), str))
         )
         configured: Final = self._index.get(self.llm_router).resolve_any(model, team_id, candidate_model_names)
         if not configured:

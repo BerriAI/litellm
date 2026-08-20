@@ -987,6 +987,58 @@ async def test_log_success_event_accounts_against_the_same_bucket_admission_chec
 
 
 @pytest.mark.asyncio
+async def test_admission_dedups_against_the_full_group_not_just_currently_healthy_members(time_controller):
+    """
+    `healthy_deployments` is Router's cooldown-filtered list for this one
+    hop -- a member merely cooled down right now is excluded from it, but
+    it's still a real member of the routing group. Deriving resolve_any's
+    candidate set from `healthy_deployments` instead of the full group would
+    make admission's resolved_group choice depend on which members happen to
+    be healthy at that exact moment, while success accounting (which has no
+    way to know what was healthy at admission time) always reconstructs the
+    full, static membership -- landing the two sides on different buckets
+    whenever a member is cooled down. Admission must dedup against the same
+    full membership success does, regardless of which members are currently
+    healthy.
+    """
+    token_limits = {
+        "token_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 10, "period_seconds": 86400}]}
+    }
+    router = litellm.Router(
+        model_list=[
+            _deployment("backend-a", "dep-a", token_limits),
+            _deployment("backend-b", "dep-b", token_limits),
+        ],
+        routing_groups=[
+            RoutingGroup(group_name="my-group", models=["backend-a", "backend-b"], routing_strategy="simple-shuffle")
+        ],
+    )
+    limiter = _make_limiter(time_controller)
+    limiter.update_variables(llm_router=router)
+
+    # The shared entry always dedups to "backend-a" (alphabetically first).
+    # Pre-load *that* bucket over the limit; the "backend-b" bucket (what a
+    # healthy_deployments-derived candidate set would wrongly resolve to,
+    # since backend-a is the only one excluded below) stays empty.
+    now = time_controller.now().timestamp()
+    over_limit_key = _expected_bucket_key(
+        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group="backend-a"
+    )
+    await limiter.internal_usage_cache.async_set_cache(key=over_limit_key, value=20.0, litellm_parent_otel_span=None)
+
+    # Simulate backend-a being cooled down: Router would exclude it from the
+    # healthy_deployments list passed to this hop's admission.
+    healthy_excluding_backend_a = [d for d in router.model_list if d["model_name"] == "backend-b"]
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="my-group",
+            healthy_deployments=healthy_excluding_backend_a,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+
+
+@pytest.mark.asyncio
 async def test_log_success_event_accounts_against_the_key_hash_admission_checked(time_controller):
     """
     Admission's `_extract_key_hash` reads `metadata.user_api_key` unconditionally
