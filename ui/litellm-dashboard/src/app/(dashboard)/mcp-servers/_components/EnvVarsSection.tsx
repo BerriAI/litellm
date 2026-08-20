@@ -1,7 +1,7 @@
 import React from "react";
 import { Input, Select, Tooltip, Typography } from "antd";
 import { Button } from "@/components/ui/button";
-import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { CircleMinus, Info, Plus } from "lucide-react";
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
 
 import {
@@ -55,7 +55,7 @@ const EnvVarsSection: React.FC = () => {
             </>
           }
         >
-          <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
+          <Info className="size-4 text-blue-400 hover:text-blue-600 cursor-help" />
         </Tooltip>
       </div>
       <Text className="text-xs text-gray-600 block mb-3">
@@ -100,15 +100,15 @@ const EnvVarsSection: React.FC = () => {
               {(control) => <Select {...selectControl<string>(control)} options={SCOPE_OPTIONS} />}
             </MountedFormField>
             <div style={{ width: 24, height: 32 }} className="flex items-center justify-center">
-              <MinusCircleOutlined
+              <CircleMinus
                 onClick={() => remove(index)}
-                className="text-gray-500 hover:text-red-500 cursor-pointer"
+                className="size-4 text-gray-500 hover:text-red-500 cursor-pointer"
               />
             </div>
           </div>
         ))}
         <Button variant="outline" className="w-full border-dashed" onClick={() => append({ scope: "global" })}>
-          <PlusOutlined />
+          <Plus />
           Add Variable
         </Button>
       </div>
@@ -130,7 +130,7 @@ const ScopedValueOrDescription: React.FC<{ index: number }> = ({ index }) => {
             addonBefore={
               <Tooltip title="Per-user variables have no shared value. This text is only a hint shown to each user when they fill in their own value.">
                 <span className="text-xs text-gray-500 cursor-help whitespace-nowrap">
-                  <InfoCircleOutlined className="mr-1" />
+                  <Info className="mr-1 inline size-3 align-text-bottom" />
                   Hint
                 </span>
               </Tooltip>

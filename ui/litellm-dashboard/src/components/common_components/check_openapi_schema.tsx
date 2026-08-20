@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import type { UseFormSetValue } from "react-hook-form";
 import { getOpenAPISchema } from "../networking";
@@ -191,7 +191,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
       <span>
         {label}{" "}
         <SimpleTooltip content={tooltip}>
-          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+          <Info className="ml-1 inline size-3.5 align-text-bottom" />
         </SimpleTooltip>
       </span>
     ) : (

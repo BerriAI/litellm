@@ -1,4 +1,4 @@
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Select as AntdSelect, Typography } from "antd";
 import React from "react";
@@ -20,7 +20,7 @@ const EscalationKeywords: React.FC<EscalationKeywordsProps> = ({ keywords, onCha
           Escalation Keywords
         </Typography.Title>
         <SimpleTooltip content="Case-sensitive phrases a user can include in their message to force a bump to the next-higher complexity tier when they aren't happy with results. They can force a stronger model, but not choose which one.">
-          <InfoCircleOutlined className="text-gray-400" />
+          <Info className="size-4 text-gray-400" />
         </SimpleTooltip>
       </div>
       <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>

@@ -62,6 +62,10 @@ const eslintConfig = [
               message:
                 "antd is being phased out; build new UI with shadcn/ui primitives instead of adding antd imports.",
             },
+            {
+              group: ["@ant-design/icons", "@ant-design/icons/*"],
+              message: "@ant-design/icons is gone from the dashboard; use lucide-react instead.",
+            },
           ],
         },
       ],
