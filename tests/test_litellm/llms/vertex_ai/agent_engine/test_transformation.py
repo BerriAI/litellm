@@ -1,19 +1,27 @@
-from litellm.llms.vertex_ai.agent_engine.transformation import VertexAgentEngineConfig
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-MULTI_TURN = [
+from litellm.llms.vertex_ai.agent_engine.transformation import VertexAgentEngineConfig
+from litellm.types.llms.openai import AllMessageValues
+
+MULTI_TURN: Sequence[AllMessageValues] = [
     {"role": "user", "content": "Remember the number 42"},
     {"role": "assistant", "content": "Noted."},
     {"role": "user", "content": "Which number?"},
 ]
 
 
-def _transform(messages, optional_params=None, litellm_params=None) -> dict:
+def _transform(
+    messages: Sequence[AllMessageValues],
+    optional_params: Mapping[str, Any] | None = None,
+    litellm_params: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     config = VertexAgentEngineConfig()
     return config.transform_request(
         model="agent_engine/123456789",
-        messages=messages,
-        optional_params=optional_params if optional_params is not None else {"user_id": "u1"},
-        litellm_params=litellm_params if litellm_params is not None else {},
+        messages=list(messages),
+        optional_params=dict(optional_params) if optional_params is not None else {"user_id": "u1"},
+        litellm_params=dict(litellm_params) if litellm_params is not None else {},
         headers={},
     )
 
@@ -38,7 +46,7 @@ class TestPromptWithoutSession:
         assert message == "Hello"
 
     def test_list_content_is_flattened(self):
-        messages = [
+        messages: Sequence[AllMessageValues] = [
             {"role": "user", "content": [{"type": "text", "text": "first"}]},
             {"role": "user", "content": [{"type": "text", "text": "second"}]},
         ]
