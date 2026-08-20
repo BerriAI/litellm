@@ -31,11 +31,14 @@ from litellm.proxy._types import (
     JWTRoutingOverride,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
+from litellm.proxy.auth.auth_checks import (
+    _cache_key_object,
+    get_key_object,
+    get_team_model_aliases,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
-    _get_team_model_aliases,
     _PendingAutoRegister,
     _matches_routing_override,
     _reserve_budget_after_common_checks,
@@ -1841,7 +1844,7 @@ async def test_standard_jwt_auth_propagates_user_identity_and_team_model_aliases
         find_model_table.assert_not_awaited()
         return
 
-    assert await _get_team_model_aliases(
+    assert await get_team_model_aliases(
         model_id=model_id,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
@@ -1863,7 +1866,7 @@ async def test_get_team_model_aliases_returns_none_when_model_row_missing():
     )
 
     assert (
-        await _get_team_model_aliases(
+        await get_team_model_aliases(
             model_id=99,
             prisma_client=prisma_client,
             user_api_key_cache=UserApiKeyCache(),

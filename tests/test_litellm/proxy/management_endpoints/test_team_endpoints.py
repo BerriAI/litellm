@@ -10261,10 +10261,19 @@ async def test_update_model_table_clears_aliases_with_empty_map():
     so existing aliases are cleared, while ``model_aliases=None`` must be a no-op that
     leaves the model table untouched.
     """
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        team_model_aliases_cache_key,
+    )
+
+    model_id = 123
+    user_api_key_cache = UserApiKeyCache()
+    cache_key = team_model_aliases_cache_key(model_id)
+    await user_api_key_cache.async_set_cache(key=cache_key, value={"old-alias": "old-model"})
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_modeltable.create = AsyncMock()
     mock_prisma.db.litellm_modeltable.upsert = AsyncMock(
-        return_value=MagicMock(id="model-123")
+        return_value=MagicMock(id=model_id)
     )
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
@@ -10272,33 +10281,38 @@ async def test_update_model_table_clears_aliases_with_empty_map():
 
     returned_model_id = await _update_model_table(
         data=UpdateTeamRequest(team_id="team-1", model_aliases={}),
-        model_id="model-123",
+        model_id=model_id,
         prisma_client=mock_prisma,
+        user_api_key_cache=user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name="default_user_id",
     )
 
     mock_prisma.db.litellm_modeltable.upsert.assert_awaited_once()
     upsert_kwargs = mock_prisma.db.litellm_modeltable.upsert.await_args.kwargs
-    assert upsert_kwargs["where"] == {"id": "model-123"}
+    assert upsert_kwargs["where"] == {"id": model_id}
     assert upsert_kwargs["data"]["update"]["model_aliases"] == json.dumps({})
     assert upsert_kwargs["data"]["create"]["model_aliases"] == json.dumps({})
-    assert returned_model_id == "model-123"
+    assert returned_model_id == model_id
+    assert await user_api_key_cache.async_get_cache(cache_key) is None
 
     mock_prisma.db.litellm_modeltable.create.reset_mock()
     mock_prisma.db.litellm_modeltable.upsert.reset_mock()
+    await user_api_key_cache.async_set_cache(key=cache_key, value={"current-alias": "current-model"})
 
     noop_model_id = await _update_model_table(
         data=UpdateTeamRequest(team_id="team-1", model_aliases=None),
-        model_id="model-123",
+        model_id=model_id,
         prisma_client=mock_prisma,
+        user_api_key_cache=user_api_key_cache,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name="default_user_id",
     )
 
     mock_prisma.db.litellm_modeltable.create.assert_not_called()
     mock_prisma.db.litellm_modeltable.upsert.assert_not_called()
-    assert noop_model_id == "model-123"
+    assert noop_model_id == model_id
+    assert await user_api_key_cache.async_get_cache(cache_key) == {"current-alias": "current-model"}
 
 
 class TestEmitTeamMembersMetric:

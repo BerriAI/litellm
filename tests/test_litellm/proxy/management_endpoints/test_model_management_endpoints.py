@@ -299,6 +299,10 @@ class TestDeleteTeamModelAlias:
     @pytest.mark.asyncio
     async def test_delete_team_model_alias_success(self):
         """Test successful deletion of a team model alias"""
+        from litellm.proxy.common_utils.user_api_key_cache import (
+            UserApiKeyCache,
+            team_model_aliases_cache_key,
+        )
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_team_model_alias,
         )
@@ -328,10 +332,18 @@ class TestDeleteTeamModelAlias:
         # Create mock prisma client
         mock_prisma = MockPrismaClient(team_exists=True)
         mock_prisma.db = MockPrismaWrapper(model_aliases_list)
+        user_api_key_cache = UserApiKeyCache()
+        for model_id in (1, 2):
+            await user_api_key_cache.async_set_cache(
+                key=team_model_aliases_cache_key(model_id),
+                value={"cached-alias": "cached-model"},
+            )
 
         # Call the function
         await delete_team_model_alias(
-            public_model_name="public_model_1", prisma_client=mock_prisma
+            public_model_name="public_model_1",
+            prisma_client=mock_prisma,
+            user_api_key_cache=user_api_key_cache,
         )
 
         # Verify results
@@ -353,10 +365,16 @@ class TestDeleteTeamModelAlias:
         assert json.loads(second_update["data"]["model_aliases"]) == {
             "alias3": "public_model_3"
         }
+        for model_id in (1, 2):
+            assert await user_api_key_cache.async_get_cache(team_model_aliases_cache_key(model_id)) is None
 
     @pytest.mark.asyncio
     async def test_delete_team_model_alias_no_matches(self):
         """Test deletion when no matching model alias exists"""
+        from litellm.proxy.common_utils.user_api_key_cache import (
+            UserApiKeyCache,
+            team_model_aliases_cache_key,
+        )
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             delete_team_model_alias,
         )
@@ -386,15 +404,24 @@ class TestDeleteTeamModelAlias:
         # Create mock prisma client
         mock_prisma = MockPrismaClient(team_exists=True)
         mock_prisma.db = MockPrismaWrapper(model_aliases_list)
+        user_api_key_cache = UserApiKeyCache()
+        cache_key = team_model_aliases_cache_key(1)
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value={"cached-alias": "cached-model"},
+        )
 
         # Call the function with non-existent model
         await delete_team_model_alias(
-            public_model_name="non_existent_model", prisma_client=mock_prisma
+            public_model_name="non_existent_model",
+            prisma_client=mock_prisma,
+            user_api_key_cache=user_api_key_cache,
         )
 
         # Verify no updates were made
         mock_db = mock_prisma.db.litellm_modeltable
         assert len(mock_db.update_calls) == 0
+        assert await user_api_key_cache.async_get_cache(cache_key) == {"cached-alias": "cached-model"}
 
 
 class TestClearCache:
