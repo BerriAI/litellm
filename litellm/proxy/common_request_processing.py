@@ -1333,7 +1333,7 @@ def _log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
         "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - litellm_call_id=%s - %s",
         litellm_call_id,
         e,
-        extra={"litellm_call_id": litellm_call_id},
+        extra=MappingProxyType({"litellm_call_id": litellm_call_id}),
     )
 
 
