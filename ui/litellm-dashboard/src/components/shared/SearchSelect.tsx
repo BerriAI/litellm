@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import {
   Combobox,
   ComboboxContent,
@@ -14,6 +15,8 @@ export interface SearchSelectOption {
   value: string;
   /** Optional muted second line (e.g. an id); also matched when searching. */
   sublabel?: string;
+  /** Optional leading glyph (e.g. a provider logo); not matched when searching. */
+  icon?: React.ReactNode;
 }
 
 interface SearchSelectProps {
@@ -25,6 +28,8 @@ interface SearchSelectProps {
   disabled?: boolean;
   className?: string;
   inputId?: string;
+  allowClear?: boolean;
+  "aria-label"?: string;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -42,6 +47,8 @@ export function SearchSelect({
   disabled = false,
   className,
   inputId,
+  allowClear = true,
+  "aria-label": ariaLabel,
 }: SearchSelectProps) {
   const selected =
     value === undefined || value === ""
@@ -62,8 +69,9 @@ export function SearchSelect({
     >
       <ComboboxInput
         id={inputId}
+        aria-label={ariaLabel}
         placeholder={placeholder}
-        showClear={value != null && value !== ""}
+        showClear={allowClear && value != null && value !== ""}
         className={`h-8 w-full text-sm ${className ?? ""}`}
       />
       <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>
@@ -71,6 +79,7 @@ export function SearchSelect({
         <ComboboxList>
           {(item: SearchSelectOption) => (
             <ComboboxItem key={item.value} value={item}>
+              {item.icon}
               <span className="flex min-w-0 flex-col">
                 <span className="truncate">{item.label}</span>
                 {item.sublabel != null && item.sublabel !== "" && (

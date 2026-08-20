@@ -117,8 +117,8 @@ describe("PerUserUsage", () => {
     const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.match(/^M\s*([\d.]+)/)?.[1]));
     expect(xPositions.size).toBe(3);
 
-    expect(chart.textContent).toContain("curl/8.0");
-    expect(chart.textContent).toContain("Unknown");
+    expect(chart).toHaveTextContent("curl/8.0");
+    expect(chart).toHaveTextContent("Unknown");
     for (const bucket of [
       "1-9 requests",
       "10-99 requests",
@@ -127,7 +127,7 @@ describe("PerUserUsage", () => {
       "10K-99.9K requests",
       "100K+ requests",
     ]) {
-      expect(chart.textContent).toContain(bucket);
+      expect(chart).toHaveTextContent(bucket);
     }
 
     const tickTexts = Array.from(chart.querySelectorAll(".recharts-cartesian-axis-tick-value")).map(

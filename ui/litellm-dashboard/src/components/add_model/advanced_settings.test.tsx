@@ -1,5 +1,6 @@
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MountedFormHost } from "../../../tests/mounted-form-host";
 import AdvancedSettings from "./advanced_settings";
 
 const mockUsePtuCostAttributionEnabled = vi.fn();
@@ -12,13 +13,15 @@ const PTU_LABELS = ["PTU Count", "Calculated Cost per PTU / Hour (USD)", "PTU Ef
 
 const renderAdvancedSettings = () =>
   render(
-    <AdvancedSettings
-      showAdvancedSettings={true}
-      setShowAdvancedSettings={() => {}}
-      guardrailsList={[]}
-      tagsList={{}}
-      accessToken="test-token"
-    />,
+    <MountedFormHost>
+      <AdvancedSettings
+        showAdvancedSettings={true}
+        setShowAdvancedSettings={() => {}}
+        guardrailsList={[]}
+        tagsList={{}}
+        accessToken="test-token"
+      />
+    </MountedFormHost>,
   );
 
 describe("AdvancedSettings", () => {

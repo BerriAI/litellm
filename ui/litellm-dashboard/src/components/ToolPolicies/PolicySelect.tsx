@@ -5,14 +5,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/cva.config";
 
 export const INPUT_POLICY_OPTIONS = [
-  { value: "untrusted", label: "untrusted", dot: "bg-amber-500" },
-  { value: "trusted", label: "trusted", dot: "bg-green-500" },
-  { value: "blocked", label: "blocked", dot: "bg-red-500" },
+  { value: "untrusted", label: "untrusted", dot: "bg-warning" },
+  { value: "trusted", label: "trusted", dot: "bg-success" },
+  { value: "blocked", label: "blocked", dot: "bg-destructive" },
 ] as const;
 
 export const OUTPUT_POLICY_OPTIONS = [
-  { value: "untrusted", label: "untrusted", dot: "bg-amber-500" },
-  { value: "trusted", label: "trusted", dot: "bg-green-500" },
+  { value: "untrusted", label: "untrusted", dot: "bg-warning" },
+  { value: "trusted", label: "trusted", dot: "bg-success" },
 ] as const;
 
 export const POLICY_OPTIONS = INPUT_POLICY_OPTIONS;

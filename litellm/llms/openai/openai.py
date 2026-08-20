@@ -46,7 +46,9 @@ from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
     OpenAIError,
+    build_output_token_limit_response,
     drop_params_from_unprocessable_entity_error,
+    is_output_token_limit_error,
 )
 
 openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
@@ -436,6 +438,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             time_delta: Final = round(end_time - start_time, 2)
             e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
             raise e
+        except openai.BadRequestError as e:
+            if not is_output_token_limit_error(e):
+                raise
+            return build_output_token_limit_response(e=e, data=data, is_async=True)
         except Exception as e:
             raise e
 
@@ -469,6 +475,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             return headers, response
         except OpenAIError:
             raise
+        except openai.BadRequestError as e:
+            if not is_output_token_limit_error(e):
+                raise
+            return build_output_token_limit_response(e=e, data=data, is_async=False)
         except Exception as e:
             if raw_response is not None:
                 raise Exception(

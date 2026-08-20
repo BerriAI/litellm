@@ -38,6 +38,7 @@ from litellm.types.mcp import (
     MCPTransportType,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -286,6 +287,7 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
+    TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
@@ -450,6 +452,7 @@ class LiteLLMRoutes(enum.Enum):
 
     mapped_pass_through_routes = [
         "/bedrock",
+        "/comprehendmedical",
         "/vertex-ai",
         "/vertex_ai",
         "/cohere",
@@ -610,6 +613,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
+        KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -644,6 +648,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_update",
             "/team/permissions_bulk_update",
             "/team/daily/activity",
+            "/team/daily/activity/aggregated",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
             # model
@@ -679,6 +684,7 @@ class LiteLLMRoutes(enum.Enum):
         # permitted teams exactly like /spend/logs/ui — it belongs to the same
         # access tier, not to customer management.
         "/management/v1/spend_logs/end_users",
+        "/management/v1/spend_logs/users",
         "/cost/estimate",
     ]
 
@@ -798,12 +804,16 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
+        "/team/daily/activity/aggregated",
         "/team/{team_id}/members/me",
         "/model/new",
         "/model/update",
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        # Endpoint restricts results to organizations the caller is ORG_ADMIN
+        # of; a caller who administers none gets an empty result set.
+        "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
         "/model/{model_id}/update",
@@ -860,6 +870,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/available_roles",
             "/user/daily/activity",
             "/team/daily/activity",
+            "/team/daily/activity/aggregated",
             "/tag/daily/activity",
             "/tag/list",
             "/audit",
@@ -871,12 +882,13 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session) and the end-user filter
-            # facet. The list endpoint `/spend/logs/ui` is covered via
+            # UI Logs page detail drawer (single + session) and the filter facets.
+            # The list endpoint `/spend/logs/ui` is covered via
             # spend_tracking_routes below.
             "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
             "/management/v1/spend_logs/end_users",
+            "/management/v1/spend_logs/users",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
             # Invitations).
@@ -1986,6 +1998,18 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
         return values
 
 
+class TeamCallbackDeleteResponseData(LiteLLMPydanticObjectBase):
+    team_id: str
+    success_callbacks: tuple[str, ...]
+    failure_callbacks: tuple[str, ...]
+
+
+class TeamCallbackDeleteResponse(LiteLLMPydanticObjectBase):
+    status: Literal["success"]
+    message: str
+    data: TeamCallbackDeleteResponseData
+
+
 class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
     success_callback: list[str] | None = []
     failure_callback: list[str] | None = []
@@ -2332,6 +2356,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
         ),
     )
+    control_plane_url: str | None = Field(
+        None,
+        description=(
+            "Global Control Plane: URL of the control plane whose admin UI manages this instance. "
+            "Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate "
+            "against it cross-origin, and restricts the SSO return_to origin to that URL. "
+            "No state is shared with the control plane"
+        ),
+    )
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
@@ -2405,6 +2438,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_request_size_mb: int | None = Field(
         None,
         description="max request size in MB, if a request is larger than this size it will be rejected",
+    )
+    max_batch_file_size_mb: int | None = Field(
+        None,
+        description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
     max_response_size_mb: int | None = Field(
         None,
@@ -2629,6 +2666,14 @@ class ConfigYAML(LiteLLMPydanticObjectBase):
         description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache",
     )
     general_settings: ConfigGeneralSettings | None = None
+    worker_registry: list[WorkerRegistryEntry] | None = Field(
+        None,
+        description=(
+            "Global Control Plane: the independent proxy instances this instance's admin UI manages. "
+            "Setting it makes this a control plane, which serves the UI and does not route LLM requests. "
+            "Enterprise-only"
+        ),
+    )
     router_settings: UpdateRouterConfig | None = Field(
         None,
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
@@ -2744,6 +2789,13 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # key off. Server-only and stripped from validated input for the same reason as the marker
     # above: a forged entry would let a caller pick which team's rpm bucket it is charged against.
     mcp_source_team_rpm_limits: dict[str, dict[str, int]] | None = Field(default=None, exclude=True)
+    # The single MCP server_id a gateway session bearer was scoped to at authorize time (RFC 8707
+    # resource), or None for an aggregate-scope session. A RESTRICTION intersected against the live
+    # grant resolution, never a grant. Server-only, set exclusively by the MCP gateway admission
+    # path via post-construction assignment and stripped from validated input like the markers
+    # above; a forged value could at most narrow, but the stripping keeps the field's provenance
+    # single-owner so its meaning stays trustworthy.
+    mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -2780,6 +2832,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
         values.pop("mcp_source_team_rpm_limits", None)
+        values.pop("mcp_session_resource_server_id", None)
         values.pop("via_virtual_key", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
@@ -3010,6 +3063,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     models: list[str] = []
     model_rpm_limit: dict | None = None
     model_tpm_limit: dict | None = None
+    model_itpm_limit: Mapping[str, int] | None = None
+    model_otpm_limit: Mapping[str, int] | None = None
     blocked: bool = False
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
@@ -3042,6 +3097,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     models: list[str] | None = None
     model_rpm_limit: dict | None = None
     model_tpm_limit: dict | None = None
+    model_itpm_limit: Mapping[str, int] | None = None
+    model_otpm_limit: Mapping[str, int] | None = None
     blocked: bool | None = None
     budget_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
@@ -4193,6 +4250,8 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "model_itpm_limit",
+    "model_otpm_limit",
     "default_estimated_output_tokens",
     "default_estimated_output_tokens_per_model",
     "mcp_rpm_limit",

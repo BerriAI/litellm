@@ -25,7 +25,7 @@ interface PaginatedSearchSelectProps {
   value?: string;
   onValueChange: (value: string) => void;
   onSearchChange: (query: string) => void;
-  onLoadMore: () => void;
+  onLoadMore?: () => void;
   hasNextPage?: boolean;
   isLoading?: boolean;
   isFetchingNextPage?: boolean;
@@ -82,7 +82,7 @@ export function PaginatedSearchSelect({
     if (target.scrollHeight === 0) return;
     const ratio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
     if (ratio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
-      onLoadMore();
+      onLoadMore?.();
     }
   };
 

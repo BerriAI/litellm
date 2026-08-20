@@ -24,7 +24,7 @@
     "/v1/video" "/v1/videos" "/video" "/videos" "/v1/search" "/search"
     "/v1/containers" "/containers" "/v1/evals" "/v1/memory" "/queue/chat"
     "/v1beta" "/interactions"
-    "/anthropic" "/azure" "/azure_ai" "/aws" "/bedrock" "/cohere" "/gemini" "/google"
+    "/anthropic" "/azure" "/azure_ai" "/aws" "/bedrock" "/comprehendmedical" "/cohere" "/gemini" "/google"
     "/vertex_ai" "/vertex-ai" "/assemblyai" "/eu.assemblyai" "/langfuse" "/vllm"
     "/mistral" "/groq" "/voyage" "/cursor" "/milvus" "/openai_passthrough"
     "/toolset"

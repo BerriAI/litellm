@@ -262,14 +262,14 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("2 masked")).toBeInTheDocument();
   });
 
-  it("should display a green Response Cache 'Hit' tag when the response cache served the request", () => {
+  it("should display a Response Cache 'Hit' tag when the response cache served the request", () => {
     render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True" })} />);
 
     expect(screen.getByText("Response Cache")).toBeInTheDocument();
-    expect(screen.getByText("Hit").className).toMatch(/green/);
+    expect(screen.getByText("Hit")).toBeInTheDocument();
   });
 
-  it("should show prompt cache tokens without an alarming red tag when only provider prompt caching occurred", () => {
+  it("should show prompt cache tokens and no response-cache hit when only provider prompt caching occurred", () => {
     render(
       <LogDetailContent
         logEntry={createLogEntry({
@@ -289,7 +289,7 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("34,462")).toBeInTheDocument();
     expect(screen.getByText("Prompt Cache Creation Tokens")).toBeInTheDocument();
     expect(screen.getByText("83")).toBeInTheDocument();
-    expect(screen.getByText("Miss").className).not.toMatch(/red|destructive/);
+    expect(screen.getByText("Miss")).toBeInTheDocument();
     expect(screen.queryByText("Cache Hit")).not.toBeInTheDocument();
   });
 
@@ -393,11 +393,10 @@ describe("LogDetailContent", () => {
     expect(within(retriesItem()).getByText("2 / 3")).toBeInTheDocument();
   });
 
-  it("should display a green 'None' tag for Retries when attempted_retries is 0", () => {
+  it("should display a 'None' tag for Retries when attempted_retries is 0", () => {
     render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success", attempted_retries: 0 } })} />);
 
-    const noneTag = within(retriesItem()).getByText("None");
-    expect(noneTag.className).toMatch(/green/);
+    expect(within(retriesItem()).getByText("None")).toBeInTheDocument();
   });
 
   it("should display '-' for Retries when attempted_retries is absent from metadata", () => {

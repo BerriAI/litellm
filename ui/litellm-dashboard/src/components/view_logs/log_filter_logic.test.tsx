@@ -45,7 +45,6 @@ const defaultProps = {
   userRole: "Admin" as string | null,
   userID: "user-1" as string | null,
   columnFilters: [] as ColumnFiltersState,
-  filterByCurrentUser: false,
   activeTab: "request logs",
   isLiveTail: false,
   startTime: "2025-01-01T00:00:00",
@@ -181,17 +180,16 @@ describe("useLogFilterLogic", () => {
     });
   });
 
-  describe("filterByCurrentUser", () => {
-    it("scopes to the current user when no explicit user filter is set", async () => {
-      renderFilterHook({ filterByCurrentUser: true });
+  describe("user scope", () => {
+    it("leaves an empty user filter for the backend to authorize", async () => {
+      renderFilterHook();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
-      expect(lastCallParams()?.params).toMatchObject({ user_id: "user-1" });
+      expect(lastCallParams()?.params?.user_id).toBeUndefined();
     });
 
-    it("lets an explicit user filter win over the current-user scope", async () => {
+    it("sends an explicit user filter for the backend to intersect with authorization", async () => {
       renderFilterHook({
-        filterByCurrentUser: true,
         columnFilters: [{ id: LOG_FILTER_IDS.USER_ID, value: "someone-else" }],
       });
 

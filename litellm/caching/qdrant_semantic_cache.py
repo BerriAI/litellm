@@ -12,7 +12,7 @@ import ast
 import asyncio
 import json
 import os
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import print_verbose
@@ -22,12 +22,21 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.types.utils import EmbeddingResponse
 
-from ._embedding_router import build_router_embedding_metadata, resolve_embedding_router
+from ._embedding_router import (
+    build_router_embedding_metadata,
+    resolve_embedding_max_input_tokens,
+    resolve_embedding_router,
+    truncate_embedding_input,
+)
 from .base_cache import BaseCache
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 class QdrantSemanticCache(BaseCache):
     CACHE_KEY_FIELD_NAME = "litellm_cache_key"
+    embedding_max_input_tokens: int | None = None
 
     def __init__(
         self,
@@ -39,6 +48,7 @@ class QdrantSemanticCache(BaseCache):
         embedding_model="text-embedding-ada-002",
         host_type=None,
         vector_size=None,
+        embedding_max_input_tokens: int | None = None,
     ):
         from litellm.llms.custom_httpx.http_handler import (
             _get_httpx_client,
@@ -57,6 +67,7 @@ class QdrantSemanticCache(BaseCache):
             raise Exception("similarity_threshold must be provided, passed None")
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
+        self.embedding_max_input_tokens = embedding_max_input_tokens
         self.vector_size = vector_size if vector_size is not None else QDRANT_VECTOR_SIZE
         headers = {}
 
@@ -188,6 +199,13 @@ class QdrantSemanticCache(BaseCache):
         cached_key: Final = payload.get(self.CACHE_KEY_FIELD_NAME)
         return cached_key is not None and str(cached_key) == str(key)
 
+    def _embedding_input(self, prompt: str, router: "Router | None") -> str:
+        return truncate_embedding_input(
+            prompt,
+            self.embedding_model,
+            resolve_embedding_max_input_tokens(self.embedding_max_input_tokens, self.embedding_model, router),
+        )
+
     def _get_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> EmbeddingResponse:
         """Embed via the proxy Router when it serves the model, else direct."""
         try:
@@ -197,16 +215,17 @@ class QdrantSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        embedding_input: Final = self._embedding_input(prompt, router)
         if router is not None:
             return router.embedding(
                 model=self.embedding_model,
-                input=prompt,
+                input=embedding_input,
                 cache={"no-store": True, "no-cache": True},
                 metadata=build_router_embedding_metadata(metadata),
             )
         return litellm.embedding(
             model=self.embedding_model,
-            input=prompt,
+            input=embedding_input,
             cache={"no-store": True, "no-cache": True},
         )
 
@@ -218,17 +237,18 @@ class QdrantSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        embedding_input: Final = self._embedding_input(prompt, router)
         if router is not None:
             return await router.aembedding(
                 model=self.embedding_model,
-                input=prompt,
+                input=embedding_input,
                 cache={"no-store": True, "no-cache": True},
                 metadata=build_router_embedding_metadata(metadata),
             )
 
         return await litellm.aembedding(
             model=self.embedding_model,
-            input=prompt,
+            input=embedding_input,
             cache={"no-store": True, "no-cache": True},
         )
 

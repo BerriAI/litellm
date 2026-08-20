@@ -68,7 +68,7 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
                     </code>
                   </TableCell>
                   <TableCell>
-                    <code className="text-blue-600">{row.type}</code>
+                    <code className="text-info">{row.type}</code>
                   </TableCell>
                   <TableCell>
                     <span className="text-muted-foreground">{row.description}</span>

@@ -11,6 +11,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -59,6 +60,7 @@ interface UserAgentActivityProps {
 }
 
 const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, userRole, dateValue, onDateChange }) => {
+  const anchor = useComboboxAnchor();
   // Maximum number of categories to show in charts to prevent color palette overflow
   const MAX_CATEGORIES = 10;
 
@@ -385,7 +387,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                 value={selectedTags}
                 onValueChange={(next: string[]) => setSelectedTags(next)}
               >
-                <ComboboxChips className="w-full" aria-busy={tagsLoading}>
+                <ComboboxChips render={<div ref={anchor} />} className="w-full" aria-busy={tagsLoading}>
                   <ComboboxValue>
                     {(selected: string[]) =>
                       selected.map((tag) => (
@@ -395,14 +397,10 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput
-                    className="border-0 bg-transparent"
-                    placeholder="All User Agents"
-                    aria-label="All User Agents"
-                  />
+                  <ComboboxChipsInput placeholder="All User Agents" aria-label="All User Agents" />
                   {selectedTags.length > 0 && <ComboboxClear aria-label="Clear user agent filter" />}
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor}>
                   <ComboboxEmpty>No user agents found</ComboboxEmpty>
                   <ComboboxList>
                     {(tag: string) => {
@@ -440,15 +438,15 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                       </Tooltip>
                       <div className="mt-4 space-y-3">
                         <div>
-                          <p className="text-sm text-gray-600">Success Requests</p>
+                          <p className="text-sm text-muted-foreground">Success Requests</p>
                           <p className="text-lg font-semibold">{formatAbbreviatedNumber(tag.successful_requests)}</p>
                         </div>
                         <div>
-                          <p className="text-sm text-gray-600">Total Tokens</p>
+                          <p className="text-sm text-muted-foreground">Total Tokens</p>
                           <p className="text-lg font-semibold">{formatAbbreviatedNumber(tag.total_tokens)}</p>
                         </div>
                         <div>
-                          <p className="text-sm text-gray-600">Total Cost</p>
+                          <p className="text-sm text-muted-foreground">Total Cost</p>
                           <p className="text-lg font-semibold">${formatAbbreviatedNumber(tag.total_spend, 4)}</p>
                         </div>
                       </div>
@@ -463,15 +461,15 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                     <h4 className="text-lg font-medium text-foreground">No Data</h4>
                     <div className="mt-4 space-y-3">
                       <div>
-                        <p className="text-sm text-gray-600">Success Requests</p>
+                        <p className="text-sm text-muted-foreground">Success Requests</p>
                         <p className="text-lg font-semibold">-</p>
                       </div>
                       <div>
-                        <p className="text-sm text-gray-600">Total Tokens</p>
+                        <p className="text-sm text-muted-foreground">Total Tokens</p>
                         <p className="text-lg font-semibold">-</p>
                       </div>
                       <div>
-                        <p className="text-sm text-gray-600">Total Cost</p>
+                        <p className="text-sm text-muted-foreground">Total Cost</p>
                         <p className="text-lg font-semibold">-</p>
                       </div>
                     </div>
@@ -487,11 +485,11 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
       <Card>
         <CardContent>
           <Tabs defaultValue="active-users">
-            <TabsList className="mb-6">
-              <TabsTrigger value="active-users" className="flex-none px-3">
+            <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+              <TabsTrigger value="active-users" className="flex-none rounded-none px-4 py-2">
                 DAU/WAU/MAU
               </TabsTrigger>
-              <TabsTrigger value="per-user" className="flex-none px-3">
+              <TabsTrigger value="per-user" className="flex-none rounded-none px-4 py-2">
                 Per User Usage (Last 30 Days)
               </TabsTrigger>
             </TabsList>
@@ -504,14 +502,14 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
               </div>
 
               <Tabs defaultValue="dau">
-                <TabsList className="mb-6">
-                  <TabsTrigger value="dau" className="flex-none px-3">
+                <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+                  <TabsTrigger value="dau" className="flex-none rounded-none px-4 py-2">
                     DAU
                   </TabsTrigger>
-                  <TabsTrigger value="wau" className="flex-none px-3">
+                  <TabsTrigger value="wau" className="flex-none rounded-none px-4 py-2">
                     WAU
                   </TabsTrigger>
-                  <TabsTrigger value="mau" className="flex-none px-3">
+                  <TabsTrigger value="mau" className="flex-none rounded-none px-4 py-2">
                     MAU
                   </TabsTrigger>
                 </TabsList>

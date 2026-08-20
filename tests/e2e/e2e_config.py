@@ -13,6 +13,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from fixture_transport import deterministic_marker, parse_fixture_mode
+
 # Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
 # Compose injects them into the proxy container, but pytest on the host does not
 # inherit that file unless we load it. override=False so a real shell export wins.
@@ -90,6 +92,15 @@ PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
 
 EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
 
+# Record/replay fixture selection (see fixture_transport.py). The raw mode value
+# is parsed and validated there; "live" (the default, also for empty values)
+# means the harness behaves exactly as before this knob existed.
+FIXTURE_MODE_RAW = os.environ.get("E2E_FIXTURE_MODE", "live")
+FIXTURE_DIR = Path(
+    os.environ.get("E2E_FIXTURE_DIR", "").strip()
+    or str(Path(__file__).resolve().parent / ".fixtures")
+)
+
 # Deliberately modest concurrency. The suite shares its proxy with every other
 # suite in the run, and 750 users at spawn rate 50 saturated the request path hard
 # enough to distort latency-sensitive neighbours (and to spend real provider money
@@ -148,7 +159,11 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
 
 def unique_marker() -> str:
     """A short unique token per call/run, so concurrent runs and the shared
-    response cache never collide on prompts, tags, or customer ids."""
+    response cache never collide on prompts, tags, or customer ids. In record
+    and replay modes the token is deterministic per test instead, so a replay
+    run regenerates the exact requests the record run sent."""
+    if parse_fixture_mode(FIXTURE_MODE_RAW) in ("record", "replay"):
+        return deterministic_marker()
     return uuid.uuid4().hex[:12]
 
 
