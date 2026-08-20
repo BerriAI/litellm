@@ -539,6 +539,9 @@ def rewrite_batch_input_file(file_source: BinaryIO, result: BatchScanResult) -> 
             line = text.rstrip("\n") if change is None else _read_spooled(result.redactions, change)
             output.write((("\n" if wrote_any else "") + line).encode("utf-8"))
             wrote_any = True
+    except BaseException:
+        output.close()
+        raise
     finally:
         file_source.seek(0)
     output.seek(0)

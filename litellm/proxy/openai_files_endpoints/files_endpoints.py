@@ -535,13 +535,13 @@ async def create_file(
             )
 
         # Prepare the file data according to FileTypes
+        if scan_result is not None:
+            spools.append(scan_result.redactions)
         upload_source: Final = (
             await asyncio.to_thread(rewrite_batch_input_file, file_source, scan_result)
             if scan_result is not None and scan_result.changes
             else file_source
         )
-        if scan_result is not None:
-            spools.append(scan_result.redactions)
         if upload_source is not file_source:
             spools.append(upload_source)
         file_data: Final = (file.filename, upload_source, file.content_type)

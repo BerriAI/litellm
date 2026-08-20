@@ -759,6 +759,38 @@ async def test_the_scan_spool_is_closed_when_the_upload_is_refused():
 
 
 @pytest.mark.asyncio
+async def test_the_rewrite_closes_its_own_output_when_it_cannot_finish():
+    """A half-written rewrite spool has no owner yet, so it has to clean up after itself."""
+    import litellm.proxy.openai_files_endpoints.batch_guardrails as bg
+
+    source = _jsonl(_record("a"), _record("b", content="my secret is here"))
+    result = await _scan_full(source, FakeProxyLogging(_redact_containing("secret")))
+
+    spools = []
+    real = bg.tempfile.SpooledTemporaryFile
+
+    def _tracking(*args, **kwargs):
+        handle = real(*args, **kwargs)
+        spools.append(handle)
+        return handle
+
+    def _boom(*args, **kwargs):
+        raise OSError("no space left on device")
+
+    bg.tempfile.SpooledTemporaryFile = _tracking
+    original_read = bg._read_spooled
+    bg._read_spooled = _boom
+    try:
+        with pytest.raises(OSError):
+            rewrite_batch_input_file(source, result)
+    finally:
+        bg.tempfile.SpooledTemporaryFile = real
+        bg._read_spooled = original_read
+
+    assert spools and all(handle.closed for handle in spools)
+
+
+@pytest.mark.asyncio
 async def test_the_scan_spool_is_closed_when_a_record_escapes_the_iterator():
     """A raise from inside the read loop bypasses the per-record outcome path entirely."""
     import litellm.proxy.openai_files_endpoints.batch_guardrails as bg
