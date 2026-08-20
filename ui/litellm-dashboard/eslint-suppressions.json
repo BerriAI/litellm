@@ -1831,7 +1831,7 @@
       "count": 1
     },
     "max-params": {
-      "count": 24
+      "count": 23
     },
     "no-nested-ternary": {
       "count": 5

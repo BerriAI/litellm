@@ -2502,12 +2502,12 @@ export const userDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  userId: string | null = null,
-  includeCurrentUtcDay: boolean = false,
+  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean]
 ) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
+  const [userId = null, includeCurrentUtcDay = false] = options;
   try {
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
