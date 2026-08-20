@@ -144,6 +144,7 @@ async def test_request_metadata_is_narrowed_to_what_guardrails_read():
     metadata = {
         "guardrails": ["g"],
         "tags": ["t"],
+        "headers": {"x-noma-application-id": "app-1"},
         "litellm_parent_otel_span": threading.RLock(),
         "user_api_key": "sk-secret",
     }
@@ -155,7 +156,21 @@ async def test_request_metadata_is_narrowed_to_what_guardrails_read():
     )
 
     assert failure is None
-    assert seen == [{"guardrails": ["g"], "tags": ["t"]}]
+    assert seen == [{"guardrails": ["g"], "tags": ["t"], "headers": {"x-noma-application-id": "app-1"}}]
+
+
+@pytest.mark.asyncio
+async def test_records_are_scanned_under_the_headers_the_upload_carried():
+    """Guardrails such as noma pick their application from a header, so dropping it changes the policy."""
+    seen = []
+
+    await _scan(
+        _jsonl(_record("a")),
+        FakeProxyLogging(lambda d: seen.append(d["litellm_metadata"].get("headers"))),
+        metadata={"guardrails": ["g"], "headers": {"x-noma-application-id": "app-1"}},
+    )
+
+    assert seen == [{"x-noma-application-id": "app-1"}]
 
 
 @pytest.mark.asyncio
@@ -302,6 +317,25 @@ async def test_url_variants_callers_actually_write_are_accepted(url):
 
     assert await _scan(_jsonl(_record("v", url=url)), logging_obj) is None
     assert logging_obj.seen[0][0] == "acompletion"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url, expected_call_type",
+    [
+        ("https://api.openai.com/v1/responses", "aresponses"),
+        ("https://api.openai.com/v1/embeddings", "aembedding"),
+        ("https://api.openai.com/v1/messages", "anthropic_messages"),
+        ("https://api.openai.com/v1/responses?api-version=1", "aresponses"),
+    ],
+)
+async def test_an_absolute_url_resolves_by_path_not_by_body_shape(url, expected_call_type):
+    """A Responses body carries `input`, which reads as an embedding if the host is not stripped first."""
+    logging_obj = FakeProxyLogging()
+    record = {"custom_id": "abs", "method": "POST", "url": url, "body": {"model": "m", "input": "x"}}
+
+    assert await _scan(_jsonl(record), logging_obj) is None
+    assert logging_obj.seen[0][0] == expected_call_type
 
 
 @pytest.mark.asyncio

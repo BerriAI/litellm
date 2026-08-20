@@ -13,7 +13,8 @@ import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, BinaryIO, Final, NoReturn
+from typing import TYPE_CHECKING, BinaryIO, Final, NoReturn, TypeAlias
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from typing_extensions import assert_never
@@ -46,6 +47,7 @@ _SCAN_METADATA_KEYS: Final = frozenset(
         "user_api_key_metadata",
         "user_api_key_team_metadata",
         "tags",
+        "headers",
     }
 )
 
@@ -86,7 +88,7 @@ class RedactionRequired:
     custom_id: str | None
 
 
-BatchScanFailure = UnparseableRecord | UnscannableRecord | RedactionRequired
+BatchScanFailure: TypeAlias = UnparseableRecord | UnscannableRecord | RedactionRequired
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,14 +130,20 @@ def _describe(custom_id: str | None) -> str:
 def _iter_records(source: BinaryIO) -> Iterator[_ParsedRecord]:
     """Yield one record per line, relying on the upload validation that already ran."""
     for line_number, raw_line in enumerate(source, start=1):
-        text: Final = raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
+        text = raw_line.decode("utf-8")
         if text.strip():
             yield _ParsedRecord(line_number=line_number, payload=json.loads(text))
 
 
 def _call_type_from_url(url: str) -> CallTypesLiteral | None:
-    # Callers write the url by hand, so a query string or a trailing slash is not a different route.
-    path: Final = url.split("?")[0].rstrip("/")
+    """
+    Resolve the route a record names, tolerating how callers actually write it.
+
+    An absolute url has to reduce to its path or nothing matches, and a record naming
+    ``/v1/responses`` in full would fall through to its body, where ``input`` reads as an
+    embedding and the record gets scanned as the wrong call type rather than the right one.
+    """
+    path: Final = urlsplit(url).path.split("?")[0].rstrip("/")
     call_types: Final = get_call_types_for_route(path)
     if call_types is None:
         return None
@@ -211,19 +219,18 @@ async def _scan_record(
             url=url if isinstance(url, str) else None,
         )
 
-    scan_input: Final[dict] = copy.deepcopy(body)  # mutable-ok: pre_call_hook mutates the dict it is given
+    scan_input: Final[dict[str, object]] = copy.deepcopy(body)  # mutable-ok: pre_call_hook mutates the dict it is given
     scan_input.pop("metadata", None)
     scan_input[_SCAN_METADATA_KEY] = dict(scan_metadata)  # mutable-ok: guardrails write bookkeeping here
 
-    returned: Final = await proxy_logging_obj.pre_call_hook(
+    # The chain hands back the body it produced, which may be a replacement for the dict it was
+    # given rather than that same dict mutated, so this is what gets compared.
+    scanned: Final[dict] = await proxy_logging_obj.pre_call_hook(  # mutable-ok: the guardrails' own dict
         user_api_key_dict=user_api_key_dict,
         data=scan_input,
         call_type=call_type,
         guardrails_only=True,
     )
-    # A guardrail may return a replacement dict rather than mutating the one it was given; that
-    # replacement is what the request would have become, so it is what gets compared.
-    scanned: Final = returned if isinstance(returned, dict) else scan_input
 
     compared: Final = (frozenset(body) | frozenset(scanned)) - _INJECTED_KEYS
     if _fingerprint(scanned, compared) != _fingerprint(body, compared):
