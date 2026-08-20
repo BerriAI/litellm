@@ -327,6 +327,8 @@ def cost_per_token(
     service_tier: str | None = None,  # for OpenAI service tier pricing
     ### DATA RESIDENCY ###
     data_residency: str | None = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
+    ### VERTEX LOCATION ###
+    vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
     response: Any | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
@@ -587,6 +589,7 @@ def cost_per_token(
                 prompt_characters=prompt_characters,
                 completion_characters=completion_characters,
                 usage=usage_block,
+                vertex_location=vertex_location,
             )
         elif cost_router == "cost_per_token":
             return google_cost_per_token(
@@ -594,6 +597,7 @@ def cost_per_token(
                 custom_llm_provider=custom_llm_provider,
                 usage=usage_block,
                 service_tier=service_tier,
+                vertex_location=vertex_location,
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
@@ -1071,6 +1075,7 @@ def _store_cost_breakdown_in_logging_obj(
     reasoning_cost: float | None = None,
     service_tier: str | None = None,
     data_residency: str | None = None,
+    vertex_location: str | None = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1090,6 +1095,7 @@ def _store_cost_breakdown_in_logging_obj(
         margin_total_amount: Total margin added in USD
         service_tier: Tier the costs above were priced on, already resolved
         data_residency: Region uplift the costs above were priced on, already resolved
+        vertex_location: Vertex AI location the costs above were priced on, already resolved
     """
     if litellm_logging_obj is None:
         return
@@ -1113,6 +1119,7 @@ def _store_cost_breakdown_in_logging_obj(
             reasoning_cost=reasoning_cost,
             service_tier=service_tier,
             data_residency=data_residency,
+            vertex_location=vertex_location,
         )
 
     except Exception as breakdown_error:
@@ -1149,6 +1156,8 @@ def completion_cost(
     service_tier: str | None = None,  # for OpenAI service tier pricing
     ### DATA RESIDENCY ###
     data_residency: str | None = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
+    ### VERTEX LOCATION ###
+    vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -1577,6 +1586,7 @@ def completion_cost(
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
                     data_residency=data_residency,
+                    vertex_location=vertex_location,
                     response=completion_response,
                     request_model=request_model_for_cost,
                 )
@@ -1664,6 +1674,7 @@ def completion_cost(
                             usage=cost_per_token_usage_object,
                             service_tier=service_tier,
                             data_residency=data_residency,
+                            vertex_location=vertex_location,
                         )
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
                         _cache_read_cost = _token_type_breakdown.cache_read_cost
@@ -1686,6 +1697,7 @@ def completion_cost(
                         reasoning_cost=_reasoning_cost,
                         service_tier=service_tier,
                         data_residency=data_residency,
+                        vertex_location=vertex_location,
                     )
 
                 return _final_cost
@@ -1765,6 +1777,8 @@ def response_cost_calculator(
     service_tier: str | None = None,  # for OpenAI service tier pricing
     ### DATA RESIDENCY ###
     data_residency: str | None = None,  # for OpenAI regional-processing uplift (e.g. "eu", "us")
+    ### VERTEX LOCATION ###
+    vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
 ) -> float:
     """
     Returns
@@ -1797,6 +1811,7 @@ def response_cost_calculator(
                 litellm_logging_obj=litellm_logging_obj,
                 service_tier=service_tier,
                 data_residency=data_residency,
+                vertex_location=vertex_location,
             )
         return response_cost
     except Exception as e:

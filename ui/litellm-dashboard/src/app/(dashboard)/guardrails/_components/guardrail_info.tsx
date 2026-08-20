@@ -5,9 +5,8 @@ import {
   updateGuardrailCall,
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
 
-import { ArrowLeft, CheckIcon, Code, CopyIcon } from "lucide-react";
+import { ArrowLeft, Ban, CheckIcon, Code, CopyIcon, EyeOff, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -524,7 +523,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
             onClick={() => copyToClipboard(guardrailData.guardrail_id, "guardrail-id")}
             className={`left-2 z-10 transition-all duration-200 ${
               copiedStates["guardrail-id"]
-                ? "text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950/40 dark:border-green-900"
+                ? "text-success bg-success/10 border-success/20"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
             }`}
           >
@@ -604,10 +603,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                           <p className="flex-1">
                             <span
                               className={`inline-flex items-center gap-1.5 ${
-                                value === "MASK" ? "text-blue-600" : "text-red-600"
+                                value === "MASK" ? "text-info" : "text-destructive"
                               }`}
                             >
-                              {value === "MASK" ? <EyeInvisibleOutlined /> : <StopOutlined />}
+                              {value === "MASK" ? <EyeOff className="size-3.5" /> : <Ban className="size-3.5" />}
                               {String(value)}
                             </span>
                           </p>
@@ -629,7 +628,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card className="block mt-6 p-6">
                 <div className="flex justify-between items-center mb-4">
                   <div className="flex items-center gap-2">
-                    <Code className="text-blue-500" />
+                    <Code className="text-info" />
                     <p className="font-medium text-lg">Custom Code</p>
                   </div>
                   {isAdmin && !isConfigGuardrail && (
@@ -667,7 +666,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                   <h3 className="text-lg font-medium">Guardrail Settings</h3>
                   {isConfigGuardrail && (
                     <SimpleTooltip content="Guardrail is defined in the config file and cannot be edited.">
-                      <InfoCircleOutlined />
+                      <Info role="img" aria-label="Config guardrail details" className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                   )}
                   {!isEditing &&

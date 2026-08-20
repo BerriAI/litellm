@@ -32,8 +32,11 @@ const loginSchema = z.object({
 type LoginFormValues = z.infer<typeof loginSchema>;
 
 function SsoEnabledNotice() {
-  const [isDismissed, setIsDismissed] = useState(false);
-  if (isDismissed) return null;
+  const [dismissed, setDismissed] = useState(false);
+
+  if (dismissed) {
+    return null;
+  }
 
   return (
     <Alert variant="info" className="mt-4">
@@ -45,8 +48,8 @@ function SsoEnabledNotice() {
         environment configuration.
       </AlertTitle>
       <AlertAction>
-        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setIsDismissed(true)}>
-          <X />
+        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setDismissed(true)}>
+          <X className="size-4" />
         </Button>
       </AlertAction>
     </Alert>

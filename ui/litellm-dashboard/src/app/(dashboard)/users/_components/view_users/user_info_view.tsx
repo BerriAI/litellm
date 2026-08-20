@@ -18,7 +18,6 @@ import {
   Member,
 } from "@/components/networking";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Modal } from "antd";
 import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
 import {
   Combobox,
@@ -43,6 +42,7 @@ import MCPServerPermissions from "@/components/permissions/MCPServerPermissions"
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface UserInfoViewProps {
   userId: string;
@@ -404,15 +404,15 @@ export default function UserInfoView({
           </Button>
           <h2 className="text-xl font-semibold">{userData.user_email || "User"}</h2>
           <div className="flex items-center cursor-pointer">
-            <span className="text-sm text-gray-500 font-mono">{userData.user_id}</span>
+            <span className="text-sm text-muted-foreground font-mono">{userData.user_id}</span>
             <Button
               variant="ghost"
               size="icon-xs"
               onClick={() => copyToClipboard(userData.user_id, "user-id")}
               className={`left-2 z-10 transition-all duration-200 ${
                 copiedStates["user-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                  ? "text-success bg-success/10 border-success/20"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
               }`}
             >
               {copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
@@ -428,7 +428,7 @@ export default function UserInfoView({
             <Button
               variant="secondary"
               onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center text-red-500 border-red-500 hover:text-red-600 hover:border-red-600"
+              className="flex items-center text-destructive border-destructive hover:bg-destructive/10"
             >
               <Trash2 />
               Delete User
@@ -517,7 +517,7 @@ export default function UserInfoView({
                                   size="icon-sm"
                                   aria-label={`Remove from ${team.team_alias || team.team_id}`}
                                   onClick={() => handleOpenRemoveTeamModal(team)}
-                                  className="text-red-500"
+                                  className="text-destructive"
                                 >
                                   <Trash2 />
                                 </Button>
@@ -592,8 +592,8 @@ export default function UserInfoView({
                       onClick={() => copyToClipboard(userData.user_id, "user-id")}
                       className={`left-2 z-10 transition-all duration-200 ${
                         copiedStates["user-id"]
-                          ? "text-green-600 bg-green-50 border-green-200"
-                          : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                          ? "text-success bg-success/10 border-success/20"
+                          : "text-muted-foreground hover:text-foreground hover:bg-accent"
                       }`}
                     >
                       {copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
@@ -631,7 +631,7 @@ export default function UserInfoView({
                   <div className="flex flex-wrap gap-2 mt-1">
                     {userData.models?.length && userData.models?.length > 0 ? (
                       userData.models?.map((model, index) => (
-                        <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                        <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
                           {model}
                         </span>
                       ))
@@ -657,7 +657,7 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">Metadata</p>
-                  <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
+                  <pre className="bg-muted p-2 rounded-sm text-xs overflow-auto mt-1">
                     {JSON.stringify(userData.metadata || {}, null, 2)}
                   </pre>
                 </div>
@@ -703,71 +703,73 @@ export default function UserInfoView({
       />
 
       {/* Add to Team Modal */}
-      <Modal
-        title="Add User to Team"
+      <Dialog
         open={isAddTeamModalOpen}
-        onCancel={() => setIsAddTeamModalOpen(false)}
-        footer={null}
-        width={500}
-        maskClosable={!isAddingTeam}
+        onOpenChange={(open) => !open && setIsAddTeamModalOpen(false)}
+        disablePointerDismissal={isAddingTeam}
       >
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            handleAddTeamSubmit();
-          }}
-        >
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor={ADD_TEAM_FIELD_ID}>Team</FieldLabel>
-              <Combobox
-                items={availableTeamsForAdd}
-                value={selectedTeamOption}
-                onValueChange={(team: TeamOption | null) => setSelectedTeamId(team?.team_id ?? "")}
-                itemToStringLabel={(team: TeamOption) => team.team_alias}
-                isItemEqualToValue={(team: TeamOption, value: TeamOption) => team.team_id === value.team_id}
-              >
-                <ComboboxInput id={ADD_TEAM_FIELD_ID} placeholder="Select a team" className="w-full" />
-                <ComboboxContent>
-                  <ComboboxEmpty>No teams found</ComboboxEmpty>
-                  <ComboboxList>
-                    {(team: TeamOption) => (
-                      <ComboboxItem key={team.team_id} value={team} title={team.team_alias}>
-                        {team.team_alias}
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
-            </Field>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Add User to Team</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleAddTeamSubmit();
+            }}
+          >
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor={ADD_TEAM_FIELD_ID}>Team</FieldLabel>
+                <Combobox
+                  items={availableTeamsForAdd}
+                  value={selectedTeamOption}
+                  onValueChange={(team: TeamOption | null) => setSelectedTeamId(team?.team_id ?? "")}
+                  itemToStringLabel={(team: TeamOption) => team.team_alias}
+                  isItemEqualToValue={(team: TeamOption, value: TeamOption) => team.team_id === value.team_id}
+                >
+                  <ComboboxInput id={ADD_TEAM_FIELD_ID} placeholder="Select a team" className="w-full" />
+                  <ComboboxContent>
+                    <ComboboxEmpty>No teams found</ComboboxEmpty>
+                    <ComboboxList>
+                      {(team: TeamOption) => (
+                        <ComboboxItem key={team.team_id} value={team} title={team.team_alias}>
+                          {team.team_alias}
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
+              </Field>
 
-            <Field>
-              <FieldLabel htmlFor={ADD_TEAM_ROLE_FIELD_ID}>Member Role</FieldLabel>
-              <Select value={selectedRole} onValueChange={(value) => value !== null && setSelectedRole(value)}>
-                <SelectTrigger id={ADD_TEAM_ROLE_FIELD_ID} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MEMBER_ROLE_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value} title={option.value}>
-                      <SimpleTooltip content={option.hint}>
-                        <span className="font-medium">{option.value}</span>
-                        <span className="ml-2 text-muted-foreground text-sm">- {option.hint}</span>
-                      </SimpleTooltip>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-          </FieldGroup>
+              <Field>
+                <FieldLabel htmlFor={ADD_TEAM_ROLE_FIELD_ID}>Member Role</FieldLabel>
+                <Select value={selectedRole} onValueChange={(value) => value !== null && setSelectedRole(value)}>
+                  <SelectTrigger id={ADD_TEAM_ROLE_FIELD_ID} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MEMBER_ROLE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value} title={option.value}>
+                        <SimpleTooltip content={option.hint}>
+                          <span className="font-medium">{option.value}</span>
+                          <span className="ml-2 text-muted-foreground text-sm">- {option.hint}</span>
+                        </SimpleTooltip>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </FieldGroup>
 
-          <div className="text-right mt-4">
-            <Button type="submit" disabled={isAddingTeam || !selectedTeamId} aria-busy={isAddingTeam}>
-              {isAddingTeam ? "Adding..." : "Add to Team"}
-            </Button>
-          </div>
-        </form>
-      </Modal>
+            <div className="text-right mt-4">
+              <Button type="submit" disabled={isAddingTeam || !selectedTeamId} aria-busy={isAddingTeam}>
+                {isAddingTeam ? "Adding..." : "Add to Team"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

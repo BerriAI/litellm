@@ -23759,16 +23759,16 @@ export interface components {
         };
         /**
          * ClassificationRubric
-         * @description Which calibration examples the built-in classifier rubric carries.
+         * @description Which calibration examples, and for BUSINESS which tier criteria, the built-in classifier rubric carries.
          * @enum {string}
          */
-        ClassificationRubric: "legacy" | "agentic" | "chat";
+        ClassificationRubric: "legacy" | "agentic" | "chat" | "business";
         /**
          * ClassifierLLMConfig
          * @description Configuration for the LLM-based complexity classifier.
          */
         ClassifierLLMConfig: {
-            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
+            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
              * Model
@@ -23946,6 +23946,15 @@ export interface components {
          * @enum {string}
          */
         ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+        /** ComplexityTierModel */
+        ComplexityTierModel: {
+            /** Litellm Params */
+            litellm_params?: {
+                [key: string]: unknown;
+            };
+            /** Model Name */
+            model_name: string;
+        };
         /**
          * ComplianceCheckRequest
          * @description Request payload for compliance check endpoints.
@@ -24198,6 +24207,11 @@ export interface components {
              * @description require a key for all calls to proxy
              */
             master_key?: string | null;
+            /**
+             * Max Batch File Size Mb
+             * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
+             */
+            max_batch_file_size_mb?: number | null;
             /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
@@ -27806,6 +27820,8 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Endpoint Uplift Multiplier */
+            regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
@@ -32729,6 +32745,11 @@ export interface components {
              */
             reasoning_keywords?: string[] | null;
             /**
+             * Reasoning Override Min Score
+             * @description Minimum weighted score a request must reach before 2+ reasoning markers may promote it to the reasoning tier. Unset tracks tier_boundaries.simple_medium, so the override never rescues a request the scorer placed in the cheapest tier; 0 restores the unconditional override
+             */
+            reasoning_override_min_score?: number | null;
+            /**
              * Reminder Markers
              * @description Override the delimiter pairs used to recognize and strip harness-injected reminder blocks before classification. A harness that wraps injected context differently per agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than adds to, the built-in default of ('<system-reminder>', '</system-reminder>'), so a harness that also emits that pair lists it too. Matching is case-insensitive.
              */
@@ -32791,6 +32812,10 @@ export interface components {
              */
             tier_labels?: {
                 [key: string]: string;
+            };
+            /** Tier Model Configs */
+            tier_model_configs?: {
+                [key: string]: components["schemas"]["ComplexityTierModel"][];
             };
             /**
              * Tiers
@@ -33750,6 +33775,8 @@ export interface components {
             escalation_keyword?: string;
             /** Matched Keyword */
             matched_keyword?: string;
+            /** Reasoning Override Min Score */
+            reasoning_override_min_score?: number;
             /** Request Type */
             request_type?: string;
             /** Routed Model */
@@ -33774,6 +33801,10 @@ export interface components {
             tier_boundaries?: components["schemas"]["StandardLoggingRoutingDecisionTierBoundaries"];
             /** Tier Label */
             tier_label?: string;
+            /** Tier Litellm Params */
+            tier_litellm_params?: {
+                [key: string]: unknown;
+            };
         };
         /**
          * StandardLoggingRoutingDecisionTierBoundaries
@@ -36979,6 +37010,8 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Endpoint Uplift Multiplier */
+            regional_endpoint_uplift_multiplier?: number | null;
             /** Regional Processing Uplift Multiplier Eu */
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
@@ -43848,7 +43881,9 @@ export interface operations {
     };
     get_image_get_image_get: {
         parameters: {
-            query?: never;
+            query?: {
+                theme?: ("light" | "dark") | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -43862,6 +43897,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -55970,6 +56014,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
                 timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
             };
             header?: never;
             path?: never;

@@ -6,8 +6,8 @@ and the 5 family) must keep a mid-conversation system reminder in place inside
 ``messages`` so the top-level ``system`` prefix stays byte-identical and the
 prompt cache written on turn one is read back in full on turn two. Models
 without the flag (Claude 4.7 and older) reject the role inside ``messages``
-outright, so the proxy must hoist the reminder into the top-level ``system``
-field and the call must still return a completion instead of a provider 400.
+outright, so the proxy must convert the reminder to a user turn in place and
+the call must still return a completion instead of a provider 400.
 
 The conversation shape mirrors what Claude Code sends mid-session: a cached
 system prompt, a user turn carrying its own ``cache_control`` breakpoint, a
@@ -46,11 +46,13 @@ UNFLAGGED_INVOKE_MODEL = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-
 AWS_REGION = "us-east-1"
 CACHE_PRIMING_DEADLINE_SECONDS = 60.0
 CACHE_PRIMING_INTERVAL_SECONDS = 3.0
+CACHE_WARM_CONSECUTIVE_READS = 3
 
 
 def _cacheable_system_block(marker: str) -> TextBlock:
-    """A system prompt comfortably above Sonnet's 1024-token minimum cacheable
-    size, unique per run so no other run's cache entry can satisfy the read."""
+    """A system prompt comfortably above the 4096-token minimum cacheable size
+    of Haiku 4.5 (the smallest model here), unique per run so no other run's
+    cache entry can satisfy the read."""
     text = " ".join(
         f"Reference paragraph {index} for run {marker}." for index in range(300)
     )
@@ -118,10 +120,12 @@ def _prime_prompt_cache(
 ) -> PrimedCache:
     """Send first-turn calls (fresh cache-marked user turn each attempt,
     identical system prefix) until one both reads the system prefix back from
-    cache and writes its own user-turn chunk, proving the cache is live in both
-    directions. Only the pre-reminder turn is ever retried here, so retries can
-    never warm a mutated-prefix cache entry and mask the regression the second
-    turn asserts on."""
+    cache and writes its own user-turn chunk, then re-send that exact turn until
+    its own chunk reads back on three sends in a row, proving the cache is live
+    in both directions before the reminder turn goes out (a freshly written entry
+    can take a few seconds to become readable). Only the pre-reminder turn is
+    ever retried here, so retries can never warm a mutated-prefix cache entry and
+    mask the regression the second turn asserts on."""
     deadline = time.monotonic() + CACHE_PRIMING_DEADLINE_SECONDS
     while True:
         user_text = _first_turn_user_text(unique_marker())
@@ -132,17 +136,43 @@ def _prime_prompt_cache(
         )
         usage = unwrap(_post_messages(client, key, body)).usage
         if usage.cache_read_input_tokens > 0 and usage.cache_creation_input_tokens > 0:
-            return PrimedCache(
+            primed = PrimedCache(
                 first_user_text=user_text,
                 prefix_read_tokens=usage.cache_read_input_tokens,
                 first_turn_creation_tokens=usage.cache_creation_input_tokens,
             )
+            if _first_turn_reads_back(client, key, body, primed.full_prefix_tokens, deadline):
+                return primed
         if time.monotonic() >= deadline:
             pytest.fail(
-                f"{model}: prompt cache never became readable within "
+                f"{model}: prompt cache never became readable in full within "
                 f"{CACHE_PRIMING_DEADLINE_SECONDS}s (last usage: {usage})"
             )
         time.sleep(CACHE_PRIMING_INTERVAL_SECONDS)
+
+
+def _reads_full_prefix(
+    client: EndpointsClient, key: str, body: RichMessagesRequest, full_prefix_tokens: int
+) -> bool:
+    return unwrap(_post_messages(client, key, body)).usage.cache_read_input_tokens >= full_prefix_tokens
+
+
+def _first_turn_reads_back(
+    client: EndpointsClient,
+    key: str,
+    body: RichMessagesRequest,
+    full_prefix_tokens: int,
+    deadline: float,
+) -> bool:
+    """True once the full prefix reads back on CACHE_WARM_CONSECUTIVE_READS sends in
+    a row. Some providers' global endpoints serve the prompt cache per region, so a
+    fresh entry can be missing from the region the next request lands on; each miss
+    re-creates the entry there, so the streak converges as the regions warm up."""
+    while time.monotonic() < deadline:
+        if all(_reads_full_prefix(client, key, body, full_prefix_tokens) for _ in range(CACHE_WARM_CONSECUTIVE_READS)):
+            return True
+        time.sleep(CACHE_PRIMING_INTERVAL_SECONDS)
+    return False
 
 
 #: Kept in sync with the copy in test_messages_mid_conversation_system_native_providers_e2e.py;
@@ -201,31 +231,43 @@ class TestBedrockInvokeMidConversationSystem:
         "llm.messages.bedrock_invoke.mid_conversation_system.nonstream.works",
         exercised_on=[],
     )
-    def test_unflagged_model_hoists_system_reminder_and_succeeds(
+    def test_unflagged_model_converts_system_reminder_and_succeeds(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
         model = _register_invoke_deployment(
             endpoints_client, resources, UNFLAGGED_INVOKE_MODEL
         )
         key = resources.key(models=[model])
+        system_block = _cacheable_system_block(unique_marker())
 
-        body = RichMessagesRequest(
+        primed = _prime_prompt_cache(endpoints_client, key, model, system_block)
+
+        reminder_turn_body = RichMessagesRequest(
             model=model,
-            system=[TextBlock(text="You are terse.")],
+            system=[system_block],
             messages=[
-                _user_turn(f"Say hi. Run {unique_marker()}."),
+                _user_turn(primed.first_user_text, cached=True),
                 _system_reminder_turn(),
-                RichMessage(role="assistant", content=[TextBlock(text="Hi.")]),
-                _user_turn("Say bye."),
+                RichMessage(role="assistant", content=[TextBlock(text="OK.")]),
+                _user_turn("Reply with one word again.", cached=True),
             ],
         )
-        completion = unwrap(_post_messages(endpoints_client, key, body))
+        second = unwrap(_post_messages(endpoints_client, key, reminder_turn_body))
 
-        assert completion.role == "assistant", (
-            f"{model}: unexpected role {completion.role!r}"
+        assert second.role == "assistant", (
+            f"{model}: unexpected role {second.role!r}"
         )
-        assert completion.text.strip(), (
+        assert second.text.strip(), (
             f"{model}: conversation with a mid-conversation system reminder "
             f"returned no text; the reminder was forwarded in place to a model "
-            f"that rejects role 'system' inside messages instead of being hoisted"
+            f"that rejects role 'system' inside messages instead of being converted to a user turn"
+        )
+        assert second.usage.cache_read_input_tokens >= primed.full_prefix_tokens, (
+            f"{model}: reminder turn read {second.usage.cache_read_input_tokens} "
+            f"cached tokens, expected at least the {primed.full_prefix_tokens} "
+            f"cached on turn one ({primed.prefix_read_tokens} system prefix + "
+            f"{primed.first_turn_creation_tokens} first user turn); the reminder "
+            f"was hoisted into the top-level system field instead of being "
+            f"converted to a user turn in place, mutating the cached prefix and "
+            f"re-billing the conversation at cache-write pricing"
         )

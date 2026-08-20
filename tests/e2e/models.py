@@ -46,6 +46,7 @@ class KeyLoggingCallback(BaseModel):
 class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
     priority: str | None = None
+    batch_enqueued_token_limit: int | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -766,6 +767,8 @@ class ModelInfoBody(BaseModel):
     # constraint when a prior run's teardown had not removed the row.
     id: str | None = None
     mode: ModelMode | None = None
+    access_groups: list[str] | None = None
+    team_id: str | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -861,6 +864,7 @@ class TeamNewResponse(BaseModel):
 class TeamUpdateBody(BaseModel):
     team_id: str
     team_alias: str
+    models: list[str] | None = None
 
 
 class TeamInfoParams(BaseModel):

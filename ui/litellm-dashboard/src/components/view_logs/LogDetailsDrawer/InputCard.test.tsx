@@ -5,16 +5,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { InputCard } from "./InputCard";
 import { ParsedMessage } from "./prettyMessagesTypes";
 
-vi.mock("antd", async () => {
-  const actual = await vi.importActual<typeof import("antd")>("antd");
-  return {
-    ...actual,
-    message: {
-      success: vi.fn(),
-    },
-  };
-});
-
 describe("InputCard", () => {
   const mockWriteText = vi.fn().mockResolvedValue(undefined);
   const mockMessages: ParsedMessage[] = [

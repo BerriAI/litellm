@@ -256,14 +256,10 @@ export function UserEditView({
             label={
               <>
                 Max Budget (USD)
-                <span className="ml-3 inline-flex items-center gap-2 font-normal">
-                  <Checkbox
-                    aria-label="Unlimited Budget"
-                    checked={unlimitedBudget}
-                    onCheckedChange={handleUnlimitedBudgetChange}
-                  />
+                <label className="ml-3 inline-flex items-center gap-2 font-normal">
+                  <Checkbox checked={unlimitedBudget} onCheckedChange={handleUnlimitedBudgetChange} />
                   Unlimited Budget
-                </span>
+                </label>
               </>
             }
           >

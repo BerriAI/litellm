@@ -871,3 +871,48 @@ class TestToolMessageImageHoisting:
         result = request["messages"]
         assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
         assert result[3]["content"] == self.HOISTED_USER_CONTENT
+
+
+class TestOpenAIPromptCacheBreakpointChatPath:
+    """Chat-path shape for OpenAI explicit prompt caching (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def test_prompt_cache_options_travels_in_extra_body(self):
+        optional_params = litellm.get_optional_params(
+            model="gpt-5.6", custom_llm_provider="openai", prompt_cache_options=self.EXPLICIT
+        )
+        assert optional_params["extra_body"]["prompt_cache_options"] == self.EXPLICIT
+        assert "prompt_cache_options" not in optional_params
+
+    def test_prompt_cache_options_is_not_a_supported_chat_param(self):
+        assert "prompt_cache_options" not in OpenAIGPT5Config().get_supported_openai_params("gpt-5.6")
+        assert "prompt_cache_options" not in OpenAIGPTConfig().get_supported_openai_params("gpt-4.1")
+
+    def test_block_breakpoint_survives_transform_request(self):
+        request = OpenAIGPT5Config().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "sys",
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+                {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]},
+            ],
+            optional_params={"extra_body": {"prompt_cache_options": self.EXPLICIT}},
+            litellm_params={},
+            headers={},
+        )
+        assert request["messages"][0]["content"] == [
+            {"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}
+        ]
+        assert request["messages"][1]["content"] == [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert request["extra_body"] == {"prompt_cache_options": self.EXPLICIT}
+        assert "prompt_cache_options" not in request

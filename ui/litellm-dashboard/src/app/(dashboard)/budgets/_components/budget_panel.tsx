@@ -6,7 +6,10 @@
 import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
+import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
 import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -25,6 +28,7 @@ interface BudgetSettingsPageProps {
 }
 
 const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
+  const syntaxTheme = useSyntaxTheme(prism);
   const [isCreateModelVisible, setIsCreateModelVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
@@ -76,7 +80,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
   return (
     <div className="flex h-full flex-col gap-4 p-6 px-12">
-      <PageHeader
+      <LegacyPageHeader
         icon={<Wallet className="size-5" />}
         title="Budgets"
         subtitle="Spend, TPM and RPM limits you can assign to customers."
@@ -150,13 +154,19 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="assign-budget" keepMounted>
-                <SyntaxHighlighter language="bash">{CREATE_END_USER_CURL_COMMAND}</SyntaxHighlighter>
+                <SyntaxHighlighter language="bash" style={syntaxTheme}>
+                  {CREATE_END_USER_CURL_COMMAND}
+                </SyntaxHighlighter>
               </TabsContent>
               <TabsContent value="curl" keepMounted>
-                <SyntaxHighlighter language="bash">{CHAT_COMPLETIONS_CURL_COMMAND}</SyntaxHighlighter>
+                <SyntaxHighlighter language="bash" style={syntaxTheme}>
+                  {CHAT_COMPLETIONS_CURL_COMMAND}
+                </SyntaxHighlighter>
               </TabsContent>
               <TabsContent value="openai-sdk" keepMounted>
-                <SyntaxHighlighter language="python">{OPENAI_SDK_PYTHON_CODE}</SyntaxHighlighter>
+                <SyntaxHighlighter language="python" style={syntaxTheme}>
+                  {OPENAI_SDK_PYTHON_CODE}
+                </SyntaxHighlighter>
               </TabsContent>
             </Tabs>
           </div>

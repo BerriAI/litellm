@@ -145,6 +145,11 @@ NUMBER_KEYS: dict[str, JsonSchema] = {
         "minimum": 1,
         "description": "Multiplier applied to all token costs for US data residency (e.g. 1.10 = +10%).",
     },
+    "regional_endpoint_uplift_multiplier": {
+        "type": "number",
+        "minimum": 1,
+        "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%).",
+    },
 }
 
 COST_DESCRIPTIONS: dict[str, str] = {

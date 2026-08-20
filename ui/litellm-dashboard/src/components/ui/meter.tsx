@@ -11,7 +11,7 @@ const meterIndicatorVariants = cva({
   variants: {
     tone: {
       default: "bg-primary",
-      warning: "bg-amber-500",
+      warning: "bg-warning",
       over: "bg-destructive",
     },
   },

@@ -20,7 +20,6 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
-import { EditOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +29,7 @@ import { Input as UIInput } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SimpleTooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/shared/form/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -39,9 +38,10 @@ import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Tabs, Tooltip } from "antd";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { toast } from "@/lib/toast";
-import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Plus, Save } from "lucide-react";
+import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Info, Pencil, Plus, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
 import { z } from "zod/v4";
@@ -475,6 +475,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
+  const { onTabChange, hasVisited } = useVisitedTabs(defaultTabKey);
 
   const teamFormValues = (): TeamUpdateFormValues => {
     const info = teamData?.team_info;
@@ -946,6 +947,965 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     }
   };
 
+  const tabItems = [
+    {
+      key: TEAM_INFO_TAB_KEYS.OVERVIEW,
+      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW],
+      children: (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <Card className="block p-6">
+            <p>Budget Status</p>
+            <div className="mt-2">
+              <h3 className="text-lg font-medium">${formatNumberWithCommas(info.spend, 2)}</h3>
+              <p>of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}</p>
+              {info.budget_duration && <p className="text-muted-foreground">Reset: {info.budget_duration}</p>}
+              <br />
+              {info.team_member_budget_table && (
+                <p className="text-muted-foreground">
+                  Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
+                </p>
+              )}
+            </div>
+          </Card>
+
+          <Card className="block p-6">
+            <p>Rate Limits</p>
+            <div className="mt-2">
+              <p>TPM: {info.tpm_limit || "Unlimited"}</p>
+              <p>RPM: {info.rpm_limit || "Unlimited"}</p>
+              {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
+              {(() => {
+                const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
+                const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
+                const models = Array.from(new Set([...Object.keys(modelTpm), ...Object.keys(modelRpm)]));
+                if (models.length === 0) return null;
+                return (
+                  <div className="mt-3">
+                    <p className="text-muted-foreground">Per-model limits:</p>
+                    {models.map((m) => (
+                      <p key={m} className="text-xs">
+                        {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
+                      </p>
+                    ))}
+                  </div>
+                );
+              })()}
+              <p>Estimated Output Tokens: {info.metadata?.default_estimated_output_tokens ?? "Default"}</p>
+              <p>
+                Estimated Output Tokens Per Model:{" "}
+                {info.metadata?.default_estimated_output_tokens_per_model
+                  ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
+                  : "Default"}
+              </p>
+            </div>
+          </Card>
+
+          <Card className="block p-6">
+            <p>Models</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details).map(
+                (badge, index) => (
+                  <SimpleTooltip key={`${badge.kind}-${badge.label}-${index}`} content={badge.tooltip}>
+                    <span>
+                      <StatusBadge tone={TEAM_MODEL_BADGE_TONES[badge.kind]} label={badge.label} />
+                    </span>
+                  </SimpleTooltip>
+                ),
+              )}
+            </div>
+          </Card>
+
+          <Card className="block p-6">
+            <p className="font-semibold text-foreground">Virtual Keys</p>
+            <div className="mt-2">
+              <p>User Keys: {teamData.keys.filter((key) => key.user_id).length}</p>
+              <p>Service Account Keys: {teamData.keys.filter((key) => !key.user_id).length}</p>
+              <p className="text-muted-foreground">Total: {teamData.keys.length}</p>
+            </div>
+          </Card>
+
+          <ObjectPermissionsView objectPermission={info.object_permission} variant="card" accessToken={accessToken} />
+
+          <Card className="block p-6">
+            <GuardrailSettingsView
+              globalGuardrailNames={globalGuardrailNames}
+              teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
+              optedOutGlobalGuardrails={
+                Array.isArray(info.metadata?.opted_out_global_guardrails)
+                  ? info.metadata.opted_out_global_guardrails
+                  : []
+              }
+              killSwitchOn={initialKillSwitchOn}
+              variant="inline"
+            />
+          </Card>
+
+          <Card className="block p-6">
+            <p className="font-semibold text-foreground mb-3">Policies</p>
+            {info.policies && info.policies.length > 0 ? (
+              <div className="space-y-4">
+                {info.policies.map((policy: string, index: number) => (
+                  <div key={index} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary">{policy}</Badge>
+                      {loadingPolicies && <p className="text-xs text-muted-foreground">Loading guardrails...</p>}
+                    </div>
+                    {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
+                      <div className="ml-4 pl-3 border-l-2 border-border">
+                        <p className="text-xs text-muted-foreground mb-1">Resolved Guardrails:</p>
+                        <div className="flex flex-wrap gap-1">
+                          {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
+                            <Badge key={gIndex} variant="secondary">
+                              {guardrail}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-muted-foreground">No policies configured</p>
+            )}
+          </Card>
+
+          <LoggingSettingsView loggingConfigs={info.metadata?.logging || []} disabledCallbacks={[]} variant="card" />
+        </div>
+      ),
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.MY_USER,
+      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER],
+      children: <MyUserTab teamId={teamId} />,
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
+      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS],
+      children: <TeamVirtualKeysTable teamId={teamId} teamAlias={info.team_alias} organization={organization} />,
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.MEMBERS,
+      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS],
+      children: (
+        <TeamMembersComponent
+          teamData={teamData}
+          canEditTeam={canEditTeam}
+          handleMemberDelete={handleMemberDelete}
+          setSelectedEditMember={setSelectedEditMember}
+          setIsEditMemberModalVisible={setIsEditMemberModalVisible}
+          setIsAddMemberModalVisible={setIsAddMemberModalVisible}
+        />
+      ),
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
+      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS],
+      children: <MemberPermissions teamId={teamId} accessToken={accessToken} canEditTeam={canEditTeam} />,
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.SETTINGS,
+      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS],
+      children: (
+        <Card className="block p-6 overflow-y-auto max-h-[65vh]">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-medium">Team Settings</h3>
+            {canEditTeam && !isEditing && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
+                  startEditing();
+                }}
+              >
+                <Pencil />
+                Edit Settings
+              </Button>
+            )}
+          </div>
+
+          {isEditing && isGuardrailsLoading ? (
+            <div className="p-4">Loading...</div>
+          ) : isEditing ? (
+            <TooltipProvider>
+              <form onSubmit={(event) => void form.handleSubmit(onTeamUpdateSubmit)(event)}>
+                <FieldGroup>
+                  <FormField control={form.control} name="team_alias" label="Team Name">
+                    {({ ref, value, ...field }) => <UIInput {...field} ref={ref} value={value ?? ""} />}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="models"
+                    label="Models"
+                    description="Leave empty to grant no models directly. The team keeps any models granted through its access groups"
+                  >
+                    {({ id, value, onChange }) => (
+                      <ModelSelect
+                        id={id}
+                        value={value ?? []}
+                        onChange={onChange}
+                        teamID={teamId}
+                        organizationID={teamData?.team_info?.organization_id || undefined}
+                        options={{
+                          includeSpecialOptions: true,
+                          includeUserModels: !teamData?.team_info?.organization_id,
+                          showAllProxyModelsOverride:
+                            isProxyAdminRole(userRole) && !teamData?.team_info?.organization_id,
+                        }}
+                        context="team"
+                        dataTestId="models-select"
+                      />
+                    )}
+                  </FormField>
+
+                  <Field>
+                    <FieldLabel>
+                      {labelWithHint(
+                        "Model Aliases",
+                        "Map a custom alias to an underlying model. Team members can call the alias in API requests instead of the real model name.",
+                      )}
+                    </FieldLabel>
+                    <ModelAliasManager
+                      accessToken={accessToken || ""}
+                      initialModelAliases={teamModelAliases}
+                      onAliasUpdate={setTeamModelAliases}
+                      showExampleConfig={false}
+                    />
+                  </Field>
+
+                  <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+                    )}
+                  </FormField>
+
+                  <FormField control={form.control} name="soft_budget" label="Soft Budget (USD)">
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="soft_budget_alerting_emails"
+                    label={labelWithHint(
+                      "Soft Budget Alerting Emails",
+                      "Comma-separated email addresses to receive alerts when the soft budget is reached",
+                    )}
+                  >
+                    {({ ref, value, ...field }) => (
+                      <UIInput
+                        {...field}
+                        ref={ref}
+                        value={typeof value === "string" ? value : ""}
+                        placeholder="example1@test.com, example2@test.com"
+                      />
+                    )}
+                  </FormField>
+
+                  <Collapsible
+                    open={teamMemberSettingsOpen}
+                    onOpenChange={setTeamMemberSettingsOpen}
+                    className="mt-4 mb-4 overflow-hidden rounded-lg border"
+                  >
+                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                      <b>Team Member Settings</b>
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="px-4 pb-3">
+                      <p className="mb-4 text-xs text-muted-foreground">
+                        Optional defaults applied when members join this team. All fields can be overridden per member.
+                      </p>
+                      <FieldGroup>
+                        <FormField
+                          control={form.control}
+                          name="default_team_member_models"
+                          label={labelWithHint(
+                            "Default Model Access",
+                            "Optional. If set, new members can only access these models by default. Must be a subset of the team's models above. Leave empty to give all members access to all team models.",
+                          )}
+                        >
+                          {({ id, value, onChange }) => (
+                            <MultiSelect
+                              id={id}
+                              value={value ?? []}
+                              onValueChange={onChange}
+                              options={(watchedModels ?? info.models ?? []).map((model) => ({
+                                label: model,
+                                value: model,
+                              }))}
+                              placeholder="Leave empty — all team models accessible to every member"
+                            />
+                          )}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_budget"
+                          label={labelWithHint(
+                            "Default Budget (USD)",
+                            "Default spend budget for each member in this team.",
+                          )}
+                        >
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+                          )}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_budget_duration"
+                          label="Default Budget Duration"
+                        >
+                          {({ value, onChange }) => <DurationSelect value={value ?? undefined} onChange={onChange} />}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_key_duration"
+                          label={labelWithHint(
+                            "Default Key Duration (eg: 1d, 1mo)",
+                            "Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)",
+                          )}
+                        >
+                          {({ ref, value, ...field }) => (
+                            <UIInput {...field} ref={ref} value={value ?? ""} placeholder="e.g., 30d" />
+                          )}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_tpm_limit"
+                          label={labelWithHint(
+                            "Default TPM Limit",
+                            "Default tokens per minute limit for each member. Can be overridden per member.",
+                          )}
+                        >
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput
+                              {...field}
+                              ref={ref}
+                              value={value ?? ""}
+                              step={1}
+                              placeholder="e.g., 1000"
+                            />
+                          )}
+                        </FormField>
+                        <FormField
+                          control={form.control}
+                          name="team_member_rpm_limit"
+                          label={labelWithHint(
+                            "Default RPM Limit",
+                            "Default requests per minute limit for each member. Can be overridden per member.",
+                          )}
+                        >
+                          {({ ref, value, ...field }) => (
+                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} placeholder="e.g., 100" />
+                          )}
+                        </FormField>
+                      </FieldGroup>
+                    </CollapsibleContent>
+                  </Collapsible>
+
+                  <FormField control={form.control} name="budget_duration" label="Reset Budget">
+                    {({ id, value, onChange }) => (
+                      <BudgetDurationDropdown
+                        id={id}
+                        placeholder="Never resets"
+                        value={value}
+                        onChange={(next) => onChange(next ?? null)}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
+                    {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
+                  </FormField>
+
+                  <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
+                    {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
+                  </FormField>
+
+                  <Field>
+                    <FieldLabel>Metadata</FieldLabel>
+                    <MetadataKeyValueFields
+                      control={form.control}
+                      getValues={form.getValues}
+                      name="metadata"
+                      schemaFields={teamMetadataSchemaFields}
+                      schemaLoading={isTeamMetadataSchemaLoading}
+                    />
+                    <FieldDescription>
+                      Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {'{"region": "us"}'}.
+                    </FieldDescription>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel>
+                      {labelWithHint(
+                        "Model-Specific Rate Limits",
+                        "Set per-model TPM/RPM limits that apply across the whole team.",
+                      )}
+                    </FieldLabel>
+                    {modelLimitRows.map((row, index) => (
+                      <div key={row.id} className="mb-2 flex items-start gap-2">
+                        <FormField control={form.control} name={`modelLimits.${index}.model`} className="min-w-60">
+                          {({ id, value, onChange }) => (
+                            <SearchSelect
+                              inputId={id}
+                              value={value ?? ""}
+                              onValueChange={onChange}
+                              options={availableRateLimitModels.map((model) => ({
+                                label: model,
+                                value: model,
+                              }))}
+                              placeholder="Select model"
+                            />
+                          )}
+                        </FormField>
+                        <FormField control={form.control} name={`modelLimits.${index}.tpm`}>
+                          {({ ref, value, onChange, ...field }) => (
+                            <NumericalInput
+                              {...field}
+                              ref={ref}
+                              value={value ?? ""}
+                              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                                onChange(event.target.value === "" ? null : Number(event.target.value))
+                              }
+                              placeholder="TPM Limit"
+                              min={0}
+                              step={1}
+                            />
+                          )}
+                        </FormField>
+                        <FormField control={form.control} name={`modelLimits.${index}.rpm`}>
+                          {({ ref, value, onChange, ...field }) => (
+                            <NumericalInput
+                              {...field}
+                              ref={ref}
+                              value={value ?? ""}
+                              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                                onChange(event.target.value === "" ? null : Number(event.target.value))
+                              }
+                              placeholder="RPM Limit"
+                              min={0}
+                              step={1}
+                            />
+                          )}
+                        </FormField>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Remove model limit"
+                          className="mt-1 text-destructive"
+                          onClick={() => removeModelLimit(index)}
+                        >
+                          <CircleMinus className="size-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full border-dashed"
+                      onClick={() => appendModelLimit({ model: "", tpm: null, rpm: null })}
+                    >
+                      <Plus className="size-4" />
+                      Add Model Limit
+                    </Button>
+                  </Field>
+
+                  <FormField
+                    control={form.control}
+                    name="default_estimated_output_tokens"
+                    label={labelWithHint("Estimated Output Tokens", teamEstimateTooltip.estimate)}
+                  >
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput
+                        {...field}
+                        ref={ref}
+                        value={value ?? ""}
+                        min={1}
+                        step={1}
+                        disabled={!canEditTeamEstimates}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="default_estimated_output_tokens_per_model"
+                    label={labelWithHint("Estimated Output Tokens Per Model", teamEstimateTooltip.perModel)}
+                  >
+                    {({ ref, value, ...field }) => (
+                      <Textarea
+                        {...field}
+                        ref={ref}
+                        value={value ?? ""}
+                        rows={4}
+                        placeholder='{"gpt-4": 4096}'
+                        disabled={!canEditTeamEstimates}
+                      />
+                    )}
+                  </FormField>
+
+                  <Field>
+                    <FieldLabel>Router Settings</FieldLabel>
+                    <RouterSettingsAccordion
+                      ref={routerSettingsRef}
+                      accessToken={accessToken || ""}
+                      teamId={teamId}
+                      value={info.router_settings ? { router_settings: info.router_settings } : undefined}
+                    />
+                  </Field>
+
+                  <FormField
+                    control={form.control}
+                    name="guardrails"
+                    label={labelWithDocsHint(
+                      "Guardrails",
+                      "Select which guardrails apply to this team. Global guardrails are enabled by default, uncheck to opt out. Other guardrails are opt-in.",
+                      "https://docs.litellm.ai/docs/proxy/guardrails/quick_start",
+                    )}
+                  >
+                    {({ id, value, onChange }) => (
+                      <GuardrailsSelect
+                        id={id}
+                        value={value ?? []}
+                        onValueChange={onChange}
+                        globalGuardrails={globalGuardrails.map((g) => ({
+                          name: g.guardrail_name,
+                          disabled: Boolean(killSwitchOn),
+                        }))}
+                        otherGuardrails={otherGuardrails.map((g) => ({
+                          name: g.guardrail_name,
+                          disabled: false,
+                        }))}
+                        globalGuardrailNames={globalGuardrailNames}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="disable_global_guardrails"
+                    label={labelWithHint(
+                      "Disable all global guardrails",
+                      "Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.",
+                    )}
+                  >
+                    {({ id, value, onChange }) => (
+                      <Switch
+                        id={id}
+                        checked={value === true}
+                        onCheckedChange={(checked) => {
+                          onChange(checked);
+                          applyKillSwitchToGuardrails(checked);
+                        }}
+                      />
+                    )}
+                  </FormField>
+
+                  {canViewPolicies && (
+                    <FormField
+                      control={form.control}
+                      name="policies"
+                      label={labelWithDocsHint(
+                        "Policies",
+                        "Apply policies to this team to control guardrails and other settings",
+                        "https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies",
+                      )}
+                    >
+                      {({ id, value, onChange }) => (
+                        <TagsInput
+                          id={id}
+                          value={value ?? []}
+                          onValueChange={onChange}
+                          options={policiesList.map((name) => ({ value: name, label: name }))}
+                          placeholder="Select or enter policies"
+                        />
+                      )}
+                    </FormField>
+                  )}
+
+                  <FormField
+                    control={form.control}
+                    name="access_group_ids"
+                    label={labelWithHint(
+                      "Access Groups",
+                      "Assign access groups to this team. Access groups control which models, MCP servers, and agents this team can use",
+                    )}
+                  >
+                    {({ value, onChange }) => (
+                      <AccessGroupSelector
+                        value={value}
+                        onChange={onChange}
+                        placeholder="Select access groups (optional)"
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField control={form.control} name="vector_stores" label="Vector Stores">
+                    {({ value, onChange }) => (
+                      <VectorStoreSelector
+                        onChange={onChange}
+                        value={value}
+                        accessToken={accessToken || ""}
+                        placeholder="Select vector stores"
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="allowed_passthrough_routes"
+                    label={
+                      !premiumUser
+                        ? labelWithHint(
+                            "Allowed Pass Through Routes",
+                            "Premium feature - Upgrade to set allowed pass through routes",
+                          )
+                        : !is_proxy_admin
+                          ? labelWithHint(
+                              "Allowed Pass Through Routes",
+                              "Only proxy admins can set allowed pass through routes",
+                            )
+                          : "Allowed Pass Through Routes"
+                    }
+                  >
+                    {({ value, onChange }) => (
+                      <PassThroughRoutesSelector
+                        value={value}
+                        onChange={onChange}
+                        accessToken={accessToken || ""}
+                        placeholder="Select pass through routes"
+                        disabled={!premiumUser || !is_proxy_admin}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField control={form.control} name="mcp_servers_and_groups" label="MCP Servers / Access Groups">
+                    {({ value, onChange }) => (
+                      <MCPServerSelector
+                        onChange={onChange}
+                        value={value}
+                        accessToken={accessToken || ""}
+                        placeholder="Select MCP servers or access groups (optional)"
+                        allowAllProxyMcpServers={is_proxy_admin}
+                      />
+                    )}
+                  </FormField>
+
+                  <div className="mb-6">
+                    <MCPToolPermissions
+                      accessToken={accessToken || ""}
+                      selectedServers={watchedMcpSelection?.servers || []}
+                      toolPermissions={watchedToolPermissions || {}}
+                      onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+                    />
+                  </div>
+
+                  <FormField control={form.control} name="agents_and_groups" label="Agents / Access Groups">
+                    {({ value, onChange }) => (
+                      <AgentSelector
+                        onChange={onChange}
+                        value={value}
+                        accessToken={accessToken || ""}
+                        placeholder="Select agents or access groups (optional)"
+                      />
+                    )}
+                  </FormField>
+
+                  <Collapsible
+                    open={searchToolSettingsOpen}
+                    onOpenChange={setSearchToolSettingsOpen}
+                    className="mt-4 mb-4 overflow-hidden rounded-lg border"
+                  >
+                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
+                      <b>Search Tool Settings</b>
+                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="px-4 pb-3">
+                      <FormField
+                        control={form.control}
+                        name="object_permission_search_tools"
+                        label={labelWithHint(
+                          "Allowed Search Tools",
+                          "Select which search tools this team can access. Leave empty to allow all search tools.",
+                        )}
+                      >
+                        {({ value, onChange }) => (
+                          <SearchToolSelector
+                            onChange={onChange}
+                            value={value}
+                            accessToken={accessToken || ""}
+                            placeholder="Select search tools (optional, empty = all allowed)"
+                          />
+                        )}
+                      </FormField>
+                    </CollapsibleContent>
+                  </Collapsible>
+
+                  <FormField control={form.control} name="organization_id" label="Organization">
+                    {({ id, value, onChange }) => (
+                      <SearchSelect
+                        inputId={id}
+                        value={value ?? ""}
+                        onValueChange={(next) => onChange(next === "" ? null : next)}
+                        options={userOrganizations.map((org) => ({
+                          value: org.organization_id ?? "",
+                          label: org.organization_alias || org.organization_id || "",
+                        }))}
+                        placeholder="Select an organization"
+                        emptyText="No matching organizations"
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField control={form.control} name="logging_settings" label="Logging Settings">
+                    {({ value, onChange }) => (
+                      <EditLoggingSettings value={(value as unknown[]) ?? []} onChange={onChange} />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="secret_manager_settings"
+                    label="Secret Manager Settings"
+                    description={
+                      premiumUser
+                        ? "Enter secret manager configuration as a JSON object."
+                        : "Premium feature - Upgrade to manage secret manager settings."
+                    }
+                  >
+                    {({ ref, value, ...field }) => (
+                      <Textarea
+                        {...field}
+                        ref={ref}
+                        value={value ?? ""}
+                        rows={6}
+                        placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                        disabled={!premiumUser}
+                      />
+                    )}
+                  </FormField>
+                </FieldGroup>
+
+                <div className="sticky z-10 -inset-x-6 -bottom-6 border-t border-border bg-card p-4 pr-0">
+                  <div className="flex items-center justify-end gap-2">
+                    <Button type="button" variant="outline" onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={isTeamSaving}>
+                      {isTeamSaving ? <UiLoadingSpinner className="size-4" /> : <Save className="size-4" />}
+                      Save Changes
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            </TooltipProvider>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <p className="font-medium">Team Name</p>
+                <div>{info.team_alias}</div>
+              </div>
+              <div>
+                <p className="font-medium">Team ID</p>
+                <div className="font-mono">{info.team_id}</div>
+              </div>
+              <div>
+                <p className="font-medium">Created At</p>
+                <div>{new Date(info.created_at).toLocaleString()}</div>
+              </div>
+              <div>
+                <p className="font-medium">Models</p>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {info.models.map((model, index) => (
+                    <Badge key={index} variant="secondary">
+                      {model}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+              {info.default_team_member_models && info.default_team_member_models.length > 0 && (
+                <div>
+                  <p className="font-medium">Default Member Models</p>
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {info.default_team_member_models.map((model, index) => (
+                      <Badge key={index} variant="secondary">
+                        {model}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
+                <p className="font-medium">Model Aliases</p>
+                {(() => {
+                  const aliasEntries = Object.entries(info.litellm_model_table?.model_aliases ?? {});
+                  if (aliasEntries.length === 0) {
+                    return <div className="text-muted-foreground">No model aliases configured</div>;
+                  }
+                  return (
+                    <div className="mt-1 space-y-1">
+                      {aliasEntries.map(([alias, target]) => (
+                        <div key={alias} className="text-sm">
+                          <span className="font-mono">{alias}</span>
+                          <span className="text-muted-foreground">{" -> "}</span>
+                          <span className="font-mono">{target}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+              <div>
+                <p className="font-medium">Rate Limits</p>
+                <div>TPM: {info.tpm_limit || "Unlimited"}</div>
+                <div>RPM: {info.rpm_limit || "Unlimited"}</div>
+                {(() => {
+                  const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
+                  const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
+                  const models = Array.from(new Set([...Object.keys(modelTpm), ...Object.keys(modelRpm)]));
+                  if (models.length === 0) return null;
+                  return (
+                    <div className="mt-2">
+                      <p className="text-muted-foreground">Per-model limits:</p>
+                      {models.map((m) => (
+                        <div key={m} className="text-xs ml-2">
+                          {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+                <div>Estimated Output Tokens: {info.metadata?.default_estimated_output_tokens ?? "Default"}</div>
+                <div>
+                  Estimated Output Tokens Per Model:{" "}
+                  {info.metadata?.default_estimated_output_tokens_per_model
+                    ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
+                    : "Default"}
+                </div>
+              </div>
+              <div>
+                <p className="font-medium">Team Budget</p>
+                <div>
+                  Max Budget: {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : "No Limit"}
+                </div>
+                <div>
+                  Soft Budget:{" "}
+                  {info.soft_budget !== null && info.soft_budget !== undefined
+                    ? `$${formatNumberWithCommas(info.soft_budget, 4)}`
+                    : "No Limit"}
+                </div>
+                <div>Budget Reset: {info.budget_duration || "Never"}</div>
+                {info.metadata?.soft_budget_alerting_emails &&
+                  Array.isArray(info.metadata.soft_budget_alerting_emails) &&
+                  info.metadata.soft_budget_alerting_emails.length > 0 && (
+                    <div>Soft Budget Alerting Emails: {info.metadata.soft_budget_alerting_emails.join(", ")}</div>
+                  )}
+              </div>
+              <div>
+                <p className="font-medium">
+                  Team Member Settings{" "}
+                  <SimpleTooltip content="These are limits on individual team members">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
+                </p>
+                <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
+                <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
+                <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
+                <div>TPM Limit: {info.team_member_budget_table?.tpm_limit || "No Limit"}</div>
+                <div>RPM Limit: {info.team_member_budget_table?.rpm_limit || "No Limit"}</div>
+              </div>
+              <div>
+                <p className="font-medium">Router Settings</p>
+                {info.router_settings &&
+                Object.values(info.router_settings).some(
+                  (v) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0),
+                ) ? (
+                  <div className="mt-1 space-y-1">
+                    {info.router_settings.routing_strategy && (
+                      <div>
+                        Routing Strategy: <Badge variant="secondary">{info.router_settings.routing_strategy}</Badge>
+                      </div>
+                    )}
+                    {info.router_settings.num_retries != null && (
+                      <div>Number of Retries: {info.router_settings.num_retries}</div>
+                    )}
+                    {info.router_settings.allowed_fails != null && (
+                      <div>Allowed Failures: {info.router_settings.allowed_fails}</div>
+                    )}
+                    {info.router_settings.cooldown_time != null && (
+                      <div>Cooldown Time: {info.router_settings.cooldown_time}s</div>
+                    )}
+                    {info.router_settings.timeout != null && <div>Timeout: {info.router_settings.timeout}s</div>}
+                    {info.router_settings.retry_after != null && (
+                      <div>Retry After: {info.router_settings.retry_after}s</div>
+                    )}
+                    {info.router_settings.fallbacks &&
+                      Array.isArray(info.router_settings.fallbacks) &&
+                      info.router_settings.fallbacks.length > 0 && (
+                        <div>Fallbacks: {info.router_settings.fallbacks.length} configured</div>
+                      )}
+                    {info.router_settings.enable_tag_filtering && <div>Tag Filtering: Enabled</div>}
+                  </div>
+                ) : (
+                  <div className="text-muted-foreground">No router settings configured</div>
+                )}
+              </div>
+              <div>
+                <p className="font-medium">Organization ID</p>
+                <div>{info.organization_id}</div>
+              </div>
+              <div>
+                <p className="font-medium">Status</p>
+                <Badge variant={info.blocked ? "destructive" : "secondary"}>
+                  {info.blocked ? "Blocked" : "Active"}
+                </Badge>
+              </div>
+
+              <ObjectPermissionsView
+                objectPermission={info.object_permission}
+                variant="inline"
+                className="pt-4 border-t border-border"
+                accessToken={accessToken}
+              />
+
+              <GuardrailSettingsView
+                globalGuardrailNames={globalGuardrailNames}
+                teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
+                optedOutGlobalGuardrails={
+                  Array.isArray(info.metadata?.opted_out_global_guardrails)
+                    ? info.metadata.opted_out_global_guardrails
+                    : []
+                }
+                killSwitchOn={initialKillSwitchOn}
+                variant="inline"
+                className="pt-4 border-t border-border"
+              />
+
+              <LoggingSettingsView
+                loggingConfigs={info.metadata?.logging || []}
+                disabledCallbacks={[]}
+                variant="inline"
+                className="pt-4 border-t border-border"
+              />
+
+              {info.metadata?.secret_manager_settings && (
+                <div className="pt-4 border-t border-border">
+                  <p className="font-medium">Secret Manager Settings</p>
+                  <pre className="mt-2 bg-muted p-3 rounded-sm text-xs overflow-x-auto">
+                    {JSON.stringify(info.metadata.secret_manager_settings, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      ),
+    },
+  ].filter((tab) => visibleTabs.includes(tab.key));
+
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -956,15 +1916,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           </Button>
           <h1 className="text-2xl font-semibold">{info.team_alias}</h1>
           <div className="flex items-center">
-            <p className="text-sm text-gray-500 font-mono">{info.team_id}</p>
+            <p className="text-sm text-muted-foreground font-mono">{info.team_id}</p>
             <Button
               variant="ghost"
               size="icon-xs"
               onClick={() => copyToClipboard(info.team_id, "team-id")}
               className={`left-2 z-10 transition-all duration-200 ${
                 copiedStates["team-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                  ? "text-success bg-success/10 border-success/20"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
               }`}
             >
               {copiedStates["team-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
@@ -973,1007 +1933,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <Tabs
-        defaultActiveKey={defaultTabKey}
-        className="mb-4"
-        items={[
-          {
-            key: TEAM_INFO_TAB_KEYS.OVERVIEW,
-            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW],
-            children: (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                <Card className="block p-6">
-                  <p>Budget Status</p>
-                  <div className="mt-2">
-                    <h3 className="text-lg font-medium">${formatNumberWithCommas(info.spend, 2)}</h3>
-                    <p>
-                      of {info.max_budget === null ? "Unlimited" : `$${formatNumberWithCommas(info.max_budget, 2)}`}
-                    </p>
-                    {info.budget_duration && <p className="text-gray-500">Reset: {info.budget_duration}</p>}
-                    <br />
-                    {info.team_member_budget_table && (
-                      <p className="text-gray-500">
-                        Team Member Budget: ${formatNumberWithCommas(info.team_member_budget_table.max_budget, 2)}
-                      </p>
-                    )}
-                  </div>
-                </Card>
-
-                <Card className="block p-6">
-                  <p>Rate Limits</p>
-                  <div className="mt-2">
-                    <p>TPM: {info.tpm_limit || "Unlimited"}</p>
-                    <p>RPM: {info.rpm_limit || "Unlimited"}</p>
-                    {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
-                    {(() => {
-                      const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
-                      const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
-                      const models = Array.from(new Set([...Object.keys(modelTpm), ...Object.keys(modelRpm)]));
-                      if (models.length === 0) return null;
-                      return (
-                        <div className="mt-3">
-                          <p className="text-gray-500">Per-model limits:</p>
-                          {models.map((m) => (
-                            <p key={m} className="text-xs">
-                              {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
-                            </p>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                    <p>Estimated Output Tokens: {info.metadata?.default_estimated_output_tokens ?? "Default"}</p>
-                    <p>
-                      Estimated Output Tokens Per Model:{" "}
-                      {info.metadata?.default_estimated_output_tokens_per_model
-                        ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
-                        : "Default"}
-                    </p>
-                  </div>
-                </Card>
-
-                <Card className="block p-6">
-                  <p>Models</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details).map(
-                      (badge, index) => (
-                        <Tooltip key={`${badge.kind}-${badge.label}-${index}`} title={badge.tooltip}>
-                          <span>
-                            <StatusBadge tone={TEAM_MODEL_BADGE_TONES[badge.kind]} label={badge.label} />
-                          </span>
-                        </Tooltip>
-                      ),
-                    )}
-                  </div>
-                </Card>
-
-                <Card className="block p-6">
-                  <p className="font-semibold text-gray-900">Virtual Keys</p>
-                  <div className="mt-2">
-                    <p>User Keys: {teamData.keys.filter((key) => key.user_id).length}</p>
-                    <p>Service Account Keys: {teamData.keys.filter((key) => !key.user_id).length}</p>
-                    <p className="text-gray-500">Total: {teamData.keys.length}</p>
-                  </div>
-                </Card>
-
-                <ObjectPermissionsView
-                  objectPermission={info.object_permission}
-                  variant="card"
-                  accessToken={accessToken}
-                />
-
-                <Card className="block p-6">
-                  <GuardrailSettingsView
-                    globalGuardrailNames={globalGuardrailNames}
-                    teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
-                    optedOutGlobalGuardrails={
-                      Array.isArray(info.metadata?.opted_out_global_guardrails)
-                        ? info.metadata.opted_out_global_guardrails
-                        : []
-                    }
-                    killSwitchOn={initialKillSwitchOn}
-                    variant="inline"
-                  />
-                </Card>
-
-                <Card className="block p-6">
-                  <p className="font-semibold text-gray-900 mb-3">Policies</p>
-                  {info.policies && info.policies.length > 0 ? (
-                    <div className="space-y-4">
-                      {info.policies.map((policy: string, index: number) => (
-                        <div key={index} className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="secondary">{policy}</Badge>
-                            {loadingPolicies && <p className="text-xs text-gray-400">Loading guardrails...</p>}
-                          </div>
-                          {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
-                            <div className="ml-4 pl-3 border-l-2 border-gray-200">
-                              <p className="text-xs text-gray-500 mb-1">Resolved Guardrails:</p>
-                              <div className="flex flex-wrap gap-1">
-                                {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
-                                  <Badge key={gIndex} variant="secondary">
-                                    {guardrail}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-gray-500">No policies configured</p>
-                  )}
-                </Card>
-
-                <LoggingSettingsView
-                  loggingConfigs={info.metadata?.logging || []}
-                  disabledCallbacks={[]}
-                  variant="card"
-                />
-              </div>
-            ),
-          },
-          {
-            key: TEAM_INFO_TAB_KEYS.MY_USER,
-            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER],
-            children: <MyUserTab teamId={teamId} />,
-          },
-          {
-            key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
-            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS],
-            children: <TeamVirtualKeysTable teamId={teamId} teamAlias={info.team_alias} organization={organization} />,
-          },
-          {
-            key: TEAM_INFO_TAB_KEYS.MEMBERS,
-            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS],
-            children: (
-              <TeamMembersComponent
-                teamData={teamData}
-                canEditTeam={canEditTeam}
-                handleMemberDelete={handleMemberDelete}
-                setSelectedEditMember={setSelectedEditMember}
-                setIsEditMemberModalVisible={setIsEditMemberModalVisible}
-                setIsAddMemberModalVisible={setIsAddMemberModalVisible}
-              />
-            ),
-          },
-          {
-            key: TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
-            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS],
-            children: <MemberPermissions teamId={teamId} accessToken={accessToken} canEditTeam={canEditTeam} />,
-          },
-          {
-            key: TEAM_INFO_TAB_KEYS.SETTINGS,
-            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.SETTINGS],
-            children: (
-              <Card className="block p-6 overflow-y-auto max-h-[65vh]">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-medium">Team Settings</h3>
-                  {canEditTeam && !isEditing && (
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
-                        startEditing();
-                      }}
-                    >
-                      <EditOutlined className="h-4 w-4" />
-                      Edit Settings
-                    </Button>
-                  )}
-                </div>
-
-                {isEditing && isGuardrailsLoading ? (
-                  <div className="p-4">Loading...</div>
-                ) : isEditing ? (
-                  <TooltipProvider>
-                    <form onSubmit={(event) => void form.handleSubmit(onTeamUpdateSubmit)(event)}>
-                      <FieldGroup>
-                        <FormField control={form.control} name="team_alias" label="Team Name">
-                          {({ ref, value, ...field }) => <UIInput {...field} ref={ref} value={value ?? ""} />}
-                        </FormField>
-
-                        <FormField
-                          control={form.control}
-                          name="models"
-                          label="Models"
-                          description="Leave empty to grant no models directly. The team keeps any models granted through its access groups"
-                        >
-                          {({ id, value, onChange }) => (
-                            <ModelSelect
-                              id={id}
-                              value={value ?? []}
-                              onChange={onChange}
-                              teamID={teamId}
-                              organizationID={teamData?.team_info?.organization_id || undefined}
-                              options={{
-                                includeSpecialOptions: true,
-                                includeUserModels: !teamData?.team_info?.organization_id,
-                                showAllProxyModelsOverride:
-                                  isProxyAdminRole(userRole) && !teamData?.team_info?.organization_id,
-                              }}
-                              context="team"
-                              dataTestId="models-select"
-                            />
-                          )}
-                        </FormField>
-
-                        <Field>
-                          <FieldLabel>
-                            {labelWithHint(
-                              "Model Aliases",
-                              "Map a custom alias to an underlying model. Team members can call the alias in API requests instead of the real model name.",
-                            )}
-                          </FieldLabel>
-                          <ModelAliasManager
-                            accessToken={accessToken || ""}
-                            initialModelAliases={teamModelAliases}
-                            onAliasUpdate={setTeamModelAliases}
-                            showExampleConfig={false}
-                          />
-                        </Field>
-
-                        <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-                          {({ ref, value, ...field }) => (
-                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
-                          )}
-                        </FormField>
-
-                        <FormField control={form.control} name="soft_budget" label="Soft Budget (USD)">
-                          {({ ref, value, ...field }) => (
-                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
-                          )}
-                        </FormField>
-
-                        <FormField
-                          control={form.control}
-                          name="soft_budget_alerting_emails"
-                          label={labelWithHint(
-                            "Soft Budget Alerting Emails",
-                            "Comma-separated email addresses to receive alerts when the soft budget is reached",
-                          )}
-                        >
-                          {({ ref, value, ...field }) => (
-                            <UIInput
-                              {...field}
-                              ref={ref}
-                              value={typeof value === "string" ? value : ""}
-                              placeholder="example1@test.com, example2@test.com"
-                            />
-                          )}
-                        </FormField>
-
-                        <Collapsible
-                          open={teamMemberSettingsOpen}
-                          onOpenChange={setTeamMemberSettingsOpen}
-                          className="mt-4 mb-4 overflow-hidden rounded-lg border"
-                        >
-                          <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
-                            <b>Team Member Settings</b>
-                            <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
-                          </CollapsibleTrigger>
-                          <CollapsibleContent className="px-4 pb-3">
-                            <p className="mb-4 text-xs text-gray-500">
-                              Optional defaults applied when members join this team. All fields can be overridden per
-                              member.
-                            </p>
-                            <FieldGroup>
-                              <FormField
-                                control={form.control}
-                                name="default_team_member_models"
-                                label={labelWithHint(
-                                  "Default Model Access",
-                                  "Optional. If set, new members can only access these models by default. Must be a subset of the team's models above. Leave empty to give all members access to all team models.",
-                                )}
-                              >
-                                {({ id, value, onChange }) => (
-                                  <MultiSelect
-                                    id={id}
-                                    value={value ?? []}
-                                    onValueChange={onChange}
-                                    options={(watchedModels ?? info.models ?? []).map((model) => ({
-                                      label: model,
-                                      value: model,
-                                    }))}
-                                    placeholder="Leave empty — all team models accessible to every member"
-                                  />
-                                )}
-                              </FormField>
-                              <FormField
-                                control={form.control}
-                                name="team_member_budget"
-                                label={labelWithHint(
-                                  "Default Budget (USD)",
-                                  "Default spend budget for each member in this team.",
-                                )}
-                              >
-                                {({ ref, value, ...field }) => (
-                                  <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
-                                )}
-                              </FormField>
-                              <FormField
-                                control={form.control}
-                                name="team_member_budget_duration"
-                                label="Default Budget Duration"
-                              >
-                                {({ value, onChange }) => (
-                                  <DurationSelect value={value ?? undefined} onChange={onChange} />
-                                )}
-                              </FormField>
-                              <FormField
-                                control={form.control}
-                                name="team_member_key_duration"
-                                label={labelWithHint(
-                                  "Default Key Duration (eg: 1d, 1mo)",
-                                  "Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)",
-                                )}
-                              >
-                                {({ ref, value, ...field }) => (
-                                  <UIInput {...field} ref={ref} value={value ?? ""} placeholder="e.g., 30d" />
-                                )}
-                              </FormField>
-                              <FormField
-                                control={form.control}
-                                name="team_member_tpm_limit"
-                                label={labelWithHint(
-                                  "Default TPM Limit",
-                                  "Default tokens per minute limit for each member. Can be overridden per member.",
-                                )}
-                              >
-                                {({ ref, value, ...field }) => (
-                                  <NumericalInput
-                                    {...field}
-                                    ref={ref}
-                                    value={value ?? ""}
-                                    step={1}
-                                    placeholder="e.g., 1000"
-                                  />
-                                )}
-                              </FormField>
-                              <FormField
-                                control={form.control}
-                                name="team_member_rpm_limit"
-                                label={labelWithHint(
-                                  "Default RPM Limit",
-                                  "Default requests per minute limit for each member. Can be overridden per member.",
-                                )}
-                              >
-                                {({ ref, value, ...field }) => (
-                                  <NumericalInput
-                                    {...field}
-                                    ref={ref}
-                                    value={value ?? ""}
-                                    step={1}
-                                    placeholder="e.g., 100"
-                                  />
-                                )}
-                              </FormField>
-                            </FieldGroup>
-                          </CollapsibleContent>
-                        </Collapsible>
-
-                        <FormField control={form.control} name="budget_duration" label="Reset Budget">
-                          {({ id, value, onChange }) => (
-                            <BudgetDurationDropdown
-                              id={id}
-                              placeholder="Never resets"
-                              value={value}
-                              onChange={(next) => onChange(next ?? null)}
-                            />
-                          )}
-                        </FormField>
-
-                        <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
-                          {({ ref, value, ...field }) => (
-                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />
-                          )}
-                        </FormField>
-
-                        <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
-                          {({ ref, value, ...field }) => (
-                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />
-                          )}
-                        </FormField>
-
-                        <Field>
-                          <FieldLabel>Metadata</FieldLabel>
-                          <MetadataKeyValueFields
-                            control={form.control}
-                            getValues={form.getValues}
-                            name="metadata"
-                            schemaFields={teamMetadataSchemaFields}
-                            schemaLoading={isTeamMetadataSchemaLoading}
-                          />
-                          <FieldDescription>
-                            Values are saved as text. Enter JSON for typed values, e.g. 3, true, or {'{"region": "us"}'}
-                            .
-                          </FieldDescription>
-                        </Field>
-
-                        <Field>
-                          <FieldLabel>
-                            {labelWithHint(
-                              "Model-Specific Rate Limits",
-                              "Set per-model TPM/RPM limits that apply across the whole team.",
-                            )}
-                          </FieldLabel>
-                          {modelLimitRows.map((row, index) => (
-                            <div key={row.id} className="mb-2 flex items-start gap-2">
-                              <FormField
-                                control={form.control}
-                                name={`modelLimits.${index}.model`}
-                                className="min-w-60"
-                              >
-                                {({ id, value, onChange }) => (
-                                  <SearchSelect
-                                    inputId={id}
-                                    value={value ?? ""}
-                                    onValueChange={onChange}
-                                    options={availableRateLimitModels.map((model) => ({
-                                      label: model,
-                                      value: model,
-                                    }))}
-                                    placeholder="Select model"
-                                  />
-                                )}
-                              </FormField>
-                              <FormField control={form.control} name={`modelLimits.${index}.tpm`}>
-                                {({ ref, value, onChange, ...field }) => (
-                                  <NumericalInput
-                                    {...field}
-                                    ref={ref}
-                                    value={value ?? ""}
-                                    onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                                      onChange(event.target.value === "" ? null : Number(event.target.value))
-                                    }
-                                    placeholder="TPM Limit"
-                                    min={0}
-                                    step={1}
-                                  />
-                                )}
-                              </FormField>
-                              <FormField control={form.control} name={`modelLimits.${index}.rpm`}>
-                                {({ ref, value, onChange, ...field }) => (
-                                  <NumericalInput
-                                    {...field}
-                                    ref={ref}
-                                    value={value ?? ""}
-                                    onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                                      onChange(event.target.value === "" ? null : Number(event.target.value))
-                                    }
-                                    placeholder="RPM Limit"
-                                    min={0}
-                                    step={1}
-                                  />
-                                )}
-                              </FormField>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                aria-label="Remove model limit"
-                                className="mt-1 text-destructive"
-                                onClick={() => removeModelLimit(index)}
-                              >
-                                <CircleMinus className="size-4" />
-                              </Button>
-                            </div>
-                          ))}
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="w-full border-dashed"
-                            onClick={() => appendModelLimit({ model: "", tpm: null, rpm: null })}
-                          >
-                            <Plus className="size-4" />
-                            Add Model Limit
-                          </Button>
-                        </Field>
-
-                        <FormField
-                          control={form.control}
-                          name="default_estimated_output_tokens"
-                          label={labelWithHint("Estimated Output Tokens", teamEstimateTooltip.estimate)}
-                        >
-                          {({ ref, value, ...field }) => (
-                            <NumericalInput
-                              {...field}
-                              ref={ref}
-                              value={value ?? ""}
-                              min={1}
-                              step={1}
-                              disabled={!canEditTeamEstimates}
-                            />
-                          )}
-                        </FormField>
-
-                        <FormField
-                          control={form.control}
-                          name="default_estimated_output_tokens_per_model"
-                          label={labelWithHint("Estimated Output Tokens Per Model", teamEstimateTooltip.perModel)}
-                        >
-                          {({ ref, value, ...field }) => (
-                            <Textarea
-                              {...field}
-                              ref={ref}
-                              value={value ?? ""}
-                              rows={4}
-                              placeholder='{"gpt-4": 4096}'
-                              disabled={!canEditTeamEstimates}
-                            />
-                          )}
-                        </FormField>
-
-                        <Field>
-                          <FieldLabel>Router Settings</FieldLabel>
-                          <RouterSettingsAccordion
-                            ref={routerSettingsRef}
-                            accessToken={accessToken || ""}
-                            teamId={teamId}
-                            value={info.router_settings ? { router_settings: info.router_settings } : undefined}
-                          />
-                        </Field>
-
-                        <FormField
-                          control={form.control}
-                          name="guardrails"
-                          label={labelWithDocsHint(
-                            "Guardrails",
-                            "Select which guardrails apply to this team. Global guardrails are enabled by default, uncheck to opt out. Other guardrails are opt-in.",
-                            "https://docs.litellm.ai/docs/proxy/guardrails/quick_start",
-                          )}
-                        >
-                          {({ id, value, onChange }) => (
-                            <GuardrailsSelect
-                              id={id}
-                              value={value ?? []}
-                              onValueChange={onChange}
-                              globalGuardrails={globalGuardrails.map((g) => ({
-                                name: g.guardrail_name,
-                                disabled: Boolean(killSwitchOn),
-                              }))}
-                              otherGuardrails={otherGuardrails.map((g) => ({
-                                name: g.guardrail_name,
-                                disabled: false,
-                              }))}
-                              globalGuardrailNames={globalGuardrailNames}
-                            />
-                          )}
-                        </FormField>
-
-                        <FormField
-                          control={form.control}
-                          name="disable_global_guardrails"
-                          label={labelWithHint(
-                            "Disable all global guardrails",
-                            "Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.",
-                          )}
-                        >
-                          {({ id, value, onChange }) => (
-                            <Switch
-                              id={id}
-                              checked={value === true}
-                              onCheckedChange={(checked) => {
-                                onChange(checked);
-                                applyKillSwitchToGuardrails(checked);
-                              }}
-                            />
-                          )}
-                        </FormField>
-
-                        {canViewPolicies && (
-                          <FormField
-                            control={form.control}
-                            name="policies"
-                            label={labelWithDocsHint(
-                              "Policies",
-                              "Apply policies to this team to control guardrails and other settings",
-                              "https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies",
-                            )}
-                          >
-                            {({ id, value, onChange }) => (
-                              <TagsInput
-                                id={id}
-                                value={value ?? []}
-                                onValueChange={onChange}
-                                options={policiesList.map((name) => ({ value: name, label: name }))}
-                                placeholder="Select or enter policies"
-                              />
-                            )}
-                          </FormField>
-                        )}
-
-                        <FormField
-                          control={form.control}
-                          name="access_group_ids"
-                          label={labelWithHint(
-                            "Access Groups",
-                            "Assign access groups to this team. Access groups control which models, MCP servers, and agents this team can use",
-                          )}
-                        >
-                          {({ value, onChange }) => (
-                            <AccessGroupSelector
-                              value={value}
-                              onChange={onChange}
-                              placeholder="Select access groups (optional)"
-                            />
-                          )}
-                        </FormField>
-
-                        <FormField control={form.control} name="vector_stores" label="Vector Stores">
-                          {({ value, onChange }) => (
-                            <VectorStoreSelector
-                              onChange={onChange}
-                              value={value}
-                              accessToken={accessToken || ""}
-                              placeholder="Select vector stores"
-                            />
-                          )}
-                        </FormField>
-
-                        <FormField
-                          control={form.control}
-                          name="allowed_passthrough_routes"
-                          label={
-                            !premiumUser
-                              ? labelWithHint(
-                                  "Allowed Pass Through Routes",
-                                  "Premium feature - Upgrade to set allowed pass through routes",
-                                )
-                              : !is_proxy_admin
-                                ? labelWithHint(
-                                    "Allowed Pass Through Routes",
-                                    "Only proxy admins can set allowed pass through routes",
-                                  )
-                                : "Allowed Pass Through Routes"
-                          }
-                        >
-                          {({ value, onChange }) => (
-                            <PassThroughRoutesSelector
-                              value={value}
-                              onChange={onChange}
-                              accessToken={accessToken || ""}
-                              placeholder="Select pass through routes"
-                              disabled={!premiumUser || !is_proxy_admin}
-                            />
-                          )}
-                        </FormField>
-
-                        <FormField
-                          control={form.control}
-                          name="mcp_servers_and_groups"
-                          label="MCP Servers / Access Groups"
-                        >
-                          {({ value, onChange }) => (
-                            <MCPServerSelector
-                              onChange={onChange}
-                              value={value}
-                              accessToken={accessToken || ""}
-                              placeholder="Select MCP servers or access groups (optional)"
-                              allowAllProxyMcpServers={is_proxy_admin}
-                            />
-                          )}
-                        </FormField>
-
-                        <div className="mb-6">
-                          <MCPToolPermissions
-                            accessToken={accessToken || ""}
-                            selectedServers={watchedMcpSelection?.servers || []}
-                            toolPermissions={watchedToolPermissions || {}}
-                            onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
-                          />
-                        </div>
-
-                        <FormField control={form.control} name="agents_and_groups" label="Agents / Access Groups">
-                          {({ value, onChange }) => (
-                            <AgentSelector
-                              onChange={onChange}
-                              value={value}
-                              accessToken={accessToken || ""}
-                              placeholder="Select agents or access groups (optional)"
-                            />
-                          )}
-                        </FormField>
-
-                        <Collapsible
-                          open={searchToolSettingsOpen}
-                          onOpenChange={setSearchToolSettingsOpen}
-                          className="mt-4 mb-4 overflow-hidden rounded-lg border"
-                        >
-                          <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
-                            <b>Search Tool Settings</b>
-                            <ChevronDown className="size-5 shrink-0 text-gray-500 transition-transform group-data-[panel-open]/section:rotate-180" />
-                          </CollapsibleTrigger>
-                          <CollapsibleContent className="px-4 pb-3">
-                            <FormField
-                              control={form.control}
-                              name="object_permission_search_tools"
-                              label={labelWithHint(
-                                "Allowed Search Tools",
-                                "Select which search tools this team can access. Leave empty to allow all search tools.",
-                              )}
-                            >
-                              {({ value, onChange }) => (
-                                <SearchToolSelector
-                                  onChange={onChange}
-                                  value={value}
-                                  accessToken={accessToken || ""}
-                                  placeholder="Select search tools (optional, empty = all allowed)"
-                                />
-                              )}
-                            </FormField>
-                          </CollapsibleContent>
-                        </Collapsible>
-
-                        <FormField control={form.control} name="organization_id" label="Organization">
-                          {({ id, value, onChange }) => (
-                            <SearchSelect
-                              inputId={id}
-                              value={value ?? ""}
-                              onValueChange={(next) => onChange(next === "" ? null : next)}
-                              options={userOrganizations.map((org) => ({
-                                value: org.organization_id ?? "",
-                                label: org.organization_alias || org.organization_id || "",
-                              }))}
-                              placeholder="Select an organization"
-                              emptyText="No matching organizations"
-                            />
-                          )}
-                        </FormField>
-
-                        <FormField control={form.control} name="logging_settings" label="Logging Settings">
-                          {({ value, onChange }) => (
-                            <EditLoggingSettings value={(value as unknown[]) ?? []} onChange={onChange} />
-                          )}
-                        </FormField>
-
-                        <FormField
-                          control={form.control}
-                          name="secret_manager_settings"
-                          label="Secret Manager Settings"
-                          description={
-                            premiumUser
-                              ? "Enter secret manager configuration as a JSON object."
-                              : "Premium feature - Upgrade to manage secret manager settings."
-                          }
-                        >
-                          {({ ref, value, ...field }) => (
-                            <Textarea
-                              {...field}
-                              ref={ref}
-                              value={value ?? ""}
-                              rows={6}
-                              placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
-                              disabled={!premiumUser}
-                            />
-                          )}
-                        </FormField>
-                      </FieldGroup>
-
-                      <div className="sticky z-10 -inset-x-6 -bottom-6 border-t border-gray-200 bg-white p-4 pr-0">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => setIsEditing(false)}
-                            disabled={isTeamSaving}
-                          >
-                            Cancel
-                          </Button>
-                          <Button type="submit" disabled={isTeamSaving}>
-                            {isTeamSaving ? <UiLoadingSpinner className="size-4" /> : <Save className="size-4" />}
-                            Save Changes
-                          </Button>
-                        </div>
-                      </div>
-                    </form>
-                  </TooltipProvider>
-                ) : (
-                  <div className="space-y-4">
-                    <div>
-                      <p className="font-medium">Team Name</p>
-                      <div>{info.team_alias}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Team ID</p>
-                      <div className="font-mono">{info.team_id}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Created At</p>
-                      <div>{new Date(info.created_at).toLocaleString()}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Models</p>
-                      <div className="flex flex-wrap gap-2 mt-1">
-                        {info.models.map((model, index) => (
-                          <Badge key={index} variant="secondary">
-                            {model}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                    {info.default_team_member_models && info.default_team_member_models.length > 0 && (
-                      <div>
-                        <p className="font-medium">Default Member Models</p>
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          {info.default_team_member_models.map((model, index) => (
-                            <Badge key={index} variant="secondary">
-                              {model}
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <div>
-                      <p className="font-medium">Model Aliases</p>
-                      {(() => {
-                        const aliasEntries = Object.entries(info.litellm_model_table?.model_aliases ?? {});
-                        if (aliasEntries.length === 0) {
-                          return <div className="text-gray-400">No model aliases configured</div>;
-                        }
-                        return (
-                          <div className="mt-1 space-y-1">
-                            {aliasEntries.map(([alias, target]) => (
-                              <div key={alias} className="text-sm">
-                                <span className="font-mono">{alias}</span>
-                                <span className="text-gray-400">{" -> "}</span>
-                                <span className="font-mono">{target}</span>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    <div>
-                      <p className="font-medium">Rate Limits</p>
-                      <div>TPM: {info.tpm_limit || "Unlimited"}</div>
-                      <div>RPM: {info.rpm_limit || "Unlimited"}</div>
-                      {(() => {
-                        const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
-                        const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
-                        const models = Array.from(new Set([...Object.keys(modelTpm), ...Object.keys(modelRpm)]));
-                        if (models.length === 0) return null;
-                        return (
-                          <div className="mt-2">
-                            <p className="text-gray-500">Per-model limits:</p>
-                            {models.map((m) => (
-                              <div key={m} className="text-xs ml-2">
-                                {m}: TPM {modelTpm[m] ?? "—"}, RPM {modelRpm[m] ?? "—"}
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })()}
-                      <div>Estimated Output Tokens: {info.metadata?.default_estimated_output_tokens ?? "Default"}</div>
-                      <div>
-                        Estimated Output Tokens Per Model:{" "}
-                        {info.metadata?.default_estimated_output_tokens_per_model
-                          ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
-                          : "Default"}
-                      </div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Team Budget</p>
-                      <div>
-                        Max Budget:{" "}
-                        {info.max_budget !== null ? `$${formatNumberWithCommas(info.max_budget, 4)}` : "No Limit"}
-                      </div>
-                      <div>
-                        Soft Budget:{" "}
-                        {info.soft_budget !== null && info.soft_budget !== undefined
-                          ? `$${formatNumberWithCommas(info.soft_budget, 4)}`
-                          : "No Limit"}
-                      </div>
-                      <div>Budget Reset: {info.budget_duration || "Never"}</div>
-                      {info.metadata?.soft_budget_alerting_emails &&
-                        Array.isArray(info.metadata.soft_budget_alerting_emails) &&
-                        info.metadata.soft_budget_alerting_emails.length > 0 && (
-                          <div>Soft Budget Alerting Emails: {info.metadata.soft_budget_alerting_emails.join(", ")}</div>
-                        )}
-                    </div>
-                    <div>
-                      <p className="font-medium">
-                        Team Member Settings{" "}
-                        <Tooltip title="These are limits on individual team members">
-                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                        </Tooltip>
-                      </p>
-                      <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
-                      <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
-                      <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
-                      <div>TPM Limit: {info.team_member_budget_table?.tpm_limit || "No Limit"}</div>
-                      <div>RPM Limit: {info.team_member_budget_table?.rpm_limit || "No Limit"}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Router Settings</p>
-                      {info.router_settings &&
-                      Object.values(info.router_settings).some(
-                        (v) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0),
-                      ) ? (
-                        <div className="mt-1 space-y-1">
-                          {info.router_settings.routing_strategy && (
-                            <div>
-                              Routing Strategy:{" "}
-                              <Badge variant="secondary">{info.router_settings.routing_strategy}</Badge>
-                            </div>
-                          )}
-                          {info.router_settings.num_retries != null && (
-                            <div>Number of Retries: {info.router_settings.num_retries}</div>
-                          )}
-                          {info.router_settings.allowed_fails != null && (
-                            <div>Allowed Failures: {info.router_settings.allowed_fails}</div>
-                          )}
-                          {info.router_settings.cooldown_time != null && (
-                            <div>Cooldown Time: {info.router_settings.cooldown_time}s</div>
-                          )}
-                          {info.router_settings.timeout != null && <div>Timeout: {info.router_settings.timeout}s</div>}
-                          {info.router_settings.retry_after != null && (
-                            <div>Retry After: {info.router_settings.retry_after}s</div>
-                          )}
-                          {info.router_settings.fallbacks &&
-                            Array.isArray(info.router_settings.fallbacks) &&
-                            info.router_settings.fallbacks.length > 0 && (
-                              <div>Fallbacks: {info.router_settings.fallbacks.length} configured</div>
-                            )}
-                          {info.router_settings.enable_tag_filtering && <div>Tag Filtering: Enabled</div>}
-                        </div>
-                      ) : (
-                        <div className="text-gray-400">No router settings configured</div>
-                      )}
-                    </div>
-                    <div>
-                      <p className="font-medium">Organization ID</p>
-                      <div>{info.organization_id}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Status</p>
-                      <Badge variant={info.blocked ? "destructive" : "secondary"}>
-                        {info.blocked ? "Blocked" : "Active"}
-                      </Badge>
-                    </div>
-
-                    <ObjectPermissionsView
-                      objectPermission={info.object_permission}
-                      variant="inline"
-                      className="pt-4 border-t border-gray-200"
-                      accessToken={accessToken}
-                    />
-
-                    <GuardrailSettingsView
-                      globalGuardrailNames={globalGuardrailNames}
-                      teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
-                      optedOutGlobalGuardrails={
-                        Array.isArray(info.metadata?.opted_out_global_guardrails)
-                          ? info.metadata.opted_out_global_guardrails
-                          : []
-                      }
-                      killSwitchOn={initialKillSwitchOn}
-                      variant="inline"
-                      className="pt-4 border-t border-gray-200"
-                    />
-
-                    <LoggingSettingsView
-                      loggingConfigs={info.metadata?.logging || []}
-                      disabledCallbacks={[]}
-                      variant="inline"
-                      className="pt-4 border-t border-gray-200"
-                    />
-
-                    {info.metadata?.secret_manager_settings && (
-                      <div className="pt-4 border-t border-gray-200">
-                        <p className="font-medium">Secret Manager Settings</p>
-                        <pre className="mt-2 bg-gray-50 p-3 rounded-sm text-xs overflow-x-auto">
-                          {JSON.stringify(info.metadata.secret_manager_settings, null, 2)}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </Card>
-            ),
-          },
-        ].filter((tab) => visibleTabs.includes(tab.key))}
-      />
+      <Tabs defaultValue={defaultTabKey} className="mb-4" onValueChange={onTabChange}>
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          {tabItems.map(({ key, label }) => (
+            <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
+              {label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {tabItems.map(({ key, children }) => (
+          <TabsContent key={key} value={key} keepMounted={hasVisited(key)}>
+            {children}
+          </TabsContent>
+        ))}
+      </Tabs>
 
       <MemberModal
         visible={isEditMemberModalVisible}
@@ -1995,9 +1968,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               label: (
                 <span>
                   Team Member Budget (USD){" "}
-                  <Tooltip title="Maximum amount in USD this member can spend within this team. This is separate from any global user budget limits">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
+                  <SimpleTooltip content="Maximum amount in USD this member can spend within this team. This is separate from any global user budget limits">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
                 </span>
               ),
               type: "numerical" as const,
@@ -2010,9 +1983,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               label: (
                 <span>
                   Budget Reset Period{" "}
-                  <Tooltip title="How often this member's budget resets within the team. Leave unset and the budget never resets.">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
+                  <SimpleTooltip content="How often this member's budget resets within the team. Leave unset and the budget never resets.">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
                 </span>
               ),
               type: "budget-duration" as const,
@@ -2022,9 +1995,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               label: (
                 <span>
                   Team Member TPM Limit{" "}
-                  <Tooltip title="Maximum tokens per minute this member can use within this team. This is separate from any global user TPM limit">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
+                  <SimpleTooltip content="Maximum tokens per minute this member can use within this team. This is separate from any global user TPM limit">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
                 </span>
               ),
               type: "numerical" as const,
@@ -2037,9 +2010,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               label: (
                 <span>
                   Team Member RPM Limit{" "}
-                  <Tooltip title="Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
+                  <SimpleTooltip content="Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
                 </span>
               ),
               type: "numerical" as const,
@@ -2052,9 +2025,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               label: (
                 <span>
                   Allowed Models{" "}
-                  <Tooltip title="Models this member can access within this team. Leave empty to inherit all team models.">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
+                  <SimpleTooltip content="Models this member can access within this team. Leave empty to inherit all team models.">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
                 </span>
               ),
               type: "multi-select" as const,

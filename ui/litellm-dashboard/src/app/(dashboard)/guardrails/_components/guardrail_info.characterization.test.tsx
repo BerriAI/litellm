@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailInfoView from "./guardrail_info";
+import { chooseSelectOption } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailInfo: vi.fn(),
@@ -152,8 +153,11 @@ describe("GuardrailInfoView update payload characterization", () => {
     renderView();
     await openEditor(user);
 
-    await user.click(screen.getByLabelText("Skip system messages in guardrail"));
-    await user.click(await screen.findByText("Yes — exclude from guardrail scan"));
+    await chooseSelectOption(
+      user,
+      screen.getByLabelText("Skip system messages in guardrail"),
+      /exclude from guardrail scan/,
+    );
     await saveChanges(user);
 
     await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
