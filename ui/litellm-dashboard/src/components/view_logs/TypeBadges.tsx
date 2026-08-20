@@ -72,7 +72,7 @@ export const McpBadge = ({ count }: { count?: number }) => (
 );
 
 export const AgentBadge = ({ count }: { count?: number }) => (
-  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-[11px] font-medium whitespace-nowrap">
+  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-[11px] font-medium whitespace-nowrap dark:bg-violet-950 dark:text-violet-300 dark:border-violet-800">
     <AgentIcon />
     {count != null ? count : "Agent"}
   </span>

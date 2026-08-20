@@ -212,7 +212,9 @@ export function MCPServerPermissions({
                   <div
                     onClick={() => toolCount > 0 && toggleToolsetExpansion(toolsetId)}
                     className={`flex items-center gap-3 py-2 px-3 rounded-lg border border-purple-200 transition-all ${
-                      toolCount > 0 ? "cursor-pointer hover:bg-purple-50 hover:border-purple-300" : "bg-card"
+                      toolCount > 0
+                        ? "cursor-pointer hover:bg-purple-50 hover:border-purple-300 dark:hover:bg-purple-950 dark:hover:border-purple-700"
+                        : "bg-card"
                     }`}
                   >
                     <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -220,7 +222,7 @@ export function MCPServerPermissions({
                       <span className="text-sm font-medium text-foreground truncate">
                         {detail?.toolset_name ?? toolsetId}
                       </span>
-                      <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded-sm uppercase tracking-wide shrink-0">
+                      <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded-sm uppercase tracking-wide shrink-0 dark:text-purple-300 dark:bg-purple-950 dark:border-purple-800">
                         Toolset
                       </span>
                     </div>
@@ -243,7 +245,7 @@ export function MCPServerPermissions({
                         {detail.tools.map((tool, toolIndex) => (
                           <span
                             key={toolIndex}
-                            className="inline-flex items-center px-2.5 py-1 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 text-xs font-medium"
+                            className="inline-flex items-center px-2.5 py-1 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 text-xs font-medium dark:bg-purple-950 dark:border-purple-800 dark:text-purple-300"
                           >
                             <span className="text-purple-400 mr-1 text-[10px]">{tool.server_id.slice(0, 6)}…</span>
                             {tool.tool_name}

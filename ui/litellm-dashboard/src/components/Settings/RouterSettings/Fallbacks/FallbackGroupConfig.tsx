@@ -93,7 +93,7 @@ export function FallbackGroupConfig({
 
       {/* Visual Connection */}
       <div className="flex items-center justify-center -my-4 z-10">
-        <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-xs">
+        <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-xs dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-900">
           <ArrowDown className="w-4 h-4" />
           IF FAILS, TRY...
         </div>
@@ -146,7 +146,7 @@ export function FallbackGroupConfig({
                     className="group flex items-center justify-between p-3 bg-card rounded-lg border border-border hover:border-indigo-300 hover:shadow-xs transition-all"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="flex items-center justify-center w-6 h-6 rounded-sm bg-muted text-muted-foreground group-hover:text-indigo-500 group-hover:bg-indigo-50">
+                      <div className="flex items-center justify-center w-6 h-6 rounded-sm bg-muted text-muted-foreground group-hover:text-indigo-500 group-hover:bg-indigo-50 dark:group-hover:text-indigo-300 dark:group-hover:bg-indigo-950">
                         <span className="text-xs font-bold">{index + 1}</span>
                       </div>
                       <div>

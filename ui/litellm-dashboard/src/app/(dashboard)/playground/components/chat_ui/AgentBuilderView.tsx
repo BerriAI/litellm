@@ -515,7 +515,7 @@ export default function AgentBuilderView({
                 <button
                   type="button"
                   onClick={handleAddAgent}
-                  className="mb-1 w-full rounded-md border border-dashed border-border px-3 py-2 text-left text-sm text-muted-foreground hover:border-info hover:bg-blue-50/50 hover:text-foreground"
+                  className="mb-1 w-full rounded-md border border-dashed border-border px-3 py-2 text-left text-sm text-muted-foreground hover:border-info hover:bg-info/10 hover:text-foreground"
                 >
                   <Plus className="mr-1 inline size-4" /> New agent
                 </button>
