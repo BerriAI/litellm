@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { OAUTH_FLOW } from "@/components/mcp_tools/types";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
 import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
 import {
   numberControl,
@@ -79,7 +79,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
 }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
   const requiredWhenCreating = (message: string) =>
-    isEditing ? undefined : { validate: { required: antdRequired(message) } };
+    isEditing ? undefined : { validate: { required: requiredRule(message) } };
 
   return (
     <>

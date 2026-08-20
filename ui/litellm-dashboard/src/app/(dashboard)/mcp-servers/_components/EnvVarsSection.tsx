@@ -12,7 +12,7 @@ import {
   useMountedName,
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
 import { matchesPattern, selectControl, selectTriggerControl, textControl } from "./mcpFieldRules";
 import { listControl } from "./mcpFormStore";
 
@@ -80,7 +80,7 @@ const EnvVarsSection: React.FC = () => {
               className="mb-0 flex-1"
               rules={{
                 validate: {
-                  required: antdRequired("Variable name is required"),
+                  required: requiredRule("Variable name is required"),
                   pattern: matchesPattern(
                     VARIABLE_NAME_PATTERN,
                     "Use letters, digits, underscores; cannot start with a digit.",

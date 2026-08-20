@@ -4,7 +4,6 @@ import "./globals.css";
 
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 
-import AntdGlobalProvider from "@/contexts/AntdGlobalProvider";
 import { AuthProvider } from "@/contexts/AuthContext";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
 import { Toaster } from "@/components/ui/sonner";
@@ -27,10 +26,8 @@ export default function RootLayout({
       <body className={inter.className}>
         <NuqsAdapter>
           <ReactQueryProvider>
-            <AntdGlobalProvider>
-              <AuthProvider>{children}</AuthProvider>
-              <Toaster />
-            </AntdGlobalProvider>
+            <AuthProvider>{children}</AuthProvider>
+            <Toaster />
           </ReactQueryProvider>
         </NuqsAdapter>
       </body>
