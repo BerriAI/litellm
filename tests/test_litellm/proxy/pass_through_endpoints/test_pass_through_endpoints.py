@@ -4994,6 +4994,212 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
     assert all(call.kwargs.get("code") != 1011 for call in websocket.close.await_args_list)
 
 
+class ClosingUpstreamWebSocket:
+    def __init__(self, close_exc: Exception):
+        self._close_exc = close_exc
+        self.close = AsyncMock()
+        self.send = AsyncMock()
+
+    async def recv(self, decode: bool = True):
+        raise self._close_exc
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+class RecordingUpstreamWebSocket:
+    def __init__(self):
+        self.close = AsyncMock()
+        self.send = AsyncMock()
+
+    async def recv(self, decode: bool = True):
+        await asyncio.Event().wait()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+def _client_websocket(receive):
+    from starlette.websockets import WebSocketState
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_text = AsyncMock()
+    websocket.send_bytes = AsyncMock()
+    websocket.receive = receive
+    websocket.headers = {}
+    websocket.client_state = WebSocketState.CONNECTED
+    websocket.application_state = WebSocketState.CONNECTED
+
+    def _mark_closed(*args, **kwargs):
+        websocket.application_state = WebSocketState.DISCONNECTED
+
+    websocket.close = AsyncMock(side_effect=_mark_closed)
+    return websocket
+
+
+@contextmanager
+def _patched_websocket_passthrough_environment(upstream_ws):
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+            return_value=FakeUpstreamConnect(upstream_ws),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER"
+        ) as mock_worker,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock()
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: async_coroutine.close()
+        )
+        yield
+
+
+async def _pending_receive():
+    await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_relays_upstream_policy_close_to_client():
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    upstream_reason = "Publisher Model `projects/p/locations/global/publishers/google/models/nope` was not found"
+    upstream_ws = ClosingUpstreamWebSocket(
+        ConnectionClosedError(
+            rcvd=Close(1008, upstream_reason),
+            sent=Close(1008, ""),
+            rcvd_then_sent=True,
+        )
+    )
+    websocket = _client_websocket(_pending_receive)
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_keeps_normal_upstream_close_normal():
+    from websockets.exceptions import ConnectionClosedOK
+    from websockets.frames import Close
+
+    upstream_ws = ClosingUpstreamWebSocket(
+        ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+    )
+    websocket = _client_websocket(_pending_receive)
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    websocket.close.assert_awaited_once_with()
+
+
+async def _run_setup_rewrite_passthrough(setup_model: str, llm_router) -> str:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_setup_model_rewriter,
+    )
+
+    upstream_ws = RecordingUpstreamWebSocket()
+    setup_frame = json.dumps({"setup": {"model": setup_model, "generationConfig": {"responseModalities": ["TEXT"]}}})
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "text": setup_frame},
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+            setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+                vertex_project="proj-db",
+                vertex_location="global",
+                llm_router=llm_router,
+            ),
+        )
+
+    upstream_ws.send.assert_awaited_once()
+    return upstream_ws.send.await_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "setup_model",
+    ["gemini-live-2.5-flash", "publishers/google/models/gemini-live-2.5-flash"],
+)
+async def test_websocket_passthrough_rewrites_setup_model_to_full_resource(setup_model):
+    sent_frame = await _run_setup_rewrite_passthrough(setup_model, llm_router=None)
+
+    sent_setup = json.loads(sent_frame)["setup"]
+    assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+    assert sent_setup["generationConfig"] == {"responseModalities": ["TEXT"]}
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_rewrites_gateway_alias_setup_model():
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-live",
+                "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"},
+            }
+        ]
+    )
+
+    sent_frame = await _run_setup_rewrite_passthrough("gemini-live", llm_router=llm_router)
+
+    sent_setup = json.loads(sent_frame)["setup"]
+    assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_leaves_full_resource_setup_model_untouched():
+    full_resource = "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash-live-preview-04-09"
+
+    sent_frame = await _run_setup_rewrite_passthrough(full_resource, llm_router=None)
+
+    assert json.loads(sent_frame)["setup"]["model"] == full_resource
+    assert sent_frame == json.dumps(
+        {"setup": {"model": full_resource, "generationConfig": {"responseModalities": ["TEXT"]}}}
+    )
+
+
 def _passthrough_kwargs_for_reservation(
     user_api_key_dict: UserAPIKeyAuth, parsed_body: Optional[dict] = None
 ) -> dict:

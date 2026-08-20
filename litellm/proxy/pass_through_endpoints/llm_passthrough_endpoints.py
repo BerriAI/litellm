@@ -9,8 +9,9 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 import json
 import os
 import re
+from collections.abc import Callable
 from types import MappingProxyType
-from typing import Annotated, Any, Final, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -55,10 +56,14 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
+from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 vertex_llm_base: Final = VertexBase()
 router: Final = APIRouter()
@@ -2373,6 +2378,89 @@ async def cursor_proxy_route(
     return received_value
 
 
+VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON: Final = (
+    "Vertex AI auth failed: set a use_in_pass_through vertex model, default_vertex_config, or DEFAULT_VERTEXAI_* env"
+)
+
+VERTEX_PUBLISHER_MODEL_PREFIX: Final = "publishers/google/models/"
+
+
+def _get_llm_router() -> "Router | None":
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+def _resolve_vertex_live_credentials(
+    vertex_project: str | None,
+    vertex_location: str | None,
+    model: str | None,
+) -> VertexPassThroughCredentials | None:
+    """
+    Resolution order: credentials registered for the requested project/location, then any DB model entry
+    flagged ``use_in_pass_through``, then ``default_vertex_config`` and the ``DEFAULT_VERTEXAI_*`` env vars
+    """
+    keyed: Final = passthrough_endpoint_router.get_vertex_credentials(
+        project_id=vertex_project,
+        location=vertex_location,
+    )
+    if keyed is not None and keyed.vertex_project is not None:
+        return keyed
+    from_deployments: Final = passthrough_endpoint_router.get_vertex_credentials_from_router_deployments(model=model)
+    if from_deployments is not None:
+        return from_deployments
+    if keyed is not None:
+        return keyed
+    passthrough_endpoint_router.set_default_vertex_config()
+    return passthrough_endpoint_router.get_vertex_credentials(
+        project_id=vertex_project,
+        location=vertex_location,
+    )
+
+
+def _build_vertex_live_setup_model_rewriter(
+    vertex_project: str | None,
+    vertex_location: str | None,
+    llm_router: "Router | None",
+) -> Callable[[str], str] | None:
+    """
+    Rewrite the ``setup`` frame's model into the full Vertex resource path the Live API requires.
+
+    Clients address the gateway the way they address LiteLLM (bare id or model alias); Vertex reads anything
+    that is not a ``projects/...`` path as a project name and closes the socket
+    """
+    if vertex_project is None or vertex_location is None:
+        return None
+
+    def rewrite(setup_model: str) -> str:
+        if setup_model.startswith("projects/"):
+            return setup_model
+        aliased: Final = _resolve_alias_to_upstream_model(setup_model, llm_router)
+        return (
+            f"projects/{vertex_project}/locations/{vertex_location}/"
+            f"{VERTEX_PUBLISHER_MODEL_PREFIX}{aliased.removeprefix(VERTEX_PUBLISHER_MODEL_PREFIX)}"
+        )
+
+    return rewrite
+
+
+def _resolve_alias_to_upstream_model(setup_model: str, llm_router: "Router | None") -> str:
+    if llm_router is None:
+        return setup_model
+    upstream: Final = next(
+        (
+            deployment["litellm_params"]["model"]
+            for deployment in (llm_router.get_model_list() or ())
+            if deployment.get("model_name") == setup_model
+        ),
+        None,
+    )
+    if upstream is None:
+        return setup_model
+    _, provider, _, _ = litellm.get_llm_provider(model=upstream)
+    return upstream.removeprefix(f"{provider}/")
+
+
 async def vertex_ai_live_websocket_passthrough(
     websocket: WebSocket,
     model: str | None = None,
@@ -2396,51 +2484,40 @@ async def vertex_ai_live_websocket_passthrough(
     await websocket.accept()
 
     incoming_headers: Final = dict(websocket.headers)
-    vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
-        project_id=vertex_project,
-        location=vertex_location,
+    vertex_credentials_config: Final = _resolve_vertex_live_credentials(
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        model=model,
     )
 
-    if vertex_credentials_config is None:
-        # Attempt to load defaults from environment/config if not already initialised
-        passthrough_endpoint_router.set_default_vertex_config()
-        vertex_credentials_config = passthrough_endpoint_router.get_vertex_credentials(
-            project_id=vertex_project,
-            location=vertex_location,
-        )
-
-    resolved_project = vertex_project
-    resolved_location: str | None = vertex_location
-    credentials_value: str | None = None
-
-    if vertex_credentials_config is not None:
-        resolved_project = resolved_project or vertex_credentials_config.vertex_project
-        temp_location: Final = resolved_location or vertex_credentials_config.vertex_location
-        # Ensure resolved_location is a string
-        if isinstance(temp_location, dict) or temp_location is not None:
-            resolved_location = str(temp_location)
-        else:
-            resolved_location = None
-        credentials_value = (
-            str(vertex_credentials_config.vertex_credentials)
-            if vertex_credentials_config.vertex_credentials is not None
-            else None
-        )
+    configured_project: Final = vertex_project or (
+        vertex_credentials_config.vertex_project if vertex_credentials_config is not None else None
+    )
+    configured_location: Final = vertex_location or (
+        vertex_credentials_config.vertex_location if vertex_credentials_config is not None else None
+    )
+    credentials_value: Final = (
+        str(vertex_credentials_config.vertex_credentials)
+        if vertex_credentials_config is not None and vertex_credentials_config.vertex_credentials is not None
+        else None
+    )
 
     try:
-        resolved_location = resolved_location or (vertex_llm_base.get_default_vertex_location())
-        if model:
-            resolved_location = vertex_llm_base.get_vertex_region(
-                vertex_region=resolved_location,
+        resolved_location: Final = (
+            vertex_llm_base.get_vertex_region(
+                vertex_region=configured_location or vertex_llm_base.get_default_vertex_location(),
                 model=model,
             )
+            if model
+            else configured_location or vertex_llm_base.get_default_vertex_location()
+        )
 
         (
             access_token,
             resolved_project,
         ) = await vertex_llm_base._ensure_access_token_async(
             credentials=credentials_value,
-            project_id=resolved_project,
+            project_id=configured_project,
             custom_llm_provider="vertex_ai_beta",
         )
     except Exception as e:
@@ -2453,7 +2530,7 @@ async def vertex_ai_live_websocket_passthrough(
                 request_data={},
             )
         if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close(code=1011, reason="Vertex AI authentication failed")
+            await websocket.close(code=1011, reason=VERTEX_LIVE_UNCONFIGURED_CLOSE_REASON)
         return
 
     host_location: Final = resolved_location or vertex_llm_base.get_default_vertex_location()
@@ -2485,6 +2562,11 @@ async def vertex_ai_live_websocket_passthrough(
         forward_headers=False,
         endpoint="/vertex_ai/live",
         accept_websocket=False,
+        setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+            vertex_project=resolved_project,
+            vertex_location=resolved_location,
+            llm_router=_get_llm_router(),
+        ),
     )
 
 

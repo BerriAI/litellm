@@ -3887,3 +3887,104 @@ class TestComprehendMedicalProxyRoute:
                 user_api_key_dict=Mock(),
             )
         assert exc_info.value.status_code == 400
+
+
+class TestVertexAILiveWebsocketPassthrough:
+    def _websocket(self):
+        from starlette.websockets import WebSocketState
+
+        websocket = MagicMock()
+        websocket.accept = AsyncMock()
+        websocket.close = AsyncMock()
+        websocket.headers = {}
+        websocket.client_state = WebSocketState.CONNECTED
+        return websocket
+
+    def _clear_vertex_env(self, monkeypatch):
+        monkeypatch.delenv("DEFAULT_VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("DEFAULT_VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("DEFAULT_GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_uses_db_deployment_credentials_without_query_params(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "service_account"}',
+                    },
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
+        )
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        ensure_token.assert_awaited_once_with(
+            credentials='{"type": "service_account"}',
+            project_id="proj-db",
+            custom_llm_provider="vertex_ai_beta",
+        )
+        passthrough_kwargs = ws_passthrough.await_args.kwargs
+        assert passthrough_kwargs["target"] == (
+            "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+        )
+        assert passthrough_kwargs["custom_headers"]["Authorization"] == "Bearer token-abc"
+        rewriter = passthrough_kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+        )
+        websocket.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_credential_failure_close_names_configuration_options(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
+        )
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(side_effect=Exception("Unable to find your credentials"))
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        ):
+            mock_proxy_logging.post_call_failure_hook = AsyncMock()
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1011
+        assert "use_in_pass_through" in close_kwargs["reason"]
+        assert "default_vertex_config" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
