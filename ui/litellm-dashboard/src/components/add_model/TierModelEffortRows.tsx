@@ -8,12 +8,14 @@ const PROVIDER_DEFAULT = "__provider_default__";
 
 const asEffort = (params: TierModelParams | undefined): ReasoningEffort | undefined => {
   const stored = params?.reasoning_effort;
+  if (typeof stored !== "string") return undefined;
   return REASONING_EFFORT_OPTIONS.find((option) => option === stored);
 };
 
 interface TierModelEffortRowsProps {
   tierLabel: string;
   models: string[];
+  reasoningModels: ReadonlySet<string>;
   paramsByModel: Record<string, TierModelParams> | undefined;
   onEffortChange: (model: string, effort: ReasoningEffort | undefined) => void;
 }
@@ -21,10 +23,14 @@ interface TierModelEffortRowsProps {
 const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = ({
   tierLabel,
   models,
+  reasoningModels,
   paramsByModel,
   onEffortChange,
 }) => {
-  if (models.length === 0) return null;
+  const shown = models.filter(
+    (model) => reasoningModels.has(model) || Object.keys(paramsByModel?.[model] ?? {}).length > 0,
+  );
+  if (shown.length === 0) return null;
   return (
     <div className="mt-2 space-y-1">
       <div className="flex items-center gap-1">
@@ -35,7 +41,7 @@ const TierModelEffortRows: React.FC<TierModelEffortRowsProps> = ({
           <Info className="size-3 text-muted-foreground/70" />
         </SimpleTooltip>
       </div>
-      {models.map((model) => (
+      {shown.map((model) => (
         <div key={model} className="flex items-center justify-between gap-2">
           <span className="truncate text-xs">{model}</span>
           <Select

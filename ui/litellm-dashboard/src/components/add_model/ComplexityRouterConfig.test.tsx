@@ -8,9 +8,9 @@ vi.mock(
 );
 
 const mockModelInfo = [
-  { model_group: "gpt-4", mode: "chat" },
+  { model_group: "gpt-4", mode: "chat", supports_reasoning: true },
   { model_group: "gpt-3.5-turbo", mode: "chat" },
-  { model_group: "claude-3-opus", mode: "chat" },
+  { model_group: "claude-3-opus", mode: "chat", supports_reasoning: true },
   { model_group: "text-embedding-3-small", mode: "embedding" },
 ] as any[];
 
@@ -899,5 +899,28 @@ describe("ComplexityRouterConfig per-model reasoning effort", () => {
     await user.click(screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" }));
     await user.click(await screen.findByRole("option", { name: "Default" }));
     expect(onChange).toHaveBeenCalledWith({ ...defaultValue, tier_model_params: undefined });
+  });
+});
+
+describe("ComplexityRouterConfig reasoning effort gating", () => {
+  it("offers no effort select for a model group without reasoning support", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(
+      screen.queryByRole("combobox", { name: "Reasoning effort for gpt-3.5-turbo in the Simple tier" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // A stored effort on a model the group info calls non-reasoning must stay visible, or the
+  // operator has no way to clear it.
+  it("keeps the select for a non-reasoning model that already has a stored effort", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tier_model_params: { SIMPLE: { "gpt-3.5-turbo": { reasoning_effort: "low" } } } }}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort for gpt-3.5-turbo in the Simple tier" }),
+    ).toHaveTextContent("low");
   });
 });

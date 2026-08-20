@@ -244,6 +244,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
+  const reasoningModels = new Set(
+    modelInfo.filter((model) => model.supports_reasoning).map((model) => model.model_group),
+  );
+
   const modelOptions = modelInfo
     .filter((model) => model.mode !== "embedding")
     .map((model) => ({
@@ -354,6 +358,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <TierModelEffortRows
                     tierLabel={label}
                     models={value.tiers[tier]}
+                    reasoningModels={reasoningModels}
                     paramsByModel={value.tier_model_params?.[tier]}
                     onEffortChange={(model, effort) => handleTierModelEffortChange(tier, model, effort)}
                   />

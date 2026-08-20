@@ -3,7 +3,6 @@ import type { ComplexityTier } from "./KeywordTierRules";
 
 export type TierModelParams = Record<string, unknown>;
 
-/** tier name -> model name -> litellm_params sent with requests that tier routes to that model. */
 export type TierModelParamsByTier = Record<string, Record<string, TierModelParams>>;
 
 export const REASONING_EFFORT_OPTIONS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -67,9 +66,8 @@ export const hydrateTierModelParams = (
 };
 
 /**
- * Emits the sibling `tier_model_configs` wire shape. Models deselected from a rendered tier are
- * pruned; tiers this editor does not render pass through untouched. Undefined when empty, so an
- * untouched router keeps no stale key.
+ * Undefined when empty rather than `{}`, so an untouched router keeps the key out of its payload;
+ * tiers this editor does not render pass through rather than being dropped now the key is managed.
  */
 export const serializeTierModelConfigs = (
   tiers: ComplexityTiers,
