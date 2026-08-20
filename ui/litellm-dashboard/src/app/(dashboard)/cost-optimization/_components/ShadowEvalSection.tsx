@@ -6,7 +6,7 @@ import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useAutoRouters, usePlainModelGroups } from "@/app/(dashboard)/hooks/models/useModels";
-import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
+import { PaginatedMultiSelect } from "@/components/shared/PaginatedMultiSelect";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,13 @@ const shadowedKeysLabel = (job: ShadowEvalJob): string =>
   job.keys.length === 1 ? shadowedKeyLabel(job.keys[0]) : `${job.keys.length} keys`;
 
 const totalBudget = (job: ShadowEvalJob): number => job.keys.reduce((sum, key) => sum + key.max_turns, 0);
+
+const keySpent = (key: ShadowEvalJobKey): boolean => key.attempt_count != null && key.attempt_count >= key.max_turns;
+
+const keyStatus = (job: ShadowEvalJob, key: ShadowEvalJobKey): string => {
+  if (job.status === "completed" || (key.stopped_at == null && keySpent(key))) return "completed";
+  return key.stopped_at != null ? "stopped" : "running";
+};
 
 const jobHeadline = (job: ShadowEvalJob): React.ReactNode =>
   job.direction === "reverse" ? (
@@ -175,6 +182,55 @@ const VerdictBar: React.FC<{ direction: ShadowEvalDirection; results: NonNullabl
   );
 };
 
+const KeyTable: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
+  const slices = new Map((job.results?.by_key ?? []).map((slice) => [slice.group, slice]));
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Key</TableHead>
+          <TableHead>Status</TableHead>
+          {["Budget used", "Router wins", `${otherArmLabel(job.direction)} wins`].map((label) => (
+            <TableHead key={label} className="text-right">
+              {label}
+            </TableHead>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {job.keys.map((key) => {
+          const slice = slices.get(key.api_key_id);
+          return (
+            <TableRow key={key.api_key_id}>
+              <TableCell className="font-medium text-foreground">{shadowedKeyLabel(key)}</TableCell>
+              <TableCell>
+                <StatusBadge status={keyStatus(job, key)} />
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                {(key.attempt_count ?? slice?.turn_count ?? 0).toLocaleString()} / {key.max_turns.toLocaleString()}
+              </TableCell>
+              {slice ? (
+                <>
+                  <TableCell className="text-right font-medium tabular-nums text-foreground">
+                    {pct(routerWinRate(job.direction, slice))}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {pct(otherArmWinRate(job.direction, slice))}
+                  </TableCell>
+                </>
+              ) : (
+                <TableCell colSpan={2} className="text-right text-muted-foreground">
+                  No verdicts yet
+                </TableCell>
+              )}
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
+  );
+};
+
 const emptyResultsText = (job: ShadowEvalJob, resultsError: boolean): string => {
   if (resultsError) return "Results could not be loaded. Retrying.";
   if (isActive(job)) return "Collecting verdicts. Results appear as sampled requests are judged.";
@@ -184,31 +240,44 @@ const emptyResultsText = (job: ShadowEvalJob, resultsError: boolean): string => 
 
 const ResultsBody: React.FC<{ job: ShadowEvalJob; resultsError?: boolean }> = ({ job, resultsError = false }) => {
   const results = job.results;
-  const stratifications = results ? [results.by_tier, results.by_current_model, results.by_key] : [];
-  if (!results || stratifications.every((slices) => slices.length === 0)) {
-    return <p className="px-6 py-8 text-center text-sm text-muted-foreground">{emptyResultsText(job, resultsError)}</p>;
-  }
+  const hasVerdicts = results != null && (results.by_tier.length > 0 || results.by_current_model.length > 0);
   return (
     <>
-      <div className="flex flex-col gap-1 border-b px-6 py-4">
-        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-          Router matched or beat {job.direction === "reverse" ? "the baseline" : "your current model"}
-        </p>
-        <p className="text-3xl font-semibold text-foreground">{pct(routerMatchedOrBeatPct(job.direction, results))}</p>
-        <p className="text-xs text-muted-foreground">of {(job.judged_count ?? 0).toLocaleString()} judged responses</p>
-      </div>
-      <VerdictBar direction={job.direction} results={results} />
-      {results.by_current_model.length > 0 && (
-        <SliceTable
-          groupHeader={job.direction === "reverse" ? "Router pick" : "Compared against"}
-          direction={job.direction}
-          slices={results.by_current_model}
-        />
-      )}
-      {results.by_tier.length > 0 && (
-        <div className={results.by_current_model.length > 0 ? "border-t" : ""}>
-          <SliceTable groupHeader="Prompt difficulty" direction={job.direction} slices={results.by_tier} />
+      {job.keys.length > 1 && (
+        <div className="border-b">
+          <KeyTable job={job} />
         </div>
+      )}
+      {/* results == null re-stated for TS narrowing; hasVerdicts alone cannot narrow it */}
+      {!hasVerdicts || results == null ? (
+        <p className="px-6 py-8 text-center text-sm text-muted-foreground">{emptyResultsText(job, resultsError)}</p>
+      ) : (
+        <>
+          <div className="flex flex-col gap-1 border-b px-6 py-4">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              Router matched or beat {job.direction === "reverse" ? "the baseline" : "your current model"}
+            </p>
+            <p className="text-3xl font-semibold text-foreground">
+              {pct(routerMatchedOrBeatPct(job.direction, results))}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              of {(job.judged_count ?? 0).toLocaleString()} judged responses
+            </p>
+          </div>
+          <VerdictBar direction={job.direction} results={results} />
+          {results.by_current_model.length > 0 && (
+            <SliceTable
+              groupHeader={job.direction === "reverse" ? "Router pick" : "Compared against"}
+              direction={job.direction}
+              slices={results.by_current_model}
+            />
+          )}
+          {results.by_tier.length > 0 && (
+            <div className={results.by_current_model.length > 0 ? "border-t" : ""}>
+              <SliceTable groupHeader="Prompt difficulty" direction={job.direction} slices={results.by_tier} />
+            </div>
+          )}
+        </>
       )}
     </>
   );
@@ -306,9 +375,9 @@ const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; label: string }[
 
 const START_FORM_DESCRIPTION: Record<ShadowEvalDirection, string> = {
   forward:
-    "Duplicates a sampled slice of the key's traffic through the auto-router and has an LLM judge compare both answers blind. The router's answers are never served to users; judge calls bill to the shadowed key.",
+    "Duplicates a sampled slice of the selected keys' traffic through the auto-router and has an LLM judge compare both answers blind. Each key gets its own turn budget. The router's answers are never served to users; judge calls bill to the shadowed key.",
   reverse:
-    "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. The baseline's answers are never served to users; judge calls bill to the shadowed key.",
+    "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each key gets its own turn budget. The baseline's answers are never served to users; judge calls bill to the shadowed key.",
 };
 
 const DURATION_OPTIONS = [
@@ -333,7 +402,7 @@ const Field: React.FC<{ label: string; htmlFor?: string; className?: string; chi
   </div>
 );
 
-const KeySelect: React.FC<{ value: string; onChange: (token: string) => void }> = ({ value, onChange }) => {
+const KeySelect: React.FC<{ value: string[]; onChange: (tokens: string[]) => void }> = ({ value, onChange }) => {
   const [search, setSearch] = useState("");
   const { data, isPending, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteKeys(50, {
     selectedKeyAlias: search || null,
@@ -350,7 +419,7 @@ const KeySelect: React.FC<{ value: string; onChange: (token: string) => void }> 
     [data],
   );
   return (
-    <PaginatedSearchSelect
+    <PaginatedMultiSelect
       inputId="shadow-eval-key"
       options={options}
       value={value}
@@ -369,7 +438,7 @@ const KeySelect: React.FC<{ value: string; onChange: (token: string) => void }> 
 
 const StartForm: React.FC = () => {
   const { accessToken } = useAuthorized();
-  const [apiKeyId, setApiKeyId] = useState("");
+  const [apiKeyIds, setApiKeyIds] = useState<string[]>([]);
   const [routerName, setRouterName] = useState("");
   const [direction, setDirection] = useState<ShadowEvalDirection>("forward");
   const [baselineModel, setBaselineModel] = useState("");
@@ -394,12 +463,12 @@ const StartForm: React.FC = () => {
   const parsedMaxTurns = Number.parseInt(maxTurns, 10);
   const maxTurnsValid = parsedMaxTurns >= 1 && parsedMaxTurns <= 2000;
   const baselinePicked = direction === "forward" || baselineModel !== "";
-  const filled = [apiKeyId, routerName, judgeModel].every((field) => field !== "") && baselinePicked;
+  const filled = apiKeyIds.length > 0 && [routerName, judgeModel].every((field) => field !== "") && baselinePicked;
   const boundsValid = percentageValid && maxTurnsValid;
   const valid = Boolean(accessToken) && filled && boundsValid;
   const handleStart = () => {
     const startBody = {
-      api_key_ids: [apiKeyId],
+      api_key_ids: apiKeyIds,
       router_name: routerName,
       direction,
       ...(direction === "reverse" ? { baseline_model: baselineModel } : {}),
@@ -436,8 +505,8 @@ const StartForm: React.FC = () => {
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Key to shadow" htmlFor="shadow-eval-key">
-            <KeySelect value={apiKeyId} onChange={setApiKeyId} />
+          <Field label="Keys to shadow" htmlFor="shadow-eval-key">
+            <KeySelect value={apiKeyIds} onChange={setApiKeyIds} />
           </Field>
           <Field label="Auto-router">
             <SearchSelect

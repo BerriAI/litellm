@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 import click
 from pydantic import TypeAdapter
 
-from .private_json import write_private_json
+from litellm.litellm_core_utils.private_json import ensure_private_dir, write_private_json
 
 HIDDEN_COMMANDS_KEY: Final = "hidden_commands"
 
@@ -42,7 +42,9 @@ def load_config() -> Mapping[str, str]:
 
 def save_config(config: Mapping[str, str]) -> None:
     """Save CLI config to file"""
-    write_private_json(get_config_file_path(), config)
+    config_file: Final = Path(get_config_file_path())
+    ensure_private_dir(config_file.parent)
+    write_private_json(str(config_file), config)
 
 
 def get_config_value(key: str) -> str | None:

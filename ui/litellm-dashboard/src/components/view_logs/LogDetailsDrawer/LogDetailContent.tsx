@@ -182,7 +182,9 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
       {isLoadingDetails ? (
         <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6 p-8 text-center">
           <UiLoadingSpinner className="inline-block size-5" />
-          <div style={{ marginTop: 8, color: "#999" }}>Loading request &amp; response data...</div>
+          <div style={{ marginTop: 8, color: "var(--color-muted-foreground)" }}>
+            Loading request &amp; response data...
+          </div>
         </div>
       ) : (
         <RequestResponseSection
@@ -600,7 +602,14 @@ function RequestResponseSection({
                       {hasResponse || hasError ? (
                         <JsonViewer data={getFormattedResponse()} mode="formatted" />
                       ) : (
-                        <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
+                        <div
+                          style={{
+                            textAlign: "center",
+                            padding: 20,
+                            color: "var(--color-muted-foreground)",
+                            fontStyle: "italic",
+                          }}
+                        >
                           Response data not available
                         </div>
                       )}
@@ -631,6 +640,11 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
     <div style={{ textAlign: "left", marginBottom: 12 }}>
       <div
         onClick={handleClick}
+        className={
+          allPassed
+            ? "border border-success/20 bg-success/10 text-success"
+            : "border border-destructive/20 bg-destructive/10 text-destructive"
+        }
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -640,9 +654,6 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
           cursor: "pointer",
           fontSize: 13,
           fontWeight: 500,
-          backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
-          color: allPassed ? "#15803d" : "#b91c1c",
-          border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
         }}
       >
         {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""}{" "}

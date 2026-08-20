@@ -255,7 +255,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
           </div>
           <button
             onClick={handleClose}
-            className="text-muted-foreground/70 hover:text-muted-foreground transition-colors p-1 rounded-md hover:bg-accent"
+            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md hover:bg-accent"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -295,7 +295,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
       {/* Chat messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-muted">
         {messages.length === 0 && !streamingContent && !isLoading && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground/70">
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <svg className="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 strokeLinecap="round"
@@ -313,7 +313,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
           <div key={idx}>
             {msg.role === "user" ? (
               <div className="flex justify-end">
-                <div className="max-w-[88%] rounded-xl px-3.5 py-2 text-sm leading-relaxed bg-info text-white">
+                <div className="max-w-[88%] rounded-xl px-3.5 py-2 text-sm leading-relaxed bg-info text-info-foreground">
                   {msg.content}
                 </div>
               </div>
@@ -383,12 +383,12 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
         <div className="flex justify-between items-center mt-2">
           <button
             onClick={handleClear}
-            className="text-xs text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
             disabled={messages.length === 0}
           >
             Clear chat
           </button>
-          <span className="text-xs text-muted-foreground/70">Enter to send</span>
+          <span className="text-xs text-muted-foreground">Enter to send</span>
         </div>
       </div>
     </div>

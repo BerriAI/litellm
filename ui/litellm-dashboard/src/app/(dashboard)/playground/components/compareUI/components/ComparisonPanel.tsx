@@ -85,7 +85,7 @@ export function ComparisonPanel({
   };
 
   const disabledOpacity = comparison.useAdvancedParams ? 1 : 0.4;
-  const disabledTextColor = comparison.useAdvancedParams ? "text-foreground" : "text-muted-foreground/70";
+  const disabledTextColor = comparison.useAdvancedParams ? "text-foreground" : "text-muted-foreground";
 
   const handleTogglePopover = () => {
     setPopoverVisible((prev) => !prev);

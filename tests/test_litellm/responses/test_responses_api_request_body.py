@@ -4,6 +4,7 @@ over the wire and surface provider errors correctly. Expected JSON bodies are st
 in expected_responses_api_request/.
 """
 
+import copy
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -422,3 +423,178 @@ async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_
         mock_ws.assert_awaited_once()
         assert mock_ws.call_args.kwargs["model"] == "gpt-5.6"
         assert mock_ws.call_args.kwargs["custom_llm_provider"] == "openai"
+
+
+_INJECTION_POINT_INPUT = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "hi"}]
+_SYSTEM_INJECTION_POINT = [{"location": "message", "role": "system"}]
+
+
+def _sent_body(mock_post) -> dict:
+    kwargs = mock_post.call_args.kwargs
+    return kwargs["json"] if "json" in kwargs else json.loads(kwargs["data"])
+
+
+@pytest.mark.asyncio
+async def test_aresponses_injection_point_marks_input_text_on_gpt_5_6():
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_pcb_async", "gpt-5.6"), 200)
+
+        await litellm.aresponses(
+            model="openai/gpt-5.6",
+            api_key="fake-api-key",
+            input=copy.deepcopy(_INJECTION_POINT_INPUT),
+            cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        )
+
+        body = _sent_body(mock_post)
+        assert body["input"][0]["content"][0] == {
+            "type": "input_text",
+            "text": "You are terse.",
+            "prompt_cache_breakpoint": {"mode": "explicit"},
+        }
+        assert body["input"][1] == {"role": "user", "content": "hi"}
+        assert body["prompt_cache_options"] == {"mode": "explicit"}
+
+
+def test_responses_injection_point_marks_input_text_on_gpt_5_6():
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_pcb_sync", "gpt-5.6"), 200)
+
+        litellm.responses(
+            model="openai/gpt-5.6",
+            api_key="fake-api-key",
+            input=copy.deepcopy(_INJECTION_POINT_INPUT),
+            cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        )
+
+        body = _sent_body(mock_post)
+        assert body["input"][0]["content"][0] == {
+            "type": "input_text",
+            "text": "You are terse.",
+            "prompt_cache_breakpoint": {"mode": "explicit"},
+        }
+        assert body["input"][1] == {"role": "user", "content": "hi"}
+        assert body["prompt_cache_options"] == {"mode": "explicit"}
+
+
+@pytest.mark.asyncio
+async def test_aresponses_injection_point_sends_nothing_extra_below_gpt_5_6():
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_pcb_old", "gpt-4.1"), 200)
+
+        await litellm.aresponses(
+            model="openai/gpt-4.1",
+            api_key="fake-api-key",
+            input=copy.deepcopy(_INJECTION_POINT_INPUT),
+            cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        )
+
+        body = _sent_body(mock_post)
+        assert body["input"] == _INJECTION_POINT_INPUT
+        assert "prompt_cache_options" not in body
+        assert "cache_control" not in json.dumps(body)
+
+
+@pytest.fixture
+def _no_openai_api_base_override(monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+
+_CUSTOM_API_BASE = "http://127.0.0.1:9/v1"
+
+
+async def _aresponses_body_with_system_point(**request_kwargs) -> dict:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_pcb_gate", "gpt-5.6"), 200)
+        await litellm.aresponses(
+            api_key="fake-api-key",
+            input=copy.deepcopy(_INJECTION_POINT_INPUT),
+            cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+            **request_kwargs,
+        )
+        return _sent_body(mock_post)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_openai_api_base_override")
+async def test_aresponses_litellm_proxy_target_sends_no_openai_markers():
+    body = await _aresponses_body_with_system_point(model="litellm_proxy/gpt-5.6", api_base=_CUSTOM_API_BASE)
+    assert body["input"] == _INJECTION_POINT_INPUT
+    assert "prompt_cache_options" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_openai_api_base_override")
+async def test_aresponses_custom_api_base_sends_no_openai_markers():
+    body = await _aresponses_body_with_system_point(model="gpt-5.6", api_base=_CUSTOM_API_BASE)
+    assert body["input"] == _INJECTION_POINT_INPUT
+    assert "prompt_cache_options" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_openai_api_base_override")
+async def test_aresponses_custom_api_base_opts_in_through_prompt_cache_options():
+    body = await _aresponses_body_with_system_point(
+        model="gpt-5.6", api_base=_CUSTOM_API_BASE, prompt_cache_options={"mode": "explicit"}
+    )
+    assert body["input"][0]["content"][0] == {
+        "type": "input_text",
+        "text": "You are terse.",
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+    assert body["prompt_cache_options"] == {"mode": "explicit"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_openai_api_base_override")
+async def test_aresponses_regional_openai_api_base_marks_input_text():
+    body = await _aresponses_body_with_system_point(model="gpt-5.6", api_base="https://eu.api.openai.com/v1")
+    assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert body["prompt_cache_options"] == {"mode": "explicit"}
+
+
+@pytest.mark.usefixtures("_no_openai_api_base_override")
+def test_responses_custom_base_url_sends_no_openai_markers():
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_pcb_gate_base_url", "gpt-5.6"), 200)
+
+        litellm.responses(
+            model="gpt-5.6",
+            api_key="fake-api-key",
+            base_url=_CUSTOM_API_BASE,
+            input=copy.deepcopy(_INJECTION_POINT_INPUT),
+            cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        )
+
+        body = _sent_body(mock_post)
+        assert body["input"] == _INJECTION_POINT_INPUT
+        assert "prompt_cache_options" not in body
+
+
+@pytest.mark.usefixtures("_no_openai_api_base_override")
+def test_responses_custom_api_base_sends_no_openai_markers():
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_pcb_gate_sync", "gpt-5.6"), 200)
+
+        litellm.responses(
+            model="gpt-5.6",
+            api_key="fake-api-key",
+            api_base=_CUSTOM_API_BASE,
+            input=copy.deepcopy(_INJECTION_POINT_INPUT),
+            cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        )
+
+        body = _sent_body(mock_post)
+        assert body["input"] == _INJECTION_POINT_INPUT
+        assert "prompt_cache_options" not in body

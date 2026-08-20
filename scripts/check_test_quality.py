@@ -38,6 +38,16 @@ TQ005   `litellm.<attr> = ...` module-global mutation. The SDK's module globals 
         process-wide, so this is the same leak as TQ004 one level up, and it is
         what the 491-line save/restore conftest exists to paper over. Inject the
         dependency or use a fixture that restores it.
+TQ006   A `pytest.skip` reached only when a credential-shaped environment variable is
+        absent. Absence is what the condition has to say: `not key`, `key is None`,
+        `"KEY" not in os.environ`. A skip taken when the credential is present is
+        somebody's deliberate branch and is left alone. On a runner that does not hold that credential the guard fires every
+        time, so the test reports green having executed nothing and is indistinguishable
+        from coverage that exists. Fake the provider at the HTTP boundary, or fail
+        loudly, so a missing credential shows up as a missing credential. The gate is
+        followed through one local or module-level binding, which is the
+        `key = os.getenv(...)` then `if not key: pytest.skip(...)` shape most of these
+        use.
 
 Every rule is suppressible with `# test-quality-ok: <reason>` on the reported
 line, following the repo's `*-ok: <reason>` convention. A suppression without a
@@ -109,6 +119,13 @@ MOCK_INSPECTION_ATTRIBUTES: Final = frozenset((
 MOCK_ASSERTION_PREFIX: Final = "assert_"
 
 PATCH_MEMBERS: Final = frozenset(("object", "dict", "multiple"))
+
+ENVIRON_READERS: Final = frozenset(("os.environ.get", "environ.get", "os.getenv", "getenv"))
+ENVIRON_MAPPINGS: Final = frozenset(("os.environ", "environ"))
+SKIP_CALLS: Final = frozenset(("pytest.skip", "skip"))
+CREDENTIAL_NAME_RE: Final = re.compile(
+    r"(?:API_KEY|_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|DATABASE_URL|ACCESS_KEY_ID)$"
+)
 
 FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -439,6 +456,97 @@ def iter_global_mutation_violations(path: Path, tree: ast.Module) -> Iterator[Vi
                 )
 
 
+def _environ_keys(node: ast.AST) -> Iterator[str]:
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Call) and _dotted_name(inner.func) in ENVIRON_READERS:
+            yield from (
+                argument.value
+                for argument in inner.args[:1]
+                if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+            )
+        elif isinstance(inner, ast.Subscript) and _dotted_name(inner.value) in ENVIRON_MAPPINGS:
+            if isinstance(inner.slice, ast.Constant) and isinstance(inner.slice.value, str):
+                yield inner.slice.value
+        elif isinstance(inner, ast.Compare) and any(isinstance(op, (ast.In, ast.NotIn)) for op in inner.ops):
+            if any(_dotted_name(right) in ENVIRON_MAPPINGS for right in inner.comparators):
+                if isinstance(inner.left, ast.Constant) and isinstance(inner.left.value, str):
+                    yield inner.left.value
+
+
+def _credential_bindings(tree: ast.Module) -> Mapping[str, str]:
+    return MappingProxyType({
+        target.id: key
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for key in tuple(k for k in _environ_keys(node.value) if CREDENTIAL_NAME_RE.search(k))[:1]
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    })
+
+
+def _absence_operands(test: ast.expr) -> Iterator[ast.expr]:
+    """The subtrees of an `if` condition that are true when what they name is missing."""
+    for node in ast.walk(test):
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            yield node.operand
+        elif isinstance(node, ast.Compare) and _is_absent_from_environ(node):
+            yield node
+        elif isinstance(node, ast.Compare) and _is_compared_to_none(node):
+            yield node.left
+
+
+def _is_absent_from_environ(node: ast.Compare) -> bool:
+    return any(isinstance(op, ast.NotIn) for op in node.ops) and any(
+        _dotted_name(right) in ENVIRON_MAPPINGS for right in node.comparators
+    )
+
+
+def _is_compared_to_none(node: ast.Compare) -> bool:
+    return all(isinstance(op, (ast.Is, ast.Eq)) for op in node.ops) and any(
+        isinstance(right, ast.Constant) and right.value is None for right in node.comparators
+    )
+
+
+def _gating_credential(test: ast.expr, bindings: Mapping[str, str]) -> str | None:
+    return next(
+        (
+            credential
+            for operand in _absence_operands(test)
+            for credential in _named_credentials(operand, bindings)
+        ),
+        None,
+    )
+
+
+def _named_credentials(node: ast.expr, bindings: Mapping[str, str]) -> Iterator[str]:
+    yield from (key for key in _environ_keys(node) if CREDENTIAL_NAME_RE.search(key))
+    yield from (
+        bindings[inner.id] for inner in ast.walk(node) if isinstance(inner, ast.Name) and inner.id in bindings
+    )
+
+
+def iter_credential_skip_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    bindings: Final = _credential_bindings(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        credential: Final = _gating_credential(node.test, bindings)
+        if credential is None:
+            continue
+        for statement in node.body:
+            for inner in ast.walk(statement):
+                if isinstance(inner, ast.Call) and _dotted_name(inner.func) in SKIP_CALLS:
+                    yield Violation(
+                        path,
+                        inner.lineno,
+                        "TQ006",
+                        f"this test skips itself when {credential} is absent, so a run without "
+                        "that credential reports green having executed nothing; fake the provider at "
+                        "the HTTP boundary, or fail loudly so the missing credential is visible "
+                        f"(suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+                    )
+
+
 def check_file(path: Path) -> tuple[Violation, ...]:
     try:
         source: Final = path.read_text(encoding="utf-8")
@@ -458,6 +566,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
             *iter_sys_path_violations(path, tree),
             *iter_environ_violations(path, tree),
             *iter_global_mutation_violations(path, tree),
+            *iter_credential_skip_violations(path, tree),
         )
         if violation.line not in skip
     )

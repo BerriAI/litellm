@@ -97,7 +97,7 @@ export function LoggingSettingsView({
           </div>
         ) : (
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
-            <CogIcon className="h-4 w-4 text-muted-foreground/70" />
+            <CogIcon className="h-4 w-4 text-muted-foreground" />
             <span className="text-muted-foreground text-sm">No logging integrations configured</span>
           </div>
         )}
@@ -140,7 +140,7 @@ export function LoggingSettingsView({
           </div>
         ) : (
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
-            <BanIcon className="h-4 w-4 text-muted-foreground/70" />
+            <BanIcon className="h-4 w-4 text-muted-foreground" />
             <span className="text-muted-foreground text-sm">No callbacks disabled</span>
           </div>
         )}

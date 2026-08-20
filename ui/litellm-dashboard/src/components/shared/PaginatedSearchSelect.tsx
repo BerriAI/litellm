@@ -1,8 +1,7 @@
 "use client";
 
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { Loader2 } from "lucide-react";
-import { useMemo, type UIEvent } from "react";
+import { useMemo } from "react";
 
 import {
   Combobox,
@@ -12,13 +11,9 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 
 import type { SearchSelectOption } from "./SearchSelect";
-
-const SCROLL_THRESHOLD = 0.8;
-
-const SEARCH_REASONS: ReadonlySet<string> = new Set(["input-change", "input-clear", "clear-press"]);
+import { usePaginatedCombobox } from "./usePaginatedCombobox";
 
 interface PaginatedSearchSelectProps {
   options: SearchSelectOption[];
@@ -70,21 +65,8 @@ export function PaginatedSearchSelect({
     return [selected, ...options];
   }, [options, selected]);
 
-  const debouncedSearch = useDebouncedCallback(onSearchChange, { wait: DEBOUNCE_WAIT_MS });
-
-  const handleInputValueChange = (next: string, reason: string) => {
-    if (!SEARCH_REASONS.has(reason)) return;
-    debouncedSearch(next);
-  };
-
-  const handleScroll = (event: UIEvent<HTMLDivElement>) => {
-    const target = event.currentTarget;
-    if (target.scrollHeight === 0) return;
-    const ratio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
-    if (ratio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
-      onLoadMore?.();
-    }
-  };
+  const pagination = { onSearchChange, onLoadMore, hasNextPage, isFetchingNextPage };
+  const { handleInputValueChange, handleScroll } = usePaginatedCombobox(pagination);
 
   return (
     <Combobox

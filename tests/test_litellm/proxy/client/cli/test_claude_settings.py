@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+from litellm.litellm_core_utils.cli_token_utils import CliTokenRecord
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.claude_settings import (
     AUTOROUTE_BACKUP_PATH,
@@ -181,18 +182,18 @@ class TestApiKeyHelperIsActuallyInvocable:
         assert result.exit_code != 2
 
     def test_the_generated_command_reaches_print_token(self):
-        with patch(f"{AUTH_MODULE}.load_token", return_value=None):
+        with patch(f"{AUTH_MODULE}.load_cli_token", return_value=None):
             result = CliRunner().invoke(cli, self._helper_args("http://localhost:4000"))
 
         assert "Not authenticated" in result.output
 
     def test_the_generated_command_carries_the_base_url_through(self):
-        stale = {
-            "base_url": "http://other-proxy.example.com",
-            "key": "sk-stale",
-            "timestamp": time.time(),
-        }
-        with patch(f"{AUTH_MODULE}.load_token", return_value=stale):
+        stale = CliTokenRecord(
+            base_url="http://other-proxy.example.com",
+            key="sk-stale",
+            timestamp=time.time(),
+        )
+        with patch(f"{AUTH_MODULE}.load_cli_token", return_value=stale):
             result = CliRunner().invoke(cli, self._helper_args("http://localhost:4000"))
 
         assert "Not authenticated for this server" in result.output

@@ -3,6 +3,8 @@ import React from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ChatImageRenderer from "../../chat_ui/ChatImageRenderer";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
@@ -15,6 +17,7 @@ interface MessageDisplayProps {
 }
 
 export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
+  const syntaxTheme = useSyntaxTheme(coy);
   if (messages.length === 0) {
     return <div className="h-full" />;
   }
@@ -73,13 +76,13 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
             const match = /language-(\w+)/.exec(className || "");
             return !inline && match ? (
               <SyntaxHighlighter
-                style={coy as any}
+                {...props}
+                style={syntaxTheme}
                 language={match[1]}
                 PreTag="div"
                 className="rounded-md my-2"
                 wrapLines={true}
                 wrapLongLines={true}
-                {...props}
               >
                 {String(children).replace(/\n$/, "")}
               </SyntaxHighlighter>
