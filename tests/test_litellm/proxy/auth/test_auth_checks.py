@@ -6784,3 +6784,58 @@ async def test_common_checks_blocks_alias_resolving_to_unpriced_model(monkeypatc
     assert exc_info.value.code == "403"
     assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing
     assert "public-alias" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_common_checks_blocks_comma_separated_request_carrying_an_unpriced_model(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_common_checks(model="priced-group,unpriced-group", llm_router=router)
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing
+    assert "'unpriced-group'" in exc_info.value.message
+    assert "'priced-group'" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_comma_separated_request_when_every_model_is_priced(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    result = await _run_common_checks(model="priced-group,priced-group", llm_router=router)
+
+    assert result is True
+
+
+def _router_with_a_group_priced_through_model_info() -> "Router":
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "model-info-priced-group",
+                "litellm_params": {"model": f"{UNPRICED_UNDERLYING_MODEL}-model-info", "api_key": "sk-test"},
+                "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            }
+        ],
+        model_group_alias={"model-info-priced-alias": "model-info-priced-group"},
+    )
+
+
+def test_model_has_no_cost_mapping_group_priced_through_model_info_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_a_group_priced_through_model_info()
+
+    assert model_has_no_cost_mapping(model="model-info-priced-group", llm_router=router) is False
+
+
+def test_model_has_no_cost_mapping_alias_to_a_group_priced_through_model_info_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_a_group_priced_through_model_info()
+
+    assert model_has_no_cost_mapping(model="model-info-priced-alias", llm_router=router) is False
