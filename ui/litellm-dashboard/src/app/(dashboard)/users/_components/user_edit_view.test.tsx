@@ -12,69 +12,6 @@ vi.mock("@/utils/roles", () => ({
   all_admin_roles: ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"],
 }));
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  const React = await import("react");
-  const SelectComponent = ({
-    value,
-    onChange,
-    mode,
-    children,
-    placeholder,
-    disabled,
-    style,
-    allowClear,
-    ...props
-  }: any) => {
-    const isMultiple = mode === "multiple";
-    const selectValue = isMultiple ? (Array.isArray(value) ? value : []) : value || "";
-    return React.createElement(
-      "select",
-      {
-        multiple: isMultiple,
-        value: selectValue,
-        onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
-          const selectedValues = Array.from(e.target.selectedOptions, (option) => option.value);
-          onChange(isMultiple ? selectedValues : selectedValues[0] || undefined);
-        },
-        disabled,
-        placeholder,
-        style,
-        "aria-label": placeholder || "Select",
-        role: "combobox",
-        ...props,
-      },
-      children,
-    );
-  };
-  SelectComponent.displayName = "Select";
-  const SelectOption = ({ value: optionValue, children: optionChildren }: any) =>
-    React.createElement("option", { value: optionValue }, optionChildren);
-  SelectOption.displayName = "SelectOption";
-  SelectComponent.Option = SelectOption;
-  const Tooltip = ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children);
-  Tooltip.displayName = "Tooltip";
-  const Checkbox = ({ checked, onChange, children, ...props }: any) =>
-    React.createElement(
-      "label",
-      { style: { display: "flex", alignItems: "center", gap: "8px" } },
-      React.createElement("input", {
-        type: "checkbox",
-        checked: checked,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => onChange({ target: { checked: e.target.checked } }),
-        ...props,
-      }),
-      children,
-    );
-  Checkbox.displayName = "Checkbox";
-  return {
-    ...actual,
-    Select: SelectComponent,
-    Tooltip,
-    Checkbox,
-  };
-});
-
 describe("UserEditView", () => {
   const MOCK_USER_DATA = {
     user_id: "user-123",

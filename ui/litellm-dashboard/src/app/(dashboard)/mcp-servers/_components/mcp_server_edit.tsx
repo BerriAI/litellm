@@ -60,7 +60,7 @@ import {
   useMountRegistry,
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
-import { antdRequired, antdRules } from "@/components/common_components/antdFormRules";
+import { requiredRule, validatorRules } from "@/components/common_components/formRules";
 import {
   allFieldsValue,
   mountedPaths,
@@ -774,7 +774,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 <MountedFormField
                   label="MCP Server Name"
                   name="server_name"
-                  rules={{ validate: antdRules({ validator: (_, value) => validateMCPServerName(value) }) }}
+                  rules={{ validate: validatorRules({ validator: (_, value) => validateMCPServerName(value) }) }}
                 >
                   {(control) => (
                     <Input
@@ -786,7 +786,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 <MountedFormField
                   label="Alias"
                   name="alias"
-                  rules={{ validate: antdRules({ validator: (_, value) => validateMCPServerName(value) }) }}
+                  rules={{ validate: validatorRules({ validator: (_, value) => validateMCPServerName(value) }) }}
                 >
                   {(control) => (
                     <Input
@@ -812,7 +812,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   label="Transport Type"
                   name="transport"
                   required
-                  rules={{ validate: { required: antdRequired("Transport Type is required") } }}
+                  rules={{ validate: { required: requiredRule("Transport Type is required") } }}
                 >
                   {(control) => (
                     <Select
@@ -842,8 +842,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     required
                     rules={{
                       validate: {
-                        required: antdRequired("Please enter a server URL"),
-                        ...antdRules({ validator: (_, value) => validateMCPServerUrl(value) }),
+                        required: requiredRule("Please enter a server URL"),
+                        ...validatorRules({ validator: (_, value) => validateMCPServerUrl(value) }),
                       },
                     }}
                   >
@@ -870,7 +870,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     }
                     name="spec_path"
                     required
-                    rules={{ validate: { required: antdRequired("Please enter an OpenAPI spec URL") } }}
+                    rules={{ validate: { required: requiredRule("Please enter an OpenAPI spec URL") } }}
                   >
                     {(control) => (
                       <Input
@@ -911,7 +911,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       label="Authentication"
                       name="auth_type"
                       required
-                      rules={{ validate: { required: antdRequired("Authentication is required") } }}
+                      rules={{ validate: { required: requiredRule("Authentication is required") } }}
                     >
                       {(control) => (
                         <Select {...selectControl<string>(control)} items={AUTH_TYPE_ITEMS}>
@@ -957,7 +957,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       label="Command"
                       name="command"
                       required
-                      rules={{ validate: { required: antdRequired("Please enter a command for stdio transport") } }}
+                      rules={{ validate: { required: requiredRule("Please enter a command for stdio transport") } }}
                     >
                       {(control) => (
                         <Input

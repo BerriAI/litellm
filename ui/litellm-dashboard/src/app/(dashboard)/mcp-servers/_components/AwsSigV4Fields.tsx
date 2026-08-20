@@ -3,7 +3,7 @@ import React from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
 import { requiredWhenSiblingSet, textControl } from "./mcpFieldRules";
@@ -39,7 +39,7 @@ const AwsSigV4Fields: React.FC = () => (
       label={<FieldLabel label="AWS Region" tooltip="AWS region for SigV4 signing (e.g., us-east-1)" />}
       name={["credentials", "aws_region_name"]}
       required
-      rules={{ validate: { required: antdRequired("AWS region is required for SigV4 auth") } }}
+      rules={{ validate: { required: requiredRule("AWS region is required for SigV4 auth") } }}
     >
       {(control) => <Input {...textControl(control)} placeholder="us-east-1" className={fieldClassName} />}
     </MountedFormField>

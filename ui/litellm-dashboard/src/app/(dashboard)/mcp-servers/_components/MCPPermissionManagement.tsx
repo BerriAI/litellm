@@ -15,7 +15,7 @@ import {
   type MountedFieldControlProps,
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
 import { Field, FieldLabel } from "@/components/shared/form/field";
 import { invertedSwitchControl, switchControl, tagsControl, textControl } from "./mcpFieldRules";
 import { listControl } from "./mcpFormStore";
@@ -64,7 +64,7 @@ const StaticHeadersFieldArray: React.FC = () => {
           <MountedFormField
             name={["static_headers", String(index), "header"]}
             className="flex-1"
-            rules={{ validate: { required: antdRequired("Header name is required") } }}
+            rules={{ validate: { required: requiredRule("Header name is required") } }}
           >
             {(headerControl) => (
               <ClearableInput
@@ -77,7 +77,7 @@ const StaticHeadersFieldArray: React.FC = () => {
           <MountedFormField
             name={["static_headers", String(index), "value"]}
             className="flex-1"
-            rules={{ validate: { required: antdRequired("Header value is required") } }}
+            rules={{ validate: { required: requiredRule("Header value is required") } }}
           >
             {(valueControl) => (
               <ClearableInput control={valueControl} placeholder="Header value" clearLabel="Clear header value" />

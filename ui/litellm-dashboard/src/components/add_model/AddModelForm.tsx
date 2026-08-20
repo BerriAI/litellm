@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import React, { useEffect, useMemo, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 import TeamDropdown from "../common_components/team_dropdown";
-import { antdRequired } from "../common_components/antdFormRules";
+import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import {
   MountedFormField,
@@ -185,7 +185,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                         label={labelWithHint("Select Team", "Select the team for which you want to add this model")}
                         name="team_id"
                         required
-                        rules={{ validate: { required: antdRequired("Please select a team to continue") } }}
+                        rules={{ validate: { required: requiredRule("Please select a team to continue") } }}
                         className="mb-4"
                       >
                         {(control) => (
@@ -215,7 +215,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                         label={labelWithHint("Provider", "E.g. OpenAI, Azure OpenAI, Anthropic, Bedrock, etc.")}
                         name="custom_llm_provider"
                         required
-                        rules={{ validate: { required: antdRequired("Required") } }}
+                        rules={{ validate: { required: requiredRule("Required") } }}
                         className="mb-4"
                       >
                         {(control) => (
@@ -368,7 +368,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                           required={isTeamOnly && !isAdmin}
                           rules={
                             isTeamOnly && !isAdmin
-                              ? { validate: { required: antdRequired("Please select a team.") } }
+                              ? { validate: { required: requiredRule("Please select a team.") } }
                               : undefined
                           }
                         >

@@ -4,7 +4,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { AUTH_TYPE, OAUTH_FLOW } from "@/components/mcp_tools/types";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
 import OpenAPIQuickPicker, { OpenAPIRegistryEntry, OpenAPIKeyTool } from "./OpenAPIQuickPicker";
 import { McpForm, resetFields, setFieldsValue } from "./mcpFormStore";
 import { textControl } from "./mcpFieldRules";
@@ -76,7 +76,7 @@ const OpenAPIFormSection: React.FC<OpenAPIFormSectionProps> = ({
         }
         name="spec_path"
         required
-        rules={{ validate: { required: antdRequired("Please enter an OpenAPI spec URL") } }}
+        rules={{ validate: { required: requiredRule("Please enter an OpenAPI spec URL") } }}
       >
         {(control) => (
           <Input

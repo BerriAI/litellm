@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
-import { antdRequired } from "../common_components/antdFormRules";
+import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 import {
   MountedFormField,
@@ -104,7 +104,7 @@ export default function CredentialModal({
                 label="Credential Name:"
                 name="credential_name"
                 required
-                rules={{ validate: { required: antdRequired("Credential name is required") } }}
+                rules={{ validate: { required: requiredRule("Credential name is required") } }}
                 className="mb-4"
               >
                 {(control) => (
@@ -123,7 +123,7 @@ export default function CredentialModal({
                 label={labelWithHint("Provider:", "Helper to auto-populate provider specific fields")}
                 name="custom_llm_provider"
                 required
-                rules={{ validate: { required: antdRequired("Required") } }}
+                rules={{ validate: { required: requiredRule("Required") } }}
                 className="mb-4"
               >
                 {(control) => (
