@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.cli_keyring import (
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
     CredentialNotRecorded,
+    CredentialNotCleared,
     CredentialNotSaved,
     clear_cli_token,
     get_cli_token_file_path,
@@ -79,6 +80,26 @@ def _write_metadata_only_file(home):
 
 def _blob(base_url=SERVER, key="sk-vault", jwt_token=""):
     return json.dumps({"base_url": base_url, "key": key, "jwt_token": jwt_token})
+
+
+_REAL_REPLACE = os.replace
+
+
+def _refuse_replace(*args, **kwargs):
+    raise OSError("device or resource busy")
+
+
+class _ReplaceThatStartsRefusing:
+    """`os.replace` standing in for a path that cannot be replaced yet: a file another process holds
+    open on Windows, a directory that went read-only between staging and the rewrite."""
+
+    def __init__(self):
+        self.allowed = False
+
+    def __call__(self, src, dst):
+        if not self.allowed:
+            raise OSError("device or resource busy")
+        _REAL_REPLACE(src, dst)
 
 
 class TestGetCliTokenFilePath:
@@ -459,6 +480,43 @@ class TestScrubFailure:
         assert json.loads(path.read_text())["key"] == "sk-legacy"
         assert list(path.parent.glob(".tmp-*")) == []
 
+    def test_a_rewrite_that_fails_after_the_keychain_took_the_secret_hands_it_back(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
+        """Staging can succeed and the rewrite still fail afterwards, which is the one window where
+        both stores hold the credential. The keychain copy goes back, so the file is left exactly as
+        it was found and the move can be tried again."""
+        path = _write_legacy_file(isolated_home)
+        vault = secret_vault_factory()
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.os.replace", _refuse_replace)
+
+        record = load_cli_token(vault=vault)
+
+        assert record.key == "sk-legacy"
+        assert vault.blob is None
+        assert json.loads(path.read_text())["key"] == "sk-legacy"
+        assert list(path.parent.glob(".tmp-*")) == []
+
+    def test_a_rollback_the_keychain_refuses_is_finished_by_the_next_read(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
+        """A keychain that will not give back what it just took leaves the credential in both stores.
+        Nothing is lost by that, and nothing is abandoned either: the next read carries the move the
+        rest of the way, so the duplicate outlives only the condition that caused it."""
+        path = _write_legacy_file(isolated_home)
+        vault = secret_vault_factory(erasable=False)
+        replace = _ReplaceThatStartsRefusing()
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.os.replace", replace)
+
+        assert load_cli_token(vault=vault).key == "sk-legacy"
+        assert vault.blob is not None
+        assert json.loads(path.read_text())["key"] == "sk-legacy"
+
+        replace.allowed = True
+
+        assert load_cli_token(vault=vault).key == "sk-legacy"
+        assert json.loads(path.read_text()).get("key") is None
+
 
 class TestClearCliToken:
     def test_removes_the_credential_from_both_stores(self, isolated_home, secret_vault_factory):
@@ -598,6 +656,39 @@ class TestClearCliToken:
         assert clear_cli_token(vault=vault) == KeyringNotInstalled()
         assert vault.blob is not None
         assert "sk-in-file" not in _token_file(isolated_home).read_text()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+    def test_a_file_that_can_be_neither_scrubbed_nor_removed_is_reported_not_raised(
+        self, isolated_home, secret_vault_factory
+    ):
+        """A `~/.litellm` gone read-only, or one left root-owned by a `sudo lite login`, refuses the
+        scrubbed rewrite and the removal alike. The credential is still readable on disk, which is
+        the one thing logging out is for, so it has to come back as an answer rather than as a
+        traceback the user has to read the code to understand."""
+        path = _write_legacy_file(isolated_home)
+        path.parent.chmod(0o500)
+        try:
+            outcome = clear_cli_token(vault=secret_vault_factory())
+        finally:
+            path.parent.chmod(0o700)
+
+        assert isinstance(outcome, CredentialNotCleared)
+        assert json.loads(path.read_text())["key"] == "sk-legacy"
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+    def test_a_metadata_file_that_will_not_go_is_not_worth_alarming_the_user_over(
+        self, isolated_home, secret_vault_factory
+    ):
+        """The secret was in the keychain and the keychain gave it up. What is stuck on disk names a
+        credential that no longer exists, so the logout it describes really did happen."""
+        path = _write_metadata_only_file(isolated_home)
+        path.parent.chmod(0o500)
+        try:
+            outcome = clear_cli_token(vault=secret_vault_factory(blob=_blob()))
+        finally:
+            path.parent.chmod(0o700)
+
+        assert outcome == SecretErased()
 
     def test_is_safe_when_nothing_was_ever_stored(self, isolated_home, secret_vault_factory):
         assert clear_cli_token(vault=secret_vault_factory()) == SecretErased()

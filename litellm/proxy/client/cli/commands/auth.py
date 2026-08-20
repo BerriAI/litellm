@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.cli_keyring import (
 )
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
+    CredentialNotCleared,
     CredentialNotRecorded,
     CredentialNotSaved,
     SecretSave,
@@ -796,9 +797,13 @@ def login(ctx: click.Context, config_claude: bool):
 @click.pass_context
 def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
+    path: Final = get_cli_token_file_path()
     match clear_cli_token(vault=context_secret_vault(ctx)):
         case SecretErased():
             click.echo("Logged out successfully. Authentication token cleared.")
+        case CredentialNotCleared(detail=detail):
+            click.echo(f"Your credential is still in {path}, which could not be removed: {detail}.")
+            click.echo("Delete that file, or make the directory writable and run 'lite logout' again.")
         case SecretStranded():
             click.echo(STRANDED_CREDENTIAL_MESSAGE)
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")

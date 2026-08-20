@@ -63,7 +63,21 @@ class CredentialNotRecorded:
     """
 
 
+@dataclass(frozen=True, slots=True)
+class CredentialNotCleared:
+    """The token file still holds the secret, because it could not be removed or rewritten.
+
+    Logging out of the keychain is only half of it. A `~/.litellm` that refuses both the scrubbed
+    rewrite and the removal leaves the credential readable on disk, which is the one thing a logout
+    is for, so it is reported instead of being counted as a clean sweep.
+    """
+
+    detail: str
+
+
 SecretSave: TypeAlias = SecretWrite | CredentialNotSaved | CredentialNotRecorded
+
+SecretClear: TypeAlias = SecretErase | CredentialNotCleared
 
 
 class CliTokenRecord(BaseModel):
@@ -150,21 +164,33 @@ def _keep_the_secret_in_the_file(record: CliTokenRecord, outcome: SecretWrite) -
     return outcome
 
 
-def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretErase:
+def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
     """Remove the credential from both stores. Reports whether the keychain is now free of it.
 
     A logout the keychain never answered keeps the token file, with its secret taken out, because
     that file is the only remaining record that something may still be in there to remove. It is
     what lets a later run tell a machine with a credential it cannot reach apart from one that never
     had a login at all, and taking it away would leave the next logout answering the warning this
-    one just issued with a false all-clear. The secret goes either way.
+    one just issued with a false all-clear. The secret goes either way, and a file that will give up
+    neither its copy nor itself outranks whatever the keychain had to say.
     """
     outcome: Final = vault.erase()
     record: Final = _read_token_file()
     settled: Final = _nothing_left_behind(outcome, record)
-    if settled or not _keep_the_unchecked_keychain_on_record(outcome, record):
-        Path(get_cli_token_file_path()).unlink(missing_ok=True)
+    if not settled and _keep_the_unchecked_keychain_on_record(outcome, record):
+        return outcome
+    removal: Final = _remove_token_file()
+    if removal is not None and record is not None and record.key is not None:
+        return removal
     return SecretErased() if settled else outcome
+
+
+def _remove_token_file() -> CredentialNotCleared | None:
+    try:
+        Path(get_cli_token_file_path()).unlink(missing_ok=True)
+    except OSError as error:
+        return CredentialNotCleared(str(error))
+    return None
 
 
 def _keep_the_unchecked_keychain_on_record(outcome: SecretErase, record: CliTokenRecord | None) -> bool:
