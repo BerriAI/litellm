@@ -44,6 +44,7 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
+    ALIAS_MARKER_FORWARDED_PARAMS_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
@@ -3239,6 +3240,8 @@ class Router:
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         """
+        for key in self._forwarded_alias_marker_keys_the_deployment_sets(deployment=deployment, kwargs=kwargs):
+            kwargs.pop(key, None)
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
 
         model_info = deployment.get("model_info", {}).copy()
@@ -11564,6 +11567,11 @@ class Router:
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
             )
+            self._stamp_or_clear_metadata_key(
+                request_kwargs=request_kwargs,
+                key=ALIAS_MARKER_FORWARDED_PARAMS_METADATA_KEY,
+                value=self._still_forwarded_alias_marker_keys(request_kwargs) or None,
+            )
             return None
 
         pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
@@ -11605,9 +11613,22 @@ class Router:
         # excluded here: they price the alias, not the deployment the hook
         # selected, and forwarding them re-registers the routed deployment at
         # the alias's price (an explicit 0 makes every alias request bill $0).
-        if pre_routing_hook_response is not None:
-            for key, value in self._forwardable_alias_marker_params(model=model, strategy_tags=selected_strategy.tags):
-                request_kwargs.setdefault(key, value)
+        # Forwarded params only fill gaps: the keys inserted here are stamped on the
+        # request so `_update_kwargs_with_deployment` can drop any the selected
+        # deployment sets itself (its own `aws_region_name` beats the marker's).
+        marker_params: Final = (
+            self._forwardable_alias_marker_params(model=model, strategy_tags=selected_strategy.tags)
+            if pre_routing_hook_response is not None
+            else ()
+        )
+        still_forwarded: Final = self._still_forwarded_alias_marker_keys(request_kwargs)
+        newly_forwarded: Final = tuple((key, value) for key, value in marker_params if key not in request_kwargs)
+        request_kwargs.update(newly_forwarded)
+        self._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key=ALIAS_MARKER_FORWARDED_PARAMS_METADATA_KEY,
+            value=(*still_forwarded, *(key for key, _ in newly_forwarded)) or None,
+        )
 
         return pre_routing_hook_response
 
@@ -11632,6 +11653,30 @@ class Router:
             if key not in _ALIAS_PARAMS_NEVER_FORWARDED
             and key not in CustomPricingLiteLLMParams.model_fields
             and value is not None
+        )
+
+    @staticmethod
+    def _still_forwarded_alias_marker_keys(request_kwargs: Mapping[str, object]) -> tuple[str, ...]:
+        stamps: Final = tuple(
+            stamp
+            for bucket in (request_kwargs.get("litellm_metadata"), request_kwargs.get("metadata"))
+            if isinstance(bucket, Mapping)
+            for stamp in (bucket.get(ALIAS_MARKER_FORWARDED_PARAMS_METADATA_KEY),)
+            if isinstance(stamp, (list, tuple))
+        )
+        return tuple(key for stamp in stamps for key in stamp if isinstance(key, str) and key in request_kwargs)
+
+    @staticmethod
+    def _forwarded_alias_marker_keys_the_deployment_sets(
+        deployment: Mapping[str, object], kwargs: Mapping[str, object]
+    ) -> tuple[str, ...]:
+        deployment_litellm_params: Final = deployment.get("litellm_params")
+        if not isinstance(deployment_litellm_params, Mapping):
+            return ()
+        return tuple(
+            key
+            for key in Router._still_forwarded_alias_marker_keys(kwargs)
+            if deployment_litellm_params.get(key) is not None
         )
 
     def _consumed_request_tags_stamp(
