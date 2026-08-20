@@ -4,8 +4,15 @@ import { Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import React from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const THEMES = [
   { value: "system", label: "System", Icon: Monitor },
@@ -14,29 +21,40 @@ const THEMES = [
 ] as const;
 
 const ThemeToggle: React.FC = () => {
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === "dark";
 
   return (
-    <ButtonGroup role="radiogroup" aria-label="Theme">
-      {THEMES.map(({ value, label, Icon }) => {
-        const selected = theme === value;
-        return (
-          <Button
-            key={value}
-            role="radio"
-            aria-checked={selected}
-            aria-label={label}
-            title={label}
-            variant={selected ? "secondary" : "outline"}
-            size="icon-xs"
-            className={selected ? "text-foreground" : "text-muted-foreground"}
-            onClick={() => setTheme(value)}
-          >
-            <Icon />
-          </Button>
-        );
-      })}
-    </ButtonGroup>
+    <span className="flex items-center gap-1">
+      {isDark && (
+        <Badge
+          variant="outline"
+          className="px-1.5 py-0 text-[10px] font-medium text-muted-foreground"
+          title="Dark mode is still being rolled out, so some surfaces may not be styled yet"
+        >
+          Experimental
+        </Badge>
+      )}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="ghost" size="icon-sm" aria-label="Theme" title="Theme" className="text-muted-foreground" />
+          }
+        >
+          {isDark ? <Moon /> : <Sun />}
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-36">
+          <DropdownMenuRadioGroup value={theme ?? "light"} onValueChange={setTheme}>
+            {THEMES.map(({ value, label, Icon }) => (
+              <DropdownMenuRadioItem key={value} value={value}>
+                <Icon />
+                {label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </span>
   );
 };
 
