@@ -22083,7 +22083,7 @@ export interface components {
             routed_model: string;
             /**
              * Routed Model Configured
-             * @description Whether routed_model is a model group this proxy actually serves
+             * @description Whether routed_model is a model group available to the caller, scoped to team_id when given. Never confirms models the caller could not use
              */
             routed_model_configured: boolean;
             /** @description The decision record this request would have written to its log row */
