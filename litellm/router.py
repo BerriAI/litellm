@@ -10800,7 +10800,7 @@ class Router:
         _route_type = (request_kwargs or {}).get("_route_type")
         if _route_type is not None:
             healthy_deployments = filter_deployments_by_protocol(
-                healthy_deployments=cast(List[Dict], healthy_deployments),
+                healthy_deployments=cast(list[dict], healthy_deployments),
                 route_type=_route_type,
                 model=model,
             )
