@@ -16,7 +16,9 @@ from litellm.litellm_core_utils.cli_keyring import (
     KeyringDisabled,
     KeyringNotInstalled,
     KeyringUnreachable,
+    SecretErased,
     SecretStored,
+    SecretStranded,
 )
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
@@ -124,6 +126,16 @@ class TestLoadCliToken:
         on_disk = json.loads(path.read_text())
         assert "key" not in on_disk
         assert on_disk["user_email"] == "user@example.com"
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    def test_migration_tightens_a_world_readable_legacy_file(self, isolated_home, secret_vault_factory):
+        """An older `lite`, a loose umask, or a restored backup can leave token.json readable by
+        every account on the box. Migrating it must not preserve those permissions."""
+        path = _write_legacy_file(isolated_home)
+        path.chmod(0o644)
+
+        load_cli_token(vault=secret_vault_factory())
+
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
     def test_legacy_file_survives_a_vault_that_refuses_to_store(self, isolated_home, secret_vault_factory):
@@ -304,12 +316,35 @@ class TestSaveCliToken:
         assert list(path.parent.glob(".tmp-*")) == []
 
 
+class TestScrubFailure:
+    """A keychain that took the secret while the file kept it is the worst of both stores: the
+    credential is live, it is in cleartext on disk, and every command reports success."""
+
+    def test_a_file_that_cannot_be_rewritten_is_removed_instead(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
+        path = _write_legacy_file(isolated_home)
+        vault = secret_vault_factory()
+
+        def _explode(*args, **kwargs):
+            raise OSError("no space left on device")
+
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.json.dump", _explode)
+
+        record = load_cli_token(vault=vault)
+
+        assert record.key == "sk-legacy"
+        assert json.loads(vault.blob)["key"] == "sk-legacy"
+        assert not path.exists()
+        assert list(path.parent.glob(".tmp-*")) == []
+
+
 class TestClearCliToken:
     def test_removes_the_credential_from_both_stores(self, isolated_home, secret_vault_factory):
         vault = secret_vault_factory()
         save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-new"), vault=vault)
 
-        assert clear_cli_token(vault=vault) is True
+        assert clear_cli_token(vault=vault) == SecretErased()
         assert vault.blob is None
         assert not _token_file(isolated_home).exists()
         assert load_cli_token(vault=vault) is None
@@ -318,11 +353,32 @@ class TestClearCliToken:
         _write_legacy_file(isolated_home)
         vault = secret_vault_factory(blob=_blob(), erasable=False)
 
-        assert clear_cli_token(vault=vault) is False
+        assert clear_cli_token(vault=vault) == SecretStranded()
+        assert not _token_file(isolated_home).exists()
+
+    def test_logout_from_an_install_without_keyring_does_not_claim_the_keychain_is_clear(
+        self, isolated_home, secret_vault_factory
+    ):
+        """Log in where `litellm[cli]` is installed and the secret goes to the OS keychain; log out
+        from a venv without it and the entry survives, because it belongs to the OS rather than to
+        the package. Reporting a clean logout there leaves a live credential the user thinks is gone."""
+        _write_metadata_only_file(isolated_home)
+        vault = secret_vault_factory(available=False, failure=KeyringNotInstalled())
+
+        assert clear_cli_token(vault=vault) == KeyringNotInstalled()
+        assert not _token_file(isolated_home).exists()
+
+    def test_a_file_backed_login_logs_out_quietly_without_keyring(self, isolated_home, secret_vault_factory):
+        """The complement: a user who never had a keychain keeps their whole credential in the file,
+        so removing it is a complete logout and must not warn about an entry that cannot exist."""
+        _write_legacy_file(isolated_home)
+        vault = secret_vault_factory(available=False, failure=KeyringNotInstalled())
+
+        assert clear_cli_token(vault=vault) == SecretErased()
         assert not _token_file(isolated_home).exists()
 
     def test_is_safe_when_nothing_was_ever_stored(self, isolated_home, secret_vault_factory):
-        assert clear_cli_token(vault=secret_vault_factory()) is True
+        assert clear_cli_token(vault=secret_vault_factory()) == SecretErased()
 
 
 class TestIsCliTokenFresh:
@@ -384,7 +440,7 @@ class TestKeyringVault:
 
         assert vault.write("blob-1") == SecretStored()
         assert vault.read() == SecretFound("blob-1")
-        assert vault.erase() is True
+        assert vault.erase() == SecretErased()
         assert vault.read() == SecretMissing()
         assert {call[1:] for call in fake.calls} == {(KEYRING_SERVICE, KEYRING_ACCOUNT)}
 
@@ -392,24 +448,25 @@ class TestKeyringVault:
         """`LITELLM_CLI_DISABLE_KEYRING` has to work without importing keyring, because keyring
         caches its backend on first use and cannot be reconfigured later. Erase still fails: a
         credential stored before the switch was set may be in the keychain, and with reads
-        disabled `lite logout` cannot verify it is gone, so it must warn instead."""
+        disabled `lite logout` cannot verify it is gone, so it must say so instead."""
         monkeypatch.setenv(DISABLE_KEYRING_ENV_VAR, "1")
         vault = KeyringVault()
 
         assert vault.read() == KeyringDisabled()
         assert vault.write("blob-1") == KeyringDisabled()
-        assert vault.erase() is False
+        assert vault.erase() == KeyringDisabled()
 
     def test_an_uninstalled_keyring_library_degrades_to_the_file(self, monkeypatch):
         """keyring is an optional extra, so the SDK must survive its absence rather than raise on
-        the hot path."""
+        the hot path. Erase cannot succeed: the entry belongs to the OS and outlives the package,
+        so an install without it is not evidence that the keychain is empty."""
         monkeypatch.delenv(DISABLE_KEYRING_ENV_VAR, raising=False)
         monkeypatch.setitem(sys.modules, "keyring", None)
         vault = KeyringVault()
 
         assert vault.read() == KeyringNotInstalled()
         assert vault.write("blob-1") == KeyringNotInstalled()
-        assert vault.erase() is True
+        assert vault.erase() == KeyringNotInstalled()
 
     def test_a_locked_keychain_is_reported_not_raised(self, install_fake_keyring):
         install_fake_keyring(_FakeKeyringModule(get_error=RuntimeError("keyring is locked")))
@@ -424,9 +481,9 @@ class TestKeyringVault:
     def test_a_refused_delete_is_reported_so_logout_can_warn(self, install_fake_keyring):
         install_fake_keyring(_FakeKeyringModule(stored="blob-1", delete_error=RuntimeError("locked")))
 
-        assert KeyringVault().erase() is False
+        assert KeyringVault().erase() == SecretStranded()
 
     def test_erasing_a_locked_keychain_is_a_failure(self, install_fake_keyring):
         install_fake_keyring(_FakeKeyringModule(get_error=RuntimeError("locked")))
 
-        assert KeyringVault().erase() is False
+        assert KeyringVault().erase() == KeyringUnreachable()

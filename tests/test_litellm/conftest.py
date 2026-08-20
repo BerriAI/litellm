@@ -25,10 +25,13 @@ from litellm._logging import ALL_LOGGERS
 from litellm.litellm_core_utils.cli_keyring import (
     KeyringUnreachable,
     KeyringUnusable,
+    SecretErase,
+    SecretErased,
     SecretFound,
     SecretMissing,
     SecretRead,
     SecretStored,
+    SecretStranded,
     SecretWrite,
 )
 from litellm.litellm_core_utils.prompt_templates import (
@@ -163,12 +166,14 @@ class FakeSecretVault:
         self.blob = blob
         return SecretStored()
 
-    def erase(self) -> bool:
+    def erase(self) -> SecretErase:
         self.erases += 1
-        if not (self.available and self.erasable):
-            return False
+        if not self.available:
+            return self.failure
+        if not self.erasable:
+            return SecretStranded() if self.blob is not None else SecretErased()
         self.blob = None
-        return True
+        return SecretErased()
 
 
 @pytest.fixture
