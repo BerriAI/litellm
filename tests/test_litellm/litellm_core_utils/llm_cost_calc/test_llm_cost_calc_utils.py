@@ -1065,10 +1065,16 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(
     ],
 )
 def test_generic_cost_per_token_gpt56_cyber(
-    model, prompt_tokens, input_rate, cache_write_rate, cache_read_rate, output_rate
+    model,
+    prompt_tokens,
+    input_rate,
+    cache_write_rate,
+    cache_read_rate,
+    output_rate,
+    monkeypatch,
 ):
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     cached_tokens = 50000
     cache_write_tokens = 40000
