@@ -5,57 +5,28 @@ import { tagsControl } from "./mcpFieldRules";
 const controlWith = (value: unknown, onChange = vi.fn()): MountedFieldControlProps =>
   ({ id: "field", name: "field", value, onChange, onBlur: vi.fn() }) as unknown as MountedFieldControlProps;
 
-// These fields were antd Selects with tokenSeparators={[","]}: a comma commits a tag, and nothing
-// else does. The shadcn tag input commits the whole typed string as one custom value instead, so
-// every case below pins the antd rule the migration has to preserve.
+// These fields were antd Selects with tokenSeparators={[","]}, so a comma commits a tag as an admin
+// types. MultiSelect owns that rule now, which leaves this adapter one job: hand the stored value to
+// the input and the edited value back, without rewriting either. Stdio args are process argv, so a
+// comma inside one and a deliberately repeated flag both have to survive a round trip.
 describe("tagsControl", () => {
-  it("splits the comma-separated headers an admin commits as one entry", () => {
-    const onChange = vi.fn();
-    tagsControl(controlWith([], onChange)).onValueChange(["Authorization,X-Custom-Header"]);
-
-    expect(onChange).toHaveBeenCalledWith(["Authorization", "X-Custom-Header"]);
+  it("keeps a stored argument that contains a comma as one argument", () => {
+    expect(tagsControl(controlWith(["--filter=a,b", "--verbose"])).value).toStrictEqual(["--filter=a,b", "--verbose"]);
   });
 
-  it("trims the space an admin types after each comma", () => {
-    const onChange = vi.fn();
-    tagsControl(controlWith([], onChange)).onValueChange(["read, write, admin"]);
-
-    expect(onChange).toHaveBeenCalledWith(["read", "write", "admin"]);
+  it("keeps a repeated stdio flag rather than collapsing it to one", () => {
+    expect(tagsControl(controlWith(["-v", "-v"])).value).toStrictEqual(["-v", "-v"]);
   });
 
-  it("keeps already-committed tags intact while splitting only the entry that needs it", () => {
-    const onChange = vi.fn();
-    tagsControl(controlWith(["group-a"], onChange)).onValueChange(["group-a", "group-b,group-c"]);
-
-    expect(onChange).toHaveBeenCalledWith(["group-a", "group-b", "group-c"]);
+  it("offers each repeated tag once, since the dropdown keys its entries by value", () => {
+    expect(tagsControl(controlWith(["-v", "-v"])).options).toStrictEqual([{ label: "-v", value: "-v" }]);
   });
 
-  it("drops the duplicate when a typed entry repeats a tag that is already selected", () => {
-    const onChange = vi.fn();
-    tagsControl(controlWith(["read"], onChange)).onValueChange(["read", "read,write"]);
-
-    expect(onChange).toHaveBeenCalledWith(["read", "write"]);
-  });
-
-  it("preserves the interior spaces of a stdio argument, which a comma alone may split", () => {
+  it("stores the edited tags exactly as the input committed them", () => {
     const onChange = vi.fn();
     tagsControl(controlWith(["npx"], onChange)).onValueChange(["npx", "--header=X-Trace: on"]);
 
     expect(onChange).toHaveBeenCalledWith(["npx", "--header=X-Trace: on"]);
-  });
-
-  it("keeps a scope URI whole, since it carries no comma", () => {
-    const onChange = vi.fn();
-    tagsControl(controlWith([], onChange)).onValueChange(["api://app-id/.default"]);
-
-    expect(onChange).toHaveBeenCalledWith(["api://app-id/.default"]);
-  });
-
-  it("splits a stored delimited string rather than rendering it as one tag", () => {
-    expect(tagsControl(controlWith("Authorization,X-Custom-Header")).value).toStrictEqual([
-      "Authorization",
-      "X-Custom-Header",
-    ]);
   });
 
   it("renders a stored list unchanged", () => {
@@ -63,15 +34,16 @@ describe("tagsControl", () => {
   });
 
   it("clears to an empty list rather than a blank tag when the field is emptied", () => {
-    const onChange = vi.fn();
-    tagsControl(controlWith("", onChange)).onValueChange([""]);
-
     expect(tagsControl(controlWith("")).value).toStrictEqual([]);
-    expect(onChange).toHaveBeenCalledWith([]);
+    expect(tagsControl(controlWith([""])).value).toStrictEqual([]);
   });
 
   it("ignores a stored value that is neither a string nor a list", () => {
     expect(tagsControl(controlWith(null)).value).toStrictEqual([]);
     expect(tagsControl(controlWith(42)).value).toStrictEqual([]);
+  });
+
+  it("wraps a bare stored string into the single tag the antd field would have shown", () => {
+    expect(tagsControl(controlWith("Authorization")).value).toStrictEqual(["Authorization"]);
   });
 });

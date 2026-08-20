@@ -27,26 +27,21 @@ export const selectControl = <TValue = unknown>(control: MountedFieldControlProp
 
 export const selectTriggerControl = (control: MountedFieldControlProps) => ariaOf(control);
 
-// Every one of these fields was an antd Select carrying tokenSeparators={[","]}, so a comma has
-// always committed a tag rather than becoming part of one, and only a comma has. The shadcn tag
-// input hands the whole typed string back as a single custom value instead, so apply that same rule
-// here, in both directions: a stored value can still be the bare string a cleared antd field left.
-const toTags = (value: unknown): string[] => [
-  ...new Set(
-    (Array.isArray(value) ? value : [value])
-      .flatMap((entry) => (typeof entry === "string" ? entry.split(",") : []))
-      .map((tag) => tag.trim())
-      .filter((tag) => tag !== ""),
-  ),
-];
+// These fields were antd Selects carrying tokenSeparators={[","]}, and MultiSelect applies that same
+// rule to what an admin types. So this only adapts the stored value: splitting or deduping it here
+// would rewrite stdio argv entries and repeated flags that nobody edited.
+const toTags = (value: unknown): string[] =>
+  (Array.isArray(value) ? value : [value]).filter(
+    (entry): entry is string => typeof entry === "string" && entry !== "",
+  );
 
 export const tagsControl = (control: MountedFieldControlProps) => {
   const value = toTags(control.value);
   return {
     id: control.id,
-    options: value.map((tag) => ({ label: tag, value: tag })),
+    options: [...new Set(value)].map((tag) => ({ label: tag, value: tag })),
     value,
-    onValueChange: (tags: readonly string[]) => control.onChange(toTags(tags)),
+    onValueChange: control.onChange,
     emptyText: "Type to add",
     allowCustomValues: true,
   };
