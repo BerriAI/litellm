@@ -5,6 +5,7 @@ Unit tests for auto router management endpoints
 import os
 import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -1211,7 +1212,8 @@ async def test_validate_config_returns_the_write_gates_verdict_without_saving():
                 "classifier_type": "llm",
                 "classifier_llm_config": {"model": "clf"},
             }
-        )
+        ),
+        ADMIN,
     )
     assert valid.valid is True
     assert valid.error is None
@@ -1228,10 +1230,59 @@ async def test_validate_config_returns_the_write_gates_verdict_without_saving():
                 "classifier_type": "llm",
                 "classifier_llm_config": {"model": "clf"},
             }
-        )
+        ),
+        ADMIN,
     )
     assert rejected.valid is False
     assert rejected.error is not None and "newline" in rejected.error
+
+
+@pytest.mark.asyncio
+async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: pytest.MonkeyPatch):
+    """A caller who could not save the router must not get the dry run either: matching
+    /model/new, a team admin passes only when naming their own team, and a caller who is
+    neither proxy admin nor team admin is rejected before validation runs."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.auto_router_endpoints import (
+        validate_complexity_router_config,
+    )
+    from litellm.types.management_endpoints.auto_router_endpoints import (
+        ComplexityRouterConfigValidationRequest,
+    )
+
+    config: Final = {"tiers": {"SIMPLE": "m1"}, "classifier_type": "heuristic"}
+
+    with pytest.raises(HTTPException) as forbidden:
+        await validate_complexity_router_config(
+            ComplexityRouterConfigValidationRequest(complexity_router_config=config), VIEWER
+        )
+    assert forbidden.value.status_code == 403
+
+    team_row: Final = MagicMock()
+    team_row.model_dump.return_value = {
+        "team_id": "team-1",
+        "members_with_roles": [{"role": "admin", "user_id": "team-admin"}],
+    }
+    prisma: Final = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+    team_admin: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-team", user_id="team-admin"
+    )
+    verdict = await validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(complexity_router_config=config, team_id="team-1"),
+        team_admin,
+    )
+    assert verdict.valid is True
+
+    with pytest.raises(HTTPException) as not_their_team:
+        await validate_complexity_router_config(
+            ComplexityRouterConfigValidationRequest(complexity_router_config=config, team_id="team-1"),
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-other", user_id="someone-else"),
+        )
+    assert not_their_team.value.status_code == 403
 
 
 def test_every_shadow_eval_sql_constant_speaks_naive_utc():

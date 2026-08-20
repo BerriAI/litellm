@@ -960,7 +960,8 @@ export interface paths {
          *
          *     Runs the same check every write path runs (the router's own pydantic model), so a form can
          *     show the backend's exact verdict while the operator is still editing rather than after a
-         *     rejected save. Nothing is created, routed, or billed.
+         *     rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
+         *     naming their own team. Nothing is created, routed, or billed.
          */
         post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
         delete?: never;
@@ -23807,6 +23808,11 @@ export interface components {
             complexity_router_config: {
                 [key: string]: unknown;
             };
+            /**
+             * Team Id
+             * @description Team the router is being created for. Required for a team admin, who may only validate their own team's routers
+             */
+            team_id?: string | null;
         };
         /** ComplexityRouterConfigValidationResponse */
         ComplexityRouterConfigValidationResponse: {

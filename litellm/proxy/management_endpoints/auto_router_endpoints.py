@@ -133,12 +133,13 @@ async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -
     return await prisma_client.db.query_raw(query, *args)
 
 
-async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> None:
+async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> None:
     """Allow exactly the callers who could create this router.
 
-    Routing a prompt can spend money (an `llm` classifier config calls its classifier, a
-    semantic config embeds the prompt), so this is gated like a write rather than a read:
-    a proxy admin, or a team admin naming their own team, matching /model/new.
+    Both dry runs are gated like the write they rehearse rather than as reads: a proxy
+    admin, or a team admin naming their own team, matching /model/new. Routing a test
+    prompt can also spend money (an `llm` classifier config calls its classifier, a
+    semantic config embeds the prompt), so a read-level gate would be too loose anyway.
     """
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
@@ -152,7 +153,7 @@ async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: st
         raise HTTPException(
             status_code=403,
             detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
-                "error": f"User does not have permission to test an auto router. Your role={user_api_key_dict.user_role}. Test as a PROXY_ADMIN, or as a team admin by specifying a team_id."
+                "error": f"User does not have permission to dry-run an auto router. Your role={user_api_key_dict.user_role}. Call as a PROXY_ADMIN, or as a team admin by specifying a team_id."
             },
         )
 
@@ -250,14 +251,18 @@ async def _authorize_models_this_test_can_call(
 )
 async def validate_complexity_router_config(
     data: ComplexityRouterConfigValidationRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> ComplexityRouterConfigValidationResponse:
     """
     Validate a complexity-router config without saving it.
 
     Runs the same check every write path runs (the router's own pydantic model), so a form can
     show the backend's exact verdict while the operator is still editing rather than after a
-    rejected save. Nothing is created, routed, or billed.
+    rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
+    naming their own team. Nothing is created, routed, or billed.
     """
+    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+
     from litellm.router_utils.auto_router_model_naming import (
         validate_complexity_router_config_write,
     )
@@ -300,7 +305,7 @@ async def preview_auto_router_routing(
     """
     from litellm.proxy.proxy_server import llm_router
 
-    await _authorize_routing_test(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
     if llm_router is None:
         raise HTTPException(

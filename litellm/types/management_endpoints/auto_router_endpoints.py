@@ -32,6 +32,10 @@ class ComplexityRouterConfigValidationRequest(BaseModel):
     backend's own verdict inline instead of a raw 400 at write time."""
 
     complexity_router_config: Mapping[str, object]
+    team_id: str | None = Field(
+        default=None,
+        description="Team the router is being created for. Required for a team admin, who may only validate their own team's routers",
+    )
 
 
 class ComplexityRouterConfigValidationResponse(BaseModel):
