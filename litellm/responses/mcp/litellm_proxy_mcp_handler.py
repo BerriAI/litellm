@@ -72,7 +72,9 @@ class LiteLLM_Proxy_MCP_Handler:
     """
 
     @staticmethod
-    def _prepare_chained_call_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    def _prepare_chained_call_params(
+        params: Mapping[str, Any],
+    ) -> dict[str, Any]:  # mutable-ok: returns a sanitized copy for the next provider call
         """Copy request params without state owned by the previous LLM call.
 
         MCP auto-execution keeps the trace identifier so chained rounds remain
@@ -1264,7 +1266,7 @@ class LiteLLM_Proxy_MCP_Handler:
         Restores the original streaming setting and removes tool_choice since
         we're now providing tool results, not requesting tool calls.
         """
-        follow_up_params: Final = call_params.copy()
+        follow_up_params: Final = LiteLLM_Proxy_MCP_Handler._prepare_chained_call_params(call_params)
 
         # Restore original streaming setting for follow-up call
         follow_up_params["stream"] = original_stream_setting

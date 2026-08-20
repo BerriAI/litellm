@@ -444,12 +444,13 @@ async def test_execute_tool_calls_uses_unique_call_ids_and_preserves_parent_cont
     assert all(item["metadata"]["parent_litellm_call_id"] == "cid" for item in captured)
 
 
-def test_prepare_chained_call_params_resets_per_call_logging_state():
+def test_prepare_follow_up_call_params_resets_per_call_logging_state():
     original = {
         "model": "gpt-4",
         "litellm_call_id": "parent-call",
         "litellm_logging_obj": object(),
         "litellm_trace_id": "trace-1",
+        "tool_choice": "auto",
         "litellm_params": {
             "litellm_call_id": "nested-parent-call",
             "litellm_logging_obj": object(),
@@ -457,13 +458,15 @@ def test_prepare_chained_call_params_resets_per_call_logging_state():
         },
     }
 
-    follow_up = LiteLLM_Proxy_MCP_Handler._prepare_chained_call_params(original)
+    follow_up = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(original, original_stream_setting=True)
 
     assert "litellm_call_id" not in follow_up
     assert "litellm_logging_obj" not in follow_up
     assert "litellm_call_id" not in follow_up["litellm_params"]
     assert "litellm_logging_obj" not in follow_up["litellm_params"]
     assert follow_up["litellm_trace_id"] == "trace-1"
+    assert follow_up["stream"] is True
+    assert "tool_choice" not in follow_up
     assert follow_up["litellm_params"]["metadata"] == {"team": "legal"}
     assert original["litellm_call_id"] == "parent-call"
 
