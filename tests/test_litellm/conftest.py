@@ -100,6 +100,12 @@ def isolate_host_aws_config(monkeypatch, isolated_aws_credentials_dir):
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
 
 
+@pytest.fixture(scope="function", autouse=True)
+def isolate_host_proxy_base_url(monkeypatch):
+    """Prevent a host PROXY_BASE_URL from outranking request-derived URLs during unit tests."""
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+
 def _run_coroutine_if_needed(result):
     if not asyncio.iscoroutine(result):
         return

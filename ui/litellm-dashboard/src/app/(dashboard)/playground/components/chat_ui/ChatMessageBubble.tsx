@@ -59,14 +59,14 @@ function ChatMessageBubble({
             }}
           >
             {isUser ? (
-              <User className="size-3 text-blue-600" aria-hidden="true" />
+              <User className="size-3 text-info" aria-hidden="true" />
             ) : (
-              <Bot className="size-3 text-gray-600" aria-hidden="true" />
+              <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
             )}
           </div>
           <strong className="text-sm capitalize">{message.role}</strong>
           {message.role === "assistant" && message.model && (
-            <span className="max-w-48 truncate rounded-sm bg-gray-100 px-2 py-0.5 text-xs font-normal text-gray-600 sm:max-w-80">
+            <span className="max-w-48 truncate rounded-sm bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground sm:max-w-80">
               {message.model}
             </span>
           )}
@@ -117,7 +117,7 @@ function ChatMessageBubble({
             <img
               src={typeof message.content === "string" ? message.content : ""}
               alt="Generated image"
-              className="max-w-full rounded-md border border-gray-200 shadow-xs"
+              className="max-w-full rounded-md border border-border shadow-xs"
               style={{ maxHeight: "500px" }}
             />
           ) : message.isAudio ? (
@@ -155,7 +155,7 @@ function ChatMessageBubble({
                       </SyntaxHighlighter>
                     ) : (
                       <code
-                        className={`${className} px-1.5 py-0.5 rounded-sm bg-gray-100 text-sm font-mono`}
+                        className={`${className} px-1.5 py-0.5 rounded-sm bg-muted text-sm font-mono`}
                         style={{ wordBreak: "break-word" }}
                         {...props}
                       >
@@ -175,7 +175,7 @@ function ChatMessageBubble({
                   <img
                     src={message.image.url}
                     alt="Generated image"
-                    className="max-w-full rounded-md border border-gray-200 shadow-xs"
+                    className="max-w-full rounded-md border border-border shadow-xs"
                     style={{ maxHeight: "500px" }}
                   />
                 </div>

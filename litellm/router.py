@@ -29,6 +29,7 @@ import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
@@ -63,6 +64,7 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -203,6 +205,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
+    LlmProviders,
     ModelInfo,
     ModelResponseStream,
     StandardLoggingPayload,
@@ -253,7 +256,7 @@ if TYPE_CHECKING:
         ResponsesAPIResponse,
     )
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
     AutoRouter = Any
@@ -3192,7 +3195,7 @@ class Router:
             function_name=function_name,
         )
         model_group: Final = kwargs.get(metadata_variable_name, {}).get("model_group")
-        _model_id: Final = self._generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
+        _model_id: Final = self.generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
         original_model_id: Final = model_info.get("id")
         model_info["id"] = _model_id
         model_info["original_model_id"] = original_model_id
@@ -5086,6 +5089,13 @@ class Router:
                     )
 
                     kwargs_copy["file"] = file
+                if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+                    kwargs_copy["extra_body"] = MappingProxyType(
+                        {
+                            **(kwargs_copy.get("extra_body") or MappingProxyType({})),
+                            "target_model_names": stripped_model,
+                        }
+                    )
                 if (
                     "gcs_bucket_name" in data
                 ):  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
@@ -7569,13 +7579,14 @@ class Router:
 
     @staticmethod
     def _json_default_stable_id(value: object) -> str:
-        """json.dumps default= for _generate_model_id: plain str() on an arbitrary
+        """json.dumps default= for generate_model_id: plain str() on an arbitrary
         object (e.g. a RoutingPlugin instance) falls back to object.__repr__'s
         `<module.Class object at 0x...>`, so the hash -- and deployment id -- would
         change every restart. Use the class name instead, stable across restarts."""
         return f"{type(value).__module__}.{type(value).__qualname__}"
 
-    def _generate_model_id(self, model_group: str, litellm_params: dict):
+    @staticmethod
+    def generate_model_id(model_group: str, litellm_params: dict) -> str:  # mutable-ok: hashed read-only
         """
         Helper function to consistently generate the same id for a deployment
 
@@ -7590,14 +7601,14 @@ class Router:
             if isinstance(k, str):
                 parts.append(k)
             elif isinstance(k, dict):
-                parts.append(json.dumps(k, default=self._json_default_stable_id))
+                parts.append(json.dumps(k, default=Router._json_default_stable_id))
             else:
                 parts.append(str(k))
 
             if isinstance(v, str):
                 parts.append(v)
             elif isinstance(v, dict):
-                parts.append(json.dumps(v, default=self._json_default_stable_id))
+                parts.append(json.dumps(v, default=Router._json_default_stable_id))
             else:
                 parts.append(str(v))
 
@@ -7635,6 +7646,39 @@ class Router:
                 if backend_value is not None:
                     model_info[field] = backend_value
 
+    @staticmethod
+    def _inherit_builtin_tiered_output_rate(
+        model_info: dict, backend_model: str, custom_llm_provider: str | None
+    ) -> None:
+        """Fill a missing entry-level output rate on a deployment entry whose tier
+        table omits one, from the backend model's built-in cost map entry.
+
+        A deployment's custom pricing is registered as its own standalone
+        ``litellm.model_cost`` entry holding only the supplied fields, and the
+        tiered-cost output fallback reads that same entry, so a tier table that
+        spells out only input-side rates would bill every completion at 0.
+
+        A user-specified ``output_cost_per_token`` always wins. No-op without a
+        tier table, when every tier declares its own output rate, or when the
+        backend model has no canonical entry or no flat output rate:
+        ``get_model_info`` synthesizes a zero for tiered-only backends, and
+        storing that zero would mark the deployment as explicitly priced free.
+        """
+        tiers: Final = model_info.get("tiered_pricing")
+        if not isinstance(tiers, list) or not tiers:
+            return
+        if model_info.get("output_cost_per_token") is not None:
+            return
+        if all(isinstance(tier, dict) and "output_cost_per_token" in tier for tier in tiers):
+            return
+        try:
+            backend_info: Final = litellm.get_model_info(model=backend_model, custom_llm_provider=custom_llm_provider)
+        except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped backend model
+            return
+        backend_rate: Final = backend_info.get("output_cost_per_token")
+        if backend_rate:
+            model_info["output_cost_per_token"] = backend_rate
+
     def _create_deployment(
         self,
         deployment_info: dict,
@@ -7652,7 +7696,16 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**_litellm_params)
+            zeroed_pricing: Final = (
+                zeroed_ptu_pricing(_model_info, _litellm_params) if _model_info.get("db_model") is not True else None
+            )
+            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
+                **(
+                    _litellm_params
+                    if zeroed_pricing is None
+                    else MappingProxyType({**_litellm_params, **zeroed_pricing})
+                )
+            )
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(
                 **deployment_info,
@@ -7670,6 +7723,11 @@ class Router:
                     backend_model=deployment.litellm_params.model,
                     custom_llm_provider=deployment.litellm_params.custom_llm_provider,
                 )
+            Router._inherit_builtin_tiered_output_rate(
+                model_info=_model_info,
+                backend_model=deployment.litellm_params.model,
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
 
             ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
             Router._register_deployment_in_model_cost(
@@ -7794,20 +7852,29 @@ class Router:
         from litellm.router_strategy.complexity_router.complexity_router import (
             ComplexityRouter,
         )
+        from litellm.router_strategy.complexity_router.config import (
+            ComplexityRouterConfig,
+        )
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
 
         default_model: str | None = deployment.litellm_params.complexity_router_default_model
 
-        # If no default model specified, try to get from config tiers
+        # If no default model specified, try to get from config tiers. Derived from the
+        # validated model, not the raw dict, so normalization (e.g. fallback_tier
+        # whitespace) is applied by its one owner before the tiers lookup.
         if default_model is None and complexity_router_config:
-            tiers: Final = complexity_router_config.get("tiers", {})
-            # Use MEDIUM tier as fallback default
-            medium: Final = tiers.get("MEDIUM") or tiers.get("SIMPLE")
-            if isinstance(medium, list):
-                default_model = medium[0] if medium else None
+            validated: Final = ComplexityRouterConfig.model_validate(complexity_router_config)
+            # Custom tier sets name their fallback tier; built-in sets default to MEDIUM or SIMPLE
+            derived: Final = (
+                (validated.tiers.get(validated.fallback_tier) if validated.fallback_tier is not None else None)
+                or validated.tiers.get("MEDIUM")
+                or validated.tiers.get("SIMPLE")
+            )
+            if isinstance(derived, list):
+                default_model = derived[0] if derived else None
             else:
-                default_model = medium
+                default_model = derived
 
         if default_model is None:
             raise ValueError(
@@ -8144,7 +8211,7 @@ class Router:
 
             # check if model info has id
             if "id" not in _model_info:
-                _id = self._generate_model_id(_model_name, _litellm_params)
+                _id = self.generate_model_id(_model_name, _litellm_params)
                 _model_info["id"] = _id
 
             if _litellm_params.get("organization", None) is not None and isinstance(
@@ -8368,6 +8435,11 @@ class Router:
                 backend_model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
+        Router._inherit_builtin_tiered_output_rate(
+            model_info=_model_info_dict,
+            backend_model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
 
         # Register custom pricing in litellm.model_cost.
         # Mirrors _create_deployment() logic to ensure dynamically-added deployments
@@ -8511,11 +8583,9 @@ class Router:
         Returns:
         - The added/updated deployment
         """
+        _deployment_model_id: Final = deployment.model_info.id or ""
+        _deployment_on_router: Final[Deployment | None] = self.get_deployment(model_id=_deployment_model_id)
         try:
-            # check if deployment already exists
-            _deployment_model_id: Final = deployment.model_info.id or ""
-
-            _deployment_on_router: Final[Deployment | None] = self.get_deployment(model_id=_deployment_model_id)
             if _deployment_on_router is not None:
                 # deployment with this model_id exists on the router
                 if (
@@ -8566,9 +8636,30 @@ class Router:
                     deployment.model_info.id,
                     e,
                 )
+                self._restore_deployment_after_failed_upsert(
+                    previous_deployment=_deployment_on_router, model_id=_deployment_model_id
+                )
                 return None
             else:
                 raise e
+
+    def _restore_deployment_after_failed_upsert(self, previous_deployment: Deployment | None, model_id: str) -> None:
+        if previous_deployment is None or self.has_model_id(model_id):
+            return
+        try:
+            self.add_deployment(deployment=previous_deployment)
+            verbose_router_logger.info(
+                "Restored deployment %s (id=%s); it keeps serving its previous configuration.",
+                previous_deployment.model_name,
+                model_id,
+            )
+        except Exception as restore_error:  # noqa: BLE001  # best-effort restore: a second failure must not abort the reload
+            verbose_router_logger.warning(
+                "Could not restore previously served deployment %s (id=%s) after the failed upsert: %s",
+                previous_deployment.model_name,
+                model_id,
+                restore_error,
+            )
 
     @staticmethod
     def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
@@ -8598,6 +8689,11 @@ class Router:
                 backend_model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
+        Router._inherit_builtin_tiered_output_rate(
+            model_info=model_info,
+            backend_model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
         return model_info
 
     @staticmethod
@@ -9078,14 +9174,26 @@ class Router:
             model_info_name = model
 
         model_info: Final = litellm.get_model_info(model=model_info_name)
+        if model_info is None:
+            return model_info
 
         ## CHECK USER SET MODEL INFO
-        user_model_info: Final = deployment.get("model_info") or {}
+        raw_user_model_info: Final = deployment.get("model_info")
+        user_model_info: Final = (
+            raw_user_model_info.model_dump(exclude_none=True)
+            if isinstance(raw_user_model_info, BaseModel)
+            else raw_user_model_info
+        )
 
-        if model_info is not None:
-            model_info.update(cast(ModelInfo, user_model_info))
+        # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
+        # values are skipped or Deployment's None pricing defaults would erase the map's
+        merged_model_info: Final = copy.copy(model_info)
+        if user_model_info:
+            for key, value in user_model_info.items():
+                if value is not None:
+                    merged_model_info[key] = value
 
-        return model_info
+        return merged_model_info
 
     def get_model_info(self, id: str) -> dict | None:
         """
@@ -9680,7 +9788,7 @@ class Router:
             if model_id is None:
                 model_name = model.get("model_name", "")
                 litellm_params = model.get("litellm_params", {})
-                model_id = self._generate_model_id(model_name, litellm_params)
+                model_id = self.generate_model_id(model_name, litellm_params)
                 # Update the model_info in the original list
                 if "model_info" not in model:
                     model["model_info"] = {}
@@ -10155,11 +10263,13 @@ class Router:
         returned_models.extend(self.get_model_list_from_routing_groups(model_name=model_name))
 
         if len(returned_models) == 0:  # check if wildcard route
-            potential_wildcard_models: Final = self.pattern_router.route(model_name) or []
+            potential_wildcard_models: Final = self.pattern_router.get_deployments_by_pattern(model=model_name or "")
 
             ## check for team-specific wildcard models
             if team_id is not None and team_id in self.team_pattern_routers:
-                potential_team_only_wildcard_models: Final = self.team_pattern_routers[team_id].route(model_name) or []
+                potential_team_only_wildcard_models: Final = self.team_pattern_routers[
+                    team_id
+                ].get_deployments_by_pattern(model=model_name or "")
                 potential_wildcard_models.extend(potential_team_only_wildcard_models)
 
             if model_name is not None and potential_wildcard_models is not None:
@@ -11091,6 +11201,8 @@ class Router:
             if pre_routing_hook_response is not None:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
+                if pre_routing_hook_response.litellm_params:
+                    request_kwargs.update(pre_routing_hook_response.litellm_params)
             #########################################################
 
             # Resolve the strategy and logger AFTER the pre-routing hook, since
@@ -11200,6 +11312,8 @@ class Router:
             if pre_routing_hook_response is not None:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
+                if pre_routing_hook_response.litellm_params:
+                    request_kwargs.update(pre_routing_hook_response.litellm_params)
 
             # 2. Get healthy deployments
             healthy_deployments: Final = await self.async_get_healthy_deployments(
@@ -11384,8 +11498,10 @@ class Router:
         deployment the strategy was registered from via its (model_name, tags)
         pair.
 
-        With tag filtering enabled, strategies that all carry real tags matching
-        none of the request's do not capture it when the name also has plain
+        With tag filtering enabled, router-wide or by the request's
+        enable_tag_filtering (which the proxy sets from key/team
+        router_settings), strategies that all carry real tags matching none of
+        the request's do not capture it when the name also has plain
         deployments: returning None hands the request to ordinary tag-aware
         deployment selection.
         """
@@ -11408,8 +11524,9 @@ class Router:
         for tagged in candidates:
             if "default" in tagged.tags:
                 return tagged
+        request_scoped_filtering: Final = request_kwargs.get("enable_tag_filtering") is True
         if (
-            self.enable_tag_filtering
+            (self.enable_tag_filtering or request_scoped_filtering)
             and all(tagged.tags for tagged in candidates)
             and self._model_name_has_plain_deployments(model)
         ):

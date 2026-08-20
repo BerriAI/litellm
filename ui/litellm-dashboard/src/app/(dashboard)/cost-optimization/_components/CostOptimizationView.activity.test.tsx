@@ -52,7 +52,7 @@ describe("CostOptimizationView daily activity", () => {
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    const { getByRole, getByTestId } = render(
+    const { getByRole, getByTestId, findByTestId } = render(
       <QueryClientProvider client={queryClient}>
         <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
       </QueryClientProvider>,
@@ -61,7 +61,7 @@ describe("CostOptimizationView daily activity", () => {
     await waitFor(() => expect(mockUserDailyActivityCall).toHaveBeenCalledTimes(1));
 
     fireEvent.click(getByRole("tab", { name: "Prompt Caching" }));
-    await waitFor(() => expect(getByTestId("caching-settings")).toBeInTheDocument());
+    await findByTestId("caching-settings");
 
     expect(mockUserDailyActivityCall).toHaveBeenCalledTimes(1);
   });

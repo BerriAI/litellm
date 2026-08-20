@@ -1,1 +1,1 @@
-export const ABOVE_ANTD_MODAL = "z-[1100]";
+export const NESTED_DIALOG_LAYER = "z-[1100]";

@@ -62,8 +62,13 @@ from litellm.integrations.otel.plumbing.providers import (
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
 
 if TYPE_CHECKING:
+    from opentelemetry.metrics import MeterProvider
+
+    from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.services import ServiceLoggerPayload
     from litellm.types.utils import (
+        CallTypesLiteral,
         StandardLoggingGuardrailInformation,
         StandardLoggingPayload,
     )
@@ -140,7 +145,7 @@ class OpenTelemetryV2(CustomLogger):
         callback_name: str | None = None,
         tracer_provider: TracerProvider | None = None,
         logger_provider: LoggerProvider | None = None,
-        meter_provider: Any | None = None,
+        meter_provider: "MeterProvider | None" = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -162,7 +167,7 @@ class OpenTelemetryV2(CustomLogger):
         self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
-    def _init_metrics(self, meter_provider: Any | None) -> "GenAIMetricRecorder | None":
+    def _init_metrics(self, meter_provider: "MeterProvider | None") -> "GenAIMetricRecorder | None":
         """Create the six GenAI histograms when metrics are enabled, else ``None``.
 
         ``meter_provider`` is an explicit override (tests inject one); otherwise the
@@ -340,7 +345,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _emit_mcp_tool_call(
         self,
-        kwargs: Mapping[str, Any],
+        kwargs: Mapping[str, object],
         start_time: datetime | float | None,
         end_time: datetime | float | None,
     ) -> bool:
@@ -417,7 +422,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _close_llm_call(
         self,
-        kwargs: Mapping[str, Any],
+        kwargs: Mapping[str, object],
         start_time: datetime | float | None,
         end_time: datetime | float | None,
     ) -> Span | None:
@@ -474,7 +479,7 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_service_success_hook(
         self,
-        payload: Any,
+        payload: "ServiceLoggerPayload",
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
@@ -491,7 +496,7 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_service_failure_hook(
         self,
-        payload: Any,
+        payload: "ServiceLoggerPayload",
         error: str | None = "",
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
@@ -509,7 +514,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _emit_service(
         self,
-        payload: Any,
+        payload: "ServiceLoggerPayload",
         *,
         parent_otel_span: Span | None,
         start_time: datetime | float | None,
@@ -559,7 +564,7 @@ class OpenTelemetryV2(CustomLogger):
     #  / errors are the FastAPI instrumentor's job, so we don't touch it here.
     # ====================================================================== #
 
-    def seed_request_identity(self, user_api_key_dict: Any, model: Any = None) -> None:
+    def seed_request_identity(self, user_api_key_dict: object, model: str | None = None) -> None:
         """Attach request-identity Baggage to the current context + server span.
 
         Seeding identity into Baggage makes **every** span emitted afterwards for
@@ -615,10 +620,10 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_pre_call_hook(
         self,
-        user_api_key_dict: Any,
-        cache: Any,
+        user_api_key_dict: "UserAPIKeyAuth",
+        cache: "DualCache",
         data: dict,
-        call_type: Any,
+        call_type: "CallTypesLiteral",
     ) -> dict:
         self.seed_request_identity(
             user_api_key_dict,
@@ -790,7 +795,7 @@ def emit_guardrail_span(entry: "StandardLoggingGuardrailInformation") -> None:
         pass
 
 
-def seed_request_identity(user_api_key_dict: Any, model: Any = None) -> None:
+def seed_request_identity(user_api_key_dict: object, model: str | None = None) -> None:
     logger: Final = _registered_v2_logger()
     if logger is not None:
         logger.seed_request_identity(user_api_key_dict, model=model)
