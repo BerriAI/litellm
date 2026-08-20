@@ -92,8 +92,12 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     document_annotation: Any | None = None
     usage_info: OCRUsageInfo | None = None
     content: str | None = None
-    tables: list[dict[str, object]] | None = None
-    keyValuePairs: list[dict[str, object]] | None = None
+    # `Any`, not `object`: the `object` field below shadows the builtin in this
+    # class namespace, and pydantic resolves the deferred annotations against
+    # that namespace — so `dict[str, object]` resolves to the string "ocr" and
+    # the model can never be built.
+    tables: list[dict[str, Any]] | None = None
+    keyValuePairs: list[dict[str, Any]] | None = None
     object: str = "ocr"
 
     model_config = {"extra": "allow"}
