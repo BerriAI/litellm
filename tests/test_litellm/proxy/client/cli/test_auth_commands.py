@@ -1137,7 +1137,12 @@ class TestKeychainBackedCommands:
         assert "could not be read" in result.output
         assert "lite login" in result.output
 
-    def test_whoami_flags_a_locked_keychain(self, isolated_home, secret_vault_factory):
+    def test_whoami_does_not_call_a_credential_it_cannot_read_authenticated(
+        self, isolated_home, secret_vault_factory
+    ):
+        """A login whose secret is stuck in an unreachable keychain authenticates nothing. Leading
+        with "Authenticated" and a token age reads as a working session, and sends the user looking
+        for the problem somewhere other than the keychain the notice underneath names."""
         _write_home_json(
             isolated_home,
             "token.json",
@@ -1147,7 +1152,8 @@ class TestKeychainBackedCommands:
 
         result = self.runner.invoke(whoami, obj=obj)
 
-        assert "Authenticated" in result.output
+        assert "Authenticated" not in result.output
+        assert "the credential cannot be read" in result.output
         assert "could not be read" in result.output
 
     def test_whoami_names_the_kill_switch_rather_than_a_missing_package(
