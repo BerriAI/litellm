@@ -78,8 +78,10 @@ proxy = [
     "expression>=5.6.0,<6.0",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
-# imports (fastapi, cryptography, ...) are all guarded, so it runs on the base
-# SDK plus just these five; none of the server runtime in `proxy` is pulled in.
+# imports are all guarded, so it runs on the base SDK plus just these five, and
+# none of the server runtime in `proxy` is pulled in. On Linux,
+# keyring reaches the Secret Service through secretstorage, which brings
+# cryptography with it.
 cli = [
     "rich>=13.9.4,<14.0",
     "pyyaml>=6.0.3,<7.0",
