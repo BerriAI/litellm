@@ -6,8 +6,8 @@ and the 5 family) must keep a mid-conversation system reminder in place inside
 ``messages`` so the top-level ``system`` prefix stays byte-identical and the
 prompt cache written on turn one is read back in full on turn two. Models
 without the flag (Claude 4.7 and older) reject the role inside ``messages``
-outright, so the proxy must convert the reminder to a user turn in place
-field and the call must still return a completion instead of a provider 400.
+outright, so the proxy must convert the reminder to a user turn in place and
+the call must still return a completion instead of a provider 400.
 
 The conversation shape mirrors what Claude Code sends mid-session: a cached
 system prompt, a user turn carrying its own ``cache_control`` breakpoint, a
@@ -49,8 +49,9 @@ CACHE_PRIMING_INTERVAL_SECONDS = 3.0
 
 
 def _cacheable_system_block(marker: str) -> TextBlock:
-    """A system prompt comfortably above Sonnet's 1024-token minimum cacheable
-    size, unique per run so no other run's cache entry can satisfy the read."""
+    """A system prompt comfortably above the 4096-token minimum cacheable size
+    of Haiku 4.5 (the smallest model here), unique per run so no other run's
+    cache entry can satisfy the read."""
     text = " ".join(
         f"Reference paragraph {index} for run {marker}." for index in range(300)
     )
@@ -118,10 +119,12 @@ def _prime_prompt_cache(
 ) -> PrimedCache:
     """Send first-turn calls (fresh cache-marked user turn each attempt,
     identical system prefix) until one both reads the system prefix back from
-    cache and writes its own user-turn chunk, proving the cache is live in both
-    directions. Only the pre-reminder turn is ever retried here, so retries can
-    never warm a mutated-prefix cache entry and mask the regression the second
-    turn asserts on."""
+    cache and writes its own user-turn chunk, then re-send that exact turn until
+    its own chunk reads back too, proving the cache is live in both directions
+    before the reminder turn goes out (a freshly written entry can take a few
+    seconds to become readable). Only the pre-reminder turn is ever retried
+    here, so retries can never warm a mutated-prefix cache entry and mask the
+    regression the second turn asserts on."""
     deadline = time.monotonic() + CACHE_PRIMING_DEADLINE_SECONDS
     while True:
         user_text = _first_turn_user_text(unique_marker())
@@ -132,16 +135,34 @@ def _prime_prompt_cache(
         )
         usage = unwrap(_post_messages(client, key, body)).usage
         if usage.cache_read_input_tokens > 0 and usage.cache_creation_input_tokens > 0:
-            return PrimedCache(
+            primed = PrimedCache(
                 first_user_text=user_text,
                 prefix_read_tokens=usage.cache_read_input_tokens,
                 first_turn_creation_tokens=usage.cache_creation_input_tokens,
             )
+            if _first_turn_reads_back(client, key, body, primed.full_prefix_tokens, deadline):
+                return primed
         if time.monotonic() >= deadline:
             pytest.fail(
-                f"{model}: prompt cache never became readable within "
+                f"{model}: prompt cache never became readable in full within "
                 f"{CACHE_PRIMING_DEADLINE_SECONDS}s (last usage: {usage})"
             )
+        time.sleep(CACHE_PRIMING_INTERVAL_SECONDS)
+
+
+def _first_turn_reads_back(
+    client: EndpointsClient,
+    key: str,
+    body: RichMessagesRequest,
+    full_prefix_tokens: int,
+    deadline: float,
+) -> bool:
+    while True:
+        usage = unwrap(_post_messages(client, key, body)).usage
+        if usage.cache_read_input_tokens >= full_prefix_tokens:
+            return True
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(CACHE_PRIMING_INTERVAL_SECONDS)
 
 

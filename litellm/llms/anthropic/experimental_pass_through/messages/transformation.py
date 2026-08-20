@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Final
 
 import httpx
@@ -163,13 +163,54 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
     )
 
-    def _system_role_message_as_user(self, message: dict) -> dict:
+    def _system_role_message_as_user(self, message: Mapping) -> Mapping:
         return {
-            **message,
             "role": "user",
             "content": self._as_system_content_blocks(self._CONVERTED_SYSTEM_NOTE)
             + self._as_system_content_blocks(message.get("content")),
         }
+
+    @staticmethod
+    def _opens_with_tool_results(message: object) -> bool:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            return False
+        content: Final = message.get("content")
+        return (
+            isinstance(content, list)
+            and len(content) > 0
+            and isinstance(content[0], dict)
+            and content[0].get("type") == "tool_result"
+        )
+
+    def _system_run_before(self, messages: Sequence, index: int) -> Sequence:
+        start: Final = next(
+            (j + 1 for j in range(index - 1, -1, -1) if not self._is_system_role_message(messages[j])),
+            0,
+        )
+        return messages[start:index]
+
+    def _system_run_end(self, messages: Sequence, index: int) -> int:
+        return next(
+            (j for j in range(index, len(messages)) if not self._is_system_role_message(messages[j])),
+            len(messages),
+        )
+
+    def _reordered_around_tool_results(self, messages: Sequence, index: int) -> tuple:
+        message: Final = messages[index]
+        if self._opens_with_tool_results(message):
+            return (message, *self._system_run_before(messages, index))
+        if not self._is_system_role_message(message):
+            return (message,)
+        run_end: Final = self._system_run_end(messages, index)
+        follower: Final = messages[run_end] if run_end < len(messages) else None
+        return () if self._opens_with_tool_results(follower) else (message,)
+
+    def _system_turns_after_tool_results(self, messages: Sequence) -> tuple:
+        return tuple(
+            message
+            for index in range(len(messages))
+            for message in self._reordered_around_tool_results(messages, index)
+        )
 
     def _normalize_system_role_messages(self, anthropic_messages_request: dict, model: str) -> None:
         """Normalize ``role: "system"`` entries in ``messages`` per the Anthropic
@@ -188,7 +229,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         so without the flag a mid-conversation entry is converted to a user turn
         in place (prefixed with an operator note) rather than hoisted: hoisting
         would mutate the ``system`` prefix and likewise collapse the cache, while
-        the in-place conversion keeps everything before it byte-identical.
+        the in-place conversion keeps everything before it byte-identical. Like
+        the hoist, the conversion carries only the entry's content. A run of
+        entries wedged between an assistant ``tool_use`` turn and its
+        ``tool_result`` turn is placed after that turn instead, since a user
+        turn in between would split the tool call from its result ("tool_use
+        ids were found without tool_result blocks immediately after") while
+        consecutive user turns merge upstream.
         Billing-header system blocks are stripped from the top-level ``system``
         field regardless of whether anything was hoisted.
 
@@ -214,7 +261,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
             else [
                 self._system_role_message_as_user(m) if self._is_system_role_message(m) else m
-                for m in messages[leading_count:]
+                for m in self._system_turns_after_tool_results(messages[leading_count:])
             ]
         )
         if hoisted or remaining != messages:

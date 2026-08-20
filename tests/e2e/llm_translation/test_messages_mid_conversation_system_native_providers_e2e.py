@@ -128,10 +128,12 @@ def _prime_prompt_cache(
 ) -> PrimedCache:
     """Send first-turn calls (fresh cache-marked user turn each attempt,
     identical system prefix) until one both reads the system prefix back from
-    cache and writes its own user-turn chunk, proving the cache is live in both
-    directions. Only the pre-reminder turn is ever retried here, so retries can
-    never warm a mutated-prefix cache entry and mask the regression the second
-    turn asserts on."""
+    cache and writes its own user-turn chunk, then re-send that exact turn until
+    its own chunk reads back too, proving the cache is live in both directions
+    before the reminder turn goes out (a freshly written entry can take a few
+    seconds to become readable). Only the pre-reminder turn is ever retried
+    here, so retries can never warm a mutated-prefix cache entry and mask the
+    regression the second turn asserts on."""
     deadline = time.monotonic() + CACHE_PRIMING_DEADLINE_SECONDS
     while True:
         user_text = _first_turn_user_text(unique_marker())
@@ -142,16 +144,34 @@ def _prime_prompt_cache(
         )
         usage = unwrap(_post_messages(client, key, body)).usage
         if usage.cache_read_input_tokens > 0 and usage.cache_creation_input_tokens > 0:
-            return PrimedCache(
+            primed = PrimedCache(
                 first_user_text=user_text,
                 prefix_read_tokens=usage.cache_read_input_tokens,
                 first_turn_creation_tokens=usage.cache_creation_input_tokens,
             )
+            if _first_turn_reads_back(client, key, body, primed.full_prefix_tokens, deadline):
+                return primed
         if time.monotonic() >= deadline:
             pytest.fail(
-                f"{model}: prompt cache never became readable within "
+                f"{model}: prompt cache never became readable in full within "
                 f"{CACHE_PRIMING_DEADLINE_SECONDS}s (last usage: {usage})"
             )
+        time.sleep(CACHE_PRIMING_INTERVAL_SECONDS)
+
+
+def _first_turn_reads_back(
+    client: EndpointsClient,
+    key: str,
+    body: RichMessagesRequest,
+    full_prefix_tokens: int,
+    deadline: float,
+) -> bool:
+    while True:
+        usage = unwrap(_post_messages(client, key, body)).usage
+        if usage.cache_read_input_tokens >= full_prefix_tokens:
+            return True
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(CACHE_PRIMING_INTERVAL_SECONDS)
 
 
